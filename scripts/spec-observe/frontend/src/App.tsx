@@ -12,6 +12,7 @@ import { WorkspacePicker } from './destinations/workspaces';
 import { catalogRead, type WorkspaceCatalog } from './destinations/workspace-state';
 import { memberRecords, visibleEpics as sharedVisibleEpics } from './destinations/epic-state';
 import { getLaunchDraft, seedLaunchDraft } from './launch-state';
+import { getConversationReturnId } from './conversations-state';
 import { armLaunchPickerIntent, cancelLaunchPickerIntent, createLaunchPickerIntent, shouldApplyPickerReset, shouldResetAcknowledgedDraft } from './launch-picker-intent';
 import { agentCoverage, effectiveAgentFilter, retainSelectedAgent, visibleAgents } from './agent-state';
 
@@ -134,7 +135,16 @@ export default function App() {
     navigate(next, routeHistoryMode(route(), next));
   }
   function goDestination(dest: Destination) {
-    go({ dest, ...(route().ws !== undefined ? { ws: route().ws } : {}) });
+    const ws = route().ws;
+    const next: RouteState = { dest, ...(ws !== undefined ? { ws } : {}) };
+    // Conversations is the only destination that restores its last explicitly
+    // selected thread on rail return; every other destination keeps its
+    // existing scope-only navigation.
+    if (dest === 'conversations' && ws !== undefined) {
+      const remembered = getConversationReturnId(ws);
+      if (remembered) next.id = remembered;
+    }
+    go(next);
   }
   function prepareAgentAssignment() {
     const ws = scopeWs();

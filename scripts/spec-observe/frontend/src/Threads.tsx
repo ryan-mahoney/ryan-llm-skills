@@ -1,11 +1,21 @@
-import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
+import { For, Show, createEffect, createSignal, onCleanup, onMount, untrack } from 'solid-js';
 import { getJson, postJson, HttpError } from './api';
 import { str, time, statusMarkdown } from './format';
 import { consumeThreadDraft, getLaunchDraft, seedLaunchDraft, seedThreadDraft } from './launch-state';
 import { shouldResetAcknowledgedDraft } from './launch-picker-intent';
-import { normalizeRequestedThreadId, resolveThreadListSelection, shouldInvalidateThreadRouteSynchronously } from './threads-selection';
-import type { ThreadDraftSeed } from './launch-state';
-import type { RouteState } from './route';
+import {
+  acknowledgeThreadSend,
+  applyThreadPreparedText,
+  captureThreadSend,
+  getThreadDraft,
+  getThreadScroll,
+  rememberConversationId,
+  resolveSelection,
+  setThreadDraft,
+  setThreadScroll,
+} from './conversations-state';
+import { navigate } from './route';
+import type { DestinationProps } from './destinations';
 
 // launch-state.ts remains the single owner of the one-use result-draft Map;
 // this surface re-exports its seed contract instead of copying the store.
@@ -14,7 +24,9 @@ export { seedThreadDraft };
 type Repo = { id: string; status?: string; worktrees?: Array<{ id?: string; path?: string; name?: string }> };
 type Thread = Record<string, any> & { thread_id: string; title?: string; queue?: any[] };
 type Entry = Record<string, any> & { id: string };
-type Props = { workspaceId: string; repositories: Repo[]; token?: string; live: boolean; refreshKey?: number; requestedThreadId?: string; onNavigate?: (next: RouteState) => void };
+// Route identity is the only selection input; the retained per-thread owners
+// (draft/retry, reading position, return id) live in conversations-state.ts.
+type Props = Pick<DestinationProps, 'route' | 'workspace' | 'catalog' | 'token' | 'live' | 'refreshKey' | 'onNavigate'>;
 const LIMIT = 100;
 const labels: Record<string, string> = { active: 'Responding', idle: 'Ready', paused: 'Paused', 'history-only': 'History only', uncertain: 'Delivery uncertain', stalled: 'Stalled', 'start-failed': 'Start failed', 'session-mismatch': 'Session mismatch', 'missing-directory': 'Directory missing', 'live-owner': 'Owner not confirmed dead', 'missing-context': 'Context missing', 'policy-refusal': 'Policy refusal' };
 const tones: Record<string, string> = { active: 'good', idle: 'good', paused: 'warn', stalled: 'warn', 'history-only': 'muted', uncertain: 'bad', 'start-failed': 'bad', 'session-mismatch': 'bad', 'missing-directory': 'bad', 'live-owner': 'bad', 'missing-context': 'bad', 'policy-refusal': 'bad' };
@@ -35,7 +47,6 @@ const tone = (s: string) => tones[s] || 'muted';
 export default function Threads(props: Props) {
   const [threads, setThreads] = createSignal<Thread[] | null>(null);
   const [invalid, setInvalid] = createSignal<any[]>([]);
-  const [selected, setSelected] = createSignal('');
   const [entries, setEntries] = createSignal<Entry[]>([]);
   const [older, setOlder] = createSignal(false);
   const [loadingHistory, setLoadingHistory] = createSignal(false);
@@ -45,7 +56,10 @@ export default function Threads(props: Props) {
   const [notice, setNotice] = createSignal('');
   const [stream, setStream] = createSignal('unavailable');
   const [listError, setListError] = createSignal('');
-  const [requestError, setRequestError] = createSignal('');
+  // Read errors (list/history) and mutation errors (send/stop/resume/discard/
+  // create) are separate: a history refresh can never clear a failed send.
+  const [historyError, setHistoryError] = createSignal('');
+  const [mutationError, setMutationError] = createSignal('');
   const [pending, setPending] = createSignal('');
   const [draft, setDraft] = createSignal('');
   const [target, setTarget] = createSignal('');
@@ -55,110 +69,147 @@ export default function Threads(props: Props) {
   const [sendPending, setSendPending] = createSignal<{ id: string; draft: string } | null>(null);
   let source: EventSource | undefined;
   let listGeneration = 0;
-  let selectionGeneration = 0;
+  let projectionEpoch = 0;
   let historyGeneration = 0;
   let opGeneration = 0;
   let createGeneration = 0;
   let listBusy = false;
-  let lastWorkspace = props.workspaceId;
-  // appliedRequested records the route identity resolved by the last
-  // successful list response. lastSeenRequested records the identity
-  // observed synchronously on every route change, before awaiting the
-  // list, so a valid->missing navigation cannot keep the previous
-  // thread's detail/controls alive during a held or failing list.
-  let appliedRequested = '';
-  let lastSeenRequested = '';
+  let lastWorkspace = props.route.ws ?? '';
+  let lastProjectionKey = '';
+  // Projection identity: the exact (ws, thread) whose transcript, live stream,
+  // pending display and draft are currently projected. A route transition
+  // clears them synchronously, before any list/history await, so a held or
+  // rejected list cannot leak the previous thread's controls or draft.
+  let projectedWs = '';
+  let projectedId = '';
   let stickBottom = true;
   let draftEl: HTMLTextAreaElement | undefined;
   let transcriptEl: HTMLDivElement | undefined;
   const [announcer, setAnnouncer] = createSignal('');
-  const active = () => props.live && Boolean(props.workspaceId);
-  const actionable = () => active() && Boolean(props.token);
-  const thread = () => threads()?.find(t => t.thread_id === selected());
-  const announce = (value: string) => setAnnouncer(value);
-  // The one-use result-draft seed is consumed only when the selected thread is
-  // the exact requested thread: a thread switch or remount cannot replay it,
-  // and a missing requested thread never seeds an unrelated fallback selection.
-  const consumeRequestedSeed = (id: string) => {
-    if (!id || id !== props.requestedThreadId) return;
-    const seed: ThreadDraftSeed | undefined = consumeThreadDraft(props.workspaceId, id);
-    if (!seed) return;
-    setDraft(seed.draft);
-    announce('Result draft prepared. Review the message before sending.');
-    queueMicrotask(() => { if (draftEl) { draftEl.value = seed.draft; draftEl.focus({ preventScroll: true }); } });
+  const wsId = () => props.route.ws ?? '';
+  const routeId = () => props.route.id ?? '';
+  const repositories = (): Repo[] => {
+    const data = props.workspace;
+    return data && Array.isArray(data.repositories) ? data.repositories : [];
   };
-  const resetSelection = () => { selectionGeneration++; historyGeneration++; closeSource(); setEntries([]); setOlder(false); setLoadingHistory(false); setIncompleteTail(false); setPartial(''); setToolNote(''); setNotice(''); setRequestError(''); setPending(''); stickBottom = true; };
+  const active = () => props.live && Boolean(wsId());
+  const actionable = () => active() && Boolean(props.token);
+  const thread = () => threads()?.find(t => t.thread_id === routeId());
+  const announce = (value: string) => setAnnouncer(value);
   function closeSource() { source?.close(); source = undefined; setStream('unavailable'); }
-  function params(extra: Record<string, string> = {}) { return new URLSearchParams({ workspace_id: props.workspaceId, ...extra }); }
+  function params(extra: Record<string, string> = {}) { return new URLSearchParams({ workspace_id: wsId(), ...extra }); }
   const routeError = (e: unknown) => e instanceof HttpError ? e.message : e instanceof Error ? e.message : 'The thread request could not be completed.';
-  async function loadList() {
-    // Synchronous route-identity invalidation before any await: a mounted
-    // valid->missing navigation must drop the previous selection,
-    // history, event source, typed draft and send retry identity
-    // immediately, so no previous-thread Send/Prepare controls survive a
-    // delayed or rejected list under the new URL. Steady refreshes with an
-    // unchanged identity preserve the explicit selection. This runs before
-    // the busy guard so a held list cannot suppress the invalidation.
-    const syncRequested = normalizeRequestedThreadId(props.requestedThreadId);
-    if (shouldInvalidateThreadRouteSynchronously(syncRequested, lastSeenRequested)) {
-      lastSeenRequested = syncRequested;
-      setSelected(''); setDraft(''); setSendPending(null); resetSelection(); setRequestedMissing(false);
+  function persistScroll() {
+    if (!projectedWs || !projectedId || !transcriptEl) return;
+    setThreadScroll(projectedWs, projectedId, { scrollTop: transcriptEl.scrollTop, stickBottom });
+  }
+  function restoreScroll(id: string, workspace: string) {
+    if (id !== projectedId || workspace !== projectedWs || !transcriptEl) return;
+    const stored = getThreadScroll(workspace, id);
+    if (stored) { transcriptEl.scrollTop = stored.scrollTop; stickBottom = stored.stickBottom; return; }
+    stickBottom = true;
+    transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  }
+  // Projection-scoped detail reset. The retained draft/retry owner and the
+  // projection epoch survive, so Refresh and a fresh history page reuse them.
+  function resetDetail() {
+    closeSource();
+    setEntries([]); setOlder(false); setLoadingHistory(false); setIncompleteTail(false);
+    setPartial(''); setToolNote(''); setNotice(''); setPending('');
+    setHistoryError('');
+  }
+  // Route/projection transition: persist the outgoing reading position, then
+  // drop every projection-scoped display immediately. Stored drafts survive.
+  function clearProjection() {
+    persistScroll();
+    projectedWs = ''; projectedId = '';
+    projectionEpoch++;
+    resetDetail();
+    setMutationError('');
+    setDraft(''); setSendPending(null); setRequestedMissing(false); stickBottom = true;
+  }
+  function materialize(ws: string, id: string) {
+    if (!ws || !id || (projectedWs === ws && projectedId === id)) return;
+    persistScroll();
+    projectedWs = ws; projectedId = id;
+    projectionEpoch++;
+    resetDetail();
+    setMutationError('');
+    stickBottom = true;
+    const stored = getThreadDraft(ws, id);
+    setDraft(stored.draft); setSendPending(stored.retry);
+    rememberConversationId(ws, id);
+    // The one-use result seed applies only to the exact requested thread; a
+    // missing thread never seeds an unrelated fallback selection.
+    if (id === routeId()) {
+      const seed = consumeThreadDraft(ws, id);
+      if (seed) {
+        const prepared = applyThreadPreparedText(ws, id, seed.draft);
+        setDraft(prepared.draft); setSendPending(prepared.retry);
+        announce('Result draft prepared. Review the message before sending.');
+        // The seed stays unsent: focus the exact rendered composer once,
+        // guarded by the unchanged ws/id/epoch so an intervening projection
+        // switch cannot steal focus.
+        const seedEpoch = projectionEpoch;
+        queueMicrotask(() => {
+          if (draftEl && projectedWs === ws && projectedId === id && projectionEpoch === seedEpoch) draftEl.focus({ preventScroll: true });
+        });
+      }
     }
+    void loadHistory();
+    openEvents();
+  }
+  // Post-list projection reconciliation. A present requested row selects
+  // exactly that row; a loaded no-id list normalizes its first row through a
+  // replace navigation; a freshly loaded absence shows requested-missing
+  // without falling back. Stale rows only ever select a present row.
+  function reconcile(freshList: boolean) {
+    const ws = wsId(), id = routeId(), rows = threads();
+    if (!ws || rows === null) return;
+    const decision = resolveSelection({ rows, requestedId: id, listLoaded: true });
+    if (decision.normalizeId) { navigate({ ...props.route, id: decision.normalizeId }, 'replace'); return; }
+    if (decision.selected) { setRequestedMissing(false); materialize(ws, decision.selected.thread_id); return; }
+    if (!decision.requestedMissing) { setRequestedMissing(false); clearProjection(); return; }
+    if (freshList) { clearProjection(); setRequestedMissing(true); }
+  }
+  async function loadList() {
     if (!active() || listBusy) return;
     listBusy = true;
-    const request = ++listGeneration, workspace = props.workspaceId;
+    const request = ++listGeneration, workspace = wsId();
     try {
       const data: any = await getJson(`/api/threads?${params()}`);
-      if (request !== listGeneration || workspace !== props.workspaceId) return;
-      const rows = Array.isArray(data) ? data : Array.isArray(data.threads) ? data.threads : [];
+      if (request !== listGeneration || workspace !== wsId()) return;
+      const rows: Thread[] = Array.isArray(data) ? data : Array.isArray(data.threads) ? data.threads : [];
       setThreads(rows); setInvalid(Array.isArray(data.invalid) ? data.invalid : []); setListError('');
-      const requested = typeof props.requestedThreadId === 'string' && props.requestedThreadId ? props.requestedThreadId : '';
-      // Pure selection contract: steady refreshes retain an explicit row /
-      // create selection with its typed draft and send retry identity (F1);
-      // a new requested identity invalidates the old thread first so a
-      // missing UUID leaves no unrelated detail or controls (F2).
-      const decision = resolveThreadListSelection({ rows, requested, appliedRequested, selected: selected() });
-      appliedRequested = decision.appliedRequested;
-      setRequestedMissing(decision.requestedMissing);
-      if (decision.invalidated) { setSelected(''); setDraft(''); setSendPending(null); resetSelection(); }
-      if (decision.shouldSelect && decision.nextSelected) {
-        if (selected() !== decision.nextSelected) setSelected(decision.nextSelected);
-        if (!decision.invalidated) { setDraft(''); setSendPending(null); resetSelection(); }
-        void loadHistory(); openEvents();
-      } else if (selected() !== decision.nextSelected) {
-        setSelected(decision.nextSelected);
-        if (decision.nextSelected) { setDraft(''); setSendPending(null); resetSelection(); void loadHistory(); openEvents(); }
-      }
-      // The one-use result seed applies only to the exactly selected
-      // requested thread; a retained explicit selection is never reseeded.
-      if (decision.nextSelected && selected() === requested) consumeRequestedSeed(requested);
+      reconcile(true);
     } catch (e) {
-      if (request === listGeneration && workspace === props.workspaceId) setListError(routeError(e) || 'Threads could not be loaded.');
+      if (request === listGeneration && workspace === wsId()) setListError(routeError(e) || 'Threads could not be loaded.');
     } finally { if (request === listGeneration) listBusy = false; }
   }
   async function loadHistory(before?: string, prepend = false) {
-    if (!active() || !selected()) return;
-    const request = ++historyGeneration, selection = selectionGeneration, id = selected(), workspace = props.workspaceId;
+    if (!active() || !projectedId || projectedId !== routeId()) return;
+    const request = ++historyGeneration, epoch = projectionEpoch, id = projectedId, workspace = projectedWs;
     const oldTop = transcriptEl?.scrollTop || 0, oldHeight = transcriptEl?.scrollHeight || 0;
-    setLoadingHistory(true); if (!prepend) setRequestError('');
+    setLoadingHistory(true); if (!prepend) setHistoryError('');
     try {
       const q: Record<string, string> = { thread_id: id, limit: String(LIMIT) }; if (before) q.before = before;
       const data: any = await getJson(`/api/thread/history?${params(q)}`);
-      if (request !== historyGeneration || selection !== selectionGeneration || id !== selected() || workspace !== props.workspaceId) return;
+      if (request !== historyGeneration || epoch !== projectionEpoch || id !== projectedId || workspace !== projectedWs || wsId() !== workspace) return;
       const page = Array.isArray(data.entries) ? data.entries : [];
       setEntries(prev => prepend ? [...page, ...prev] : page);
-      setOlder(data.truncated === true); setIncompleteTail(data.incomplete_tail === true); setLoadingHistory(false); setRequestError(''); stickBottom = !prepend;
+      setOlder(data.truncated === true); setIncompleteTail(data.incomplete_tail === true); setLoadingHistory(false); setHistoryError('');
       if (prepend) queueMicrotask(() => { if (transcriptEl) transcriptEl.scrollTop = oldTop + transcriptEl.scrollHeight - oldHeight; });
+      else queueMicrotask(() => restoreScroll(id, workspace));
     } catch (e) {
-      if (request === historyGeneration && selection === selectionGeneration && id === selected()) { setLoadingHistory(false); setRequestError(routeError(e) || 'The transcript could not be loaded.'); }
+      if (request === historyGeneration && epoch === projectionEpoch && id === projectedId && wsId() === workspace) { setLoadingHistory(false); setHistoryError(routeError(e) || 'The transcript could not be loaded.'); }
     }
   }
   async function refreshTail() {
-    const id = selected(), workspace = props.workspaceId, selection = selectionGeneration;
+    const id = projectedId, workspace = projectedWs, epoch = projectionEpoch;
     if (!active() || !id) return;
     try {
       const data: any = await getJson(`/api/thread/history?${params({ thread_id: id, limit: String(LIMIT) })}`);
-      if (selection !== selectionGeneration || id !== selected() || workspace !== props.workspaceId) return;
+      if (epoch !== projectionEpoch || id !== projectedId || workspace !== projectedWs || wsId() !== workspace) return;
       const page: Entry[] = Array.isArray(data.entries) ? data.entries : [];
       if (!page.length) return;
       setEntries(prev => {
@@ -170,10 +221,10 @@ export default function Threads(props: Props) {
   }
   function openEvents() {
     closeSource();
-    if (!active() || !selected() || typeof EventSource === 'undefined') return;
-    const id = selected(), workspace = props.workspaceId, generation = selectionGeneration;
+    const id = projectedId, workspace = projectedWs, epoch = projectionEpoch;
+    if (!active() || !id || id !== routeId() || typeof EventSource === 'undefined') return;
     const es = new EventSource(`/api/thread/events?${params({ thread_id: id })}`); source = es; setStream('connecting');
-    const current = () => source === es && generation === selectionGeneration && selected() === id && props.workspaceId === workspace;
+    const current = () => source === es && epoch === projectionEpoch && projectedId === id && projectedWs === workspace && wsId() === workspace;
     es.onopen = () => { if (current()) setStream('live'); };
     es.onerror = () => { if (current()) setStream(es.readyState === EventSource.CLOSED ? 'stopped' : 'reconnecting'); };
     for (const type of ['snapshot', 'delta', 'tool', 'message_end', 'state', 'notice', 'settled']) es.addEventListener(type, raw => {
@@ -187,7 +238,9 @@ export default function Threads(props: Props) {
         if (!data.partial && typeof data.last_persisted_id === 'string' && data.last_persisted_id !== tailId) setTimeout(() => { if (current()) void refreshTail(); }, 0);
       } else {
         const ev = data.event && typeof data.event === 'object' ? data.event : {};
-        if (type === 'delta') { const d = typeof ev.delta === 'string' ? ev.delta : ev.assistantMessageEvent?.delta || ''; if (d) { setPartial(v => v + d); stickBottom = true; } }
+        // Live deltas append without moving the reader: stickBottom is only
+        // changed by an actual transcript scroll or a fresh render.
+        if (type === 'delta') { const d = typeof ev.delta === 'string' ? ev.delta : ev.assistantMessageEvent?.delta || ''; if (d) setPartial(v => v + d); }
         if (type === 'tool') setToolNote(`Running tool: ${ev.toolName || ev.tool || ev.name || 'activity'}`);
         if (type === 'message_end') { const val = contentText(ev.message?.content ?? ev.message?.text ?? ev.content ?? ev.text ?? ''); if (val) setPartial(val); setToolNote(''); setTimeout(() => { if (current()) void refreshTail(); }, 400); }
         if (type === 'state') updateSelected({ ...ev, queue: ev.queue ?? data.queue, attention: ev.attention ?? data.attention, queue_paused: ev.queue_paused });
@@ -197,50 +250,100 @@ export default function Threads(props: Props) {
     });
   }
   function updateSelected(patch: any) {
-    setThreads(prev => prev?.map(t => t.thread_id !== selected() ? t : ({ ...t, ...Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)) })) || null);
+    const id = routeId();
+    setThreads(prev => prev?.map(t => t.thread_id !== id ? t : ({ ...t, ...Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)) })) || null);
   }
-  function selectThread(id: string) {
-    if (!id || id === selected()) return;
-    setSelected(id); setDraft(''); setSendPending(null); resetSelection(); void loadHistory(); openEvents(); consumeRequestedSeed(id);
+  function selectRow(id: string) {
+    if (!id || id === routeId()) return;
+    props.onNavigate({ ...props.route, dest: 'conversations', id });
+  }
+  function refreshThread() {
+    if (!projectedId) return;
+    historyGeneration++;
+    resetDetail();
+    void loadHistory();
+    openEvents();
+    void loadList();
   }
   async function action<T>(path: string, body: unknown, op: string): Promise<T> {
-    const workspace = props.workspaceId, id = selected(), selection = selectionGeneration, generation = ++opGeneration;
-    setPending(op); setRequestError('');
+    const workspace = wsId(), id = routeId(), epoch = projectionEpoch, generation = ++opGeneration;
+    setPending(op); setMutationError('');
     try { return await postJson<T>(path, body, props.token || '', undefined); }
-    finally { if (generation === opGeneration && workspace === props.workspaceId && id === selected() && selection === selectionGeneration) setPending(''); }
+    finally { if (generation === opGeneration && workspace === wsId() && id === routeId() && epoch === projectionEpoch) setPending(''); }
   }
   async function createThread() {
     if (!actionable() || creating()) return;
-    const workspace = props.workspaceId, request = ++createGeneration;
+    const workspace = wsId(), request = ++createGeneration;
     const dest = target() ? { kind: 'repository', repository_id: target() } : { kind: 'workspace' };
     setCreating(true); setCreateError('');
     try {
       const record = await postJson<Thread>('/api/thread/create', { workspace_id: workspace, target: dest }, props.token || '');
-      if (workspace !== props.workspaceId || request !== createGeneration) return;
-      setThreads(prev => [record, ...(prev || []).filter(t => t.thread_id !== record.thread_id)]); setSelected(record.thread_id); setTarget(''); setDraft(''); setSendPending(null); resetSelection(); void loadHistory(); openEvents(); announce('Thread created. It is named after your first message.'); void loadList();
-    } catch (e) { if (workspace === props.workspaceId && request === createGeneration) setCreateError(routeError(e)); }
-    finally { if (workspace === props.workspaceId && request === createGeneration) setCreating(false); }
+      if (workspace !== wsId() || request !== createGeneration) return;
+      setThreads(prev => [record, ...(prev || []).filter(t => t.thread_id !== record.thread_id)]);
+      setTarget('');
+      // Creation success owns the created id: navigate to it so the projection
+      // materializes it (the inline new-thread UI stays for step 5).
+      props.onNavigate({ ...props.route, dest: 'conversations', id: record.thread_id });
+      announce('Thread created. It is named after your first message.');
+      void loadList();
+    } catch (e) { if (workspace === wsId() && request === createGeneration) setCreateError(routeError(e)); }
+    finally { if (workspace === wsId() && request === createGeneration) setCreating(false); }
   }
   async function send() {
-    if (!actionable() || !selected() || !draft().trim() || pending()) return;
-    const submitted = draft(); let retry = sendPending();
-    if (!retry || retry.draft !== submitted) { retry = { id: uuid(), draft: submitted }; setSendPending(retry); }
-    const req = retry; const workspace = props.workspaceId, id = selected(), selection = selectionGeneration;
+    const id = projectedId, workspace = projectedWs;
+    if (!actionable() || !id || id !== routeId() || workspace !== wsId() || !draft().trim() || pending()) return;
+    const submitted = draft();
+    // The captured retry identity travels with the submitted text so a failed
+    // send retries with the same request id and a late acknowledgement only
+    // clears the stored entry while both still match.
+    const captured = captureThreadSend(workspace, id);
+    let retry = captured.retry;
+    if (!retry || retry.draft !== submitted) {
+      retry = { id: uuid(), draft: submitted };
+      setThreadDraft(workspace, id, { draft: submitted, retry });
+    }
+    const req = retry;
+    const epoch = projectionEpoch;
+    setSendPending(req);
     try {
       const data: any = await action('/api/thread/send', { workspace_id: workspace, thread_id: id, id: req.id, text: submitted.trim() }, 'send');
-      if (workspace !== props.workspaceId || id !== selected() || selection !== selectionGeneration) { void loadList(); return; }
-      if (sendPending()?.id === req.id) setSendPending(null);
-      if (draft() === submitted) { setDraft(''); if (draftEl) draftEl.value = ''; }
-      setRequestError(data.state === 'uncertain' ? 'The message may already have been delivered. Discard it or retry under Pending messages; a retry can duplicate the response.' : '');
-      announce(data.duplicate ? 'Message was already queued.' : data.state === 'accepted' ? 'Message accepted.' : data.state === 'uncertain' ? 'Message delivery is uncertain.' : 'Message queued.');
-      void loadList(); setTimeout(() => { if (id === selected() && selection === selectionGeneration) void refreshTail(); }, 0);
-    } catch (e) { if (workspace === props.workspaceId && id === selected() && selection === selectionGeneration) setRequestError(routeError(e)); }
+      // The retained owner is acknowledged even after a thread switch or an
+      // unmount, and a late response never navigates. The projected draft and
+      // retry clear only when the retained capture matched; otherwise the
+      // projection resyncs from the retained owner so a newer draft or a
+      // replaced retry cannot be erased by the earlier acknowledgement.
+      const acknowledged = acknowledgeThreadSend(workspace, id, { draft: submitted, retry: req });
+      if (workspace === wsId() && id === routeId() && projectedWs === workspace && projectedId === id && epoch === projectionEpoch) {
+        if (acknowledged) {
+          setSendPending(null);
+          setDraft('');
+        } else {
+          const stored = getThreadDraft(workspace, id);
+          setDraft(stored.draft);
+          setSendPending(stored.retry);
+        }
+        setMutationError(data.state === 'uncertain' ? 'The message may already have been delivered. Discard it or retry under Pending messages; a retry can duplicate the response.' : '');
+        announce(data.duplicate ? 'Message was already queued.' : data.state === 'accepted' ? 'Message accepted.' : data.state === 'uncertain' ? 'Message delivery is uncertain.' : 'Message queued.');
+        setTimeout(() => { if (id === projectedId && epoch === projectionEpoch) void refreshTail(); }, 0);
+      }
+      void loadList();
+    } catch (e) {
+      if (workspace === wsId() && id === routeId() && projectedId === id && epoch === projectionEpoch) setMutationError(routeError(e));
+    }
   }
   async function simpleAction(path: string, op: string, body: any = {}) {
-    if (!actionable() || !selected()) return;
-    const id = selected(), workspace = props.workspaceId, selection = selectionGeneration;
-    try { await action(path, { workspace_id: workspace, thread_id: id, ...body }, op); if (id === selected() && workspace === props.workspaceId && selection === selectionGeneration) { announce(op === 'stop' ? 'Stop requested. The thread queue is paused.' : op === 'resume' ? 'Thread resumed.' : body.resend ? 'Message queued again. A duplicate response is possible.' : 'Uncertain message discarded.'); void loadList(); if (op === 'resume') void refreshTail(); } }
-    catch (e) { if (id === selected() && selection === selectionGeneration) setRequestError(routeError(e)); }
+    const id = projectedId, workspace = projectedWs, epoch = projectionEpoch;
+    if (!actionable() || !id || id !== routeId() || workspace !== wsId()) return;
+    try {
+      await action(path, { workspace_id: workspace, thread_id: id, ...body }, op);
+      if (id === projectedId && workspace === projectedWs && epoch === projectionEpoch) {
+        announce(op === 'stop' ? 'Stop requested. The thread queue is paused.' : op === 'resume' ? 'Thread resumed.' : body.resend ? 'Message queued again. A duplicate response is possible.' : 'Uncertain message discarded.');
+        void loadList();
+        if (op === 'resume') void refreshTail();
+      }
+    } catch (e) {
+      if (id === projectedId && workspace === projectedWs && epoch === projectionEpoch && workspace === wsId()) setMutationError(routeError(e));
+    }
   }
   // Prepare assignment hands the exact thread identity to the hidden launch
   // flow. A repository target recorded on the thread rides along as the
@@ -251,31 +354,56 @@ export default function Threads(props: Props) {
   // Prepare starts an independent empty draft; pending, failed, unconfirmed
   // and editable entries stay untouched.
   function prepareAssignment() {
-    const id = selected();
-    if (!id) return;
-    const target = thread()?.target;
-    const repositoryId = target && target.kind === 'repository' && typeof target.repository_id === 'string' && target.repository_id ? target.repository_id : '';
-    const context = { ws: props.workspaceId, thread: id };
+    const id = projectedId, workspace = projectedWs;
+    if (!id || id !== routeId()) return;
+    const threadTarget = thread()?.target;
+    const repositoryId = threadTarget && threadTarget.kind === 'repository' && typeof threadTarget.repository_id === 'string' && threadTarget.repository_id ? threadTarget.repository_id : '';
+    const context = { ws: workspace, thread: id };
     if (shouldResetAcknowledgedDraft(getLaunchDraft(context))) {
       seedLaunchDraft(context, { title: '', content: '' });
     }
-    props.onNavigate?.({ dest: 'launch', ws: props.workspaceId, thread: id, ...(repositoryId ? { target: repositoryId } : {}), tab: 'brief' });
+    props.onNavigate({ dest: 'launch', ws: workspace, thread: id, ...(repositoryId ? { target: repositoryId } : {}), tab: 'brief' });
     announce('Opening the launch brief for this thread.');
   }
-  onMount(() => { void loadList(); const timer = window.setInterval(() => { void loadList(); }, 5000); onCleanup(() => { clearInterval(timer); listGeneration++; selectionGeneration++; historyGeneration++; closeSource(); }); });
+  onMount(() => {
+    void loadList();
+    const timer = window.setInterval(() => { void loadList(); }, 5000);
+    onCleanup(() => {
+      clearInterval(timer);
+      listGeneration++; projectionEpoch++; historyGeneration++;
+      persistScroll(); closeSource();
+    });
+  });
   createEffect(() => {
-    const workspace = props.workspaceId;
-    props.live; props.refreshKey; props.requestedThreadId;
-    if (workspace !== lastWorkspace) {
-      lastWorkspace = workspace; listGeneration++; createGeneration++; listBusy = false; appliedRequested = ''; lastSeenRequested = normalizeRequestedThreadId(props.requestedThreadId); setThreads(null); setSelected(''); resetSelection(); setRequestedMissing(false); setDraft(''); setSendPending(null); setCreating(false); setCreateError('');
-    } else if (shouldInvalidateThreadRouteSynchronously(normalizeRequestedThreadId(props.requestedThreadId), lastSeenRequested)) {
-      // Mounted route-identity change with the same workspace: invalidate
-      // synchronously before the list fetch so the previous thread cannot
-      // survive a held or failing list. Steady polls keep the selection.
-      lastSeenRequested = normalizeRequestedThreadId(props.requestedThreadId);
-      setSelected(''); setDraft(''); setSendPending(null); resetSelection(); setRequestedMissing(false);
+    const ws = wsId();
+    const id = routeId();
+    props.live; props.refreshKey;
+    if (!active()) {
+      lastWorkspace = ws; lastProjectionKey = '';
+      listGeneration++; createGeneration++; listBusy = false;
+      clearProjection();
+      setThreads(null); setInvalid([]); setListError(''); setRequestedMissing(false);
+      setCreating(false); setCreateError(''); setTarget('');
+      return;
     }
-    if (active()) void loadList(); else { listGeneration++; createGeneration++; listBusy = false; setThreads(null); setSelected(''); resetSelection(); setCreating(false); setCreateError(''); }
+    if (ws !== lastWorkspace) {
+      // A workspace change resets the held list gate so a prior held request
+      // cannot starve the new scope; the old projection is persisted/cleared
+      // before the new list arrives.
+      lastWorkspace = ws; lastProjectionKey = '';
+      listGeneration++; listBusy = false;
+      clearProjection();
+      setThreads(null); setInvalid([]); setListError(''); setRequestedMissing(false);
+      setCreating(false); setCreateError(''); setTarget('');
+    } else {
+      const key = ws && id ? JSON.stringify([ws, id]) : '';
+      if (key !== lastProjectionKey) {
+        lastProjectionKey = key;
+        clearProjection();
+      }
+    }
+    untrack(() => reconcile(false));
+    void loadList();
   });
   createEffect(() => { const value = draft(); if (draftEl && draftEl.value !== value) draftEl.value = value; });
   createEffect(() => {
@@ -293,21 +421,22 @@ export default function Threads(props: Props) {
       <Show when={!listError()||threads()!==null} fallback={<div class="empty" role="status"><h3>Threads are unavailable</h3><p class="small">{listError()}</p><button onClick={() => void loadList()}>Retry</button></div>}>
         <Show when={threads()} fallback={<p class="empty">Loading threads…</p>}>
           <div class="thread-new" role="group" aria-label="New thread">
-            <div class="thread-field"><label for="thread-new-target">Runs in</label><select id="thread-new-target" value={target()} onInput={e => setTarget(e.currentTarget.value)}><option value="">Whole workspace</option><For each={props.repositories}>{r => <option value={r.id}>{r.id}{r.status && r.status !== 'ok' ? ` (${r.status})` : ''}</option>}</For></select></div>
+            <div class="thread-field"><label for="thread-new-target">Runs in</label><select id="thread-new-target" value={target()} onInput={e => setTarget(e.currentTarget.value)}><option value="">Whole workspace</option><For each={repositories()}>{r => <option value={r.id}>{r.id}{r.status && r.status !== 'ok' ? ` (${r.status})` : ''}</option>}</For></select></div>
             <button id="thread-create" data-thread-create disabled={!actionable() || creating()} onClick={() => void createThread()}>{creating() ? 'Creating…' : 'Create thread'}</button>
             <Show when={createError()}><p class="small warn" role="alert">{createError()}</p></Show>
           </div>
           <div class="threads-split">
             <div class="thread-list" role="list" aria-label="Threads">
               <Show when={(threads() || []).length} fallback={<p class="empty">No threads yet. Create one above to discuss work in this workspace.</p>}>
-                <For each={threads()}>{t => { const s = derived(t); const q = t.queue || []; const waiting = q.filter((m: any) => m.state === 'queued').length; return <button class="thread-row" data-thread={t.thread_id} aria-pressed={t.thread_id === selected()} onClick={() => selectThread(t.thread_id)}><span class="flex justify-between gap-3"><span class="run-title">{t.title || `Thread ${t.thread_id.slice(0, 8)}`}</span><span class={`pill ${tone(s)}`}>{label(s)}</span></span><span class="small muted">{q.length ? `${waiting ? `${waiting} waiting` : `${q.length} pending`}${t.queue_paused ? ' · paused queue' : ''}` : 'No pending messages'}</span></button>; }}</For>
+                <For each={threads()}>{t => { const s = derived(t); const q = t.queue || []; const waiting = q.filter((m: any) => m.state === 'queued').length; return <button class="thread-row" data-thread={t.thread_id} aria-pressed={t.thread_id === routeId()} onClick={() => selectRow(t.thread_id)}><span class="flex justify-between gap-3"><span class="run-title">{t.title || `Thread ${t.thread_id.slice(0, 8)}`}</span><span class={`pill ${tone(s)}`}>{label(s)}</span></span><span class="small muted">{q.length ? `${waiting ? `${waiting} waiting` : `${q.length} pending`}${t.queue_paused ? ' · paused queue' : ''}` : 'No pending messages'}</span></button>; }}</For>
               </Show>
             </div>
             <div class="thread-detail">
-              <Show when={thread()} fallback={<Show when={requestedMissing()} fallback={<div class="empty"><p class="small muted">Select a thread to read its transcript and compose a message.</p></div>}><div class="thread-state bad" id="thread-requested-unavailable" role="status"><p>Requested thread {props.requestedThreadId} is unavailable.</p><p class="small muted">It is not in this workspace's thread list, so nothing was selected, seeded or launched.</p></div></Show>}>
-                <div class="thread-head"><div class="section-head"><div><h4>{thread()?.title || `Thread ${selected().slice(0, 8)}`}</h4><p class="small muted mono">{selected()}{thread()?.generation != null ? ` · generation ${thread()?.generation}` : ''}{thread()?.updated_at ? ` · updated ${time(thread()?.updated_at)} ` : ''}</p></div><span class={`pill ${tone(state())}`}>{label(state())}</span></div>
+              <Show when={thread()} fallback={<Show when={requestedMissing()} fallback={<div class="empty"><p class="small muted">Select a thread to read its transcript and compose a message.</p></div>}><div class="thread-state bad" id="thread-requested-unavailable" role="status"><p>Requested thread {routeId()} is unavailable.</p><p class="small muted">It is not in this workspace's thread list, so nothing was selected, seeded or launched.</p></div></Show>}>
+                <div class="thread-head"><div class="section-head"><div><h4>{thread()?.title || `Thread ${routeId().slice(0, 8)}`}</h4><p class="small muted mono">{routeId()}{thread()?.generation != null ? ` · generation ${thread()?.generation}` : ''}{thread()?.updated_at ? ` · updated ${time(thread()?.updated_at)} ` : ''}</p></div><span class={`pill ${tone(state())}`}>{label(state())}</span></div>
                   <Show when={help()[1]}><div class={`thread-state ${help()[2]}`} role="status"><p><strong>{help()[0]}</strong></p><p class="small">{help()[1]}</p></div></Show>
-                  <Show when={requestError()}><div class="thread-state bad" role="alert"><p>{requestError()}</p><button id="thread-error-retry" onClick={() => { setRequestError(''); void loadHistory(); }}>Retry</button></div></Show>
+                  <Show when={historyError()}><div class="thread-state bad" role="alert"><p>{historyError()}</p><button id="thread-error-retry" onClick={() => { setHistoryError(''); void loadHistory(); }}>Retry</button></div></Show>
+                  <Show when={mutationError()}><div class="thread-state bad" role="alert"><p>{mutationError()}</p></div></Show>
                 </div>
                 <div class="thread-transcript" role="log" aria-label="Thread transcript" tabindex="0" ref={transcriptEl} onScroll={e => { const el = e.currentTarget; stickBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40; }}>
                   <Show when={older() && entries().length}><p><button data-thread-older disabled={!!pending()} onClick={() => { const first = entries()[0]?.id; if (first) void loadHistory(first, true); }}>Load older messages</button></p></Show>
@@ -319,7 +448,7 @@ export default function Threads(props: Props) {
                   <Show when={incompleteTail()}><p class="small warn">The session file ends with an incomplete line; it is excluded from parsed history.</p></Show>
                 </div>
                 <div id="thread-queue" class="rows" aria-label="Pending messages"><For each={thread()?.queue || []}>{item => { const uncertain = item.state === 'uncertain'; return <div class="info-row"><p><strong>{uncertain ? 'Delivery uncertain' : item.state === 'delivering' ? 'Delivering' : 'Queued'}</strong>{item.queue_position != null ? ` · queue position ${item.queue_position}` : ''}</p><p class="small thread-text">{item.text || ''}</p><Show when={uncertain}><small class="warn">The prompt may or may not have been delivered. Discard removes it; retrying sends it again and may duplicate the response.</small><p class="thread-actions"><button data-thread-discard={item.id} disabled={!actionable() || ['discard', 'resend'].includes(pending())} onClick={() => void simpleAction('/api/thread/discard', 'discard', { id: item.id, resend: false })}>Discard message</button><button data-thread-resend={item.id} disabled={!actionable() || ['discard', 'resend'].includes(pending())} onClick={() => void simpleAction('/api/thread/discard', 'resend', { id: item.id, resend: true })}>Retry as new message</button></p></Show></div>; }}</For></div>
-                <Show when={state() === 'history-only'} fallback={<div class="thread-composer"><label for="thread-draft">Message thread</label><textarea id="thread-draft" rows="4" placeholder="Write a message. Enter sends; Shift+Enter adds a newline." ref={draftEl} onInput={e => setDraft(e.currentTarget.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }} /><p class="small muted">Enter sends · Shift+Enter newline. Messages queue in order over the single local response slot.</p><div class="thread-actions"><button id="thread-send" class="primary" data-thread-send disabled={!actionable() || !!pending() || !draft().trim()} onClick={() => void send()}>{pending() === 'send' ? 'Sending…' : 'Send'}</button><Show when={state() === 'active' || thread()?.owns_response}><button id="thread-stop" data-thread-stop disabled={!actionable() || pending() === 'stop'} onClick={() => void simpleAction('/api/thread/stop', 'stop')}>{pending() === 'stop' ? 'Stopping…' : 'Stop'}</button></Show><Show when={state() === 'paused'}><button id="thread-resume" data-thread-resume disabled={!actionable() || pending() === 'resume'} onClick={() => void simpleAction('/api/thread/resume', 'resume')}>{pending() === 'resume' ? 'Resuming…' : 'Resume'}</button></Show><button data-thread-refresh onClick={() => { resetSelection(); void loadHistory(); openEvents(); void loadList(); }}>Refresh thread</button></div></div>}>
+                <Show when={state() === 'history-only'} fallback={<div class="thread-composer"><label for="thread-draft">Message thread</label><textarea id="thread-draft" rows="4" placeholder="Write a message. Enter sends; Shift+Enter adds a newline." ref={draftEl} onInput={e => { const value = e.currentTarget.value; setDraft(value); if (projectedWs && projectedId) setThreadDraft(projectedWs, projectedId, { draft: value, retry: sendPending() }); }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }} /><p class="small muted">Enter sends · Shift+Enter newline. Messages queue in order over the single local response slot.</p><div class="thread-actions"><button id="thread-send" class="primary" data-thread-send disabled={!actionable() || !!pending() || !draft().trim()} onClick={() => void send()}>{pending() === 'send' ? 'Sending…' : 'Send'}</button><Show when={state() === 'active' || thread()?.owns_response}><button id="thread-stop" data-thread-stop disabled={!actionable() || pending() === 'stop'} onClick={() => void simpleAction('/api/thread/stop', 'stop')}>{pending() === 'stop' ? 'Stopping…' : 'Stop'}</button></Show><Show when={state() === 'paused'}><button id="thread-resume" data-thread-resume disabled={!actionable() || pending() === 'resume'} onClick={() => void simpleAction('/api/thread/resume', 'resume')}>{pending() === 'resume' ? 'Resuming…' : 'Resume'}</button></Show><button data-thread-refresh onClick={refreshThread}>Refresh thread</button></div></div>}>
                   <div class="thread-state muted" role="status"><p>{state() === 'history-only' ? 'This thread is history only: browsing and reading work, but sending and resuming are unavailable. Source sessions are never modified.' : "Message controls are available on the host's live dashboard."}</p></div>
                 </Show>
                 <p class="small muted"><span class={`pill ${stream() === 'live' ? 'good' : stream() === 'reconnecting' ? 'warn' : 'muted'}`}>{stream() === 'live' ? 'Live' : stream() === 'connecting' ? 'Connecting live updates…' : stream() === 'reconnecting' ? 'Live updates reconnecting…' : stream() === 'stopped' ? 'Live updates stopped' : 'Live updates unavailable'}</span> · The local stream may stay silent for 15 seconds between keepalives.</p><Show when={notice()}><p class="small muted">{notice()}</p></Show>

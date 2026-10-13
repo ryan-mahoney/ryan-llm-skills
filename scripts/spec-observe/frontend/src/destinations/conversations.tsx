@@ -2,20 +2,19 @@ import Threads from '../Threads';
 import type { DestinationProps } from './index';
 
 export default function ConversationsDestination(props: DestinationProps) {
-  const repositories = () => {
-    const data = props.workspace;
-    return data && Array.isArray(data.repositories) ? data.repositories : [];
-  };
+  // Route identity, the workspace record (for reactive repository options)
+  // and the catalog context pass straight through; Threads owns deriving the
+  // workspace id and repository list from them.
   return (
     <div class="full-page">
       <div class="detail">
         <Threads
-          workspaceId={props.route.ws ?? ''}
-          repositories={repositories()}
+          route={props.route}
+          workspace={props.workspace}
+          catalog={props.catalog}
           token={props.token}
           live={props.live}
           refreshKey={props.refreshKey}
-          requestedThreadId={props.route.id}
           onNavigate={props.onNavigate}
         />
       </div>

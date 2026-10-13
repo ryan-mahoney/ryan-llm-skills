@@ -110,6 +110,9 @@ let threads=[{thread_id:thread1,workspace_id:'fixture',title:'Discussion one',st
 let entries=[{id:'entry-1',timestamp:new Date().toISOString(),message:{role:'assistant',content:[{type:'text',text:'Ready to discuss. <script>unsafe()</script>'}]}}];
 let localOperator=false;
 let tick=0,staleLaunch=!plannedLaunch,failSend=false,delaySend=false,delayBrief=false,delayDispatchBrief=false,failDispatchBrief=false,delayDispatchSuggestions=false;
+// Route-drafts only additive controls: deliberate held/rejected /api/threads
+// reads and an opt-in long transcript. Every default stays unchanged.
+let holdThreads=false,failThreads=false,longHistory=false;
 // Review/dispatch controls: hold pending responses until both widths are
 // captured, then release; typed refusals drive each presentation state.
 let holdDispatchPreview=false,holdDispatchLaunch=false,dispatchPreviewRefusal='none',dispatchLaunchRefusal='none';
@@ -117,7 +120,7 @@ let holdDispatchPreview=false,holdDispatchLaunch=false,dispatchPreviewRefusal='n
 // observer snapshot exposes a published assignment as an observed row.
 let dispatchLaunchOutcome='live';
 const launchedAssignments=new Map();
-const dispatchPreviewWaiters=[],dispatchLaunchWaiters=[];
+const dispatchPreviewWaiters=[],dispatchLaunchWaiters=[],threadWaiters=[];
 const busyAssignmentId='b42f1903-9508-46c1-a4aa-a0842dbce617';
 const waitForRelease=waiters=>new Promise(resolve=>waiters.push(resolve));
 const releaseWaiters=waiters=>{const pending=waiters.splice(0);for(const resolve of pending)resolve();};
@@ -169,8 +172,8 @@ async function fixtureAssignmentTarget(threadId){
 const discussion={
  async prepareSpecTarget(input){posts.push({name:'prepareSpecTarget',input});return prepareAssignmentSpecTarget({storageRoot:storage,workspace_id:input.workspace_id,target:await fixtureAssignmentTarget(input.thread_id),specPackage:input.spec_package});},
  async suggestions(input){posts.push({name:'suggestions',input});if(delaySuggestions)await new Promise(r=>setTimeout(r,650));const thread=threads.find(item=>item.thread_id===input.thread_id);if(!thread)throw Object.assign(new Error('Thread not found'),{code:'thread-not-found'});const target=thread.target&&typeof thread.target==='object'?thread.target:{};let executionDir=workspace.directory;if(target.kind==='repository'){const match=dispatchRepos.find(repo=>repo.id===target.repository_id);if(match)executionDir=await realpath(match.path);}else if(target.kind==='worktree'&&typeof target.path==='string'){executionDir=await realpath(target.path);}return referenceCatalog.suggest({workspace:{...workspace,repositories:dispatchRepos.map(repo=>({id:repo.id,path:repo.path}))},executionDir,kind:input.kind,query:input.query});},
- async list({workspace_id}){return {threads:workspace_id==='fixture'?copied(threads):[],invalid:[]};},
- async history({before}){if(before)return {entries:[{id:'entry-old',message:{role:'user',content:'Older message'}}],truncated:false,incomplete_tail:false};return {entries:copied(entries),truncated:true,incomplete_tail:false};},
+ async list({workspace_id}){if(holdThreads)await waitForRelease(threadWaiters);if(failThreads)throw Object.assign(new Error('Fixture thread list unavailable'),{code:'service-closed'});return {threads:workspace_id==='fixture'?copied(threads):[],invalid:[]};},
+ async history({before}){if(before)return {entries:[{id:'entry-old',message:{role:'user',content:'Older message'}}],truncated:false,incomplete_tail:false};if(longHistory)return {entries:Array.from({length:48},(_,index)=>({id:`entry-long-${index+1}`,timestamp:new Date(Date.now()-index*60000).toISOString(),message:{role:index%2?'assistant':'user',content:`Long history message ${index+1}. Fixture transcript line for the retained reading position. A second sentence keeps each row tall enough to scroll.`}})),truncated:true,incomplete_tail:false};return {entries:copied(entries),truncated:true,incomplete_tail:false};},
  async create(input){posts.push({name:'create',input});const t={...threads[0],thread_id:randomUUID(),title:input.title||'New thread',target:input.target||{kind:'workspace'},queue:[],attention:null};threads=[t,...threads];return copied(t);},
  async send(input){posts.push({name:'send',input});if(delaySend)await new Promise(r=>setTimeout(r,700));if(failSend)throw Object.assign(new Error('Temporary fixture failure'),{code:'service-closed'});entries.push({id:randomUUID(),message:{role:'user',content:input.text}});return {state:'accepted'};},
  async stop(input){posts.push({name:'stop',input});threads=threads.map(t=>t.thread_id===input.thread_id?{...t,queue_paused:true,owns_response:false}:t);return {};},
@@ -209,6 +212,10 @@ const server=createServer(async(req,res)=>{
   if(action==='edit-context')await writeFile(join(workspace.directory,'notes','browser.md'),'# Updated browser note\nChanged source after preview.\n');
   if(action==='fail-send')failSend=url.searchParams.get('value')==='true';
   if(action==='delay-send')delaySend=url.searchParams.get('value')==='true';
+  if(action==='hold-threads')holdThreads=url.searchParams.get('value')==='true';
+  if(action==='release-threads'){holdThreads=false;releaseWaiters(threadWaiters);}
+  if(action==='fail-threads')failThreads=url.searchParams.get('value')==='true';
+  if(action==='long-history')longHistory=url.searchParams.get('value')==='true';
   if(action==='delay-brief')delayBrief=url.searchParams.get('value')==='true';
   if(action==='delay-dispatch-brief')delayDispatchBrief=url.searchParams.get('value')==='true';
   if(action==='fail-dispatch-brief')failDispatchBrief=url.searchParams.get('value')==='true';
@@ -239,7 +246,7 @@ const server=createServer(async(req,res)=>{
   if(action==='state-delay-ms')boundary.stateDelayMs=numberValue(url.searchParams.get('value'),0,5000);
   if(action==='state-clock-offset-ms')boundary.stateClockOffsetMs=numberValue(url.searchParams.get('value'),-120000,120000);
   if(action==='catalog-mode')await applyCatalogMode(url.searchParams.get('value')||'healthy');
-  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({...packageIdentity,posts,threads,tick,boundary,session:{identity:sessionIdentity,ended:sessionEnded},review:{holdDispatchPreview,holdDispatchLaunch,dispatchPreviewRefusal,dispatchLaunchRefusal,staleLaunch},launch:{outcome:dispatchLaunchOutcome,published:[...launchedAssignments.keys()]},diagnostics:{resolvers:resolverDiagnostics},boundaryLog:boundaryLog.slice(-60),active:[...activeBoundary.values()],launchResolutions:Object.fromEntries(launchResolutions),briefWritesPending,completedBriefWrites}));return;
+  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({...packageIdentity,posts,threads,tick,boundary,threadControls:{holdThreads,failThreads,longHistory},session:{identity:sessionIdentity,ended:sessionEnded},review:{holdDispatchPreview,holdDispatchLaunch,dispatchPreviewRefusal,dispatchLaunchRefusal,staleLaunch},launch:{outcome:dispatchLaunchOutcome,published:[...launchedAssignments.keys()]},diagnostics:{resolvers:resolverDiagnostics},boundaryLog:boundaryLog.slice(-60),active:[...activeBoundary.values()],launchResolutions:Object.fromEntries(launchResolutions),briefWritesPending,completedBriefWrites}));return;
  }
  // Emulate the trusted Serve endpoint so the browser exercises thread-only tokens.
  if(!localOperator){req.headers.host='dashboard.example';if(req.headers.origin)req.headers.origin='https://dashboard.example';}
