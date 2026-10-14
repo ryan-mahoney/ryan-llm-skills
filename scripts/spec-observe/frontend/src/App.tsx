@@ -1,6 +1,7 @@
 import { For, Show, Switch, Match, createSignal, createMemo, createEffect, on, onMount, onCleanup } from 'solid-js';
 import { getJson } from './api';
 import { str, base, time, packageFilterMatches, setClock, tickClock, serverNow, stale, statusMarkdown } from './format';
+import { catalog as modelsCatalog, loadCatalog as loadModelsCatalog } from './models-state';
 import { normalizeEnvelope, authoritativeObservers, collectRecords, packageSummaries, collectAssignments, collectEpics, type Envelope, type WireRecord } from './model';
 import Shell from './Shell';
 import type { StatusTone } from './primitives';
@@ -21,7 +22,16 @@ type Catalog = WorkspaceCatalog;
 const liveBrowser = () => location.protocol !== 'file:';
 
 const registry = destinationEntries();
-const [SpecsAdapter, EpicsAdapter, AgentsAdapter, ConversationsAdapter, FilesAdapter, DesignsAdapter, WorkspacesAdapter, LaunchAdapter] = registry.map(entry => entry.render);
+const adapterDest = (dest: Destination) => registry.find(e => e.dest === dest)!.render;
+const SpecsAdapter = adapterDest('specs');
+const EpicsAdapter = adapterDest('epics');
+const AgentsAdapter = adapterDest('agents');
+const ConversationsAdapter = adapterDest('conversations');
+const FilesAdapter = adapterDest('files');
+const DesignsAdapter = adapterDest('designs');
+const WorkspacesAdapter = adapterDest('workspaces');
+const LaunchAdapter = adapterDest('launch');
+const ModelsAdapter = adapterDest('models');
 const primaryNav = registry.filter(entry => entry.nav === 'primary').sort((a, b) => a.order - b.order).map(entry => ({ dest: entry.dest, label: entry.label }));
 const directoryNav = registry.filter(entry => entry.nav === 'directory').sort((a, b) => a.order - b.order).map(entry => ({ dest: entry.dest, label: entry.label }));
 
@@ -636,11 +646,13 @@ export default function App() {
         ? <button class="ds-btn" type="button" onClick={() => goDestination('agents')}>Return to agents</button>
         : route().dest === 'workspaces'
           ? <button class="ds-btn" type="button" aria-busy={catalogPending()} onClick={() => void loadCatalog()}>Refresh workspaces</button>
-          : route().dest === 'agents'
-            ? <><button id="launch-agent-action" class="ds-btn ds-btn--primary" type="button" onClick={prepareAgentAssignment}>Launch agent</button><button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button></>
-            : route().dest === 'conversations'
-              ? <><button id="thread-new-action" class="ds-btn ds-btn--primary" type="button" disabled={!live() || !token()} title={newThreadUnavailableReason()} aria-describedby={!live() || !token() ? 'thread-new-action-reason' : undefined} onClick={() => go({ ...route(), tab: 'new' })}>New thread</button><Show when={!live() || !token()}><span id="thread-new-action-reason" class="sr-only">{newThreadUnavailableReason()}</span></Show><button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button></>
-              : <button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button>}
+          : route().dest === 'models'
+            ? <button class="ds-btn" type="button" aria-busy={modelsCatalog().refreshing} disabled={modelsCatalog().refreshing} onClick={() => loadModelsCatalog(true)}>Refresh catalog</button>
+            : route().dest === 'agents'
+              ? <><button id="launch-agent-action" class="ds-btn ds-btn--primary" type="button" onClick={prepareAgentAssignment}>Launch agent</button><button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button></>
+              : route().dest === 'conversations'
+                ? <><button id="thread-new-action" class="ds-btn ds-btn--primary" type="button" disabled={!live() || !token()} title={newThreadUnavailableReason()} aria-describedby={!live() || !token() ? 'thread-new-action-reason' : undefined} onClick={() => go({ ...route(), tab: 'new' })}>New thread</button><Show when={!live() || !token()}><span id="thread-new-action-reason" class="sr-only">{newThreadUnavailableReason()}</span></Show><button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button></>
+                : <button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button>}
       connection={{ label: connectionLabel(), tone: connectionTone() }}
       observedAt={observedAt()}
       onRefresh={manualRefresh}
@@ -661,6 +673,7 @@ export default function App() {
             <Match when={route().dest === 'designs'}><DesignsAdapter {...outletProps} /></Match>
             <Match when={route().dest === 'workspaces'}><WorkspacesAdapter {...outletProps} /></Match>
             <Match when={route().dest === 'launch'}><LaunchAdapter {...outletProps} /></Match>
+            <Match when={route().dest === 'models'}><ModelsAdapter {...outletProps} /></Match>
           </Switch>
         }
       >

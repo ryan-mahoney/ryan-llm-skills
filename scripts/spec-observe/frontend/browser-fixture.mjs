@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {execFileSync,spawn} from 'node:child_process';
 import {createDashboardServer} from '../dashboard.mjs';
+import {parseModelCatalog} from '../model-routes.mjs';
 import {collectWorkspace} from '../sentinel.mjs';
 import {createDiscussionService} from '../../workspaces/discussion.mjs';
 import {createReferenceCatalog} from '../../workspaces/references.mjs';
@@ -17,6 +18,7 @@ const plannedLaunch=process.env.SENTINEL_PLANNED_LAUNCH==='1';
 const specsReadiness=process.env.SENTINEL_SPECS_READINESS==='1';
 const epicPlanning=process.env.SENTINEL_EPIC_PLANNING==='1';
 const filesFixture=process.env.SENTINEL_REPOSITORY_FILES==='1';
+const modelsFixture=process.env.SENTINEL_MODELS==='1';
 const handoffIntegration=process.env.SENTINEL_HANDOFF_INTEGRATION==='1'&&(plannedLaunch||specsReadiness||epicPlanning);
 const root=await realpath(await mkdtemp(join(tmpdir(),'sentinel-solid-browser-')));
 // Real final-integration resolution reads HOME and PATH: isolate both to this
@@ -24,6 +26,14 @@ const root=await realpath(await mkdtemp(join(tmpdir(),'sentinel-solid-browser-')
 // file, never the live operator home.
 if(handoffIntegration){process.env.HOME=root;process.env.PATH=`${root}:${process.env.PATH??''}`;}
 const storage=join(root,'storage');await setupStorage(storage);
+// Models fixture (gated by SENTINEL_MODELS=1)
+let modelsReadAt=Date.now();
+let modelsCatalogFail=false;
+const modelsPreferredSeed=`{"version":1,"preferred":[{"provider":"pi-claude-cli","model":"claude-sonnet-5-5"},{"provider":"pi-claude-cli","model":"claude-haiku-5-5"},{"provider":"zai","model":"glm-5.3"},{"provider":"deepseek","model":"deepseek-v4-pro"},{"provider":"kimi-coding","model":"k3"},{"provider":"openai-codex","model":"gpt-6-sol"},{"provider":"old-provider","model":"retired-model"}],"updated_at":"2026-10-14T14:31:00.000Z"}`;
+if(modelsFixture){
+ const prefDir=join(root,'agent','spec-sentinel');await mkdir(prefDir,{recursive:true});
+ await writeFile(join(prefDir,'preferred-models.json'),modelsPreferredSeed);
+}
 const workspace=await createWorkspace(storage,{id:'fixture',name:'Browser fixture'});
 await createWorkspace(storage,{id:'other',name:'Other workspace'});
 const mismatchDirectory=await createWorkspace(storage,{id:'physical',name:'Physical directory'});
@@ -32,6 +42,45 @@ await writeFile(join(mismatchDirectory.directory,'kit.yaml'),'version: 1\nid: al
 await writeFile(join(neighborDirectory.directory,'kit.yaml'),'version: 1\nid: physical\nname: Physical neighbor\nrepositories: []\n');
 const checkout=join(root,'checkout');await mkdir(checkout,{recursive:true});execFileSync('git',['init','--quiet',checkout],{stdio:'ignore'});
 const secondCheckout=join(root,'checkout-two');if(plannedLaunch){await mkdir(secondCheckout,{recursive:true});execFileSync('git',['init','--quiet',secondCheckout],{stdio:'ignore'});}
+// Models fixture catalog building
+const buildTable=(rows)=>{
+ const header=['provider','model','context','max-out','thinking','images'];
+ const widths=header.map((h,i)=>Math.max(h.length,...rows.map(r=>String(r[i]??'').length)));
+ return [header.map((h,i)=>h.padEnd(widths[i])).join('  '),...rows.map(r=>r.map((c,i)=>String(c??'').padEnd(widths[i])).join('  '))].join('\n');
+};
+const modelsFixtureRows=[
+ ['pi-claude-cli','claude-sonnet-5-5','1M','128K','yes','yes'],
+ ['pi-claude-cli','claude-haiku-5-5','1M','128K','yes','yes'],
+ ['pi-claude-cli','claude-opus-5-5','1M','128K','yes','yes'],
+ ['pi-claude-cli','claude-fable-5','1M','128K','yes','yes'],
+ ['zai','glm-5.3','272K','64K','yes','no'],
+ ['zai','glm-4.7','200K','32K','no','no'],
+ ['zai','glm-5.3-flash','128K','16K','no','yes'],
+ ['deepseek','deepseek-v4-pro','1M','128K','yes','no'],
+ ['deepseek','deepseek-flash','128K','16K','no','yes'],
+ ['kimi-coding','k3','1M','128K','yes','no'],
+ ['kimi-coding','k3-256k','256K','32K','yes','no'],
+ ['kimi-coding','kimi-for-coding','1M','64K','yes','no'],
+ ['openai-codex','gpt-6-sol','1M','128K','yes','yes'],
+ ['openai-codex','gpt-5.6-luna','272K','64K','yes','yes'],
+ ['openai-codex','gpt-5.5','200K','32K','no','no'],
+ ['openrouter','anthropic/claude-sonnet-4','1M','128K','yes','yes'],
+ ['openrouter','openai/gpt-4.1','1M','128K','yes','yes'],
+ ['openrouter','google/gemini-1.5','1M','128K','yes','yes'],
+ ['groq','llama3-70b','128K','32K','no','no'],
+ ['groq','mixtral-8x7b','128K','32K','no','no'],
+ ['gmicloud','gemini-1.5-pro','1M','128K','yes','yes'],
+ ['gmicloud','gemini-1.5-flash','272K','64K','yes','yes']
+];
+let modelsCatalogTable=buildTable(modelsFixtureRows);
+const fixtureCatalog={
+ host:'fixture-host',
+ async read(){
+  if(modelsCatalogFail)return {state:'failed',host:'fixture-host',failed_at:new Date(modelsReadAt).toISOString(),reason:'catalog-unavailable'};
+  const models=parseModelCatalog(modelsCatalogTable);
+  return {state:'ready',host:'fixture-host',read_at:new Date(modelsReadAt).toISOString(),providers:new Set(models.map(m=>m.provider)).size,models};
+ }
+};
 // Real spec-worktree preparation needs a base commit in each isolated repo.
 if(plannedLaunch)for(const directory of [checkout,secondCheckout])execFileSync('git',['-C',directory,'-c','user.name=Browser fixture','-c','user.email=fixture@example.invalid','commit','--quiet','--allow-empty','-m','Initialize fixture repository'],{stdio:'ignore'});
 // Checkout-scoped suggestion target: visible only when file suggestions are
@@ -517,7 +566,7 @@ async function handleTerminalRequest(req,res,url,assetMatch){
 }
 if(handoffIntegration)await publishIntegrationSnapshot();
 else await writeFile(observerFile,JSON.stringify(makeSnapshot()));
-const dashboard=createDashboardServer({agentDir:join(root,'agent'),storageRoot:storage,publicHost:'dashboard.example',discussion,sessionControl});
+const dashboard=createDashboardServer({...modelsFixture?{modelCatalog:fixtureCatalog}:{},agentDir:join(root,'agent'),storageRoot:storage,publicHost:'dashboard.example',discussion,sessionControl});
 const server=createServer(async(req,res)=>{
  const url=new URL(req.url,'http://fixture');
  if(url.pathname==='/__fixture/control'){
@@ -612,7 +661,11 @@ const server=createServer(async(req,res)=>{
   if(action==='state-delay-ms')boundary.stateDelayMs=numberValue(url.searchParams.get('value'),0,5000);
   if(action==='state-clock-offset-ms')boundary.stateClockOffsetMs=numberValue(url.searchParams.get('value'),-120000,120000);
   if(action==='catalog-mode')await applyCatalogMode(url.searchParams.get('value')||'healthy');
-  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({...packageIdentity,posts,threads,createdThreads,tick,boundary,threadControls:{holdThreads,holdThreadsWorkspace,failThreads,longHistory,incompleteTail,invalidRecords,listFailStatus,historyFailStatus,responseState},subscribedThreadIds:[...new Set([...subscribers].map(item=>item.thread_id))],createControls:{delayCreate,failCreate},session:{identity:sessionIdentity,ended:sessionEnded},terminal:{state:terminalState,delayMs:terminalDelayMs,openDelayMs:terminalOpenDelayMs,failAsset:terminalFailAsset,assignment:terminalAssignment,counts:terminalCounts},review:{holdDispatchPreview,holdDispatchLaunch,dispatchPreviewRefusal,dispatchLaunchRefusal,staleLaunch,holdingRun:reviewHoldingRun?.assignment_id??null},launch:{outcome:dispatchLaunchOutcome,published:[...launchedAssignments.keys()]},diagnostics:{resolvers:resolverDiagnostics},boundaryLog:boundaryLog.slice(-60),active:[...activeBoundary.values()],launchResolutions:Object.fromEntries(launchResolutions),briefWritesPending,completedBriefWrites,integration:handoffIntegration?{enabled:true,processStarts:handoffNewSessions,sessions:[...handoffSessions.values()].map(session=>({session:session.name,socket:session.socketPath,assignment_id:session.assignmentId,ended:session.ended})),tmuxCalls:handoffTmuxCalls.length}:{enabled:false},...(controlResult??{})}));return;
+  if(modelsFixture&&action==='models-catalog-fail')modelsCatalogFail=url.searchParams.get('value')==='true';
+  if(modelsFixture&&action==='models-stale'){modelsReadAt=url.searchParams.get('value')==='true'?Date.now()-30*60*60*1000:Date.now();}
+  if(modelsFixture&&action==='models-preferences-broken')await writeFile(join(root,'agent','spec-sentinel','preferred-models.json'),url.searchParams.get('value')==='true'?'{ broken json':modelsPreferredSeed);
+  const modelsState=modelsFixture?{catalogFail:modelsCatalogFail,readAt:new Date(modelsReadAt).toISOString(),stale:Date.now()-modelsReadAt>24*60*60*1000}:null;
+  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({...packageIdentity,posts,threads,createdThreads,tick,boundary,threadControls:{holdThreads,holdThreadsWorkspace,failThreads,longHistory,incompleteTail,invalidRecords,listFailStatus,historyFailStatus,responseState},subscribedThreadIds:[...new Set([...subscribers].map(item=>item.thread_id))],createControls:{delayCreate,failCreate},session:{identity:sessionIdentity,ended:sessionEnded},terminal:{state:terminalState,delayMs:terminalDelayMs,openDelayMs:terminalOpenDelayMs,failAsset:terminalFailAsset,assignment:terminalAssignment,counts:terminalCounts},review:{holdDispatchPreview,holdDispatchLaunch,dispatchPreviewRefusal,dispatchLaunchRefusal,staleLaunch,holdingRun:reviewHoldingRun?.assignment_id??null},launch:{outcome:dispatchLaunchOutcome,published:[...launchedAssignments.keys()]},diagnostics:{resolvers:resolverDiagnostics},boundaryLog:boundaryLog.slice(-60),active:[...activeBoundary.values()],launchResolutions:Object.fromEntries(launchResolutions),briefWritesPending,completedBriefWrites,integration:handoffIntegration?{enabled:true,processStarts:handoffNewSessions,sessions:[...handoffSessions.values()].map(session=>({session:session.name,socket:session.socketPath,assignment_id:session.assignmentId,ended:session.ended})),tmuxCalls:handoffTmuxCalls.length}:{enabled:false},models:modelsState,...(controlResult??{})}));return;
  }
  const terminalAsset=/^\/api\/assignment-terminal\/([^/]+)\/([^/]+)$/.exec(url.pathname);
  if(url.pathname==='/api/assignment-terminal/open'||terminalAsset){await handleTerminalRequest(req,res,url,terminalAsset);return;}
