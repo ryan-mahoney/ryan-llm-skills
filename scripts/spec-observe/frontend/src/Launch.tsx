@@ -9,19 +9,18 @@ import BriefComposer from './BriefComposer';
 import { ActionBar, RegionalSkeleton, StateNotice, StatusText } from './primitives';
 import { str } from './format';
 import {
-  beginCorrectedAttempt, changeLaunchTarget, changeLaunchModel, editLaunchDraft, getLaunchDraft, launchReviewedDraft, normalizeLaunchStop, resolveLaunchStage,
+  beginCorrectedAttempt, changeLaunchTarget, changeLaunchModel, editLaunchDraft, getLaunchDraft, launchReviewedDraft, resolveLaunchStage,
   reviewLaunchDraft, saveLaunchDraft, seedLaunchDraft, seedThreadDraft,
   type LaunchContext, type LaunchDraftError, type LaunchPreview,
 } from './launch-state';
 import { CapturedInput, PackageContract, PackageDenied, PackageResult, packageReviewKind } from './launch-package';
 import {
-  plannedTargetChoices, publicationAuthorityForSkill, seedColdHandoff,
+  coldPlanningPlan, launchContextForRoute, plannedTargetChoices, seedColdHandoff,
   type HandoffInput, type HandoffKind, type PackagePlanningPlan, type PlannedTarget,
 } from './launch-handoff';
 import ModelPicker from './ModelPicker';
 import { availabilityMessage, catalog, formatModelChoice, type ModelChoice } from './models-state';
 import { observedSpecReadiness } from './readiness';
-import { CRITIQUE_ONLY_PLAN, packagePlanningPlan } from '../../../workspaces/spec-prompt.mjs';
 import type { BriefReference } from './composerTypes';
 import type { WireRecord } from './model';
 import type { RouteState } from './route';
@@ -175,21 +174,9 @@ export default function Launch(props: LaunchProps) {
   let threadGeneration = 0;
 
   const ws = () => props.route.ws ?? '';
-  const context = (): LaunchContext => {
-    // Bound package authority is derived from the route's hand-off skill by the
-    // owning derivation; a generic or absent skill keeps the ordinary body.
-    const authority = props.route.package ? publicationAuthorityForSkill(props.route.skill) : undefined;
-    const stop = normalizeLaunchStop(props.route.stop);
-    return {
-      ws: ws(),
-      ...(props.route.thread ? { thread: props.route.thread } : {}),
-      target: props.route.target ?? null,
-      ...(props.route.package ? { package: props.route.package } : {}),
-      ...(props.route.skill ? { skill: props.route.skill } : {}),
-      ...(authority ? { authority } : {}),
-      ...(stop ? { stop } : {}),
-    };
-  };
+  // The shared route identity owns the bound authority and the normalized
+  // stop, so this surface reads exactly the entry its seed wrote.
+  const context = (): LaunchContext => launchContextForRoute(props.route, ws());
   const draft = createMemo(() => (ws() ? getLaunchDraft(context()) : undefined));
   const title = () => draft()?.title ?? '';
   const content = () => draft()?.content ?? '';
@@ -378,54 +365,11 @@ export default function Launch(props: LaunchProps) {
       return { reason: 'The requested target does not resolve to a usable primary target of this package; inspect the package and workspace repositories before preparing this hand-off.' };
     }
     const facts = observedSpecReadiness(record, props.epics ?? [], props.assignments ?? []).facts;
-    const routeStop = normalizeLaunchStop(props.route.stop);
     let plan: PackagePlanningPlan | null = null;
     if (kind === 'plan') {
-      if (!facts || facts.proposal === null) {
-        return { reason: 'The package proposal presence is not observed; inspect the package files before preparing this planning hand-off.' };
-      }
-      if (props.route.skill === 'spec-architect-critics' && routeStop === 'critique') {
-        // Explicit critique-only entry: the route declares the one-stage
-        // critics run; observed facts decide whether that stage is valid.
-        if (facts.critiqueRecommended !== true) {
-          return { reason: 'A critique-only launch requires a recorded critique recommendation; inspect the proposal before preparing this hand-off.' };
-        }
-        if (facts.critique === null) {
-          return { reason: 'The recommended critique outcome is not observed; inspect the proposal and package files before preparing this planning hand-off.' };
-        }
-        if (facts.critique === true) {
-          return { reason: 'A critique is already written for this package; the next planning stage is the specification.' };
-        }
-        plan = CRITIQUE_ONLY_PLAN as PackagePlanningPlan;
-      } else if (props.route.skill === 'spec-write' && routeStop === 'prepared') {
-        // Explicit spec skip: the operator declared the proposal settled, so
-        // only proposal presence gates this path (FH-4).
-        if (facts.proposal !== true) {
-          return { reason: 'The requested specification stage does not match the observed package stage; inspect the package before preparing this hand-off.' };
-        }
-        plan = packagePlanningPlan({ proposal: true }) as PackagePlanningPlan;
-      } else {
-        // The same conservative stage rules as normal entry: an unknown critique
-        // recommendation and an unknown recommended-critique outcome refuse
-        // instead of coercing a spec-write or critics stage.
-        if (facts.proposal === true && facts.critiqueRecommended === null) {
-          return { reason: 'The proposal does not record whether critique is recommended; inspect the proposal and package files before preparing this planning hand-off.' };
-        }
-        if (facts.critiqueRecommended === true && facts.critique === null) {
-          return { reason: 'The recommended critique outcome is not observed; inspect the proposal and package files before preparing this planning hand-off.' };
-        }
-        plan = packagePlanningPlan({
-          proposal: facts.proposal === true,
-          critiqueRecommended: facts.critiqueRecommended === true,
-          critique: facts.critique === true,
-        }) as PackagePlanningPlan;
-        if (plan.skill !== props.route.skill) {
-          return { reason: 'The requested planning skill does not match the observed package stage; inspect the package before preparing this hand-off.' };
-        }
-        if (routeStop !== undefined && routeStop !== plan.stop) {
-          return { reason: 'The requested planning stop does not match the observed package stage; inspect the package before preparing this hand-off.' };
-        }
-      }
+      const selection = coldPlanningPlan(props.route.skill, props.route.stop, facts);
+      if (!selection.ok) return { reason: selection.reason };
+      plan = selection.plan;
     }
     return {
       kind,

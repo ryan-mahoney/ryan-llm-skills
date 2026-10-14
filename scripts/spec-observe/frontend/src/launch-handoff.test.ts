@@ -9,11 +9,12 @@ import {
   editLaunchDraft, getLaunchDraft, launchReviewedDraft, reviewLaunchDraft, saveLaunchDraft,
 } from './launch-state';
 import {
-  discussionRepositoryTarget, handoffReturn, packageLaunchPresentation, plannedTargetChoices, retargetPackageHandoff,
-  seedColdHandoff, startPackageHandoff, type HandoffInput, type PackagePlanningPlan, type PlannedTarget,
+  coldPlanningPlan, discussionRepositoryTarget, handoffReturn, launchContextForRoute, packageLaunchPresentation, plannedTargetChoices,
+  retargetPackageHandoff, seedColdHandoff, startPackageHandoff, type HandoffInput, type PackagePlanningPlan, type PlannedTarget,
 } from './launch-handoff';
 import { navigate, type RouteState } from './route';
 import { CRITIQUE_ONLY_PLAN, packagePlanningPlan } from '../../../workspaces/spec-prompt.mjs';
+import type { PlanningFacts } from './readiness';
 
 const TOKEN = 'test-action-token';
 const ASSIGNMENT_ID = '22222222-2222-4222-8222-222222222222';
@@ -243,7 +244,7 @@ test('epic critics-then-spec and critique-only drafts stay separate identities a
 
   const epic = await startPackageHandoff('plan', { ws, packageRef, targets, planningPlan: epicPlan }, TOKEN, () => undefined);
   if (!epic.ok) assert.fail(epic.reason);
-  assert.equal(epic.context.stop, 'prepared');
+  assert.equal(epic.context.stop, undefined, 'the ordinary critics-to-spec stop is presentation-only');
   const critique = await startPackageHandoff('plan', { ws, packageRef, targets, planningPlan: CRITIQUE_PLAN }, TOKEN, () => undefined);
   if (!critique.ok) assert.fail(critique.reason);
   assert.equal(critique.context.stop, 'critique');
@@ -251,7 +252,9 @@ test('epic critics-then-spec and critique-only drafts stay separate identities a
   assert.equal(calls[0].body.title, 'Plan /storage/proj/specs/pkg-split through preparation');
   assert.equal(calls[1].body.title, 'Plan /storage/proj/specs/pkg-split through critique');
 
-  const epicDraft = getLaunchDraft({ ws, package: packageRef, skill: 'spec-architect-critics', stop: 'prepared' });
+  const epicDraft = getLaunchDraft({ ws, package: packageRef, skill: 'spec-architect-critics' });
+  assert.equal(getLaunchDraft({ ws, package: packageRef, skill: 'spec-architect-critics', stop: 'prepared' })?.content,
+    epicDraft?.content, 'an ordinary prepared route stop reads the one ordinary identity');
   const critiqueDraft = getLaunchDraft({ ws, package: packageRef, skill: 'spec-architect-critics', stop: 'critique' });
   assert.match(epicDraft!.content, /Stop at Prepared\./);
   assert.equal(epicDraft!.content.includes('This launch ends at the critique'), false);
@@ -262,9 +265,9 @@ test('epic critics-then-spec and critique-only drafts stay separate identities a
   const epicRoutes: RouteState[] = [];
   const repeatedEpic = await startPackageHandoff('plan', { ws, packageRef, targets, planningPlan: epicPlan }, TOKEN, route => { epicRoutes.push(route); });
   if (!repeatedEpic.ok) assert.fail(repeatedEpic.reason);
-  assert.equal(repeatedEpic.context.stop, 'prepared');
+  assert.equal(repeatedEpic.context.stop, undefined);
   assert.equal(repeatedEpic.draft.content, epicDraft!.content);
-  assert.deepEqual(epicRoutes.map(route => [route.tab, route.stop]), [['review', 'prepared']]);
+  assert.deepEqual(epicRoutes.map(route => [route.tab, route.stop]), [['review', undefined]]);
   const critiqueRoutes: RouteState[] = [];
   const repeatedCritique = await startPackageHandoff('plan', { ws, packageRef, targets, planningPlan: CRITIQUE_PLAN }, TOKEN, route => { critiqueRoutes.push(route); });
   if (!repeatedCritique.ok) assert.fail(repeatedCritique.reason);
@@ -275,14 +278,89 @@ test('epic critics-then-spec and critique-only drafts stay separate identities a
   assert.equal(getLaunchDraft({ ws, package: packageRef, skill: 'spec-architect-critics', stop: 'prepared' })!.content, epicDraft!.content);
   assert.equal(getLaunchDraft({ ws, package: packageRef, skill: 'spec-architect-critics', stop: 'critique' })!.content, critiqueDraft!.content);
 
-  // Cold repeat entry keeps the retained stop for each held identity.
+  // Cold repeat entry keeps each retained draft under its own identity.
   const coldEpic = seedColdHandoff('plan', { ws, packageRef, targets, planningPlan: epicPlan });
   if (!coldEpic.ok) assert.fail(coldEpic.reason);
-  assert.equal(coldEpic.context.stop, 'prepared');
+  assert.equal(coldEpic.context.stop, undefined);
   const coldCritique = seedColdHandoff('plan', { ws, packageRef, targets, planningPlan: CRITIQUE_PLAN });
   if (!coldCritique.ok) assert.fail(coldCritique.reason);
   assert.equal(coldCritique.context.stop, 'critique');
   assert.equal(calls.length, 2);
+});
+
+test('a cold-seeded planning draft is readable through the route identity its cold consumer uses', async (t) => {
+  const calls = scopeFetch(t, []);
+  const ws = 'ws-handoff-consumer';
+  const packageRef = '/storage/proj/specs/pkg-consumer';
+  const targets: PlannedTarget[] = [{ id: 'consumer', primary: '/workspace/repos/consumer' }];
+  const epicPlan = packagePlanningPlan({ proposal: true, critiqueRecommended: true }) as PackagePlanningPlan;
+
+  // The cold consumer is the URL: Launch maps it with launchContextForRoute
+  // and reads the store under that identity. An ordinary planning URL carries
+  // no stop while the epic and Write spec actions carry their plan stop.
+  const ordinary = seedColdHandoff('plan', { ws, packageRef, targets, planningPlan: epicPlan });
+  if (!ordinary.ok) assert.fail(ordinary.reason);
+  const stoplessRoute: RouteState = { dest: 'launch', ws, tab: 'brief', package: packageRef, skill: 'spec-architect-critics' };
+  const consumerDraft = getLaunchDraft(launchContextForRoute(stoplessRoute, ws));
+  assert.equal(consumerDraft?.content, ordinary.draft.content, 'the stop-less cold URL reads the seeded ordinary draft');
+  assert.match(consumerDraft!.content, /Stop at Prepared\./);
+  assert.equal(getLaunchDraft(launchContextForRoute({ ...stoplessRoute, stop: 'prepared' }, ws))?.content, ordinary.draft.content,
+    'the epic action stop reads the same ordinary identity');
+
+  const spec = seedColdHandoff('plan', { ws, packageRef, targets, planningPlan: packagePlanningPlan({ proposal: true }) as PackagePlanningPlan });
+  if (!spec.ok) assert.fail(spec.reason);
+  const specRoute: RouteState = { dest: 'launch', ws, tab: 'brief', package: packageRef, skill: 'spec-write', stop: 'prepared' };
+  assert.equal(getLaunchDraft(launchContextForRoute(specRoute, ws))?.content, spec.draft.content,
+    'the explicit spec skip route reads its own stop-less identity');
+
+  const critique = seedColdHandoff('plan', { ws, packageRef, targets, planningPlan: CRITIQUE_PLAN });
+  if (!critique.ok) assert.fail(critique.reason);
+  const critiqueDraft = getLaunchDraft(launchContextForRoute({ ...stoplessRoute, stop: 'critique' }, ws));
+  assert.equal(critiqueDraft?.content, critique.draft.content);
+  assert.notEqual(critiqueDraft!.content, ordinary.draft.content);
+  assert.equal(calls.length, 0, 'cold seeding never posts');
+});
+
+test('cold planning selection allows an explicit critique without a recommendation and refuses an absent proposal', () => {
+  const facts = (overrides: Partial<PlanningFacts> = {}): PlanningFacts => ({
+    proposal: true, critique: false, critiqueRecommended: true, prepared: false, steps: null,
+    preparation: null, decision: null, receipts: [], worktreeRecorded: null, ...overrides,
+  });
+
+  // The Next steps secondary "Critique proposal" action offers the explicit
+  // critics stop even when the proposal did not recommend a critique; the
+  // reviewed recommendation cannot refuse an explicit selection.
+  const secondary = coldPlanningPlan('spec-architect-critics', 'critique', facts({ critiqueRecommended: false }));
+  assert.equal(secondary.ok, true);
+  if (secondary.ok) assert.deepEqual(secondary.plan, CRITIQUE_ONLY_PLAN);
+
+  // An absent proposal cannot seed critics even with a recommendation.
+  const absent = coldPlanningPlan('spec-architect-critics', 'critique', facts({ proposal: false }));
+  assert.equal(absent.ok, false);
+  if (!absent.ok) assert.match(absent.reason, /proposal/i);
+
+  // Unknown and written critique outcomes still refuse the fresh critics run.
+  const unknown = coldPlanningPlan('spec-architect-critics', 'critique', facts({ critique: null }));
+  assert.equal(unknown.ok, false);
+  if (!unknown.ok) assert.match(unknown.reason, /critique/i);
+  const written = coldPlanningPlan('spec-architect-critics', 'critique', facts({ critique: true }));
+  assert.equal(written.ok, false);
+  if (!written.ok) assert.match(written.reason, /already written/i);
+
+  // Explicit Write spec keeps proposal presence as its only gate.
+  const skip = coldPlanningPlan('spec-write', 'prepared', facts({ critiqueRecommended: null }));
+  assert.equal(skip.ok, true);
+  if (skip.ok) assert.equal(skip.plan.skill, 'spec-write');
+  const skipAbsent = coldPlanningPlan('spec-write', 'prepared', facts({ proposal: false }));
+  assert.equal(skipAbsent.ok, false);
+
+  // The derived branch keeps its skill and stop compatibility checks.
+  const fresh = coldPlanningPlan('spec-architect-initial', undefined, facts({ proposal: false, critiqueRecommended: true }));
+  assert.equal(fresh.ok, true);
+  if (fresh.ok) assert.equal(fresh.plan.stop, 'proposal');
+  const stopMismatch = coldPlanningPlan('spec-write', 'critique', facts({ critiqueRecommended: false }));
+  assert.equal(stopMismatch.ok, false);
+  if (!stopMismatch.ok) assert.match(stopMismatch.reason, /stop/i);
 });
 
 test('package handoff rejects missing workspace, package and zero targets without fetching', async (t) => {

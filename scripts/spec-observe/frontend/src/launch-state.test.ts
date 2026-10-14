@@ -374,33 +374,40 @@ test('workspace, thread, package and skill contexts retain separate drafts', asy
   assert.equal(scope.calls.length, 0);
 });
 
-test('a normalized planning stop splits critique and prepared identities while unknown values share the absent entry', () => {
+test('only the critics-only critique stop splits identity while other stop values share the absent entry', () => {
   const store = createLaunchStore();
   const base: LaunchContext = { ws: 'ws-stop', thread: 'thread-stop', package: 'pkg-stop', skill: 'spec-architect-critics' };
   const critique: LaunchContext = { ...base, stop: 'critique' };
   const prepared: LaunchContext = { ...base, stop: 'prepared' };
+  const proposal: LaunchContext = { ...base, stop: 'proposal' };
   const absent: LaunchContext = { ...base };
   store.seedLaunchDraft(critique, { title: 'critique', content: 'c' });
-  store.seedLaunchDraft(prepared, { title: 'prepared', content: 'p' });
   store.seedLaunchDraft(absent, { title: 'absent', content: 'a' });
   assert.equal(store.getLaunchDraft(critique)?.title, 'critique');
-  assert.equal(store.getLaunchDraft(prepared)?.title, 'prepared');
-  assert.equal(store.getLaunchDraft(absent)?.title, 'absent');
+  assert.equal(store.getLaunchDraft(prepared)?.title, 'absent', 'a prepared stop shares the absent-stop identity');
+  assert.equal(store.getLaunchDraft(proposal)?.title, 'absent', 'a proposal stop shares the absent-stop identity');
+
+  const wrongSkill: LaunchContext = { ...base, skill: 'spec-write' };
+  store.seedLaunchDraft(wrongSkill, { title: 'wrong skill', content: 'w' });
+  assert.equal(store.getLaunchDraft({ ...wrongSkill, stop: 'critique' })?.title, 'wrong skill',
+    'a critique stop outside the critics skill adds no identity of its own');
 
   const unknownStop = { ...base, stop: 'other' } as unknown as LaunchContext;
   assert.equal(store.getLaunchDraft(unknownStop)?.title, 'absent', 'an unrecognized stop shares the absent-stop identity');
   store.editLaunchDraft(unknownStop, { content: 'edited through the unknown stop' });
   assert.equal(store.getLaunchDraft(absent)?.content, 'edited through the unknown stop');
   assert.equal(store.getLaunchDraft(critique)?.content, 'c');
-  assert.equal(store.getLaunchDraft(prepared)?.content, 'p');
+  assert.equal(store.getLaunchDraft(prepared)?.content, 'edited through the unknown stop');
 
-  assert.equal(normalizeLaunchStop('critique'), 'critique');
-  assert.equal(normalizeLaunchStop('proposal'), 'proposal');
-  assert.equal(normalizeLaunchStop('prepared'), 'prepared');
-  assert.equal(normalizeLaunchStop('other'), undefined);
-  assert.equal(normalizeLaunchStop(undefined), undefined);
-  assert.equal(normalizeLaunchStop(null), undefined);
-  assert.equal(normalizeLaunchStop(7), undefined);
+  assert.equal(normalizeLaunchStop('critique', 'spec-architect-critics'), 'critique');
+  assert.equal(normalizeLaunchStop('critique', 'spec-write'), undefined);
+  assert.equal(normalizeLaunchStop('critique'), undefined);
+  assert.equal(normalizeLaunchStop('proposal', 'spec-architect-critics'), undefined);
+  assert.equal(normalizeLaunchStop('prepared', 'spec-architect-critics'), undefined);
+  assert.equal(normalizeLaunchStop('other', 'spec-architect-critics'), undefined);
+  assert.equal(normalizeLaunchStop(undefined, 'spec-architect-critics'), undefined);
+  assert.equal(normalizeLaunchStop(null, 'spec-architect-critics'), undefined);
+  assert.equal(normalizeLaunchStop(7, 'spec-architect-critics'), undefined);
 });
 
 // node --import tsx --test --test-name-pattern="unchanged save retries" src/launch-state.test.ts

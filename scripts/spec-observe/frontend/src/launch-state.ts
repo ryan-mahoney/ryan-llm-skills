@@ -85,17 +85,19 @@ export type LaunchStore = {
   beginCorrectedAttempt: (context: LaunchContext) => LaunchResult | undefined;
 };
 
-// A caller-supplied stop participates in identity only in its recognized
-// form, so an unknown value cannot mint an unbounded entry and shares the
-// absent-stop identity instead.
-export const normalizeLaunchStop = (value: unknown): LaunchStop | undefined =>
-  value === 'critique' || value === 'proposal' || value === 'prepared' ? value : undefined;
+// A caller-supplied stop is a distinct launch identity only for the
+// critics-only critique run: `skill === 'spec-architect-critics'` with
+// `stop === 'critique'`. Every other value (proposal, prepared, unknown) is
+// presentation-only and shares the absent-stop identity, so a seed cannot
+// mint an entry the route consumer reading only the URL cannot reach.
+export const normalizeLaunchStop = (value: unknown, skill?: string): LaunchStop | undefined =>
+  skill === 'spec-architect-critics' && value === 'critique' ? 'critique' : undefined;
 
 // The editable target is deliberately not part of the identity tuple; the
-// normalized planning stop is, so a critique-only draft and an epic
+// normalized critique stop is, so a critique-only draft and an epic
 // critics-then-spec draft for the same package keep separate entries.
 export const contextKey = (context: LaunchContext): string =>
-  JSON.stringify([context.ws, context.thread ?? null, context.package ?? null, context.skill ?? null, normalizeLaunchStop(context.stop) ?? null]);
+  JSON.stringify([context.ws, context.thread ?? null, context.package ?? null, context.skill ?? null, normalizeLaunchStop(context.stop, context.skill) ?? null]);
 
 const sameReferenceIdentities = (a: readonly BriefReference[], b: readonly BriefReference[]): boolean =>
   a.length === b.length && a.every((reference, index) => reference.kind === b[index].kind && reference.id === b[index].id);
