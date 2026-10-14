@@ -605,6 +605,35 @@ def run_picker(url, page):
         cap_picker(page, 'disabled-option-in-place')
         passed('disabled option in place')
 
+        # h. selected unavailable
+        pick_close(page)
+        page.locator('#thread-new-model').click()
+        page.wait_for_selector('#thread-new-model-list')
+        glm_opt = page.locator('#thread-new-model-list [role="option"]').filter(has_text='glm-5.3')
+        glm_opt.click()
+        page.wait_for_timeout(300)
+        expect(page.locator('#thread-new-model')).to_contain_text('glm-5.3')
+        expect(page.locator('#thread-new-model')).to_contain_text('zai')
+        pick_close(page)
+        control('models-catalog-drop', 'zai|glm-5.3')
+        page.locator('#thread-new-model').click()
+        page.wait_for_selector('#thread-new-model-list')
+        error_loc = page.locator('.mfield .field-error[role="alert"]')
+        error_loc.wait_for(state='visible', timeout=5000)
+        expect(page.locator('#thread-new-model')).to_contain_text('glm-5.3')
+        expect(page.locator('#thread-new-model')).to_contain_text('zai')
+        glm_opt = page.locator('#thread-new-model-list [role="option"]').filter(has_text='glm-5.3')
+        assert glm_opt.get_attribute('aria-disabled') == 'true'
+        assert glm_opt.locator('.why').text_content().strip() == 'Not in fixture-host catalog'
+        assert error_loc.first.text_content().strip().count('is not in the fixture-host catalog') >= 1
+        assert error_loc.first.text_content().strip().count('manage preferred models') >= 1
+        cap_picker(page, 'selected-unavailable')
+        passed('selected unavailable')
+
+        control('models-catalog-drop', '')
+        page.reload(wait_until='domcontentloaded')
+        goto_conversations_page(page)
+
         reference_captures = []
         if reference_dir:
             ref_screens = reference_dir / 'screens'

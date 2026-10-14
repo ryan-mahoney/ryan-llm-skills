@@ -46,6 +46,7 @@ export default function ModelPicker(props: Props) {
 
   const openList = () => {
     if (props.disabled) return;
+    if (props.live) void loadCatalog();
     setOpen(true);
     const enabled = enabledOptions();
     if (enabled.length > 0) {
@@ -189,7 +190,6 @@ export default function ModelPicker(props: Props) {
   };
 
   const errorHost = () => catalogView().host ?? 'catalog';
-  const errorAvailable = selectedAvailability();
 
   return (
     <div class="field mfield">
@@ -288,7 +288,7 @@ export default function ModelPicker(props: Props) {
 
       <Show when={showFieldError()}>
         <div class="field-error" role="alert">
-          <Show when={errorAvailable === 'missing'} fallback={
+          <Show when={selectedAvailability() === 'missing'} fallback={
             <span>Availability of {selected()!.model} is unknown; the catalog has not been read. Choose Pi default or refresh the Models page.</span>
           }>
             <span>{selected()!.model} is not in the {errorHost()} catalog. Choose another model or manage preferred models.</span>
