@@ -4,6 +4,7 @@ import type { AgentViewState } from './agent-state';
 import { specRecordFor, specRoute, workTourRoute } from './agent-links';
 import { copyText } from './clipboard';
 import SessionPanel from './SessionPanel';
+import TerminalPanel from './TerminalPanel';
 import { ActionBar, StateNotice, StatusText } from './primitives';
 import type { StatusTone } from './primitives';
 import { age, inlineMarkdown, time } from './format';
@@ -34,6 +35,8 @@ export type AgentDetailProps = {
   assignment: any;
   records: WireRecord[];
   token?: string;
+  completionToken?: string;
+  completionLocalOnly?: boolean;
   live: boolean;
   refresh: () => Promise<void>;
   onEnded: (id: string) => void;
@@ -273,6 +276,12 @@ function AgentDetailBody(props: AgentDetailProps) {
         <Show when={a().key} keyed={true}>
           {(key: string) => <SessionPanel assignment={a()} token={props.token} live={props.live} refresh={props.refresh} onEnded={showEndedSession} />}
         </Show>
+        <TerminalPanel
+          assignment={a()}
+          live={props.live}
+          localOnly={props.completionLocalOnly ?? false}
+          token={props.completionToken}
+        />
         <Show when={!retained() && a().task_activity?.state && a().task_activity.state !== 'unknown'}>
           <section class="section">
             <div class="section-head"><h3>Response status</h3></div>

@@ -985,6 +985,42 @@ scripts/spec-observe/session-routes.test.mjs`, the `session controls end only`
 case in `scripts/workspaces/launch.integration.test.mjs`, and
 `uv run --script scripts/spec-observe/frontend/browser-session-check.py`.
 
+### Live terminal preview
+
+The live terminal preview is optional and requires `asciinema` 3.x on the
+dashboard host's `PATH`. Nothing validates the version: when the binary is
+missing, the panel's state is **Not installed**, and an older binary may fail
+instead. The viewer panel ships with the dashboard frontend; the route and
+lifecycle contract below is what the host provides once it is present.
+
+`POST /api/assignment-terminal/open` requires a strictly local dashboard
+request, the dashboard action token and the exact same-origin `Origin`.
+`GET|HEAD /api/assignment-terminal/<assignment-uuid>/<asset>` (the player
+assets) requires the same strict local classification but no token. The raw
+`/ws` upgrade requires a loopback `Host` and its explicit matching local
+`Origin`. The configured public host, any forwarding header and imported
+snapshots are refused by these routes. Remote operators reach the host-local
+page through an SSH tunnel (`ssh -L 4319:127.0.0.1:4319 <host>`) rather than
+the public host. Only the dashboard page's content-security policy carries the
+player's WebAssembly allowance and the exact local `ws://` origins; package
+and workspace document policies keep their sandbox and `connect-src 'none'`.
+
+The view attaches tmux read-only: no keystroke reaches the agent and no
+recording is written. One stream is shared by every local dashboard viewer; it
+stops after the last viewer's grace window, after an unviewed open, when the
+asciinema process exits, or on dashboard shutdown. The dashboard owns only its
+asciinema child and never signals the tmux server or the agent pane.
+
+While a stream is active, the upstream loopback port asciinema opens accepts
+reads from any browser origin. That residual exposure is accepted outside the
+dashboard-only promise: direct readers of the upstream port cannot start a
+stream, and they never count as viewers, so they cannot retain one past the
+proxy's last-viewer grace window or its unused-open timer. The dashboard never
+restarts a stream or itself; restarting it (or retrying a view) is an operator
+action.
+
+Focused verification: `node --test scripts/spec-observe/terminal-routes.test.mjs`.
+
 ## Package dev servers
 
 Configured workspaces expose Start dev server, Stop dev server, and a Tailscale link

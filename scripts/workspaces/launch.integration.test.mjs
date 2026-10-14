@@ -11,6 +11,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile, fork, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { createConnection } from "node:net";
 import {
   chmod,
   lstat,
@@ -33,10 +34,14 @@ import {
   launchAssignment,
   listAssignments,
   locateAssignment,
+  prepareAssignmentSpecTarget,
   resolveAssignment,
 } from "./assignments.mjs";
 import { newPackage } from "../spec-location/index.mjs";
+import { collectAssignments } from "../spec-observe/assignments.mjs";
+import { createDashboardServer } from "../spec-observe/dashboard.mjs";
 import { writeFileAtomic } from "./store.mjs";
+import { windowSize } from "./tmux.mjs";
 
 const FIXTURE_PI = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "launch-fixture-pi.mjs");
 const LAUNCH_WORKER = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "launch-worker.mjs");
@@ -1193,7 +1198,7 @@ test('launch reservation: failed spawn from a live host is unknown, not still la
 
 // node --test --test-name-pattern='session controls end only' scripts/workspaces/launch.integration.test.mjs
 test('session controls end only the confirmed assignment and preserve saved evidence',async t=>{
-  const {createSessionControl}=await import('./session-control.mjs');
+  const {createSessionControl,verifyTerminal}=await import('./session-control.mjs');
   const {probeSession}=await import('./tmux.mjs');
   const {storageRoot,home,piPath,logPath,socket}=await launchScenario(t,2);
   const records=[];
@@ -1218,6 +1223,28 @@ test('session controls end only the confirmed assignment and preserve saved evid
   assert.equal(preview.can_end,true);
   assert.match(preview.attach_command,/ssh/);assert.match(preview.attach_command,/host.example/);
   assert.ok(preview.attach_command.includes(records[0].tmux_session));
+  // A mismatched saved pane or PID describes as unverifiable, with no control
+  // or attach command, and verification never rewrites durable bytes.
+  const assignmentPath=join(records[0].workspace_directory,'assignments',`${records[0].assignment_id}.json`);
+  const originalBytes=await readFile(assignmentPath);
+  for(const mismatched of [
+    {...records[0],pane_id:'%999999'},
+    {...records[0],pi_identity:{...records[0].pi_identity,pid:records[1].pi_identity.pid}},
+  ]){
+    await writeFile(assignmentPath,JSON.stringify(mismatched));
+    const bytesBefore=await readFile(assignmentPath);
+    const verdict=await verifyTerminal(mismatched);
+    assert.equal(verdict.exact,false);
+    assert.equal(verdict.ended,false);
+    const mismatchedPreview=await service.describe(records[0].assignment_id);
+    assert.equal(mismatchedPreview.can_end,false);
+    assert.equal(mismatchedPreview.local_command,null);
+    assert.equal(mismatchedPreview.attach_command,null);
+    assert.equal(mismatchedPreview.state,'unknown');
+    assert.equal(mismatchedPreview.identity,verdict.identity);
+    assert.deepEqual(await readFile(assignmentPath),bytesBefore,'terminal verification must not mutate the durable assignment record');
+  }
+  await writeFile(assignmentPath,originalBytes);
   await assert.rejects(service.end({assignment_id:records[0].assignment_id,expected_identity:'stale',confirm:true}),/changed/);
   await assert.rejects(service.end({assignment_id:records[0].assignment_id,expected_identity:preview.identity}),/Confirm/);
   assert.equal((await probeSession(records[0])).status,'present');
@@ -1235,6 +1262,18 @@ test('session controls end only the confirmed assignment and preserve saved evid
   assert.equal((await probeSession(records[1])).status,'present','other assignment remains running');
   assert.equal(await readFile(records[0].brief_snapshot,'utf8'),snapshot);
   assert.equal((await service.end({assignment_id:records[0].assignment_id,expected_identity:preview.identity,confirm:true})).duplicate,true);
+  // An ended-state record never exposes control of the live terminal, and the
+  // ended describe shares its result with verifyTerminal.
+  const endedBytes=await readFile(assignmentPath);
+  const endedVerdict=await verifyTerminal({...records[0],state:'ended'});
+  assert.equal(endedVerdict.ended,true);
+  assert.equal(endedVerdict.exact,false);
+  const endedPreview=await service.describe(records[0].assignment_id);
+  assert.equal(endedPreview.can_end,false);
+  assert.equal(endedPreview.local_command,null);
+  assert.equal(endedPreview.attach_command,null);
+  assert.equal(endedPreview.state,'ended');
+  assert.deepEqual(await readFile(assignmentPath),endedBytes,'terminal verification must not mutate the durable assignment record');
 });
 
 test("store preservation: harness records", async (t) => {
@@ -1448,4 +1487,326 @@ test("assignment harness lifecycle: claude fixture resolves the clauded wrapper 
 
 test("assignment harness lifecycle: codex fixture resolves the codexd wrapper without pi_path", async (t) => {
   await runHarnessLifecycle(t, { harness: "codex", wrapperName: "codexd" });
+});
+
+// ---------------------------------------------------------------------------
+// Step 8: real terminal view streams (EV-1/EV-6).
+//
+// One real recorded assignment on the private launchScenario socket, the
+// ordinary dashboard default server (no injected terminal views, service or
+// adapters), a raw v1.alis viewer and the real bundled player through the
+// same-origin proxy. Every probe file lives in the owned
+// ADJ4_TERMINAL_PROBE_DIR.
+// ---------------------------------------------------------------------------
+
+// Raw WebSocket upgrade client matching the terminal-view raw contract: the
+// test sends the exact v1.alis handshake and observes the proxy's first ALiS
+// frames before any page attaches.
+function rawUpgrade(port, path, { head = "", headers = {} } = {}) {
+  const socket = createConnection({ host: "127.0.0.1", port });
+  const state = { socket, data: Buffer.alloc(0), closed: false, error: null };
+  socket.on("data", (chunk) => { state.data = Buffer.concat([state.data, chunk]); });
+  socket.on("close", () => { state.closed = true; });
+  socket.on("error", (error) => { state.error = error; state.closed = true; });
+  state.ready = new Promise((resolve) => {
+    socket.once("connect", () => {
+      const lines = [
+        `GET ${path} HTTP/1.1`,
+        `Host: 127.0.0.1:${port}`,
+        "Upgrade: websocket",
+        "Connection: Upgrade",
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+        "Sec-WebSocket-Version: 13",
+        ...Object.entries(headers).map(([name, value]) => `${name}: ${value}`),
+      ];
+      socket.write(`${lines.join("\r\n")}\r\n\r\n${head}`);
+      resolve();
+    });
+  });
+  state.write = (value) => socket.write(value);
+  state.end = () => socket.destroy();
+  return state;
+}
+
+// One masked client text frame; tmux read-only clients must discard it.
+function maskedTextFrame(text) {
+  const payload = Buffer.from(text, "utf8");
+  const mask = Buffer.from([0x12, 0x34, 0x56, 0x78]);
+  const masked = Buffer.from(payload.map((byte, index) => byte ^ mask[index % 4]));
+  return Buffer.concat([Buffer.from([0x81, 0x80 | payload.length]), mask, masked]);
+}
+
+test("terminal view streams: real tmux/asciinema/dashboard/player composition", { timeout: 180000 }, async (t) => {
+  // launchScenario mutates the fixture env; capture the prior values first so
+  // this case restores exactly what it changed.
+  const hadFixtureLog = Object.hasOwn(process.env, "ADJ4_FIXTURE_LOG");
+  const priorFixtureLog = process.env.ADJ4_FIXTURE_LOG;
+  const hadFixtureStop = Object.hasOwn(process.env, "ADJ4_FIXTURE_STOP");
+  const priorFixtureStop = process.env.ADJ4_FIXTURE_STOP;
+  const { root, storageRoot, home, piPath, logPath, socket } = await launchScenario(t, 1);
+  const workspaceDirectory = join(storageRoot, "projects", "workspace-0");
+  const probeDir = join(root, "terminal-probe");
+  const hadTerm = Object.hasOwn(process.env, "TERM");
+  const priorTerm = process.env.TERM;
+  const priorProbe = process.env.ADJ4_TERMINAL_PROBE_DIR;
+  // Service-like spawn: the terminal manager must supply its own TERM.
+  delete process.env.TERM;
+  process.env.ADJ4_TERMINAL_PROBE_DIR = probeDir;
+  t.after(() => {
+    if (hadTerm) process.env.TERM = priorTerm; else delete process.env.TERM;
+    if (priorProbe === undefined) delete process.env.ADJ4_TERMINAL_PROBE_DIR;
+    else process.env.ADJ4_TERMINAL_PROBE_DIR = priorProbe;
+    if (hadFixtureLog) process.env.ADJ4_FIXTURE_LOG = priorFixtureLog; else delete process.env.ADJ4_FIXTURE_LOG;
+    if (hadFixtureStop) process.env.ADJ4_FIXTURE_STOP = priorFixtureStop; else delete process.env.ADJ4_FIXTURE_STOP;
+  });
+
+  // Owned spec package with a real spec document and sandbox HTML fixture.
+  const created = await newPackage({
+    workspace: "workspace-0",
+    slug: "terminal-real",
+    targets: [{ id: "app" }],
+    root: storageRoot,
+  });
+  assert.equal(created.ok, true, created.code);
+  const packageDirectory = created.locations.package_dir;
+  await writeFile(join(packageDirectory, "spec.md"), "# Terminal real specification\n\nReal player proof.\n");
+  await writeFile(join(packageDirectory, "sandbox.html"), "<!doctype html><html><body><h1>Sandbox fixture</h1></body></html>");
+
+  // Establish the real spec worktree through the same owner the production
+  // prepare path uses; makeRepo already created the repository commit.
+  await prepareAssignmentSpecTarget({
+    storageRoot,
+    workspace_id: "workspace-0",
+    target: "app",
+    specPackage: packageDirectory,
+  });
+
+  // Real launch on the private socket with the owned probe directory.
+  const input = launchInput({ workspaceId: "workspace-0", storageRoot, home, piPath, specPackage: packageDirectory });
+  const resolved = await resolveAssignment(input);
+  const record = await launchAssignment(input, { resolved, expectedDigest: resolved.contractDigest });
+  assert.equal(record.state, "live");
+  await waitForFixtureLog(logPath, socket, input.assignment_id);
+
+  // Positive input control and baseline: the fixture prints the startup marker
+  // before it observes stdin, then an owned direct tmux send-keys proves the
+  // observer is live.
+  const paneTarget = record.pane_id ? record.pane_id : `=${record.tmux_session}`;
+  const capturePane = async () => {
+    const result = await tmuxExec(socket, ["capture-pane", "-p", "-t", paneTarget]);
+    if (!result.ok) {
+      throw new Error(`capture-pane failed for ${paneTarget}: ${result.stderr || "unknown tmux error"}`);
+    }
+    return result.stdout;
+  };
+  try {
+    await waitFor(async () => (await capturePane()).includes("INITIAL_TERMINAL_MARKER"), "initial terminal marker on the owned pane");
+  } catch (error) {
+    // Bounded first-unproven prerequisite diagnostic: which tmux target was
+    // read, what it contained, whether the fixture saw the probe env and the
+    // pane dimensions. The marker assertion itself is unchanged.
+    const capture = await capturePane().catch((captureError) => `capture failed: ${captureError.message}`);
+    const probeEnv = await tmuxExec(socket, ["show-environment", "-t", `=${record.tmux_session}`, "ADJ4_TERMINAL_PROBE_DIR"]);
+    const paneSize = await tmuxExec(socket, ["display-message", "-p", "-t", paneTarget, "#{pane_width}x#{pane_height}"]);
+    throw new Error(
+      `initial terminal marker not observed: ${error.message}; ` +
+      `capture=${JSON.stringify(capture)}; ` +
+      `fixtureLog=${JSON.stringify(await fixtureEntries(logPath))}; ` +
+      `probeDirExists=${await exists(probeDir)}; ` +
+      `inputLogExists=${await exists(join(probeDir, "input.log"))}; ` +
+      `probeEnv=${JSON.stringify(probeEnv)}; ` +
+      `paneSize=${JSON.stringify(paneSize)}`,
+    );
+  }
+  const positiveInput = `ADJ4-POSITIVE-${input.assignment_id.slice(0, 8)}`;
+  const sent = await tmuxExec(socket, ["send-keys", "-l", "-t", paneTarget, positiveInput]);
+  assert.equal(sent.ok, true, sent.stderr);
+  const inputLogPath = join(probeDir, "input.log");
+  await waitFor(async () => (await readFile(inputLogPath).catch(() => Buffer.alloc(0))).includes(Buffer.from(positiveInput)), "positive input observation");
+  const inputBaseline = await readFile(inputLogPath);
+  assert.ok(inputBaseline.length > 0);
+
+  const snapshotPath = join(workspaceDirectory, "assignments", `${input.assignment_id}.brief.md`);
+  const recordPath = join(workspaceDirectory, "assignments", `${input.assignment_id}.json`);
+  const snapshotBytes = await readFile(snapshotPath);
+  const recordBytes = await readFile(recordPath);
+  const sizeBefore = await windowSize({ socketPath: socket, sessionName: record.tmux_session });
+  assert.ok(sizeBefore && sizeBefore.cols > 0 && sizeBefore.rows > 0, JSON.stringify(sizeBefore));
+
+  // Production-shaped observer envelope serialized inside the owned agentDir;
+  // ordinary App routes then reach the real launched UUID with no private
+  // registration, injection or fixture framework.
+  const agentDir = join(root, "agent");
+  const observersDirectory = join(agentDir, "spec-sentinel", "b".repeat(64), "observers");
+  await mkdir(observersDirectory, { recursive: true });
+  const collected = await collectAssignments({ storageRoot });
+  const collectedRow = collected.assignments.find((row) => row.assignment_id === input.assignment_id);
+  assert.ok(collectedRow, `launched assignment missing from collection: ${JSON.stringify(collected.coverage)}`);
+  const publishedAt = new Date().toISOString();
+  const envelope = {
+    schema_version: 1,
+    observer_id: "terminal-real",
+    state: "observing",
+    published_at: publishedAt,
+    snapshot: {
+      workspace: "workspace-0",
+      coverage: { state: "complete", observed_at: publishedAt, reasons: [] },
+      runs: [{
+        workspace: "workspace-0",
+        package: packageDirectory,
+        package_ref: "workspace-0/terminal-real",
+        assignment_id: input.assignment_id,
+        workflow_id: collectedRow.workflow_id ?? record.workflow_id ?? "terminal-workflow",
+        execution: "running",
+        workflow_state: "waiting-worker",
+        is_current_assignment: true,
+        activity: "Streaming the owned terminal",
+        obligation: "Render real terminal output",
+        observed_at: publishedAt,
+        coverage: { state: "complete", reasons: [] },
+        spec_progress: { current_position: 1, total_steps: 2, current_name: "Stream" },
+        timing: { started_at: publishedAt, attempts: [] },
+      }],
+      recently_completed: [],
+      assignments: [collectedRow],
+      assignment_coverage: { state: "complete", reasons: [] },
+      epics: [],
+    },
+  };
+  await writeFileAtomic(join(observersDirectory, "b.json"), JSON.stringify(envelope));
+
+  // Ordinary createDashboardServer defaults: no terminalViews or sessionControl.
+  const server = createDashboardServer({ agentDir, storageRoot });
+  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
+  t.after(async () => {
+    await server.closeTerminalViews().catch(() => {});
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  });
+  const port = server.address().port;
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const openPath = "/api/assignment-terminal/open";
+
+  // The ordinary state route exposes the launched UUID and its linked run
+  // before any browser or upgrade attempt.
+  const stateResponse = await fetch(`${baseUrl}/api/state`);
+  assert.equal(stateResponse.status, 200);
+  const state = await stateResponse.json();
+  assert.equal(typeof state.action_token, "string");
+  const openHeaders = { origin: baseUrl, "x-sentinel-token": state.action_token, "content-type": "application/json" };
+  const stateAssignment = state.observers.flatMap((observer) => observer.snapshot?.assignments ?? [])
+    .find((row) => row.assignment_id === input.assignment_id);
+  assert.ok(stateAssignment, "launched UUID is not exposed through /api/state");
+  const stateRun = state.observers.flatMap((observer) => observer.snapshot?.runs ?? [])
+    .find((row) => row.assignment_id === input.assignment_id);
+  assert.ok(stateRun, "launched UUID has no linked run through /api/state");
+
+  // Authenticated open from the state action token; the returned dimensions
+  // come from the real tmux window.
+  const openedResponse = await fetch(`${baseUrl}${openPath}`, {
+    method: "POST", headers: openHeaders, body: JSON.stringify({ assignment_id: input.assignment_id }),
+  });
+  const openedText = await openedResponse.text();
+  assert.equal(openedResponse.status, 200, openedText);
+  const opened = JSON.parse(openedText);
+  assert.equal(opened.state, "live");
+  assert.equal(opened.cols, sizeBefore.cols);
+  assert.equal(opened.rows, sizeBefore.rows);
+
+  // Raw upgrade: real proxy negotiation, first ALiS frames with the startup
+  // marker, then a masked viewer input attempt.
+  const viewer = rawUpgrade(port, `/api/assignment-terminal/${input.assignment_id}/ws`, {
+    headers: { "Sec-WebSocket-Protocol": "v1.alis", Origin: baseUrl },
+  });
+  t.after(() => viewer.end());
+  await viewer.ready;
+  await waitFor(() => viewer.data.includes(Buffer.from("101 Switching Protocols")), "raw viewer handshake");
+  await waitFor(() => viewer.data.includes(Buffer.from("v1.alis")), "v1.alis protocol negotiation");
+  await waitFor(() => viewer.data.includes(Buffer.from("INITIAL_TERMINAL_MARKER")), "initial marker in ALiS frames");
+  viewer.write(maskedTextFrame("ADJ4-VIEWER-INPUT"));
+
+  // The real tmux client attaches read-only and ignore-size and must not
+  // change the agent's window dimensions.
+  const clientLine = await waitFor(async () => {
+    const result = await tmuxExec(socket, ["list-clients", "-t", `=${record.tmux_session}`, "-F", "#{client_readonly}|#{client_flags}"]);
+    return result.ok && result.stdout.trim() !== "" ? result.stdout.trim() : false;
+  }, "read-only terminal client");
+  assert.match(clientLine, /^1\|/, clientLine);
+  assert.match(clientLine, /read-only/, clientLine);
+  assert.match(clientLine, /ignore-size/, clientLine);
+  const sizeAfterAttach = await windowSize({ socketPath: socket, sessionName: record.tmux_session });
+  assert.deepEqual(sizeAfterAttach, sizeBefore, "viewer attach must not resize the agent window");
+
+  // Real browser journey: ordinary App routes, actual bundled player and both
+  // markers through the same ready stream while the raw viewer stays attached.
+  const frontendDirectory = join(dirname(fileURLToPath(import.meta.url)), "..", "spec-observe", "frontend");
+  const browserCheck = join(frontendDirectory, "terminal-browser-check.py");
+  const evidenceDirectory = process.env.SENTINEL_EVIDENCE_DIR;
+  const evidencePath = join(evidenceDirectory ?? "/tmp", "ev-6-real-player.json");
+  await rm(evidencePath, { force: true });
+  const pythonOutput = await new Promise((resolve, reject) => {
+    execFile(
+      "uv",
+      ["run", "--script", browserCheck, "--case", "real", "--url", baseUrl, "--assignment", input.assignment_id,
+        "--probe-dir", probeDir, "--package", packageDirectory, "--workspace", "workspace-0"],
+      {
+        cwd: join(dirname(fileURLToPath(import.meta.url)), "..", ".."),
+        timeout: 120000,
+        killSignal: "SIGKILL",
+        maxBuffer: 8 * 1024 * 1024,
+        encoding: "utf8",
+      },
+      (error, stdout, stderr) => {
+        if (error) reject(new Error(`real terminal browser journey failed: ${stderr || stdout || error.message}`));
+        else resolve(stdout);
+      },
+    );
+  });
+  assert.match(pythonOutput, /"status": "passed"/, pythonOutput);
+  const receipt = JSON.parse(await readFile(evidencePath, "utf8"));
+  assert.equal(receipt.status, "passed");
+  assert.ok(receipt.captures.length >= 4, JSON.stringify(receipt.captures));
+  assert.equal(receipt.viewer_input?.attempted, true);
+
+  // The narrow browser viewport must not resize the agent window either.
+  const sizeAfterBrowser = await windowSize({ socketPath: socket, sessionName: record.tmux_session });
+  assert.deepEqual(sizeAfterBrowser, sizeBefore, "browser viewport must not resize the agent window");
+
+  // Closing the viewers arms the shipping default grace (10 s), which removes
+  // the read-only client without touching input, saved bytes or Pi identity.
+  viewer.end();
+  await waitFor(() => viewer.closed, "raw viewer closed");
+  await waitFor(async () => {
+    const result = await tmuxExec(socket, ["list-clients", "-t", `=${record.tmux_session}`]);
+    return result.ok && result.stdout.trim() === "";
+  }, "default grace removes the read-only client", 30000);
+  assert.deepEqual(await readFile(inputLogPath), inputBaseline, "viewer input must not reach the observed input log");
+  assert.deepEqual(await readFile(snapshotPath), snapshotBytes, "snapshot bytes changed");
+  assert.deepEqual(await readFile(recordPath), recordBytes, "assignment record bytes changed");
+  const survived = await locateAssignment(storageRoot, input.assignment_id);
+  assert.equal(survived.state, "live");
+  assert.deepEqual(survived.pi_identity, record.pi_identity);
+
+  // Reopen, then drain only the dashboard-owned stream: the raw viewer closes,
+  // the tmux client disappears and the recorded Pi identity stays alive.
+  const reopenedResponse = await fetch(`${baseUrl}${openPath}`, {
+    method: "POST", headers: openHeaders, body: JSON.stringify({ assignment_id: input.assignment_id }),
+  });
+  assert.equal(reopenedResponse.status, 200, await reopenedResponse.text());
+  const viewerDrain = rawUpgrade(port, `/api/assignment-terminal/${input.assignment_id}/ws`, {
+    headers: { "Sec-WebSocket-Protocol": "v1.alis", Origin: baseUrl },
+  });
+  t.after(() => viewerDrain.end());
+  await viewerDrain.ready;
+  await waitFor(() => viewerDrain.data.includes(Buffer.from("101")), "drain viewer handshake");
+  await server.closeTerminalViews();
+  await waitFor(() => viewerDrain.closed, "closeTerminalViews closes the raw viewer");
+  await waitFor(async () => {
+    const result = await tmuxExec(socket, ["list-clients", "-t", `=${record.tmux_session}`]);
+    return result.ok && result.stdout.trim() === "";
+  }, "closeTerminalViews drains the read-only client", 30000);
+  const drained = await locateAssignment(storageRoot, input.assignment_id);
+  assert.equal(drained.state, "live", "Pi identity must remain alive after the dashboard drain");
+  assert.deepEqual(drained.pi_identity, record.pi_identity);
+  assert.deepEqual(await readFile(inputLogPath), inputBaseline, "input log changed after the dashboard drain");
 });

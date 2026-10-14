@@ -25,6 +25,37 @@ sudo apt-get install -y git gh jq ripgrep tmux unison curl
 - `unison` must be 2.52 or newer and protocol-compatible with the client's Unison. Without
   `sudo`, see [Unison without sudo](#unison-without-sudo).
 
+### Optional: live terminal preview (asciinema 3.x)
+
+The dashboard can show a read-only live view of an assignment's tmux session. It is
+optional and requires `asciinema` 3.x on the dashboard's `PATH`. Nothing validates the
+version: when the binary is missing the panel shows **Not installed**, and an older binary
+may fail instead. The viewer panel ships with the dashboard frontend; this section covers
+the host prerequisite and the route/lifecycle contract behind it.
+
+```bash
+asciinema --version   # install asciinema 3.x; nothing validates the version, and
+                      # distribution packages are often older
+```
+
+The stream starts only from the host-local dashboard. Terminal routes refuse the configured
+public host and any forwarding headers, so view the preview by forwarding the loopback port
+instead of opening the Tailscale Serve URL:
+
+```bash
+ssh -N -L 4319:127.0.0.1:4319 <host>
+# then open http://127.0.0.1:4319/ on the client
+```
+
+The view attaches tmux read-only and writes no recording; it stops after the last dashboard
+viewer leaves or on dashboard shutdown, signalled only through the dashboard's own
+`asciinema` child. While a stream is active, the upstream loopback port asciinema opens
+accepts reads from any browser origin; that residual exposure is accepted outside the
+dashboard-only promise. Direct readers of the upstream port cannot start a stream and never
+count as viewers, so they cannot retain one past the proxy's last-viewer grace window or
+its unused-open timer. Restarting the dashboard or a stopped view is an operator action —
+nothing restarts automatically.
+
 **[Host]** Join the tailnet and confirm the machine's name:
 
 ```bash

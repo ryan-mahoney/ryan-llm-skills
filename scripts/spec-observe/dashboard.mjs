@@ -5,6 +5,8 @@
 // only wired to the bounded operator thread routes.
 import {createSessionControl} from '../workspaces/session-control.mjs';
 import {createSessionRoutes} from './session-routes.mjs';
+import {createTerminalRoutes} from './terminal-routes.mjs';
+import {createTerminalViews} from './terminal-view.mjs';
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
@@ -135,13 +137,39 @@ function viewContentType(fileName, fileType) {
   return fileType;
 }
 
-export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi/agent'), publicHost, storageRoot, discussion, sessionControl, previewService } = {}) {
+// The shell page loads the same-origin asciinema player bundle and opens the
+// raw socket through the dashboard proxy. Only this shell policy carries the
+// demonstrated WebAssembly allowance and the exact loopback WebSocket origins;
+// package and workspace document policies stay sandboxed without either.
+function shellContentSecurityPolicy(localPort) {
+  return `default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://127.0.0.1:${localPort} ws://localhost:${localPort}; frame-src 'self' blob:; frame-ancestors 'none'`;
+}
+
+// One exact application-terminal upgrade target: the assignment UUID and /ws.
+const TERMINAL_UPGRADE_PATH = /^\/api\/assignment-terminal\/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/ws$/i;
+
+// Refuse an unmatched or unauthorized upgrade with a fixed status line; the
+// socket is never handed to the stream manager.
+function refuseUpgrade(socket, status, message) {
+  if (socket.destroyed) return;
+  const text = status === 403 ? 'Forbidden' : 'Not Found';
+  try {
+    socket.end(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(message)}\r\n\r\n${message}`);
+    socket.once('finish', () => socket.destroy());
+  } catch {
+    socket.destroy();
+  }
+}
+
+export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi/agent'), publicHost, storageRoot, discussion, sessionControl, previewService, terminalViews } = {}) {
   let cached, read;
   const actionToken = randomBytes(32).toString('hex');
   const discussionRoutes = createDiscussionRoutes({ discussion, actionToken });
   const publicName = normalizePublicHost(publicHost);
   const workspaceRoot = storageRoot ?? resolveStorageRoot(process.env, homedir());
   const sessionRoutes=createSessionRoutes({service:sessionControl??createSessionControl({storageRoot:workspaceRoot,publicHost:publicName}),actionToken});
+  const terminals=terminalViews??createTerminalViews({storageRoot:workspaceRoot});
+  const terminalRoutes=createTerminalRoutes({terminals,actionToken});
   // Fresh catalog per request: only an id with exactly one valid kit maps to an entry.
   const authorizedKit = async id => {
     if (typeof id !== 'string' || id === '') throw new Error('Workspace id is required');
@@ -156,7 +184,7 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
     authorize: async requested => authorizePackage(await readDashboardState(agentDir), requested, authorizedWorkspace),
   });
   const repositoryRoutes = createRepositoryFileRoutes({ authorizedKit, exclude: workspaceExclude });
-  return createServer(async (request, response) => {
+  const server = createServer(async (request, response) => {
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('X-Frame-Options', 'DENY');
@@ -182,6 +210,9 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
       // The configured public host is an operator endpoint behind Tailscale Serve.
       // Forwarding headers alone never authorize an otherwise remote request.
       if (await sessionRoutes(request,response,url,{remote:remote&&!publicRequest,expectedOrigin:publicRequest?`https://${publicName}`:`http://${host}`})) {cached=null;return;}
+      // Terminal routes take the strict locality rule: the public host is never
+      // an authorized terminal endpoint, whatever forwarding headers claim.
+      if (await terminalRoutes(request,response,url,{remote,expectedOrigin:`http://${host}`})) return;
       if (await discussionRoutes(request, response, url, {
         remote: remote && !publicRequest,
         expectedOrigin: publicRequest ? `https://${publicName}` : `http://${host}`,
@@ -279,10 +310,37 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
         response.end(request.method === 'HEAD' ? undefined : file.bytes);
       } else if (path === '/' || path === '/dashboard.html') {
         response.setHeader('Content-Type', 'text/html; charset=utf-8');
+        response.setHeader('Content-Security-Policy', shellContentSecurityPolicy(localPort));
         response.end(request.method === 'HEAD' ? undefined : await readFile(join(here, 'dashboard.html')));
       } else { response.writeHead(404); response.end('Not found'); }
     } catch { response.writeHead(503, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ error: 'Dashboard data unavailable. Retry shortly.' })); }
   });
+  // The upgrade handshake bypasses the request handler above, so it repeats
+  // the strict local Host/Origin acceptance before the stream manager sees the
+  // socket. Only an exact UUID /ws path reaches the owner, and every refusal
+  // answers with a fixed status that never carries diagnostics.
+  server.on('upgrade', (request, socket, head) => {
+    const host = request.headers.host;
+    const { localPort } = request.socket;
+    const localHost = host === `127.0.0.1:${localPort}` || host === `localhost:${localPort}`;
+    if (!localHost || isRemoteRequest(request) || request.headers.origin !== `http://${host}`) {
+      refuseUpgrade(socket, 403, 'Terminal streaming requires the local dashboard.');
+      return;
+    }
+    let url = null;
+    try { url = new URL(request.url ?? '', `http://${host}`); } catch { url = null; }
+    const match = url !== null && url.search === '' ? TERMINAL_UPGRADE_PATH.exec(url.pathname) : null;
+    if (match === null) { refuseUpgrade(socket, 404, 'Not found'); return; }
+    Promise.resolve(terminals.handleUpgrade(request, socket, head, match[1])).catch(() => {
+      try { socket.destroy(); } catch { /* Refused socket cleanup is best effort. */ }
+    });
+  });
+  // Both dashboard shutdown owners call this before closing the HTTP listener;
+  // the close event is the fallback for any other caller, with the rejection
+  // handled because an event listener cannot await the drain.
+  server.closeTerminalViews = () => terminals.closeAll();
+  server.on('close', () => { server.closeTerminalViews().catch(() => {}); });
+  return server;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -309,7 +367,27 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       if (process.send) process.send({ type: 'ready', url });
       else console.log(`Sentinel dashboard: ${url}\nReads existing snapshots; start /spec-sentinel in Pi for live data.`);
     });
-    const stop = () => { server.closeAllConnections(); server.close(() => process.exit(0)); };
+    let stopping = null;
+    const stop = () => {
+      if (stopping) return stopping;
+      stopping = (async () => {
+        // Start the owned-child drain before closing the listener; a clean
+        // exit waits for both the drain and the HTTP close callback.
+        const drained = server.closeTerminalViews();
+        server.closeAllConnections();
+        const closed = new Promise(resolveClose => server.close(resolveClose));
+        await Promise.all([drained, closed]);
+      })();
+      stopping.then(
+        () => process.exit(0),
+        error => {
+          if (process.send) process.send({ type: 'error', error: error.code ?? error.message });
+          else console.error(`Sentinel dashboard: ${error.code ?? error.message}`);
+          process.exit(1);
+        },
+      );
+      return stopping;
+    };
     process.on('SIGTERM', stop); process.on('SIGINT', stop);
     process.on('disconnect', stop);
   } catch (error) { console.error(error.message); process.exitCode = 1; }

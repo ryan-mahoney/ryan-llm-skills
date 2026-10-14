@@ -458,6 +458,8 @@ export default function AgentsDestination(props: DestinationProps) {
           assignment={selected()}
           records={props.records}
           token={props.token}
+          completionToken={props.completionToken}
+          completionLocalOnly={props.completionLocalOnly ?? false}
           live={props.live}
           refresh={props.refresh}
           onEnded={props.onEnded}

@@ -1,17 +1,24 @@
+import type { TerminalConnection } from './terminal-state';
+
 // Fixed refusal metadata crosses HTTP only as a static reason and, for
 // target-busy, one validated assignment UUID. Unrecognized reasons and
 // malformed identifiers are ignored so arbitrary server text stays private.
 const REFUSAL_REASONS = new Set(['stale-preview', 'request-conflict', 'target-busy', 'run-active', 'service-unavailable']);
 const ASSIGNMENT_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Terminal failures cross HTTP as one fixed state; anything else is discarded
+// so arbitrary server text never reaches the panel.
+const TERMINAL_STATES = new Set<string>(['not-live', 'changed', 'not-installed', 'failed', 'busy', 'not-running']);
+const isTerminalState = (value: unknown): value is TerminalConnection => typeof value === 'string' && TERMINAL_STATES.has(value);
 export class HttpError extends Error {
-  constructor(public status: number, message: string, public reason?: string, public assignmentId?: string) { super(message); this.name = 'HttpError'; }
+  constructor(public status: number, message: string, public reason?: string, public assignmentId?: string, public terminalState?: TerminalConnection) { super(message); this.name = 'HttpError'; }
 }
 async function readJson<T>(response: Response): Promise<T> {
   const body = await response.json().catch(() => null);
   if (!response.ok) {
     const reason = typeof body?.reason === 'string' && REFUSAL_REASONS.has(body.reason) ? body.reason : undefined;
     const assignmentId = typeof body?.assignment_id === 'string' && ASSIGNMENT_UUID.test(body.assignment_id) ? body.assignment_id : undefined;
-    throw new HttpError(response.status, typeof body?.error === 'string' ? body.error : `Request failed (${response.status}).`, reason, assignmentId);
+    const terminalState = isTerminalState(body?.state) ? body.state : undefined;
+    throw new HttpError(response.status, typeof body?.error === 'string' ? body.error : `Request failed (${response.status}).`, reason, assignmentId, terminalState);
   }
   return body as T;
 }

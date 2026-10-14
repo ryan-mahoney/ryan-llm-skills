@@ -5,7 +5,7 @@
   "scripts": {
     "build": "tsc --noEmit && vite build && node build.mjs",
     "check": "tsc --noEmit",
-    "test": "node --import tsx --test src/model.test.ts src/route.test.ts src/destinations/workspace-state.test.ts src/planned-assignment.test.ts src/spec-state.test.ts src/launch-client.test.ts src/launch-state.test.ts src/conversations-state.test.ts src/launch-handoff.test.ts src/threads-selection.test.ts src/launch-picker-intent.test.ts src/threads-route.test.ts src/destinations/epic-state.test.ts src/agent-state.test.ts src/agent-links.test.ts src/readiness.test.ts"
+    "test": "node --import tsx --test src/model.test.ts src/route.test.ts src/destinations/workspace-state.test.ts src/planned-assignment.test.ts src/spec-state.test.ts src/launch-client.test.ts src/launch-state.test.ts src/conversations-state.test.ts src/launch-handoff.test.ts src/launch-picker-intent.test.ts src/destinations/epic-state.test.ts src/agent-state.test.ts src/agent-links.test.ts src/readiness.test.ts src/terminal-state.test.ts"
   },
   "dependencies": {
     "solid-js": "1.9.17"
