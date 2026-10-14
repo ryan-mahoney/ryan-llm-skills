@@ -10,6 +10,7 @@ import { dirname, isAbsolute, join, posix, resolve } from 'node:path';
 
 import { listEpics } from '../spec-location/index.mjs';
 import { DESIGN_SLUG } from '../design/schema.mjs';
+import { readPreparation, readDecision, readPlanningArtifacts } from './preparation.mjs';
 
 export const EPIC_LIMITS = Object.freeze({ epics: 50, members: 100, recordBytes: 65536 });
 export const EPIC_SLUG = /^[a-z][a-z0-9-]{0,31}$/;
@@ -126,6 +127,15 @@ export function deriveMemberStatus({ observed = true, exists, prepared, hasRecei
   return { status, attention: status === 'in-progress' && attentionOf(run) };
 }
 
+// The planning subset an epic member publishes. Values are the same truth as a
+// planned row's readiness facts; an unobserved or unreadable member stays null
+// (INV-2 observation, never acceptance).
+const PLANNING_FIELDS = ['proposal', 'critique', 'critique_recommended', 'prepared', 'step_count', 'preparation', 'decision'];
+function projectPlanning(facts) {
+  if (!facts) return null;
+  return Object.fromEntries(PLANNING_FIELDS.map(field => [field, facts[field] ?? null]));
+}
+
 // Pure projection of collected member facts. `entries[].members` aligns with
 // `epic.packages`; each carries the facts the status table needs plus `path`,
 // `run`, `incomplete`.
@@ -143,7 +153,8 @@ export function buildEpics(entries) {
         requires: [...item.requires], waiting_on: item.requires, note: item.note,
         completed_at: fact.completion?.completed_at ?? null,
         pr_url: fact.completion?.merge?.url ?? fact.run?.merge?.url ?? null,
-        assignment_id: fact.run?.assignment_id ?? null };
+        assignment_id: fact.run?.assignment_id ?? null,
+        planning: projectPlanning(fact.planning) };
     });
     const byName = new Map(members.map(member => [member.name, member]));
     // A landed member owes nothing; otherwise list the requirements that have not landed.
@@ -190,26 +201,54 @@ const kindOf = async path => {
 };
 
 // Joins the records with collected package facts. Beyond the sentinel's own
-// package reads it performs only lstat calls on a member directory and its spec-steps.json.
-export async function collectEpics({ entries, facts, runs, recentlyCompleted, runConditions, readTime }) {
+// package reads it performs only lstat calls on a member directory and its
+// spec-steps.json, plus bounded planning reads through the injected reader and
+// the shared step-index owner for observed members that lack cached
+// planned-row readiness facts.
+export async function collectEpics({ entries, facts, runs, recentlyCompleted, runConditions, readTime,
+  budget = null, readBounded = null, planningCache = null, readStepIndex = null }) {
   const currentRun = path => {
     const row = runs.find(item => item.package === path && item.is_current_assignment === true);
     return row ? { ...row, conditions: runConditions(row, readTime) } : recentlyCompleted.find(item => item.package === path) ?? null;
+  };
+  const canRead = typeof readBounded === 'function' && budget !== null && budget !== undefined;
+  // The memo keeps one read per planning file when a package is a member of
+  // more than one epic.
+  const planningMemo = new Map();
+  const planningFacts = async fact => {
+    // Members excluded from planned inventory never had their step index read.
+    // Obtain it through the shared bounded owner so the fallback publishes the
+    // same preparation truth as a planned row; the owner's fact.stepIndex cache
+    // keeps one read per package.
+    const steps = fact.stepIndex
+      ?? (typeof readStepIndex === 'function' ? await readStepIndex(fact, budget) : null)
+      ?? { readiness_valid: null, steps: [], source: null };
+    const preparation = await readPreparation(fact.packagePath, budget, { readBounded, memo: planningMemo });
+    const decision = await readDecision(fact.packagePath, budget, { readBounded, memo: planningMemo });
+    const artifacts = await readPlanningArtifacts(fact.packagePath, budget, { readBounded, memo: planningMemo });
+    // Same readiness rule as a planned row: only a valid index plus a prepared
+    // report and no unresolved decision is positively prepared. Incomplete
+    // reads stay unknown instead of guessing.
+    const prepared = steps.readiness_valid === null || preparation.outcome === 'unavailable' || decision?.outcome === 'unavailable'
+      ? null
+      : steps.readiness_valid === true && preparation.outcome === 'prepared' && decision === null;
+    return { ...artifacts, prepared, step_count: steps.source ? steps.steps.length : null, preparation, decision };
   };
   for (const entry of entries) {
     entry.members = [];
     for (const item of entry.packageDirs) {
       const path = await realpath(item.dir).catch(() => item.dir);
       const fact = facts.get(path);
+      const planning = planningCache?.get(path) ?? (fact && canRead ? await planningFacts(fact) : null);
       const base = { path, workspace: entry.workspace, observed: true };
       if (fact) {
         entry.members.push({ ...base, exists: true, prepared: await kindOf(join(path, 'spec-steps.json')) === 'file',
           hasReceipts: (fact.candidates?.length ?? 0) > 0, completion: fact.completion ?? null, run: currentRun(path),
-          incomplete: !!(fact.staleReceipts || fact.receiptsIncomplete) });
+          incomplete: !!(fact.staleReceipts || fact.receiptsIncomplete), planning });
       } else {
         const kind = await kindOf(path);
         entry.members.push({ ...base, observed: kind !== 'error', exists: kind === 'dir',
-          prepared: kind === 'dir' && await kindOf(join(path, 'spec-steps.json')) === 'file' });
+          prepared: kind === 'dir' && await kindOf(join(path, 'spec-steps.json')) === 'file', planning: null });
       }
     }
   }

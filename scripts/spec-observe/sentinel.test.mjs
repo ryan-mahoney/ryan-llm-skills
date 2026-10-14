@@ -789,6 +789,220 @@ test('planned inventory excludes legacy implementation artifacts and orders plan
   assert.deepEqual(snapshot.recently_completed, [], 'exclusion from Planned does not assert accepted completion');
 });
 
+// Run alone: node --test --test-name-pattern='planned inventory publishes readiness' scripts/spec-observe/sentinel.test.mjs
+test('planned inventory publishes readiness and planning facts for a standalone prepared package and its epic member', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'planned-facts');
+  const prepared = path => {
+    writeFileSync(join(path, 'spec-steps.json'), JSON.stringify({ steps: [
+      { step: 1, name: 'Prepare inputs', description: 'Prepare bounded inputs.', difficulty: 'medium', visualDesign: false, evidence: [] },
+      { step: 2, name: 'Draft reader', description: 'Draft the bounded reader.', difficulty: 'medium', visualDesign: false, evidence: [] }] }));
+    writeFileSync(join(path, 'spec-prepare.md'), '# Preparation\n\nOutcome: prepared\nPrepared: 2026-10-06\n');
+    writeFileSync(join(path, 'proposal.md'), '---\nverdict: COMPATIBLE\ncritique_recommended: true\n---\n\n# Proposal\n');
+    writeFileSync(join(path, 'critique.md'), '# Critique\n');
+  };
+  const standalone = pack(repo, 'prepared-standalone');
+  const member = pack(repo, 'epic-member');
+  prepared(standalone);
+  prepared(member);
+  const epicDir = join(STORAGE, 'projects', basename(repo), 'epics', 'facts');
+  mkdirSync(epicDir, { recursive: true });
+  writeFileSync(join(epicDir, 'epic.json'), JSON.stringify({ schema_version: 1, epic: 'facts',
+    title: 'Facts epic', state: 'active', packages: [{ package: 'epic-member' }] }));
+
+  const snapshot = await collect({ roots: [repo], indexDir: f.indexDir, now });
+  const row = snapshot.planned_packages.find(item => item.package === standalone);
+  assert.ok(row, 'a standalone no-receipt package is planned inventory');
+  assert.equal(row.step_count, 2);
+  assert.equal(row.prepared, true);
+  assert.equal(row.preparation.outcome, 'prepared');
+  assert.equal(row.preparation.reported_at, '2026-10-06');
+  assert.equal(row.decision, null);
+  assert.deepEqual(row.receipts, []);
+  assert.equal(row.worktree_recorded, repo, 'a null recorded worktree falls back to the primary checkout');
+  assert.equal(row.proposal, true);
+  assert.equal(row.critique, true);
+  assert.equal(row.critique_recommended, true);
+
+  const memberRow = snapshot.planned_packages.find(item => item.package === member);
+  assert.ok(memberRow?.epic, 'an epic member package carries epic membership');
+  for (const field of ['step_count', 'prepared', 'decision', 'receipts', 'worktree_recorded', 'proposal', 'critique', 'critique_recommended'])
+    assert.deepEqual(memberRow[field], row[field], `standalone and epic member share ${field}`);
+  assert.equal(memberRow.preparation.outcome, row.preparation.outcome);
+});
+
+// Run alone: node --test --test-name-pattern='planned inventory never publishes prepared' scripts/spec-observe/sentinel.test.mjs
+test('planned inventory never publishes prepared for blocked, pending, malformed, or unreadable preparation', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'planned-unready');
+  const steps = JSON.stringify({ steps: [{ step: 1, name: 'One' }, { step: 2, name: 'Two' }] });
+  const blocked = pack(repo, 'blocked-prepare');
+  writeFileSync(join(blocked, 'spec-steps.json'), steps);
+  writeFileSync(join(blocked, 'spec-prepare.md'), 'Outcome: blocked\n');
+  const pending = pack(repo, 'pending-decision');
+  writeFileSync(join(pending, 'spec-steps.json'), steps);
+  writeFileSync(join(pending, 'spec-prepare.md'), 'Outcome: decision-required\n');
+  writeFileSync(join(pending, 'decision-required.md'), '---\nstage: architecture\nquestion: "Which seam?"\nrecommendation: "Keep it local"\nrecorded_at: 2026-10-06T12:00:00.000Z\n---\n');
+  const sparse = pack(repo, 'sparse-index');
+  writeFileSync(join(sparse, 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1, name: 'One' }, { step: 3, name: 'Three' }] }));
+  writeFileSync(join(sparse, 'spec-prepare.md'), 'Outcome: prepared\n');
+  const unreadable = pack(repo, 'unreadable-prepare');
+  writeFileSync(join(unreadable, 'spec-steps.json'), steps);
+  writeFileSync(join(unreadable, 'spec-prepare.md'), 'x'.repeat(65537));
+  const noIndex = pack(repo, 'missing-index');
+  writeFileSync(join(noIndex, 'spec-prepare.md'), 'Outcome: prepared\n');
+
+  const snapshot = await collect({ roots: [repo], indexDir: f.indexDir, now });
+  const row = path => snapshot.planned_packages.find(item => item.package === path);
+  for (const path of [blocked, pending, sparse, unreadable, noIndex]) {
+    assert.ok(row(path), `${basename(path)} is still planned inventory`);
+    assert.equal(row(path).prepared, false, basename(path));
+  }
+  assert.equal(row(blocked).preparation.outcome, 'blocked');
+  assert.equal(row(pending).decision.stage, 'architecture');
+  assert.equal(row(pending).decision.question, 'Which seam?');
+  assert.equal(row(sparse).step_count, 2, 'a readable non-sequential index still reports its size');
+  assert.equal(row(noIndex).step_count, null);
+});
+
+// Run alone: node --test --test-name-pattern='planned inventory refuses incomplete multi-target routing' scripts/spec-observe/sentinel.test.mjs
+test('planned inventory refuses incomplete multi-target routing without repository membership', async t => {
+  const f = sandbox(t);
+  const repoA = primary(f.dir, 'multi-a');
+  const repoB = primary(f.dir, 'multi-b');
+  const workspace = basename(repoA);
+  const twoTargets = [
+    { id: 'multi-a', primary: repoA, common: join(repoA, '.git'), branch: 'spec-multi', worktree: null },
+    { id: 'multi-b', primary: repoB, common: join(repoB, '.git'), branch: 'spec-multi', worktree: null },
+  ];
+  const makeMulti = name => {
+    const path = pack(repoA, name);
+    writeFileSync(join(path, 'locations.json'), JSON.stringify({ schema_version: 1,
+      package_ref: `${workspace}/${name}`, targets: twoTargets }));
+    writeFileSync(join(path, 'spec-prepare.md'), 'Outcome: prepared\n');
+    return path;
+  };
+  const valid = entry => ({ step: entry.step, name: entry.name, description: 'Do the bounded step.',
+    difficulty: 'medium', visualDesign: false, evidence: [], ...(entry.repository === undefined ? {} : { repository: entry.repository }) });
+  const missing = makeMulti('multi-missing');
+  writeFileSync(join(missing, 'spec-steps.json'), JSON.stringify({ steps: [valid({ step: 1, name: 'One' })] }));
+  const unknown = makeMulti('multi-unknown');
+  writeFileSync(join(unknown, 'spec-steps.json'), JSON.stringify({ steps: [valid({ step: 1, name: 'One', repository: 'unknown-target' })] }));
+  const incomplete = makeMulti('multi-incomplete');
+  writeFileSync(join(incomplete, 'spec-steps.json'), JSON.stringify({ steps: [valid({ step: 1, name: 'One', repository: 'multi-a' }), { step: 2, name: 'Two' }] }));
+  const routed = makeMulti('multi-routed');
+  writeFileSync(join(routed, 'spec-steps.json'), JSON.stringify({ steps: [valid({ step: 1, name: 'One', repository: 'multi-a' })] }));
+  const singleIncomplete = pack(repoA, 'single-incomplete');
+  writeFileSync(join(singleIncomplete, 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1, name: 'One' }] }));
+  writeFileSync(join(singleIncomplete, 'spec-prepare.md'), 'Outcome: prepared\n');
+  const singleUnknown = pack(repoA, 'single-unknown');
+  writeFileSync(join(singleUnknown, 'spec-steps.json'), JSON.stringify({ steps: [valid({ step: 1, name: 'One', repository: 'unknown-target' })] }));
+  writeFileSync(join(singleUnknown, 'spec-prepare.md'), 'Outcome: prepared\n');
+
+  const snapshot = await collect({ roots: [repoA, repoB], indexDir: f.indexDir, now });
+  const row = path => snapshot.planned_packages.find(item => item.package === path);
+  for (const path of [missing, unknown, incomplete, singleIncomplete, singleUnknown]) {
+    assert.ok(row(path), `${basename(path)} is still planned inventory`);
+    assert.equal(row(path).prepared, false, basename(path));
+    assert.equal(row(path).step_count, path === incomplete ? 2 : 1, 'a readable index still reports its size');
+  }
+  assert.ok(row(routed), 'a routed multi-target package is planned inventory');
+  assert.equal(row(routed).prepared, true, 'a valid repository membership publishes prepared true');
+});
+
+// Run alone: node --test --test-name-pattern='epic planning' scripts/spec-observe/sentinel.test.mjs
+test('epic planning facts match planned inventory truth and blocked, missing members stay unlaunchable', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'epic-planning');
+  const prepared = pack(repo, 'prepared-member');
+  writeFileSync(join(prepared, 'spec-steps.json'), JSON.stringify({ steps: [
+    { step: 1, name: 'One', description: 'Prepare bounded inputs.', difficulty: 'medium', visualDesign: false, evidence: [] },
+    { step: 2, name: 'Two', description: 'Draft the bounded reader.', difficulty: 'medium', visualDesign: false, evidence: [] }] }));
+  writeFileSync(join(prepared, 'spec-prepare.md'), 'Outcome: prepared\nPrepared: 2026-10-06\n');
+  writeFileSync(join(prepared, 'proposal.md'), '---\ncritique_recommended: true\n---\n# Proposal\n');
+  writeFileSync(join(prepared, 'critique.md'), '# Critique\n');
+  const blocked = pack(repo, 'blocked-member');
+  writeFileSync(join(blocked, 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1, name: 'One' }] }));
+  writeFileSync(join(blocked, 'spec-prepare.md'), 'Outcome: blocked\n');
+  const epicDir = join(STORAGE, 'projects', basename(repo), 'epics', 'planning');
+  mkdirSync(epicDir, { recursive: true });
+  writeFileSync(join(epicDir, 'epic.json'), JSON.stringify({ schema_version: 1, epic: 'planning', title: 'Planning epic', state: 'active',
+    packages: [{ package: 'prepared-member' }, { package: 'blocked-member' }, { package: 'missing-member' }] }));
+
+  const snapshot = await collect({ roots: [repo], indexDir: f.indexDir, now });
+  const epic = snapshot.epics.find(item => item.epic === 'planning');
+  const member = name => epic.members.find(item => item.name === name);
+  const planningFields = ['proposal', 'critique', 'critique_recommended', 'prepared', 'step_count', 'preparation', 'decision'];
+  const projected = row => Object.fromEntries(planningFields.map(field => [field, row[field] ?? null]));
+
+  const preparedRow = snapshot.planned_packages.find(item => item.package === prepared);
+  assert.ok(preparedRow, 'the prepared member is planned inventory');
+  assert.deepEqual(member('prepared-member').planning, projected(preparedRow), 'member planning equals the planned inventory truth');
+  assert.equal(member('prepared-member').planning.step_count, 2);
+  assert.equal(member('prepared-member').planning.preparation.outcome, 'prepared');
+
+  assert.ok(snapshot.planned_packages.some(item => item.package === blocked), 'the blocked member is still planned inventory');
+  assert.equal(member('blocked-member').status, 'prepared', 'the legacy index-only lifecycle stays prepared');
+  assert.equal(member('blocked-member').planning.prepared, false, 'a blocked report is not launchable preparation');
+  assert.equal(member('blocked-member').planning.preparation.outcome, 'blocked');
+
+  assert.equal(member('missing-member').status, 'missing');
+  assert.equal(member('missing-member').planning, null, 'a missing member publishes no planning facts');
+  assert.equal(epic.summary.merged, 0);
+  assert.equal(epic.summary.complete, 0, 'landed counts are unchanged by planning observations');
+  assert.equal(epic.summary.prepared, 2, 'legacy prepared lifecycle counting is unchanged');
+  assert.equal(epic.summary.missing, 1);
+});
+
+// Run alone: node --test --test-name-pattern='epic planning' scripts/spec-observe/sentinel.test.mjs
+test('epic planning observes an uncached member index outside planned inventory', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'epic-uncached');
+  const member = pack(repo, 'uncached-member');
+  writeFileSync(join(member, 'spec-steps.json'), JSON.stringify({ steps: [
+    { step: 1, name: 'One', description: 'Prepare bounded inputs.', difficulty: 'medium', visualDesign: false, evidence: [] }] }));
+  writeFileSync(join(member, 'spec-prepare.md'), 'Outcome: prepared\nPrepared: 2026-10-06\n');
+  writeFileSync(join(member, 'proposal.md'), '---\ncritique_recommended: true\n---\n\n# Proposal\n');
+  writeFileSync(join(member, 'critique.md'), '# Critique\n');
+  // Step learning excludes the receipt-free member from planned inventory, so
+  // its index was never read there; the epic fallback must still observe it.
+  writeFileSync(join(member, 'step-1-learning.md'), '# Learning\n');
+  const epicDir = join(STORAGE, 'projects', basename(repo), 'epics', 'planning');
+  mkdirSync(epicDir, { recursive: true });
+  writeFileSync(join(epicDir, 'epic.json'), JSON.stringify({ schema_version: 1, epic: 'planning', title: 'Planning epic', state: 'active',
+    packages: [{ package: 'uncached-member' }] }));
+
+  const snapshot = await collect({ roots: [repo], indexDir: f.indexDir, now });
+  assert.ok(!snapshot.planned_packages.some(item => item.package === member), 'implementation evidence keeps the member outside planned inventory');
+  const epic = snapshot.epics.find(item => item.epic === 'planning');
+  const row = epic.members.find(item => item.name === 'uncached-member');
+  assert.equal(row.status, 'prepared', 'the legacy index-only lifecycle stays prepared');
+  assert.equal(row.planning.prepared, true, 'fallback preparation reflects the actual prepared report');
+  assert.equal(row.planning.step_count, 1, 'fallback step count reflects the uncached index');
+  assert.equal(row.planning.preparation.outcome, 'prepared');
+  assert.equal(epic.summary.prepared, 1, 'epic preparation counts include the uncached member');
+});
+
+// Run alone: node --test --test-name-pattern='planned inventory keeps cancelled receipts' scripts/spec-observe/sentinel.test.mjs
+test('planned inventory keeps cancelled receipts as history and a recorded worktree as a non-disqualifying fact', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'planned-history-facts');
+  const workspace = basename(repo);
+  const settled = pack(repo, 'settled-worktree');
+  receipt(settled, { id: 'settled', state: 'cancelled', started_at: ago(60000) });
+  writeFileSync(join(settled, 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1, name: 'One' }] }));
+  const recorded = join(f.dir, 'recorded-worktree');
+  writeFileSync(join(settled, 'locations.json'), JSON.stringify({ schema_version: 1, package_ref: `${workspace}/settled-worktree`,
+    targets: [{ id: workspace, primary: repo, common: join(repo, '.git'), branch: 'spec-settled', worktree: recorded }] }));
+  const active = pack(repo, 'active-implementation');
+  receipt(active, { id: 'active', state: 'running', started_at: ago(1000) });
+  const completed = pack(repo, 'completed-implementation');
+  receipt(completed, { id: 'completed', state: 'completed', started_at: ago(2000) });
+
+  const snapshot = await collect({ roots: [repo], indexDir: f.indexDir, now });
+  const row = snapshot.planned_packages.find(item => item.package === settled);
+  assert.ok(row, 'a cancelled-only receipt history does not disqualify a package');
+  assert.deepEqual(row.receipts, [{ id: 'settled', state: 'cancelled' }]);
+  assert.equal(row.worktree_recorded, recorded, 'the recorded worktree is a fact, not a disqualifier');
+  assert.ok(!snapshot.planned_packages.some(item => item.package === active), 'active implementation stays outside planned inventory');
+  assert.ok(!snapshot.planned_packages.some(item => item.package === completed), 'completed implementation stays outside planned inventory');
+});
+
 test('completion history caps packages independently of monitored assignments and reports omitted history', async t => {
   const f = sandbox(t), repo = primary(f.dir, 'completion-cap');
   const active = pack(repo, 'active');

@@ -249,7 +249,10 @@ def run_states(browser, report):
         planned_rows = planned_page.locator(".records button.record[data-key]")
         expect(planned_rows).to_have_count(2)
         planned_rows.filter(has=planned_page.get_by_text("browser", exact=True)).click()
-        expect(planned_page.locator("#planned-assignment")).to_be_visible()
+        # The integrated Ready destination replaces the legacy planned launch
+        # form with observed readiness, while keeping this terminal exclusion.
+        expect(planned_page.get_by_role("region", name="Waiting on base", exact=True)).to_be_visible()
+        expect(planned_page.get_by_role("button", name="Implement spec", exact=True)).to_be_disabled()
         expect(planned_page.locator("section.terminal-view")).to_have_count(0)
         assert control(api, planned)["terminal"]["counts"]["open"] == 0
         planned_page.close()

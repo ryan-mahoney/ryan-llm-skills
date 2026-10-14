@@ -102,6 +102,36 @@ export function busyAgentsHref(
   return `${base}&q=${encodeURIComponent(conflictingId)}`;
 }
 
+// Bound package result links. Planning returns to the epic that carries the
+// member and implementation returns to the package's own spec row; the exact
+// observed key wins, and an unobserved identity falls back to a workspace-
+// scoped q filter so an unrelated first row is never selected.
+export function packageEpicHref(
+  ws: string,
+  packageRef: string,
+  epics: Array<{ key?: unknown; members?: unknown }> = [],
+): string {
+  const base = `#/epics?ws=${encodeURIComponent(ws)}`;
+  const slug = packageRef.split('/').filter(Boolean).pop() ?? packageRef;
+  for (const epic of epics) {
+    const members = Array.isArray(epic?.members) ? epic.members as Array<{ package?: unknown; name?: unknown }> : [];
+    const holdsMember = members.some(member => member?.package === slug || member?.name === slug);
+    if (holdsMember && typeof epic.key === 'string' && epic.key) return `${base}&id=${encodeURIComponent(epic.key)}`;
+  }
+  return `${base}&q=${encodeURIComponent(slug)}`;
+}
+
+export function packageSpecHref(
+  ws: string,
+  packageRef: string,
+  records: Array<{ key?: unknown; package?: unknown; package_ref?: unknown }> = [],
+): string {
+  const base = `#/specs?ws=${encodeURIComponent(ws)}`;
+  const match = records.find(record => record?.package === packageRef || record?.package_ref === packageRef);
+  if (match && typeof match.key === 'string' && match.key) return `${base}&id=${encodeURIComponent(match.key)}`;
+  return `${base}&q=${encodeURIComponent(packageRef)}`;
+}
+
 const listeners = new Set<RouteListener>();
 let bound = false;
 let observedKey: string | null = null;

@@ -105,8 +105,17 @@ Don't guess silently — wrong assumptions here cascade into wrong architecture.
 
 When a consequential answer is unavailable, write the resolved `context.md` and a compact
 `decision-required` report with the unresolved choice, consequence, recommendation, and safe work
-completed. Do not emit a compatible proposal for dependent work or misclassify the gap as an
-architecture incompatibility. Resume the same package after the decision is sourced.
+completed. Also write the sibling `decision-required.md` in `package_dir` atomically: write the
+full content to a temporary file in the destination directory, then rename it over the final path.
+It is a runtime optional package artifact, not a canonical planning Markdown output. Lead with
+front matter followed by an H1 heading; the four scalar front-matter fields are `stage`
+(`architecture` or `specification`), `question` (JSON double-quoted), `recommendation` (JSON
+double-quoted; may be empty), and `recorded_at` (ISO timestamp). On a new run or resume,
+keep an unresolved record; remove it only after that question is resolved or explicitly superseded.
+Never delete other package data; when the package already has a `spec-prepare.md`, its
+`decision-required` outcome stays authoritative until a subsequent report is produced. Do not emit
+a compatible proposal for dependent work or misclassify the gap as an architecture incompatibility.
+Resume the same package after the decision is sourced.
 
 ## Step 2 — Load the Architecture Context
 

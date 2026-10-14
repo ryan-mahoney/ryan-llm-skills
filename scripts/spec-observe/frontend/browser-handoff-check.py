@@ -1063,217 +1063,226 @@ try:
     thread3 = fixture_info['thread3']
     worktree_target = fixture_info['worktreeTarget']
     with sync_playwright() as p:
-        if section == 'thread':
-            # The thread route/draft section owns its Playwright Chromium (no
-            # CDP) so it can run standalone against the temporary fixture;
-            # every other section keeps the existing CDP contract.
+        # Own the browser unless the operator supplied an explicit CDP
+        # endpoint: SENTINEL_CDP_URL keeps the external connect_over_cdp
+        # contract, and every other invocation launches its own Chromium so
+        # the default command has no preexisting localhost:9222 dependency.
+        cdp_url = os.environ.get('SENTINEL_CDP_URL')
+        owns_browser = cdp_url is None
+        if cdp_url is not None:
+            browser = p.chromium.connect_over_cdp(cdp_url)
+        else:
             executable = shutil.which('google-chrome')
             browser = p.chromium.launch(**({'executable_path': executable} if executable else {}), headless=True, args=['--no-sandbox'])
-        else:
-            browser = p.chromium.connect_over_cdp(os.environ.get('SENTINEL_CDP_URL', 'http://127.0.0.1:9222'))
-        if section == 'brief':
-            try:
-                run_brief(browser, url)
-                assert not summary['page_errors'], summary['page_errors']
-                summary['status']='passed'
-                print(json.dumps({'status': 'passed', 'elapsed_seconds': round(time.monotonic() - started, 2), 'cases': summary['cases'], 'captures': summary['captures'], 'boundary': summary['boundary'], 'receipt': str(receipt)}))
-            except BaseException as exc:
-                summary['error']=repr(exc)
-                raise
-        elif section == 'review':
-            try:
-                run_review(browser, url)
-                assert not summary['page_errors'], summary['page_errors']
-                summary['status']='passed'
-                print(json.dumps({'status': 'passed', 'elapsed_seconds': round(time.monotonic() - started, 2), 'cases': summary['cases'], 'captures': summary['captures'], 'boundary': summary['boundary'], 'receipt': str(receipt)}))
-            except BaseException as exc:
-                summary['error']=repr(exc)
-                raise
-        elif section == 'result':
-            try:
-                run_result(browser, url, thread1)
-                assert not summary['page_errors'], summary['page_errors']
-                summary['status']='passed'
-                print(json.dumps({'status': 'passed', 'elapsed_seconds': round(time.monotonic() - started, 2), 'cases': summary['cases'], 'captures': summary['captures'], 'boundary': summary['boundary'], 'receipt': str(receipt)}))
-            except BaseException as exc:
-                summary['error']=repr(exc)
-                raise
-        elif section == 'thread':
-            try:
-                run_thread(browser, url, thread1, thread2)
-                assert not summary['page_errors'], summary['page_errors']
-                summary['status']='passed'
-                print(json.dumps({'status': 'passed', 'elapsed_seconds': round(time.monotonic() - started, 2), 'cases': summary['cases'], 'captures': summary['captures'], 'boundary': summary['boundary'], 'receipt': str(receipt)}))
-            except BaseException as exc:
-                summary['error']=repr(exc)
-                raise
-            finally:
-                # Close the thread-owned Chromium inside the live Playwright
-                # session: closing after the context manager exits raises
-                # "Event loop is closed". browserClosed records only an
-                # observed successful close.
-                if browser is not None:
-                    try:
-                        browser.close()
-                        cleanup['browserClosed'] = True
-                    except Exception as error:
-                        cleanup['errors'].append(f'browser close: {error}')
-        elif section == 'final-review':
-            try:
-                run_final_review(browser, url, thread1, thread2, thread3, worktree_target)
-                assert not summary['page_errors'], summary['page_errors']
-                summary['status']='passed'
-                print(json.dumps({'status': 'passed', 'elapsed_seconds': round(time.monotonic() - started, 2), 'cases': summary['cases'], 'captures': summary['captures'], 'boundary': summary['boundary'], 'receipt': str(receipt)}))
-            except BaseException as exc:
-                summary['error']=repr(exc)
-                raise
-        else:
-            context = browser.new_context(viewport={'width': 1440, 'height': 1100}, device_scale_factor=1)
-            try:
-                page = context.new_page()
-                errors = []
-                page.on('pageerror', lambda e: errors.append(str(e)))
-                def control(action='', value=''):
-                    response = context.request.get(url + '/__fixture/control?action=' + action + '&value=' + value)
-                    assert response.ok
-                    return response.json()
-                def posts(name):
-                    return [x for x in control()['posts'] if x['name'] == name]
-                # Direct journey: Agents -> Launch agent -> picker -> brief.
-                # The retired thread composer is replaced by the direct launch
-                # flow while every named save/review/dispatch protection remains.
-                page.goto(url+'/#/agents', wait_until='domcontentloaded')
-                expect(page.locator('#launch-agent-action')).to_be_visible()
-                page.locator('#launch-agent-action').click()
-                expect(page.locator('.workspace-picker')).to_be_visible()
-                page.locator('.workspace-picker button[data-workspace="fixture"]').click()
-                expect(page).to_have_url(re.compile(r'#/launch\?ws=fixture&tab=brief'))
-                title, brief = page.locator('#launch-brief-title'), page.locator('#launch-brief-content')
-                save = page.locator('#launch-save')
-                title.fill('Preferred models settings')
-                brief.fill('/spec-architect-initial add a settings area for preferred models')
-                brief.press('End'); brief.press_sequentially(' See @browser')
-                expect(page.get_by_role('option', name='@notes/browser.md', exact=False)).to_be_visible()
-                brief.press('Tab')
-                expect(page.locator('.brief-references')).to_contain_text('@workspace/notes/browser.md')
+        try:
+            if section == 'brief':
+                try:
+                    run_brief(browser, url)
+                    assert not summary['page_errors'], summary['page_errors']
+                    summary['status']='passed'
+                    print(json.dumps({'status': 'passed', 'elapsed_seconds': round(time.monotonic() - started, 2), 'cases': summary['cases'], 'captures': summary['captures'], 'boundary': summary['boundary'], 'receipt': str(receipt)}))
+                except BaseException as exc:
+                    summary['error']=repr(exc)
+                    raise
+            elif section == 'review':
+                try:
+                    run_review(browser, url)
+                    assert not summary['page_errors'], summary['page_errors']
+                    summary['status']='passed'
+                    print(json.dumps({'status': 'passed', 'elapsed_seconds': round(time.monotonic() - started, 2), 'cases': summary['cases'], 'captures': summary['captures'], 'boundary': summary['boundary'], 'receipt': str(receipt)}))
+                except BaseException as exc:
+                    summary['error']=repr(exc)
+                    raise
+            elif section == 'result':
+                try:
+                    run_result(browser, url, thread1)
+                    assert not summary['page_errors'], summary['page_errors']
+                    summary['status']='passed'
+                    print(json.dumps({'status': 'passed', 'elapsed_seconds': round(time.monotonic() - started, 2), 'cases': summary['cases'], 'captures': summary['captures'], 'boundary': summary['boundary'], 'receipt': str(receipt)}))
+                except BaseException as exc:
+                    summary['error']=repr(exc)
+                    raise
+            elif section == 'thread':
+                try:
+                    run_thread(browser, url, thread1, thread2)
+                    assert not summary['page_errors'], summary['page_errors']
+                    summary['status']='passed'
+                    print(json.dumps({'status': 'passed', 'elapsed_seconds': round(time.monotonic() - started, 2), 'cases': summary['cases'], 'captures': summary['captures'], 'boundary': summary['boundary'], 'receipt': str(receipt)}))
+                except BaseException as exc:
+                    summary['error']=repr(exc)
+                    raise
+            elif section == 'final-review':
+                try:
+                    run_final_review(browser, url, thread1, thread2, thread3, worktree_target)
+                    assert not summary['page_errors'], summary['page_errors']
+                    summary['status']='passed'
+                    print(json.dumps({'status': 'passed', 'elapsed_seconds': round(time.monotonic() - started, 2), 'cases': summary['cases'], 'captures': summary['captures'], 'boundary': summary['boundary'], 'receipt': str(receipt)}))
+                except BaseException as exc:
+                    summary['error']=repr(exc)
+                    raise
+            else:
+                context = browser.new_context(viewport={'width': 1440, 'height': 1100}, device_scale_factor=1)
+                try:
+                    page = context.new_page()
+                    errors = []
+                    page.on('pageerror', lambda e: errors.append(str(e)))
+                    def control(action='', value=''):
+                        response = context.request.get(url + '/__fixture/control?action=' + action + '&value=' + value)
+                        assert response.ok
+                        return response.json()
+                    # The default handoff journey owns its stale-source recovery:
+                    # the fixture's legacy staleLaunch flag starts true outside
+                    # the planned-launch fixture, so clear it and let the real
+                    # edit-context + fresh resolver digest prove the refusal.
+                    control('stale-launch', 'false')
+                    def posts(name):
+                        return [x for x in control()['posts'] if x['name'] == name]
+                    # Direct journey: Agents -> Launch agent -> picker -> brief.
+                    # The retired thread composer is replaced by the direct launch
+                    # flow while every named save/review/dispatch protection remains.
+                    page.goto(url+'/#/agents', wait_until='domcontentloaded')
+                    expect(page.locator('#launch-agent-action')).to_be_visible()
+                    page.locator('#launch-agent-action').click()
+                    expect(page.locator('.workspace-picker')).to_be_visible()
+                    page.locator('.workspace-picker button[data-workspace="fixture"]').click()
+                    expect(page).to_have_url(re.compile(r'#/launch\?ws=fixture&tab=brief'))
+                    title, brief = page.locator('#launch-brief-title'), page.locator('#launch-brief-content')
+                    save = page.locator('#launch-save')
+                    title.fill('Preferred models settings')
+                    brief.fill('/spec-architect-initial add a settings area for preferred models')
+                    brief.press('End'); brief.press_sequentially(' See @browser')
+                    expect(page.get_by_role('option', name='@notes/browser.md', exact=False)).to_be_visible()
+                    brief.press('Tab')
+                    expect(page.locator('.brief-references')).to_contain_text('@workspace/notes/browser.md')
 
-                # Screen 85 locked saving: a pending save disables the submitted
-                # fields. The retired in-flight edit/focus assertion is replaced
-                # by leaving mid-save: one request and the typed content survive.
-                control('delay-dispatch-brief', 'true')
-                save.click()
-                expect(save).to_contain_text('Saving brief…')
-                expect(title).to_be_disabled()
-                expect(brief).to_be_disabled()
-                expect(page.locator('#launch-target')).to_be_disabled()
-                page.locator('.head-actions .ds-btn').click()
-                expect(page).to_have_url(re.compile(r'#/agents'))
-                control('delay-dispatch-brief', 'false')
-                page.wait_for_timeout(900)
-                assert len(posts('dispatchSaveBrief')) == 1
-                page.go_back()
-                expect(page.locator('#launch-brief-title')).to_have_value('Preferred models settings')
-                expect(page.locator('#launch-brief-content')).to_have_value('/spec-architect-initial add a settings area for preferred models See @workspace/notes/browser.md ')
-                expect(page.locator('#launch-saved')).to_be_visible()
-                passed('locked saving restores pending work')
+                    # Screen 85 locked saving: a pending save disables the submitted
+                    # fields. The retired in-flight edit/focus assertion is replaced
+                    # by leaving mid-save: one request and the typed content survive.
+                    control('delay-dispatch-brief', 'true')
+                    save.click()
+                    expect(save).to_contain_text('Saving brief…')
+                    expect(title).to_be_disabled()
+                    expect(brief).to_be_disabled()
+                    expect(page.locator('#launch-target')).to_be_disabled()
+                    page.locator('.head-actions .ds-btn').click()
+                    expect(page).to_have_url(re.compile(r'#/agents'))
+                    control('delay-dispatch-brief', 'false')
+                    page.wait_for_timeout(900)
+                    assert len(posts('dispatchSaveBrief')) == 1
+                    page.go_back()
+                    expect(page.locator('#launch-brief-title')).to_have_value('Preferred models settings')
+                    expect(page.locator('#launch-brief-content')).to_have_value('/spec-architect-initial add a settings area for preferred models See @workspace/notes/browser.md ')
+                    expect(page.locator('#launch-saved')).to_be_visible()
+                    passed('locked saving restores pending work')
 
-                # Save-only confirmation: the restored handoff is saved once and
-                # nothing previews or launches until an explicit action.
-                expect(page.locator('#launch-saved')).to_contain_text('Saving does not start an agent')
-                saved_input = posts('dispatchSaveBrief')[-1]['input']
-                assert saved_input['title'] == 'Preferred models settings'
-                assert saved_input['content'].startswith('/spec-architect-initial add a settings area for preferred models')
-                assert not posts('dispatchPreview')
-                assert not posts('dispatchLaunch')
-                passed('save-only confirmation')
+                    # Save-only confirmation: the restored handoff is saved once and
+                    # nothing previews or launches until an explicit action.
+                    expect(page.locator('#launch-saved')).to_contain_text('Saving does not start an agent')
+                    saved_input = posts('dispatchSaveBrief')[-1]['input']
+                    assert saved_input['title'] == 'Preferred models settings'
+                    assert saved_input['content'].startswith('/spec-architect-initial add a settings area for preferred models')
+                    assert not posts('dispatchPreview')
+                    assert not posts('dispatchLaunch')
+                    passed('save-only confirmation')
 
-                # Repeated Enter on unchanged content must not create another handoff.
-                before = len(posts('dispatchSaveBrief'))
-                expect(save).to_be_disabled()
-                brief.press('Enter')
-                expect(save).to_be_disabled()
-                assert len(posts('dispatchSaveBrief')) == before
-                passed('unchanged Enter preserves handoff')
+                    # Repeated Enter on unchanged content must not create another handoff.
+                    before = len(posts('dispatchSaveBrief'))
+                    expect(save).to_be_disabled()
+                    brief.press('Enter')
+                    expect(save).to_be_disabled()
+                    assert len(posts('dispatchSaveBrief')) == before
+                    passed('unchanged Enter preserves handoff')
 
-                shot(page.locator('.flow'), 'ev-4-handoff-saved.png')
-                full_shot('ev-4-handoff-desktop.png')
-                passed('desktop boundary capture')
+                    shot(page.locator('.flow'), 'ev-4-handoff-saved.png')
+                    full_shot('ev-4-handoff-desktop.png')
+                    passed('desktop boundary capture')
 
-                # Review resolves the saved handoff once; dispatch stays explicit.
-                page.evaluate("location.hash = '#/launch?ws=fixture&tab=review'")
-                expect(page.locator('#launch-review')).to_be_visible()
-                expect(page.locator('#launch-assignment-launch')).to_be_enabled()
-                expect(page.locator('#launch-heading')).to_be_focused()
-                assert len(posts('dispatchPreview')) == 1
-                assert not posts('dispatchLaunch')
-                page.evaluate("[...document.querySelectorAll('#launch-what-pi details')].forEach(d=>d.open=true)")
-                expect(page.locator('#launch-what-pi')).to_contain_text('add a settings area for preferred models')
-                expect(page.locator('#launch-what-pi')).to_contain_text('Perform the attached assignment brief.')
-                expect(page.locator('#launch-what-pi')).to_contain_text('A recorded note.')
-                passed('preview then explicit launch')
+                    # Review resolves the saved handoff once; dispatch stays explicit.
+                    page.evaluate("location.hash = '#/launch?ws=fixture&tab=review'")
+                    expect(page.locator('#launch-review')).to_be_visible()
+                    expect(page.locator('#launch-assignment-launch')).to_be_enabled()
+                    expect(page.locator('#launch-heading')).to_be_focused()
+                    assert len(posts('dispatchPreview')) == 1
+                    assert not posts('dispatchLaunch')
+                    page.evaluate("[...document.querySelectorAll('#launch-what-pi details')].forEach(d=>d.open=true)")
+                    expect(page.locator('#launch-what-pi')).to_contain_text('add a settings area for preferred models')
+                    expect(page.locator('#launch-what-pi')).to_contain_text('Perform the attached assignment brief.')
+                    expect(page.locator('#launch-what-pi')).to_contain_text('A recorded note.')
+                    passed('preview then explicit launch')
 
-                # Changed source: the launch refuses the stale digest until a
-                # fresh review captures the new file contents.
-                control('edit-context')
-                page.locator('#launch-assignment-launch').click()
-                expect(page.locator('#launch-review-error')).to_contain_text('The reviewed contract changed')
-                expect(page.locator('#launch-assignment-launch')).to_have_count(0)
-                page.locator('#launch-assignment-review').click()
-                expect(page.locator('#launch-assignment-launch')).to_be_enabled()
-                page.evaluate("[...document.querySelectorAll('#launch-what-pi details')].forEach(d=>d.open=true)")
-                expect(page.locator('#launch-what-pi')).to_contain_text('Changed source after preview.')
-                passed('stale source-change recovery')
+                    # Changed source: the launch refuses the stale digest until a
+                    # fresh review captures the new file contents.
+                    control('edit-context')
+                    page.locator('#launch-assignment-launch').click()
+                    expect(page.locator('#launch-review-error')).to_contain_text('The reviewed contract changed')
+                    expect(page.locator('#launch-assignment-launch')).to_have_count(0)
+                    page.locator('#launch-assignment-review').click()
+                    expect(page.locator('#launch-assignment-launch')).to_be_enabled()
+                    page.evaluate("[...document.querySelectorAll('#launch-what-pi details')].forEach(d=>d.open=true)")
+                    expect(page.locator('#launch-what-pi')).to_contain_text('Changed source after preview.')
+                    passed('stale source-change recovery')
 
-                # Dirty edits withdraw review until the revised brief is saved.
-                page.locator('#launch-assignment-edit').click()
-                brief.fill('Changed request')
-                expect(page.locator('#launch-review-unsaved')).to_contain_text('Unsaved changes are not reviewed')
-                expect(page.locator('#launch-assignment-launch')).to_have_count(0)
-                save.click()
-                expect(page.locator('#launch-assignment-launch')).to_be_enabled()
-                assert posts('dispatchSaveBrief')[-1]['input']['content'] == 'Changed request'
-                page.evaluate("[...document.querySelectorAll('#launch-what-pi details')].forEach(d=>d.open=true)")
-                expect(page.locator('#launch-what-pi')).to_contain_text('Changed request')
-                passed('dirty edits require a fresh save')
+                    # Dirty edits withdraw review until the revised brief is saved.
+                    page.locator('#launch-assignment-edit').click()
+                    brief.fill('Changed request')
+                    expect(page.locator('#launch-review-unsaved')).to_contain_text('Unsaved changes are not reviewed')
+                    expect(page.locator('#launch-assignment-launch')).to_have_count(0)
+                    save.click()
+                    expect(page.locator('#launch-assignment-launch')).to_be_enabled()
+                    assert posts('dispatchSaveBrief')[-1]['input']['content'] == 'Changed request'
+                    page.evaluate("[...document.querySelectorAll('#launch-what-pi details')].forEach(d=>d.open=true)")
+                    expect(page.locator('#launch-what-pi')).to_contain_text('Changed request')
+                    passed('dirty edits require a fresh save')
 
-                # Single submission: a held dispatch rejects a second click and
-                # pending navigation retains the reviewed facts.
-                control('hold-dispatch-launch', 'true')
-                launches_before = len(posts('dispatchLaunch'))
-                assignment = page.locator('#launch-review [data-fact="assignment"] dd').inner_text()
-                digest = page.locator('#launch-review [data-fact="digest"] dd').inner_text()
-                page.evaluate("() => { const b = document.getElementById('launch-assignment-launch'); b.click(); b.click(); }")
-                expect(page.locator('#launch-assignment-launch')).to_be_disabled()
-                expect(page.locator('#launch-assignment-launch')).to_contain_text('Starting agent')
-                assert len(posts('dispatchLaunch')) == launches_before + 1
-                submitted = posts('dispatchLaunch')[-1]['input']
-                assert submitted['assignment_id'] == assignment
-                assert submitted['expectedDigest'] == digest
-                page.locator('.head-actions .ds-btn').click()
-                expect(page).to_have_url(re.compile(r'#/agents'))
-                page.evaluate("location.hash = '#/launch?ws=fixture&tab=review'")
-                expect(page.locator('#launch-assignment-launch')).to_contain_text('Starting agent')
-                assert len(posts('dispatchLaunch')) == launches_before + 1
-                passed('single submit retains reviewed facts')
-                control('release-dispatch-launch', 'true')
-                expect(page.locator('#launch-result-facts')).to_be_visible()
-                expect(page).to_have_url(re.compile(r'#/launch\?ws=fixture&id=' + re.escape(assignment) + '&tab=result'))
-                expect(page.locator('#launch-heading')).to_have_text('Agent is live')
-                expect(page.locator('#launch-heading')).to_be_focused()
-                expect(page.locator('#launch-result-facts [data-fact="observation"] dd')).to_contain_text('Live process confirmed')
-                assert len(posts('dispatchLaunch')) == 2  # one stale refusal, one launch
-                assert len(posts('dispatchSaveBrief')) == 2
-                passed('launch confirmation')
-                assert not errors, errors
-                summary['status']='passed'; summary['page_errors']=errors
-                print(json.dumps({'status': 'passed', 'elapsed_seconds': round(time.monotonic() - started, 2), 'cases': summary['cases'], 'captures': summary['captures'], 'boundary': summary['boundary'], 'receipt': str(receipt)}))
-            except BaseException as exc:
-                summary['error']=repr(exc)
-                try: summary['page_errors']=errors
-                except Exception: summary['page_errors']=[]
-                raise
-            finally:
-                context.close()
+                    # Single submission: a held dispatch rejects a second click and
+                    # pending navigation retains the reviewed facts.
+                    control('hold-dispatch-launch', 'true')
+                    launches_before = len(posts('dispatchLaunch'))
+                    assignment = page.locator('#launch-review [data-fact="assignment"] dd').inner_text()
+                    digest = page.locator('#launch-review [data-fact="digest"] dd').inner_text()
+                    page.evaluate("() => { const b = document.getElementById('launch-assignment-launch'); b.click(); b.click(); }")
+                    expect(page.locator('#launch-assignment-launch')).to_be_disabled()
+                    expect(page.locator('#launch-assignment-launch')).to_contain_text('Starting agent')
+                    assert len(posts('dispatchLaunch')) == launches_before + 1
+                    submitted = posts('dispatchLaunch')[-1]['input']
+                    assert submitted['assignment_id'] == assignment
+                    assert submitted['expectedDigest'] == digest
+                    page.locator('.head-actions .ds-btn').click()
+                    expect(page).to_have_url(re.compile(r'#/agents'))
+                    page.evaluate("location.hash = '#/launch?ws=fixture&tab=review'")
+                    expect(page.locator('#launch-assignment-launch')).to_contain_text('Starting agent')
+                    assert len(posts('dispatchLaunch')) == launches_before + 1
+                    passed('single submit retains reviewed facts')
+                    control('release-dispatch-launch', 'true')
+                    expect(page.locator('#launch-result-facts')).to_be_visible()
+                    expect(page).to_have_url(re.compile(r'#/launch\?ws=fixture&id=' + re.escape(assignment) + '&tab=result'))
+                    expect(page.locator('#launch-heading')).to_have_text('Agent is live')
+                    expect(page.locator('#launch-heading')).to_be_focused()
+                    expect(page.locator('#launch-result-facts [data-fact="observation"] dd')).to_contain_text('Live process confirmed')
+                    assert len(posts('dispatchLaunch')) == 2  # one stale refusal, one launch
+                    assert len(posts('dispatchSaveBrief')) == 2
+                    passed('launch confirmation')
+                    assert not errors, errors
+                    summary['status']='passed'; summary['page_errors']=errors
+                    print(json.dumps({'status': 'passed', 'elapsed_seconds': round(time.monotonic() - started, 2), 'cases': summary['cases'], 'captures': summary['captures'], 'boundary': summary['boundary'], 'receipt': str(receipt)}))
+                except BaseException as exc:
+                    summary['error']=repr(exc)
+                    try: summary['page_errors']=errors
+                    except Exception: summary['page_errors']=[]
+                    raise
+                finally:
+                    context.close()
+        finally:
+            # Close an owned Chromium inside the live Playwright session:
+            # closing after the context manager exits raises "Event loop is
+            # closed". External CDP browsers are left untouched, and
+            # browserClosed records only an observed successful close.
+            if owns_browser and browser is not None:
+                try:
+                    browser.close()
+                    cleanup['browserClosed'] = True
+                except Exception as error:
+                    cleanup['errors'].append(f'browser close: {error}')
 finally:
     fixture.terminate()
     try:

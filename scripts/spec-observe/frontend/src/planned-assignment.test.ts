@@ -1,7 +1,10 @@
 // Run with: node --import tsx --test src/planned-assignment.test.ts
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { plannedBriefContent, plannedBriefTitle, plannedTargetChoices } from './planned-assignment';
+// The legacy PlannedAssignment surface is retired; the brief bytes and canonical
+// target helpers now live with spec-prompt and launch-handoff owners.
+import { plannedBriefContent, plannedBriefTitle } from '../../../workspaces/spec-prompt.mjs';
+import { plannedTargetChoices, plannedTargetLabel } from './launch-handoff';
 
 test('prefills both package references and keeps the requested owner routing text', () => {
   const ref = '/workspace/specs/feature';
@@ -20,16 +23,8 @@ test('prefills both package references and keeps the requested owner routing tex
   ].join('\n'));
 });
 
-test('keeps canonical package target paths when their aliases differ from repository ids', () => {
-  const choices = plannedTargetChoices([
-    { id: 'main', primary: '/home/operator/Documents/app', worktree: '/home/operator/worktrees/app-feature' },
-    { id: 'alternate', primary: '/home/operator/Documents/docs' },
-    { id: 'invalid', primary: '' },
-    { id: 'main', primary: '/home/operator/Documents/app', worktree: '/home/operator/worktrees/app-feature' },
-  ]);
-
-  assert.deepEqual(choices, [
-    { key: 'alternate\n/home/operator/Documents/docs', id: 'alternate', path: '/home/operator/Documents/docs' },
-    { key: 'main\n/home/operator/Documents/app', id: 'main', path: '/home/operator/Documents/app' },
-  ]);
+test('legacy planned surface keeps canonical target alias protection', () => {
+  const alias = plannedTargetChoices([{ id: 'alias', primary: '/workspace/repos/real' }, { id: 'invalid', primary: '' }]);
+  assert.deepEqual(alias, [{ key: 'alias\n/workspace/repos/real', id: 'alias', path: '/workspace/repos/real' }]);
+  assert.equal(plannedTargetLabel(alias[0]), 'alias · /workspace/repos/real');
 });

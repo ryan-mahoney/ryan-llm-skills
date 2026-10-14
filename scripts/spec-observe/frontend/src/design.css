@@ -168,6 +168,11 @@
 .detail-actions #package-preview .status,.detail-actions #package-preview .preview-note{white-space:normal;overflow-wrap:anywhere;max-width:100%}
 .detail-actions #package-preview .ds-btn{flex-shrink:0}
 
+/* Readiness actions portal: the footer keeps its fixed action row while the
+   portaled region preserves the pre-portal button spacing. */
+.readiness-actions-mount,.readiness-actions-mount>div{display:contents}
+#spec-readiness-actions{display:inline-flex;align-items:center;gap:12px}
+
 /* Completion dialog: the captured request keeps one right-aligned action row
    and dialog buttons retain the design focus ring over the legacy reset. */
 #completion-dialog .actions{justify-content:flex-end}
@@ -327,6 +332,33 @@
 .conversations-destination .ds-turn__body.thread-text{white-space:pre-wrap;overflow-wrap:anywhere}
 .conversations-destination #thread-queue .thread-text{margin-top:6px;white-space:pre-wrap;overflow-wrap:anywhere}
 .conversations-destination .composer textarea.ds-input[readonly]{background:var(--ds-chrome);color:var(--ds-ink-2)}
+/* Specs Ready states: the four readiness facts extend the shared fact grid,
+   the state obligation reuses .obligation, and unavailable actions keep their
+   reason inline with the task text. Shared tokens only; no new shell/chrome.
+   The Epic four-fact grid stays four columns at desktop widths (1280/1600);
+   its 2x2 collapse applies only below desktop, unlike the tighter Specs grid. */
+.facts.four{grid-template-columns:repeat(3,minmax(0,1fr)) minmax(0,1.5fr)}
+.facts--4{grid-template-columns:repeat(3,minmax(0,1fr)) minmax(0,1.5fr)}
+.fact strong.id{font-size:14px;line-height:1.5;overflow-wrap:anywhere;display:block}
+th.col-action,td.col-action{width:148px;white-space:nowrap}
+.action-note{font-size:13px;color:var(--ds-muted)}
+.detail-actions .action-note{margin-left:8px}
+.col-action .text-link{min-width:44px;background:none;border:0;border-radius:0;padding:0;color:var(--ds-accent-text)}
+.col-action .text-link:hover{text-decoration:underline}
+.col-action .text-link:disabled{background:none;border:0;color:var(--ds-muted);text-decoration:none}
+.col-action .action-note{display:block;white-space:normal;margin-top:4px;max-width:148px}
+.spec-readiness .action-note{font-size:13px;color:var(--ds-muted)}
+.spec-readiness [data-action-note]{max-width:48ch}
+.spec-readiness .ds-callout{margin-top:16px}
+.spec-readiness .table-wrap .ds-btn{min-height:44px}
+.list-hint{padding:16px;font-size:13px;color:var(--ds-muted)}
+@media(max-width:1350px){.facts.four{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:1023px){.facts--4{grid-template-columns:repeat(2,minmax(0,1fr))}}
+/* Decision-state epic action bar: keep the primary Plan button and every
+   secondary action/reason from squeezing into one-word columns at 1280px. */
+.detail-actions:has([data-action="discuss-decision"]){flex-wrap:wrap}
+.detail-actions:has([data-action="discuss-decision"]) .ds-btn{flex-shrink:0}
+.detail-actions:has([data-action="discuss-decision"]) [data-action-note]{flex:1 1 20ch;min-width:0;max-width:35ch;white-space:normal;overflow-wrap:anywhere;margin-left:0}
 /* Live terminal panel: the reusable section owns one installed-player frame,
    kept black and clipped at both documented widths. Hiding is explicit so
    the frame's own display cannot outrank the hidden attribute. */

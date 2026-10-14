@@ -13,10 +13,17 @@ import {
   reviewLaunchDraft, saveLaunchDraft, seedLaunchDraft, seedThreadDraft,
   type LaunchContext, type LaunchDraftError, type LaunchPreview,
 } from './launch-state';
+import { CapturedInput, PackageContract, PackageDenied, PackageResult, packageReviewKind } from './launch-package';
+import {
+  plannedTargetChoices, publicationAuthorityForSkill, seedColdHandoff,
+  type HandoffInput, type HandoffKind, type PackagePlanningPlan, type PlannedTarget,
+} from './launch-handoff';
+import { observedSpecReadiness } from './readiness';
+import { packagePlanningPlan } from '../../../workspaces/spec-prompt.mjs';
 import type { BriefReference } from './composerTypes';
 import type { WireRecord } from './model';
 import type { RouteState } from './route';
-import { busyAgentsHref } from './route';
+import { busyAgentsHref, packageEpicHref, packageSpecHref } from './route';
 import { suggestionSourceFor } from './launch-client';
 
 export type LaunchProps = {
@@ -24,8 +31,16 @@ export type LaunchProps = {
   live: boolean;
   token?: string;
   workspace?: WireRecord;
+  workspaceError?: string;
   workspaceName: string;
   assignments?: WireRecord[];
+  // Observed snapshot rows for the bound package review's statuses and links;
+  // they never supply execution, authority or model facts.
+  records?: WireRecord[];
+  // True once the observation envelope has loaded. An empty record list with a
+  // loaded envelope is a definite absence, not a still-loading placeholder.
+  observationLoaded?: boolean;
+  epics?: WireRecord[];
   onNavigate?(next: RouteState): void;
   onReturnToAgents(): void;
 };
@@ -55,7 +70,6 @@ function threadTargetOf(record: WireRecord | null | undefined): ThreadTarget | n
 // owner, and the planned newui-13 panel can reuse the same facts.
 export function AssignmentContract(props: { preview: LaunchPreview }) {
   const record = () => props.preview.record;
-  const input = () => props.preview.inputPreview;
   // Display-only normalization: the wire value stays untouched for dispatch,
   // while empty or any casing of "none" keeps the design's title-case label.
   const authority = () => {
@@ -84,22 +98,7 @@ export function AssignmentContract(props: { preview: LaunchPreview }) {
           </div>
         )}</For>
       </dl>
-      <Show when={input()}>
-        <div id="launch-what-pi" class="launch-input">
-          <h3>What Pi will receive</h3>
-          <p class="small muted">The saved brief and selected contents below are captured together. Changed source contents require a new review before launch.</p>
-          <For each={input()?.references ?? []}>{reference => (
-            <details>
-              <summary>{reference.kind === 'skill' ? 'Skill' : 'File'}: {reference.label}{reference.source ? ` · ${reference.source}` : ''}</summary>
-              <p class="small mono">{reference.path}</p>
-              <p class="small mono">SHA-256 {reference.sha256}</p>
-              <pre>{reference.content}</pre>
-            </details>
-          )}</For>
-          <details><summary>Complete brief and context</summary><pre>{input()?.brief}</pre></details>
-          <details><summary>Assignment instructions</summary><pre>{input()?.instruction}</pre></details>
-        </div>
-      </Show>
+      <CapturedInput preview={props.preview} />
     </div>
   );
 }
@@ -160,13 +159,19 @@ export default function Launch(props: LaunchProps) {
   let threadGeneration = 0;
 
   const ws = () => props.route.ws ?? '';
-  const context = (): LaunchContext => ({
-    ws: ws(),
-    ...(props.route.thread ? { thread: props.route.thread } : {}),
-    target: props.route.target ?? null,
-    ...(props.route.package ? { package: props.route.package } : {}),
-    ...(props.route.skill ? { skill: props.route.skill } : {}),
-  });
+  const context = (): LaunchContext => {
+    // Bound package authority is derived from the route's hand-off skill by the
+    // owning derivation; a generic or absent skill keeps the ordinary body.
+    const authority = props.route.package ? publicationAuthorityForSkill(props.route.skill) : undefined;
+    return {
+      ws: ws(),
+      ...(props.route.thread ? { thread: props.route.thread } : {}),
+      target: props.route.target ?? null,
+      ...(props.route.package ? { package: props.route.package } : {}),
+      ...(props.route.skill ? { skill: props.route.skill } : {}),
+      ...(authority ? { authority } : {}),
+    };
+  };
   const draft = createMemo(() => (ws() ? getLaunchDraft(context()) : undefined));
   const title = () => draft()?.title ?? '';
   const content = () => draft()?.content ?? '';
@@ -179,6 +184,17 @@ export default function Launch(props: LaunchProps) {
   const saved = () => draft()?.saved;
   const previewState = () => draft()?.preview;
   const reviewStatus = () => draft()?.reviewStatus ?? 'idle';
+  // Bound package review detection: a package route plus one of the plan or
+  // implement hand-off skills (resolved preview first, requested route skill
+  // before resolution) selects the package contract presentation. Generic
+  // package skills keep the ordinary assignment contract.
+  const previewSkill = () => str(previewState()?.record?.skill) || props.route.skill || '';
+  const packageKind = () => (props.route.package ? packageReviewKind(previewSkill()) : null);
+  const bound = () => packageKind() !== null;
+  const packageRef = () => props.route.package ?? '';
+  const launchLabel = () => packageKind() === 'plan' ? 'Start planning' : packageKind() === 'implement' ? 'Start implementation' : 'Launch agent';
+  const startingLabel = () => packageKind() === 'plan' ? 'Starting planning…' : packageKind() === 'implement' ? 'Starting implementation…' : 'Starting agent…';
+  const editLabel = () => bound() ? 'Edit brief' : 'Edit assignment';
   const savedCurrent = () => {
     const value = saved();
     if (!value) return false;
@@ -198,11 +214,11 @@ export default function Launch(props: LaunchProps) {
   const threadTarget = () => threadTargetOf(threadRecord());
   const threadTargetKind = () => threadState() === 'bound' ? threadTarget()?.kind ?? 'workspace' : threadState();
   const threadUsable = () => !threadBound() || threadState() === 'bound';
-  const locked = () => Boolean(pending()) || !enabled() || !threadUsable();
+  const locked = () => Boolean(pending()) || !enabled() || !threadUsable() || coldBoundBlocked();
   const stage = () => resolveLaunchStage(draft(), { tab: props.route.tab, id: props.route.id });
   const repositories = () => {
     const list = props.workspace?.repositories;
-    return Array.isArray(list) ? list as Array<{ id?: unknown; status?: unknown }> : [];
+    return Array.isArray(list) ? list as Array<{ id?: unknown; status?: unknown; canonical_path?: unknown }> : [];
   };
   // Suggestions follow the identity that owns the target: thread contexts use
   // the thread endpoint with the exact UUID (the route target has no authority
@@ -261,20 +277,155 @@ export default function Launch(props: LaunchProps) {
   // when this assignment is already observed, otherwise a workspace-scoped
   // UUID filter so App cannot replace the selection with an unrelated row.
   const resultKind = () => draft()?.result?.kind;
-  const resultHeading = () => resultKind() === 'launched' ? 'Agent is live' : resultKind() === 'failed' ? 'Agent could not start' : 'Launch is unconfirmed';
+  const resultHeading = () => resultKind() === 'launched'
+    ? bound() ? (packageKind() === 'plan' ? 'Planning is live' : 'Implementation is live') : 'Agent is live'
+    : resultKind() === 'failed' ? 'Agent could not start' : 'Launch is unconfirmed';
   const resultRecord = () => previewState()?.record ?? lastReviewed()?.record ?? {};
   const resultExecution = () => str(resultRecord().execution_dir) || 'Unresolved';
   const resultAgentsHref = () => busyAgentsHref(ws(), draft()?.result?.assignmentId, props.assignments ?? []);
+  const resultPreview = () => previewState() ?? lastReviewed();
+  // A bound launched outcome owns the package composition; a launched result
+  // without retained package facts, and every unconfirmed/failed outcome,
+  // keeps the generic result treatment.
+  const packageResultPreview = () => bound() && draft()?.result?.kind === 'launched' ? resultPreview() : undefined;
+  // Bound return links: planning returns to the epic that carries the member
+  // and implementation returns to the package's own spec row, so the result
+  // never strands the operator on an unrelated first row.
+  const resultEpicHref = () => packageEpicHref(ws(), packageRef(), props.epics);
+  const resultSpecHref = () => packageSpecHref(ws(), packageRef(), props.records);
   const inspectionHref = () => busyAgentsHref(ws(), props.route.id, props.assignments ?? []);
   const resultObservation = () => resultKind() === 'launched'
     ? 'Live process confirmed'
     : resultKind() === 'failed' ? 'launch_failed · process confirmed gone' : 'Unknown identity · not observed';
 
+  // Cold bound package entry has no retained draft: derive the shared
+  // presentation from observed package/epic planning facts once the
+  // observation exists. An unread snapshot waits instead of seeding a
+  // permanently empty bound brief; an unreadable package, missing targets or a
+  // requested planning skill that disagrees with the derived plan shows an
+  // honest reason and posts nothing. A route target is honored only as a
+  // canonical package primary path/key or as a workspace repository alias whose
+  // stored canonical_path is one of the package's own primary targets, so an
+  // explicit alias selection survives cold entry without approving a different
+  // repository. A cold result URL stays inspection and is never converted into
+  // a fresh attempt.
+  const [coldSeedState, setColdSeedState] = createSignal<'idle' | 'waiting' | 'unavailable'>('idle');
+  const [coldSeedReason, setColdSeedReason] = createSignal('');
+  const coldBoundSeed = createMemo((): { kind: HandoffKind; input: HandoffInput } | 'waiting' | { reason: string } | null => {
+    const routePackage = props.route.package;
+    const kind = routePackage ? packageReviewKind(props.route.skill) : null;
+    if (!routePackage || !kind) return null;
+    // A thread-bound context keeps the existing thread seed flow; its
+    // identity must not be re-seeded under a different context tuple.
+    if (props.route.thread) return null;
+    // A result identity is an inspection, not a fresh bound attempt.
+    if (props.route.tab === 'result' && props.route.id) return null;
+    // A retained draft always owns its context.
+    if (getLaunchDraft(context())) return null;
+    // Not connected or not observed yet: wait rather than seed an empty bound
+    // draft that would look like a prepared brief.
+    if (!ws() || !props.live) return 'waiting';
+    const records = props.records ?? [];
+    if (!records.length && !props.observationLoaded) return 'waiting';
+    const record = records.find(item => str(item.workspace) === ws()
+      && [str(item.package), str(item.package_ref), str(item.package_path)].some(value => value === routePackage));
+    if (!record) return { reason: 'The requested package is not observed in this workspace; inspect the package before preparing this hand-off.' };
+    const choices = plannedTargetChoices(Array.isArray(record.targets) ? record.targets as PlannedTarget[] : []);
+    if (choices.length === 0) {
+      return { reason: 'No usable package target is available; inspect the package before preparing this hand-off.' };
+    }
+    // Direct canonical path/key wins; otherwise only a usable selected workspace
+    // repository alias resolving through its canonical_path to a package primary
+    // is accepted. Wait for that inventory before the first seed: retained drafts
+    // must not be mutated when a later workspace response arrives.
+    const routeTarget = props.route.target;
+    const directTarget = routeTarget && choices.some(choice => choice.path === routeTarget || choice.key === routeTarget)
+      ? routeTarget
+      : undefined;
+    if (routeTarget && !directTarget && (!props.workspace || props.workspace.id !== ws()
+      || !Array.isArray(props.workspace.repositories))) {
+      return props.workspaceError
+        ? { reason: 'Workspace repository inventory could not be loaded; retry workspace details before preparing this hand-off.' }
+        : 'waiting';
+    }
+    const aliasRepository = routeTarget && !directTarget
+      ? repositories().find(repository => repository.id === routeTarget && repository.status === 'ok')
+      : undefined;
+    const aliasTarget = aliasRepository && typeof aliasRepository.canonical_path === 'string'
+      ? choices.find(choice => choice.path === aliasRepository.canonical_path)?.path
+      : undefined;
+    const boundTarget = directTarget ?? aliasTarget;
+    if (routeTarget && !boundTarget) {
+      return { reason: 'The requested target does not resolve to a usable primary target of this package; inspect the package and workspace repositories before preparing this hand-off.' };
+    }
+    const facts = observedSpecReadiness(record, props.epics ?? [], props.assignments ?? []).facts;
+    let plan: PackagePlanningPlan | null = null;
+    if (kind === 'plan') {
+      if (!facts || facts.proposal === null) {
+        return { reason: 'The package proposal presence is not observed; inspect the package files before preparing this planning hand-off.' };
+      }
+      // The same conservative stage rules as normal entry: an unknown critique
+      // recommendation and an unknown recommended-critique outcome refuse
+      // instead of coercing a spec-write or critics stage.
+      if (facts.proposal === true && facts.critiqueRecommended === null) {
+        return { reason: 'The proposal does not record whether critique is recommended; inspect the proposal and package files before preparing this planning hand-off.' };
+      }
+      if (facts.critiqueRecommended === true && facts.critique === null) {
+        return { reason: 'The recommended critique outcome is not observed; inspect the proposal and package files before preparing this planning hand-off.' };
+      }
+      plan = packagePlanningPlan({
+        proposal: facts.proposal === true,
+        critiqueRecommended: facts.critiqueRecommended === true,
+        critique: facts.critique === true,
+      }) as PackagePlanningPlan;
+      if (plan.skill !== props.route.skill) {
+        return { reason: 'The requested planning skill does not match the observed package stage; inspect the package before preparing this hand-off.' };
+      }
+    }
+    return {
+      kind,
+      input: {
+        ws: ws(),
+        // Route identity owns the context tuple; observed facts only derive the
+        // presentation, skill and stage.
+        packageRef: routePackage,
+        targets: Array.isArray(record.targets) ? record.targets as PlannedTarget[] : [],
+        ...(plan ? { planningPlan: plan } : {}),
+        ...(boundTarget ? { target: boundTarget } : {}),
+      },
+    };
+  });
+  const coldBoundBlocked = () => Boolean(props.route.package && packageReviewKind(props.route.skill))
+    && (coldSeedState() === 'waiting' || coldSeedState() === 'unavailable');
+
   // Seed one draft per launch context; retained typed work is never clobbered.
   createEffect(() => {
     const ctx = context();
     if (!ctx.ws) return;
-    if (!getLaunchDraft(ctx)) seedLaunchDraft(ctx, { title: '', content: '' });
+    const cold = coldBoundSeed();
+    if (cold === null) {
+      // Generic, direct, thread or result context (or the memo already found a
+      // retained draft): clear any stale bound refusal and keep the ordinary
+      // empty seed.
+      setColdSeedState('idle');
+      setColdSeedReason('');
+      if (!getLaunchDraft(ctx)) seedLaunchDraft(ctx, { title: '', content: '' });
+      return;
+    }
+    if (getLaunchDraft(ctx)) return;
+    if (cold === 'waiting') {
+      setColdSeedState('waiting');
+      setColdSeedReason('');
+      return;
+    }
+    if ('reason' in cold) {
+      setColdSeedState('unavailable');
+      setColdSeedReason(cold.reason);
+      return;
+    }
+    setColdSeedState('idle');
+    setColdSeedReason('');
+    seedColdHandoff(cold.kind, cold.input);
   });
 
   // Read the exact stored thread record once per requested UUID. The read-only
@@ -488,16 +639,28 @@ export default function Launch(props: LaunchProps) {
             <span class={stage() === 'result' || stage() === 'inspection' ? 'current' : ''}><b>3</b>Result</span>
           </nav>
           <h2 id="launch-heading" tabindex="-1" ref={heading}>
-            {stage() === 'review' ? 'Review assignment'
+            {stage() === 'review' ? (bound() ? `Review ${packageKind() === 'plan' ? 'planning' : 'implementation'} assignment` : 'Review assignment')
               : stage() === 'result' ? resultHeading()
                 : stage() === 'inspection' ? 'Launch result unavailable'
                   : 'Prepare assignment'}
           </h2>
           <p class="muted">{stage() === 'review'
-            ? 'Check the resolved contract before starting the agent.'
+            ? bound()
+              ? packageKind() === 'plan'
+                ? 'Check the resolved planning contract before starting the agent; the package stops before implementation.'
+                : 'Check the resolved implementation contract before starting the agent; a draft pull request is the limit.'
+              : 'Check the resolved contract before starting the agent.'
             : stage() === 'result' || stage() === 'inspection' ? props.workspaceName : `${props.workspaceName} · New background agent`}</p>
           <Show when={props.live} fallback={<StateNotice tone="info" title="Launch requires the live dashboard">Open the host dashboard to prepare and save an assignment brief. Imported snapshots cannot reach the launch service.</StateNotice>}>
             <Show when={showBrief()}>
+              <Show when={coldBoundBlocked()}>
+                <div id="launch-cold-bound" data-cold-bound={coldSeedState()}>
+                  <StateNotice tone={coldSeedState() === 'unavailable' ? 'warning' : 'info'} announce={false}
+                    title={coldSeedState() === 'unavailable' ? 'Bound package cannot be prepared' : 'Waiting for the observed package'}>
+                    {coldSeedReason() || 'The package observation has not loaded yet, so this bound brief is not seeded. Nothing has been saved or dispatched.'}
+                  </StateNotice>
+                </div>
+              </Show>
               <form id="launch-form" onSubmit={event => { event.preventDefault(); save(); }}>
                 <div class="field">
                   <Show when={threadBound()} fallback={<>
@@ -576,7 +739,7 @@ export default function Launch(props: LaunchProps) {
             <Show when={(reviewSurface() || resultSurface()) && reviewContext()}>
               <section id="launch-review" class="launch-review" aria-labelledby="launch-review-heading">
                 <div class="section-heading">
-                  <h3 id="launch-review-heading">{reviewView() === 'result' || reviewView() === 'inspection' ? 'Launch result' : 'Assignment review'}</h3>
+                  <h3 id="launch-review-heading">{reviewView() === 'result' || reviewView() === 'inspection' ? 'Launch result' : bound() ? (packageKind() === 'plan' ? 'Review planning assignment' : 'Review implementation assignment') : 'Assignment review'}</h3>
                   <Switch>
                     <Match when={reviewView() === 'current'}><StatusText tone="success">Reviewed</StatusText></Match>
                     <Match when={reviewView() === 'resolving'}><StatusText tone="info">Resolving</StatusText></Match>
@@ -594,26 +757,34 @@ export default function Launch(props: LaunchProps) {
                     <RegionalSkeleton rows={3} announce={false} label="Resolving execution contract" />
                     <RequestedFacts workspace={props.workspaceName || ws()} target={requestedTargetLabel()} brief={saved()?.brief || 'Recorded'} />
                     <ActionBar variant="inline">
-                      <button id="launch-assignment-launch" class="ds-btn ds-btn--primary" type="button" disabled>Launch agent</button>
+                      <button id="launch-assignment-launch" class="ds-btn ds-btn--primary" type="button" disabled>{launchLabel()}</button>
                     </ActionBar>
                   </Match>
                   <Match when={reviewView() === 'dispatching'}>
                     <StateNotice tone="info" title={`Starting assignment ${shortAssignment()}`} announce={false}>
                       Dispatch uses the reviewed contract. Wait for identity confirmation; a second launch is unavailable.
                     </StateNotice>
-                    <Show when={previewState()} keyed>{preview => <AssignmentContract preview={preview} />}</Show>
+                    <Show when={previewState()} keyed>{preview => bound()
+                      ? <PackageContract preview={preview} packageRef={packageRef()} kind={packageKind()!} records={props.records} epics={props.epics} />
+                      : <AssignmentContract preview={preview} />}</Show>
                     <ActionBar variant="inline">
-                      <button id="launch-assignment-launch" class="ds-btn ds-btn--primary" type="button" disabled aria-busy="true">Starting agent…</button>
+                      <button id="launch-assignment-launch" class="ds-btn ds-btn--primary" type="button" disabled aria-busy="true">{startingLabel()}</button>
                     </ActionBar>
                   </Match>
                   <Match when={reviewView() === 'current'}>
-                    <Show when={previewState()} keyed>{preview => <AssignmentContract preview={preview} />}</Show>
+                    <Show when={previewState()} keyed>{preview => bound()
+                      ? <PackageContract preview={preview} packageRef={packageRef()} kind={packageKind()!} records={props.records} epics={props.epics} />
+                      : <AssignmentContract preview={preview} />}</Show>
                     <ActionBar variant="inline">
-                      <button id="launch-assignment-launch" class="ds-btn ds-btn--primary" type="button" disabled={!canLaunch()} onClick={launch}>Launch agent</button>
+                      <button id="launch-assignment-launch" class="ds-btn ds-btn--primary" type="button" disabled={!canLaunch()} onClick={launch}>{launchLabel()}</button>
                       <button id="launch-assignment-review" class="ds-btn" type="button" disabled={!canReview()} onClick={review}>Review assignment</button>
-                      <button id="launch-assignment-edit" class="ds-btn" type="button" onClick={editAssignment}>Edit assignment</button>
+                      <button id="launch-assignment-edit" class="ds-btn" type="button" onClick={editAssignment}>{editLabel()}</button>
                     </ActionBar>
-                    <p class="contract-note">Launching starts a separate background assignment. It does not send a message or grant merge or deployment authority.</p>
+                    <p class="contract-note">{bound()
+                      ? packageKind() === 'plan'
+                        ? 'Starting planning runs one package-bound planning assignment and stops before implementation. No branch push or pull request is authorized.'
+                        : 'Starting implementation runs one package-bound assignment and may open a draft pull request. Merge stays with the operator.'
+                      : 'Launching starts a separate background assignment. It does not send a message or grant merge or deployment authority.'}</p>
                   </Match>
                   <Match when={reviewView() === 'stale'}>
                     <div id="launch-review-error" class="launch-review-error" tabindex="-1" ref={reviewErrorRegion}>
@@ -625,12 +796,15 @@ export default function Launch(props: LaunchProps) {
                     <Show when={lastReviewed()} keyed>{previous => <PreviousReviewedFacts preview={previous} />}</Show>
                     <ActionBar variant="inline">
                       <button id="launch-assignment-review" class="ds-btn ds-btn--primary" type="button" disabled={!canReview()} onClick={review}>Review assignment</button>
-                      <button id="launch-assignment-edit" class="ds-btn" type="button" onClick={editAssignment}>Edit assignment</button>
+                      <button id="launch-assignment-edit" class="ds-btn" type="button" onClick={editAssignment}>{editLabel()}</button>
                     </ActionBar>
                   </Match>
                   <Match when={reviewView() === 'denied'}>
                     <div id="launch-review-error" class="launch-review-error" tabindex="-1" ref={reviewErrorRegion}>
                       <Switch>
+                        <Match when={bound()}>
+                          <PackageDenied reason={draft()?.error?.reason} conflictingAssignment={draft()?.error?.assignmentId} agentHref={agentsHref()} packageRef={packageRef()} kind={packageKind()!} ws={ws()} records={props.records} />
+                        </Match>
                         <Match when={draft()?.error?.reason === 'target-busy'}>
                           <StateNotice tone="error" title="This directory already has a writer" announce={false} action={<a class="ds-btn" href={agentsHref()}>Open agent</a>}>
                             <Show when={draft()?.error?.assignmentId} fallback={<span>Another assignment is still live or unconfirmed in {requestedTargetLabel()}. Inspect it before choosing this execution directory.</span>}>
@@ -659,7 +833,7 @@ export default function Launch(props: LaunchProps) {
                     <Show when={lastReviewed()} keyed>{previous => <PreviousReviewedFacts preview={previous} />}</Show>
                     <ActionBar variant="inline">
                       <button id="launch-assignment-review" class="ds-btn ds-btn--primary" type="button" disabled={!canReview()} onClick={review}>Review assignment</button>
-                      <button id="launch-assignment-edit" class="ds-btn" type="button" onClick={editAssignment}>Edit assignment</button>
+                      <button id="launch-assignment-edit" class="ds-btn" type="button" onClick={editAssignment}>{editLabel()}</button>
                     </ActionBar>
                   </Match>
                   <Match when={reviewView() === 'error'}>
@@ -673,42 +847,60 @@ export default function Launch(props: LaunchProps) {
                       <Show when={saved()} fallback={<button id="launch-assignment-save" class="ds-btn ds-btn--primary" type="button" disabled={locked() || !title().trim()} onClick={save}>Save brief</button>}>
                         <button id="launch-assignment-review" class="ds-btn ds-btn--primary" type="button" disabled={!canReview()} onClick={review}>Review assignment</button>
                       </Show>
-                      <button id="launch-assignment-edit" class="ds-btn" type="button" onClick={editAssignment}>Edit assignment</button>
+                      <button id="launch-assignment-edit" class="ds-btn" type="button" onClick={editAssignment}>{editLabel()}</button>
                     </ActionBar>
                   </Match>
                   <Match when={reviewView() === 'result'}>
                     <Show when={draft()?.result} keyed>{value => (
                       <div class="launch-result">
-                        <StateNotice
-                          tone={value.kind === 'launched' ? 'success' : value.kind === 'failed' ? 'error' : 'warning'}
-                          announce={false}
-                          title={value.kind === 'launched' ? 'Assignment started' : value.kind === 'failed' ? 'Process startup failed' : 'The launch acknowledgement was lost'}
-                        >
-                          {value.kind === 'launched'
-                            ? 'The host recorded this assignment as live. Work completion has not been established.'
-                            : value.kind === 'failed'
-                              ? 'The host recorded a confirmed launch failure. The assignment and saved brief are retained for inspection.'
-                              : 'The submitted assignment may already be running; do not launch it again. Locate the submitted identity in Agents before starting another assignment; this dashboard has no confirmed record of it.'}
-                        </StateNotice>
-                        <dl class="launch-facts" id="launch-result-facts" aria-label="Launch result facts">
-                          <div data-fact="request"><dt>Request</dt><dd class="mono">{saved()?.requestId ?? 'Recorded'}</dd></div>
-                          <div data-fact="assignment"><dt>Assignment</dt><dd class="mono">{value.assignmentId}</dd></div>
-                          <div data-fact="execution"><dt>Execution directory</dt><dd class="mono">{resultExecution()}</dd></div>
-                          <div data-fact="brief"><dt>Brief</dt><dd>{saved()?.title || 'Recorded'}</dd></div>
-                          <Show when={props.route.thread}><div data-fact="thread"><dt>Originating thread</dt><dd class="mono">{props.route.thread}</dd></div></Show>
-                          <div data-fact="observation"><dt>Observation</dt><dd>{resultObservation()}</dd></div>
-                        </dl>
-                        <ActionBar variant="inline">
-                          <a id="launch-result-open-agent" class="ds-btn ds-btn--primary" href={resultAgentsHref()}>Open agent</a>
-                          <Show when={value.kind === 'failed'}>
-                            <button id="launch-result-correct" class="ds-btn" type="button" onClick={correct}>Correct assignment</button>
-                          </Show>
+                        <Show when={packageResultPreview()}>
+                          {preview => (
+                            <PackageResult
+                              kind={packageKind()!}
+                              packageRef={packageRef()}
+                              preview={preview()}
+                              result={value}
+                              agentHref={resultAgentsHref()}
+                              epicHref={resultEpicHref()}
+                              specHref={resultSpecHref()}
+                              records={props.records}
+                              epics={props.epics}
+                              assignments={props.assignments}
+                            />
+                          )}
+                        </Show>
+                        <Show when={!packageResultPreview()}>
+                          <StateNotice
+                            tone={value.kind === 'launched' ? 'success' : value.kind === 'failed' ? 'error' : 'warning'}
+                            announce={false}
+                            title={value.kind === 'launched' ? 'Assignment started' : value.kind === 'failed' ? 'Process startup failed' : 'The launch acknowledgement was lost'}
+                          >
+                            {value.kind === 'launched'
+                              ? 'The host recorded this assignment as live. Work completion has not been established.'
+                              : value.kind === 'failed'
+                                ? 'The host recorded a confirmed launch failure. The assignment and saved brief are retained for inspection.'
+                                : 'The submitted assignment may already be running; do not launch it again. Locate the submitted identity in Agents before starting another assignment; this dashboard has no confirmed record of it.'}
+                          </StateNotice>
+                          <dl class="launch-facts" id="launch-result-facts" aria-label="Launch result facts">
+                            <div data-fact="request"><dt>Request</dt><dd class="mono">{saved()?.requestId ?? 'Recorded'}</dd></div>
+                            <div data-fact="assignment"><dt>Assignment</dt><dd class="mono">{value.assignmentId}</dd></div>
+                            <div data-fact="execution"><dt>Execution directory</dt><dd class="mono">{resultExecution()}</dd></div>
+                            <div data-fact="brief"><dt>Brief</dt><dd>{saved()?.title || 'Recorded'}</dd></div>
+                            <Show when={props.route.thread}><div data-fact="thread"><dt>Originating thread</dt><dd class="mono">{props.route.thread}</dd></div></Show>
+                            <div data-fact="observation"><dt>Observation</dt><dd>{resultObservation()}</dd></div>
+                          </dl>
+                          <ActionBar variant="inline">
+                            <a id="launch-result-open-agent" class="ds-btn ds-btn--primary" href={resultAgentsHref()}>Open agent</a>
+                            <Show when={value.kind === 'failed'}>
+                              <button id="launch-result-correct" class="ds-btn" type="button" onClick={correct}>Correct assignment</button>
+                            </Show>
+                            <Show when={props.route.thread}>
+                              <button id="launch-result-discuss" class="ds-btn" type="button" onClick={discuss}>Discuss result</button>
+                            </Show>
+                          </ActionBar>
                           <Show when={props.route.thread}>
-                            <button id="launch-result-discuss" class="ds-btn" type="button" onClick={discuss}>Discuss result</button>
+                            <p class="contract-note">Discuss result opens the originating conversation with an unsent result draft. Review it before sending.</p>
                           </Show>
-                        </ActionBar>
-                        <Show when={props.route.thread}>
-                          <p class="contract-note">Discuss result opens the originating conversation with an unsent result draft. Review it before sending.</p>
                         </Show>
                       </div>
                     )}</Show>
@@ -729,7 +921,7 @@ export default function Launch(props: LaunchProps) {
                     <RequestedFacts workspace={props.workspaceName || ws()} target={requestedTargetLabel()} brief={saved()?.brief || 'Recorded'} />
                     <ActionBar variant="inline">
                       <button id="launch-assignment-review" class="ds-btn ds-btn--primary" type="button" disabled={!canReview()} onClick={review}>Review assignment</button>
-                      <button id="launch-assignment-edit" class="ds-btn" type="button" onClick={editAssignment}>Edit assignment</button>
+                      <button id="launch-assignment-edit" class="ds-btn" type="button" onClick={editAssignment}>{editLabel()}</button>
                     </ActionBar>
                   </Match>
                   <Match when={reviewView() === 'unsaved'}>
@@ -740,7 +932,7 @@ export default function Launch(props: LaunchProps) {
                     </div>
                     <ActionBar variant="inline">
                       <button id="launch-assignment-save" class="ds-btn ds-btn--primary" type="button" disabled={locked() || !title().trim()} onClick={save}>Save brief</button>
-                      <button id="launch-assignment-edit" class="ds-btn" type="button" onClick={editAssignment}>Edit assignment</button>
+                      <button id="launch-assignment-edit" class="ds-btn" type="button" onClick={editAssignment}>{editLabel()}</button>
                     </ActionBar>
                   </Match>
                 </Switch>

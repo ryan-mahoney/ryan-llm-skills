@@ -317,10 +317,12 @@ try:
             expect(rows_on(page)).to_have_count(3)
             expect(page.locator('.list-caption')).to_have_text('3 epic records · dependency order')
             beta = page.locator('.records .record', has_text='Beta epic')
-            expect(beta).to_contain_text('0 of 2 landed · next: beta-two · 1 need attention · evidence incomplete')
+            expect(beta).to_contain_text('Planning incomplete')
+            expect(beta).to_contain_text('0 of 2 prepared · 1 need attention · evidence incomplete')
+            expect(beta).not_to_contain_text('next to plan')
             assert beta.get_attribute('aria-current') is None, 'unselected row claims current selection'
             expect(page.locator('.records .record', has_text='Alpha epic')).to_have_attribute('aria-current', 'page')
-            report['scenarios'].append('multi-epic list renders attention and evidence-incomplete cues on the affected row')
+            report['scenarios'].append('multi-epic list renders prepared, attention and evidence-incomplete cues under a Planning incomplete header on the affected row')
 
             page.locator('#find-record').fill('beta')
             expect(rows_on(page)).to_have_count(1)
@@ -354,7 +356,7 @@ try:
             page.wait_for_selector('.records .skeletons', state='visible', timeout=5000)
             elapsed = time.monotonic() - mark
             assert elapsed >= 0.25, f'list skeleton appeared after only {elapsed:.3f}s'
-            expect(page.locator('.detail-pane .facts .skeletons')).to_have_count(3)
+            expect(page.locator('.detail-pane .facts .skeletons')).to_have_count(4)
             expect(page.locator('.detail-pane .skeletons-table')).to_have_count(1)
             expect(page.locator('.detail-pane .skeletons').first).to_be_visible()
             expect(page.locator('.list-caption')).to_contain_text('Reading epics')
@@ -572,7 +574,7 @@ try:
             page.goto(receipt['url'] + '/#/epics?' + urlencode({'ws': 'fixture'}), wait_until='domcontentloaded')
             page.wait_for_selector('.records .skeletons', state='visible', timeout=5000)
             expect(page.locator('.detail-pane .object-head h2')).to_have_text('Epic details')
-            expect(page.locator('.detail-pane .facts .skeletons')).to_have_count(3)
+            expect(page.locator('.detail-pane .facts .skeletons')).to_have_count(4)
             expect(page.locator('.detail-pane .skeletons-table')).to_have_count(1)
             expect(page.locator('.detail-pane .section-heading h3', has_text='Dependency order')).to_be_visible()
             shoot('epics-42-1280.png', 1280)
@@ -662,18 +664,24 @@ try:
             ])
             open_detail(conflict_payload)
             status = page.locator('.object-head .status')
-            expect(status).to_contain_text('Recorded complete')
-            assert 'warning' in (status.get_attribute('class') or ''), 'conflict status is not warning tone'
+            expect(status).to_contain_text('Planning incomplete')
+            assert 'warning' in (status.get_attribute('class') or ''), 'planning-incomplete status is not warning tone'
             callout = page.locator('.detail-body .ds-callout.warning')
             expect(callout).to_contain_text('Recorded state conflicts with member evidence')
             expect(callout).to_contain_text('The records have not been rewritten')
             expect(callout).to_contain_text('conflicting evidence is preserved')
-            expect(facts).to_have_count(3)
+            expect(facts).to_have_count(4)
             expect(facts.nth(0)).to_contain_text('Recorded epic state')
             expect(facts.nth(0)).to_contain_text('Complete')
+            expect(facts.nth(1)).to_contain_text('Members prepared')
             expect(facts.nth(1)).to_contain_text('0 of 3')
+            expect(facts.nth(2)).to_contain_text('Members landed')
+            expect(facts.nth(2)).to_contain_text('0 of 3')
+            expect(facts.nth(3)).to_contain_text('Next to plan')
             expect(table.get_by_text('PR published')).to_be_visible()
-            expect(table.get_by_text('Prepared', exact=True)).to_be_visible()
+            prepared_row = table.locator('tbody tr', has=page.get_by_role('button', name='prepared-member', exact=True))
+            expect(prepared_row.locator('.status')).to_have_text('Readiness unknown')
+            expect(prepared_row.locator('[data-action="plan"]')).to_be_disabled()
             assert table.locator('.status', has_text='Merged').count() == 0, 'published/prepared member counted as landed'
             note = page.get_by_text('prepared-member: Not undertaken. Its prepared status remains recorded; it has no dropped status.', exact=True)
             expect(note).to_be_visible()
@@ -681,7 +689,7 @@ try:
             assert page.locator('.status', has_text='Not undertaken').count() == 0, 'note leaked into member status'
             controls = pane.locator('button, a, select')
             assert controls.filter(has_text=re.compile('drop|hide|remove|filter', re.I)).count() == 0, 'dropped-status filter/action appeared'
-            report['scenarios'].append('detail conflict: Recorded complete/warning, no-rewrite explanation, 0 of 3 landed, notes stay text with no dropped control')
+            report['scenarios'].append('detail conflict: Planning incomplete warning header with Complete recorded state, no-rewrite explanation, 0 of 3 landed, notes stay text with no dropped control')
 
             # Card (b): declared requires win over waiting_on, and an older
             # snapshot omitting requires shows unmet names with exactly one
@@ -721,8 +729,8 @@ try:
             expect(rows.nth(1).locator('td').first).to_have_text('legacy-a \u00b7 waiting')
             expect(rows.nth(2).locator('td').first).to_have_text('legacy-b \u00b7 waiting')
             expect(page.get_by_text('This observer reports only unmet requirements.', exact=True)).to_have_count(1)
-            expect(facts.nth(2)).to_contain_text('legacy-b')
-            expect(facts.nth(2)).to_contain_text('Only unmet requirements reported')
+            expect(facts.nth(2)).to_contain_text('Members landed')
+            expect(facts.nth(3)).to_contain_text('None eligible')
             report['scenarios'].append('detail older snapshot: unmet names carry waiting markers with exactly one unmet-only table note and fact')
 
             # Card (c): order/scopes/caption, literal unknown status, unmatched
@@ -743,29 +751,32 @@ try:
             open_detail(detail_envelope(table_epic, runs=[detail_run('short-slug', 'detail-short')]))
             expect(table.locator('caption')).to_have_count(1)
             expect(table.locator('caption')).to_have_text('Members of Table epic in dependency order')
-            expect(table.locator('thead th[scope=col]')).to_have_count(3)
+            expect(table.locator('thead th[scope=col]')).to_have_count(4)
             expect(table.locator('tbody th[scope=row]')).to_have_count(3)
             cells = table.locator('tbody th[scope=row]')
             expect(cells.nth(0)).to_contain_text('ready-slug')
             expect(cells.nth(1)).to_contain_text('short-slug')
             expect(cells.nth(2)).to_contain_text('omega-member')
-            expect(rows.nth(0).locator('.status')).to_have_text('ready')
-            expect(rows.nth(0).locator('button')).to_have_count(0)
+            expect(rows.nth(0).locator('.status')).to_have_text('Package not observed')
+            expect(rows.nth(0).locator('th[scope=row] button')).to_have_count(0)
+            expect(rows.nth(0).locator('button:enabled')).to_have_count(0)
+            expect(rows.nth(0).locator('[data-action="plan"]')).to_be_disabled()
+            expect(rows.nth(0).locator('.action-note')).to_contain_text('No observed package matches this member in this observation.')
             expect(rows.nth(0)).to_contain_text('No observed package matches this member in scope.')
-            short_button = rows.nth(1).locator('button')
+            short_button = rows.nth(1).locator('button.text-link.mono')
             expect(short_button).to_have_text('short-slug')
-            expect(facts.nth(2)).to_contain_text('Next candidate')
-            expect(facts.nth(2)).to_contain_text('omega-member')
-            expect(facts.nth(2)).to_contain_text('Requires short-slug')
-            expect(page.get_by_role('heading', name='Next member', exact=True)).to_be_visible()
-            expect(page.locator('.obligation')).to_contain_text('Inspect short-slug: its recorded observation needs attention.')
+            expect(facts.nth(3)).to_contain_text('Next to plan')
+            expect(facts.nth(3)).to_contain_text('None eligible')
+            expect(page.get_by_role('heading', name='Next to plan', exact=True)).to_be_visible()
+            expect(page.locator('.obligation')).to_contain_text('No unplanned member is eligible in this observation.')
             page.locator('#find-record').focus()
             assert tab_until('document.activeElement && document.activeElement.textContent.trim() === "short-slug"'), 'Tab never reached the short-slug member'
             focus_visible()
             measure(short_button, 'short-slug member')
-            assert tab_until('document.activeElement && document.activeElement.textContent.trim() === "Open spec"'), 'Tab never reached Open spec'
-            focus_visible()
-            measure(pane.locator('.detail-actions .ds-btn--primary'), 'Open spec')
+            primary = pane.locator('.detail-actions .ds-btn--primary')
+            expect(primary).to_have_text('Plan member')
+            expect(primary).to_be_disabled()
+            measure(primary, 'Plan member')
             report['scenarios'].append('detail table: order/scopes/caption, literal ready, unmatched text-only, next candidate vs attention inspection distinct, keyboard focus and 44px hit boxes')
 
             # Step-004 fix counterexamples: mixed landed/unmet declared
@@ -785,8 +796,8 @@ try:
             open_detail(detail_envelope(mixed_epic))
             expect(rows).to_have_count(3)
             expect(rows.nth(2).locator('td').first).to_have_text('landed-dep, unmet-dep \u00b7 waiting')
-            expect(facts.nth(2)).to_contain_text('mixed-member')
-            expect(facts.nth(2)).to_contain_text('Requires landed-dep, unmet-dep')
+            expect(facts.nth(2)).to_contain_text('Members landed')
+            expect(facts.nth(3)).to_contain_text('None eligible')
             report['scenarios'].append('detail mixed requires: landed name bare with only the unmet name marked waiting')
 
             # Step-004 F1: snapshot next stays eligible under evidence-first focus,
@@ -803,10 +814,9 @@ try:
             }
             check_deadline()
             open_detail(detail_envelope(evidence_epic))
-            expect(facts.nth(2).locator('strong')).to_have_text('eligible')
-            expect(facts.nth(2)).to_contain_text('No requirements')
-            expect(facts.nth(2)).not_to_contain_text('Inspect')
-            expect(page.locator('.obligation')).to_contain_text('Inspect unknown-member')
+            expect(facts.nth(3).locator('strong')).to_have_text('None eligible')
+            expect(facts.nth(3)).not_to_contain_text('Inspect')
+            expect(page.locator('.obligation')).to_contain_text('No unplanned member is eligible in this observation.')
             report['scenarios'].append('detail next fact: snapshot eligible stays the candidate under evidence-first focus with inspection kept in Next member')
 
             nullnext_epic = {
@@ -821,8 +831,8 @@ try:
             }
             check_deadline()
             open_detail(detail_envelope(nullnext_epic))
-            expect(facts.nth(2).locator('strong')).to_have_text('None eligible')
-            expect(facts.nth(2)).to_contain_text('wait on unlanded requirements')
+            expect(facts.nth(3).locator('strong')).to_have_text('None eligible')
+            expect(facts.nth(3)).to_contain_text('No unplanned member is eligible in this observation')
             report['scenarios'].append('detail next fact: null next renders None eligible instead of the blocked in-progress member')
 
             # Real-producer null next with no waiting and nothing landed must
@@ -836,10 +846,11 @@ try:
             }
             check_deadline()
             open_detail(detail_envelope(lone_progress_epic))
-            expect(facts.nth(2).locator('strong')).to_have_text('None eligible')
-            expect(facts.nth(2)).to_contain_text('No eligible candidate in this observation')
-            expect(facts.nth(2)).not_to_contain_text('All members landed')
-            expect(facts.nth(1)).to_contain_text('0 of 1')
+            expect(facts.nth(3).locator('strong')).to_have_text('None eligible')
+            expect(facts.nth(3)).to_contain_text('No unplanned member is eligible in this observation')
+            expect(facts.nth(3)).not_to_contain_text('All members landed')
+            expect(facts.nth(2)).to_contain_text('Members landed')
+            expect(facts.nth(2)).to_contain_text('0 of 1')
             lone_published_epic = {
                 'workspace': 'fixture', 'epic': 'lone-published-epic', 'title': 'Lone published epic', 'state': 'active',
                 'members': [detail_member('solo', 'published')],
@@ -849,8 +860,8 @@ try:
             }
             check_deadline()
             open_detail(detail_envelope(lone_published_epic))
-            expect(facts.nth(2).locator('strong')).to_have_text('None eligible')
-            expect(facts.nth(2)).not_to_contain_text('All members landed')
+            expect(facts.nth(3).locator('strong')).to_have_text('None eligible')
+            expect(facts.nth(3)).not_to_contain_text('All members landed')
             report['scenarios'].append('detail next fact: real-producer null next with in-progress/published and 0 of 1 landed never claims All members landed')
 
             # Step-004 F3: one-character slug keeps a 44x44 target.
@@ -865,7 +876,7 @@ try:
             }
             check_deadline()
             open_detail(detail_envelope(tiny_epic, runs=[detail_run('a', 'detail-a')]))
-            tiny_button = table.locator('tbody tr').first.locator('button')
+            tiny_button = table.locator('tbody tr').first.locator('button.text-link.mono')
             expect(tiny_button).to_have_text('a')
             measure(tiny_button, 'single-char member')
             report['scenarios'].append('detail hit box: one-character member slug keeps a 44x44 target')
@@ -885,16 +896,17 @@ try:
             check_deadline()
             open_detail(detail_envelope(unknown_epic, runs=[]))
             absent_action = pane.locator('.detail-actions .ds-btn--primary')
+            expect(absent_action).to_have_text('Plan member')
             expect(absent_action).to_be_disabled()
-            expect(absent_action).to_have_attribute('aria-describedby', 'epic-open-spec-help')
-            expect(page.locator('#epic-open-spec-help')).to_have_text('unknown-member has no observed spec in this snapshot.')
-            expect(page.locator('#epic-open-spec-help')).not_to_contain_text('Landing evidence')
-            report['scenarios'].append('detail open reason: evidence-first member without a record names the missing observed spec')
+            expect(absent_action).to_have_attribute('aria-describedby', 'epic-plan-member-reason')
+            expect(page.locator('#epic-plan-member-reason')).to_contain_text('No unplanned member is eligible')
+            expect(page.locator('#epic-plan-member-reason')).not_to_contain_text('Landing evidence')
+            report['scenarios'].append('detail plan reason: no eligible planning candidate keeps Plan member disabled with its observed reason')
             check_deadline()
             open_detail(detail_envelope(unknown_epic, runs=[detail_run('unknown-member', 'detail-unknown')]))
-            expect(pane.locator('.detail-actions .ds-btn--primary')).to_be_enabled()
-            expect(page.locator('#epic-open-spec-help')).to_have_count(0)
-            report['scenarios'].append('detail open reason: evidence-first member with a record keeps Open spec available')
+            expect(pane.locator('table.epic-members tbody th[scope=row] button')).to_have_count(1)
+            expect(pane.locator('.detail-actions .ds-btn--primary')).to_be_disabled()
+            report['scenarios'].append('detail plan reason: an observed member stays linkable while Plan member remains disabled for a non-candidate')
 
             # Card (d): bound reference digests, reference-vs-production region
             # captures at both widths, and the 26 long-slug table at 1280.
@@ -954,7 +966,7 @@ try:
             assert_no_document_overflow()
             assert pane.locator('.detail-body').evaluate('el => el.scrollWidth <= el.clientWidth'), 'detail region scrolled horizontally'
             assert pane.locator('.table-wrap').evaluate('el => el.scrollWidth <= el.clientWidth'), 'member table scrolled horizontally'
-            long_button = table.locator('tbody tr').first.locator('button')
+            long_button = table.locator('tbody tr').first.locator('button.text-link.mono')
             expect(long_button).to_be_visible()
             measure(long_button, 'long wrapped member')
             open_action = pane.locator('.detail-actions .ds-btn--primary')
@@ -1057,7 +1069,7 @@ try:
             # keeps the retained list/facts/table with one regional notice.
             open_selected(observation_envelope(observations_epic, 'fresh', runs=observations_runs))
             expect(rows_on(page)).to_have_count(1)
-            expect(facts).to_have_count(3)
+            expect(facts).to_have_count(4)
             expect(table.locator('tbody tr')).to_have_count(2)
             control['value'] = 'fail'
             page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
@@ -1069,7 +1081,7 @@ try:
             expect(retry).to_have_count(1)
             assert 'ds-btn--primary' in (retry.get_attribute('class') or ''), 'Retry connection is not the regional primary'
             expect(rows_on(page)).to_have_count(1)
-            expect(facts).to_have_count(3)
+            expect(facts).to_have_count(4)
             expect(table.locator('tbody tr')).to_have_count(2)
             assert page.locator('#notice').count() == 0, 'global #notice duplicated the Epics transport failure'
             report['scenarios'].append('offline: 503 after a usable payload keeps list/facts/table with one regional Connection unavailable and no global #notice')
@@ -1077,7 +1089,7 @@ try:
             retry.click()
             expect(transport_callouts).to_have_count(0)
             expect(rows_on(page)).to_have_count(1)
-            expect(facts).to_have_count(3)
+            expect(facts).to_have_count(4)
             expect(table.locator('tbody tr')).to_have_count(2)
             report['scenarios'].append('offline recovery: Retry connection restores the notice-free retained read')
 
@@ -1109,7 +1121,7 @@ try:
             refresh = stale_notice.get_by_role('button', name='Refresh state', exact=True)
             expect(refresh).to_have_count(1)
             assert 'ds-btn--primary' in (refresh.get_attribute('class') or ''), 'Refresh state is not the regional primary'
-            expect(facts).to_have_count(3)
+            expect(facts).to_have_count(4)
             expect(table.locator('tbody tr')).to_have_count(2)
             report['scenarios'].append(f'stale: old observed_at shows real-time Last checked at {expected_time} with Refresh state')
 
@@ -1125,7 +1137,7 @@ try:
             page.wait_for_timeout(300)
             expect(transport_callouts).to_have_count(1)
             expect(rows_on(page)).to_have_count(1)
-            expect(facts).to_have_count(3)
+            expect(facts).to_have_count(4)
             expect(table.locator('tbody tr')).to_have_count(2)
             control['value'] = recent_payload
             for pending in held:
@@ -1135,7 +1147,7 @@ try:
                     pass
             held.clear()
             expect(transport_callouts).to_have_count(0)
-            expect(facts).to_have_count(3)
+            expect(facts).to_have_count(4)
             expect(table.locator('tbody tr')).to_have_count(2)
             report['scenarios'].append('refresh held: readable contents stay while waiting and a recent observation clears the stale notice')
 
@@ -1146,12 +1158,15 @@ try:
             conflict_stale = observation_envelope(conflict_epic, 'old', runs=conflict_runs)
             status = page.locator('article.detail-pane .object-head .status')
             open_selected(conflict_fresh)
-            expect(status).to_contain_text('Recorded complete')
-            expect(facts.nth(1)).to_contain_text('0 of 3')
+            expect(status).to_contain_text('Planning incomplete')
+            expect(facts.nth(0)).to_contain_text('Recorded epic state')
+            expect(facts.nth(0)).to_contain_text('Complete')
+            expect(facts.nth(2)).to_contain_text('Members landed')
+            expect(facts.nth(2)).to_contain_text('0 of 3')
             expect(conflict_callout).to_have_count(1)
             expect(transport_callouts).to_have_count(0)
             expect(regional_callouts).to_have_count(1)
-            report['scenarios'].append('partial conflict: Recorded complete shows one regional conflict notice with 0 of 3 landed and no transport')
+            report['scenarios'].append('partial conflict: Planning incomplete header with Complete recorded state shows one regional conflict notice with 0 of 3 landed and no transport')
             control['value'] = 'fail'
             page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
             expect(transport_callouts).to_have_count(1)
@@ -1162,18 +1177,22 @@ try:
             expect(compact).to_have_count(1)
             expect(compact.first).to_contain_text('conflicting evidence is preserved')
             assert compact.first.evaluate('el => el.closest(".ds-callout") === null'), 'conflict compact rendered as a live callout'
-            expect(status).to_contain_text('Recorded complete')
-            expect(facts.nth(1)).to_contain_text('0 of 3')
-            report['scenarios'].append('offline conflict: Recorded complete and the no-rewrite explanation stay beside 0 of 3 landed with exactly one transport callout')
+            expect(status).to_contain_text('Planning incomplete')
+            expect(facts.nth(0)).to_contain_text('Complete')
+            expect(facts.nth(2)).to_contain_text('Members landed')
+            expect(facts.nth(2)).to_contain_text('0 of 3')
+            report['scenarios'].append('offline conflict: Planning incomplete header and the no-rewrite explanation stay beside 0 of 3 landed with exactly one transport callout')
             open_selected(conflict_stale)
             expect(transport_callouts).to_have_count(1)
             expect(transport_callouts.first).to_contain_text('Last checked at')
             expect(regional_callouts).to_have_count(1)
             expect(conflict_callout).to_have_count(0)
             expect(pane.locator('.detail-body .section-note', has_text='The records have not been rewritten')).to_have_count(1)
-            expect(status).to_contain_text('Recorded complete')
-            expect(facts.nth(1)).to_contain_text('0 of 3')
-            report['scenarios'].append('stale conflict: the stale transport notice does not hide the Recorded complete conflict explanation')
+            expect(status).to_contain_text('Planning incomplete')
+            expect(facts.nth(0)).to_contain_text('Complete')
+            expect(facts.nth(2)).to_contain_text('Members landed')
+            expect(facts.nth(2)).to_contain_text('0 of 3')
+            report['scenarios'].append('stale conflict: the stale transport notice does not hide the Planning incomplete conflict explanation')
             # Generic partial without a completion conflict owns one live notice.
             generic_partial_epic = {
                 'workspace': 'fixture', 'epic': 'generic-partial-epic', 'title': 'Generic partial epic', 'state': 'active',
@@ -1354,8 +1373,10 @@ try:
             }
             control['value'] = observation_envelope(conflict_pair_epic, 'fresh', runs=())
             open_selected(control['value'])
-            expect(status).to_contain_text('Recorded complete')
-            expect(facts.nth(1)).to_contain_text('0 of 2')
+            expect(status).to_contain_text('Planning incomplete')
+            expect(facts.nth(0)).to_contain_text('Complete')
+            expect(facts.nth(2)).to_contain_text('Members landed')
+            expect(facts.nth(2)).to_contain_text('0 of 2')
             expect(conflict_callout).to_have_count(1)
             expect(conflict_callout.first).to_contain_text('0 of 2')
             watch_callouts()
@@ -1366,7 +1387,8 @@ try:
             }
             control['value'] = observation_envelope(conflict_pair_landed, 'fresh', runs=())
             settled_refresh()
-            expect(facts.nth(1)).to_contain_text('1 of 2')
+            expect(facts.nth(2)).to_contain_text('Members landed')
+            expect(facts.nth(2)).to_contain_text('1 of 2')
             expect(conflict_callout).to_have_count(1)
             expect(conflict_callout.first).to_contain_text('1 of 2')
             page.wait_for_function('() => window.__epicsAnnouncements.length === 1')
@@ -1375,9 +1397,10 @@ try:
             page.wait_for_timeout(200)
             assert page.evaluate('() => window.__epicsAnnouncements.length') == 1, 'identical advanced conflict payload announced again'
             assert page.evaluate('() => window.__epicsTextMutations') == after_change_text, 'identical advanced conflict payload changed the notice text'
-            expect(facts.nth(1)).to_contain_text('1 of 2')
+            expect(facts.nth(2)).to_contain_text('Members landed')
+            expect(facts.nth(2)).to_contain_text('1 of 2')
             expect(conflict_callout.first).to_contain_text('1 of 2')
-            report['scenarios'].append('conflict count: a same-epic 0 of 2 -> 1 of 2 advance updates the landed fact and the conflict notice together and announces exactly once while the identical repeat stays quiet')
+            report['scenarios'].append('conflict count: a same-epic 0 of 2 -> 1 of 2 advance updates the landed fact and the conflict notice together under the Planning incomplete header and announces exactly once while the identical repeat stays quiet')
             report['scenarios'].append('signature: identical and timestamp-only payloads add no callout; offline and stale announce once each; same-epic partial repeat adds none while changed coverage reasons announce again')
 
             # (5) A real #import-file snapshot offers no live recovery and keeps
@@ -1402,7 +1425,7 @@ try:
                 expect(page.locator('h1')).to_have_text('Epics')
                 page.wait_for_function("() => location.hash.includes('id=')")
                 expect(rows_on(page)).to_have_count(1)
-                expect(facts).to_have_count(3)
+                expect(facts).to_have_count(4)
                 expect(table.locator('tbody tr')).to_have_count(2)
                 expect(transport_callouts).to_have_count(0)
                 expect(pane.locator('.detail-body').get_by_role('button', name=re.compile('Retry connection|Refresh state'))).to_have_count(0)
@@ -1447,10 +1470,10 @@ try:
                 report['screenshots'].append(str(path))
                 assert page.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth'), f'document overflow at {width}'
             measure(transport_callouts.first.get_by_role('button', name='Retry connection', exact=True), 'observations Retry connection')
-            open_action = pane.locator('.detail-actions .ds-btn')
-            assert 'ds-btn--primary' not in (open_action.get_attribute('class') or ''), 'Open spec stayed primary beside the transport notice'
+            open_action = pane.locator('.detail-actions .ds-btn').first
+            assert 'ds-btn--primary' not in (open_action.get_attribute('class') or ''), 'epic action stayed primary beside the transport notice'
             assert pane.locator('.detail-actions .ds-btn--primary').count() == 0, 'transport lost its sole primary'
-            measure(open_action, 'observations Open spec')
+            measure(open_action, 'observations epic action')
             control['value'] = observation_envelope(observations_epic, 'old', runs=observations_runs)
             page.goto('about:blank')
             open_epics(page, ws='fixture')
@@ -1583,7 +1606,7 @@ try:
                 page.wait_for_timeout(50)
                 list_scroll = list_scroller().evaluate('el => el.scrollTop')
                 assert list_scroll > 0, 'epic list pane did not scroll'
-                button = page.locator('table.epic-members button', has_text='browser')
+                button = page.locator('table.epic-members button.text-link.mono', has_text='browser')
                 expect(button).to_have_count(1)
                 button.scroll_into_view_if_needed()
                 detail_scroll = detail_scroller().evaluate('el => el.scrollTop')
@@ -1594,7 +1617,7 @@ try:
             def wait_restored_member(list_scroll, detail_scroll):
                 page.wait_for_function("""() => {
                   const active = document.activeElement;
-                  return Boolean(active && active.closest('table.epic-members')
+                  return Boolean(active && active.matches('table.epic-members button.text-link.mono')
                     && active.textContent.trim() === 'browser');
                 }""")
                 page.wait_for_function("""expected => {
@@ -1646,8 +1669,8 @@ try:
             assert params_on(page)['ws'] == ['fixture'], page.url
             assert not {'q', 'filter', 'tab', 'path', 'source'} & params_on(page).keys(), page.url
             expect(page.locator('#find-record')).to_have_value('')
-            expect(page.locator('article.detail h2')).to_have_text('browser')
-            expect(page.locator('article.detail')).to_contain_text('Building the dashboard')
+            expect(page.locator('article.detail-pane h2')).to_have_text('browser')
+            expect(page.locator('article.detail-pane')).to_contain_text('Keep editors stable')
             report['scenarios'].append('member: a real absolute-path member opens its same-workspace Specs record with no epic q/filter/tab left behind')
 
             page.go_back()
@@ -1660,16 +1683,16 @@ try:
             page.go_forward()
             expect(page.locator('h1')).to_have_text('Specs')
             assert params_on(page).get('id') == [spec_id], page.url
-            expect(page.locator('article.detail h2')).to_have_text('browser')
+            expect(page.locator('article.detail-pane h2')).to_have_text('browser')
             report['scenarios'].append('member: Forward selects the same Specs record')
 
             # (b) same-workspace active > planned > non-recent precedence, a
             # same-slug other-workspace record cannot win, and a member without
             # a record has no active control.
-            active_run = member_run('member-active', fixture_package, is_current_assignment=True, activity='Active member record')
-            historical_run = member_run('member-history', str(projects_dir / 'fixture' / 'archive' / 'browser'), execution='cancelled', workflow_state='cancelled', activity='Historical member record')
-            completed_run = member_run('member-done', str(projects_dir / 'fixture' / 'done' / 'browser'), execution='completed', workflow_state='complete', completion_basis='merged-pr', completed_at=stamp(), activity='Recently completed member record')
-            foreign_run = member_run('member-foreign', foreign_package, workspace='other', is_current_assignment=True, activity='Foreign workspace record')
+            active_run = member_run('member-active', fixture_package, is_current_assignment=True, obligation='Active member record')
+            historical_run = member_run('member-history', str(projects_dir / 'fixture' / 'archive' / 'browser'), execution='cancelled', workflow_state='cancelled', obligation='Historical member record')
+            completed_run = member_run('member-done', str(projects_dir / 'fixture' / 'done' / 'browser'), execution='completed', workflow_state='complete', completion_basis='merged-pr', completed_at=stamp(), obligation='Recently completed member record')
+            foreign_run = member_run('member-foreign', foreign_package, workspace='other', is_current_assignment=True, obligation='Foreign workspace record')
             planned_record = {'workspace': 'fixture', 'package': str(projects_dir / 'fixture' / 'planned' / 'browser'), 'package_ref': 'fixture/planned-browser', 'source_paths': ['spec.md']}
             precedence_epic = member_epic('precedence', 'Precedence epic', [member('browser'), member('ghost-member', status='prepared')])
 
@@ -1681,11 +1704,11 @@ try:
                 expect(rows_on(page)).to_have_count(1)
 
             def click_browser():
-                button = page.locator('table.epic-members button', has_text='browser')
+                button = page.locator('table.epic-members button.text-link.mono', has_text='browser')
                 expect(button).to_have_count(1)
                 button.click()
 
-            def assert_spec_record(activity=None, filter_value=None, ref=None, completion=False):
+            def assert_spec_record(obligation=None, filter_value=None, ref=None, completion=False):
                 expect(page.locator('h1')).to_have_text('Specs')
                 selected = params_on(page).get('id', [None])[0]
                 assert selected, page.url
@@ -1697,46 +1720,48 @@ try:
                     assert 'filter' not in params_on(page), page.url
                 else:
                     assert params_on(page)['filter'] == [filter_value], page.url
-                detail = page.locator('article.detail')
+                detail = page.locator('article.detail-pane')
                 expect(detail).to_have_count(1)
-                if activity:
-                    expect(detail).to_contain_text(activity)
                 if ref:
                     expect(detail).to_contain_text(ref)
+                if obligation:
+                    expect(detail).to_contain_text(obligation)
 
             check_deadline()
             open_precedence(runs=[active_run, historical_run, foreign_run], completed=[completed_run], planned=[planned_record])
             ghost = page.locator('table.epic-members tbody tr', has_text='ghost-member')
-            expect(ghost.locator('button')).to_have_count(0)
+            expect(ghost.locator('button:enabled')).to_have_count(0)
+            expect(ghost.locator('[data-action="plan"]')).to_be_disabled()
+            expect(ghost.locator('.action-note')).to_contain_text('No observed package matches this member in this observation.')
             expect(ghost).to_contain_text('No observed package matches this member in scope.')
-            report['scenarios'].append('member: a member without a matching record stays text with no active control')
+            report['scenarios'].append('member: a member without a matching record stays text with zero enabled controls and its disabled Plan reason')
             click_browser()
-            assert_spec_record(activity='Active member record')
+            assert_spec_record(obligation='Active member record')
             report['scenarios'].append('member precedence: an active same-workspace record wins over planned, historical and recent records')
 
             check_deadline()
             open_precedence(runs=[historical_run, foreign_run], completed=[completed_run], planned=[planned_record])
             click_browser()
-            assert_spec_record(filter_value='planned', ref='fixture/planned-browser')
+            assert_spec_record(filter_value='ready', ref='fixture/planned-browser')
             report['scenarios'].append('member precedence: without an active record the planned package record wins')
 
             check_deadline()
             open_precedence(runs=[historical_run, foreign_run], completed=[completed_run])
             click_browser()
-            assert_spec_record(activity='Historical member record')
+            assert_spec_record(obligation='Historical member record')
             report['scenarios'].append('member precedence: without active or planned records the non-recent run wins')
 
             check_deadline()
             open_precedence(runs=[foreign_run], completed=[completed_run])
             click_browser()
-            assert_spec_record(filter_value='completed', activity='Recently completed member record', completion=True)
+            assert_spec_record(filter_value='completed', obligation='Recently completed member record', completion=True)
             report['scenarios'].append('member precedence: a recently completed record is chosen only last')
 
             check_deadline()
             open_precedence(runs=[foreign_run, historical_run])
             click_browser()
-            assert_spec_record(activity='Historical member record')
-            expect(page.locator('article.detail')).not_to_contain_text('Foreign workspace record')
+            assert_spec_record(obligation='Historical member record')
+            expect(page.locator('article.detail-pane')).not_to_contain_text('Foreign workspace record')
             report['scenarios'].append('member precedence: a same-slug active record in another workspace cannot win')
 
             # (c1) a consumed token is one-use: an unchanged same-epic poll does
@@ -1777,7 +1802,7 @@ try:
             assert panes_at_top(), 'a stale token restored scroll after a deliberate epic change'
             report['scenarios'].append('member return: a deliberate different epic drops the token instead of restoring stale focus/scroll')
 
-            page.locator('table.epic-members button', has_text='browser').click()
+            page.locator('table.epic-members button.text-link.mono', has_text='browser').click()
             expect(page.locator('h1')).to_have_text('Specs')
             page.evaluate("hash => { location.hash = hash; }", '#/epics?' + urlencode({'ws': 'other'}))
             expect(page.locator('h1')).to_have_text('Epics')
@@ -1796,13 +1821,13 @@ try:
             open_continuity()
             scroll_and_click_member()
             expect(page.locator('h1')).to_have_text('Specs')
-            alternate_run = member_run('member-alternate', str(fixture_dir / 'specs' / 'browser-two'), is_current_assignment=True, activity='Alternate member record')
+            alternate_run = member_run('member-alternate', str(fixture_dir / 'specs' / 'browser-two'), is_current_assignment=True, obligation='Alternate member record')
             mode['value'] = continuity_payload([member('browser-two', status='prepared')], runs=[real_observer['snapshot']['runs'][0], alternate_run])
             refresh_state()
             expect(page.locator('h1')).to_have_text('Specs')
             page.go_back()
             expect(page.locator('h1')).to_have_text('Epics')
-            expect(page.locator('table.epic-members button', has_text='browser-two')).to_have_count(1)
+            expect(page.locator('table.epic-members button.text-link.mono', has_text='browser-two')).to_have_count(1)
             page.wait_for_timeout(400)
             assert no_member_focus(), 'a missing remembered member focused an unrelated row'
             report['scenarios'].append('member return: an unavailable remembered member does not focus an unrelated member row')

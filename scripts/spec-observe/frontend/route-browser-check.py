@@ -2306,13 +2306,13 @@ try:
             open_route('specs', ws='fixture', filter='planned')
             filters = page.get_by_role('navigation', name='Package filters')
             expect(filters.get_by_role('button', name='Active', exact=True)).to_have_attribute('aria-pressed', 'false')
-            planned_tab = filters.get_by_role('button', name='Planned', exact=True)
-            expect(planned_tab).to_have_attribute('aria-pressed', 'true')
+            ready_tab = filters.get_by_role('button', name='Ready', exact=True)
+            expect(ready_tab).to_have_attribute('aria-pressed', 'true')
             rows = page.locator('.records button.record[data-key]')
             expect(rows).to_have_count(1)
             expect(rows.nth(0).locator('.run-title')).to_have_text('browser')
             caption = page.locator('.list-caption')
-            expect(caption).to_contain_text('Planned')
+            expect(caption).to_contain_text('Prepared, not started')
             expect(caption).to_contain_text('1')
             expect(page.locator('main')).not_to_contain_text('active-browser')
             expect(page.locator('main')).not_to_contain_text('other-planned')
@@ -2334,10 +2334,11 @@ try:
             expect(rows.first.locator('.run-title')).to_have_text('done-browser')
             expect(caption).to_contain_text('Done')
             expect(caption).to_contain_text('1')
-            filters.get_by_role('button', name='Planned', exact=True).click()
+            filters.get_by_role('button', name='Ready', exact=True).click()
+            assert params()['filter'] == ['ready'], page.url
             expect(rows).to_have_count(1)
             expect(rows.first.locator('.run-title')).to_have_text('browser')
-            expect(caption).to_contain_text('Planned')
+            expect(caption).to_contain_text('Prepared, not started')
             expect(caption).to_contain_text('1')
             report['scenarios'].append('Filter clicks show matching rows and counts; Active orders blocked before healthy, while Blocked narrows to attention')
 
@@ -2351,16 +2352,16 @@ try:
             expect(rows).to_have_count(1)
 
             rows.first.click()
-            expect(page.locator('article.detail h2')).to_have_text('browser')
-            expect(page.get_by_role('button', name='Open files', exact=True)).to_be_enabled()
+            expect(page.locator('.object-head h2')).to_have_text('browser')
+            expect(page.get_by_role('button', name='Open spec files', exact=True)).to_be_enabled()
             selected_url = page.url
-            assert params()['filter'] == ['planned'], selected_url
+            assert params()['filter'] == ['ready'], selected_url
             page.screenshot(path=str(evidence / 'sentinel-planned-filter-desktop.png'), full_page=True)
             page.reload()
-            expect(filters.get_by_role('button', name='Planned', exact=True)).to_have_attribute('aria-pressed', 'true')
-            expect(page.locator('article.detail h2')).to_have_text('browser')
-            assert params()['filter'] == ['planned'] and params().get('id'), page.url
-            page.get_by_role('button', name='Open files', exact=True).click()
+            expect(filters.get_by_role('button', name='Ready', exact=True)).to_have_attribute('aria-pressed', 'true')
+            expect(page.locator('.object-head h2')).to_have_text('browser')
+            assert params()['filter'] == ['ready'] and params().get('id'), page.url
+            page.get_by_role('button', name='Open spec files', exact=True).click()
             expect(page.locator('h1')).to_have_text('Files')
             assert params()['source'] == ['package'] and params()['id'] == [package] and params()['ws'] == ['fixture'], page.url
             files_row('spec.md').click()
@@ -2369,9 +2370,9 @@ try:
             assert 'path' not in files_params(), page.url
             page.go_back()
             expect(page.locator('h1')).to_have_text('Specs')
-            expect(filters.get_by_role('button', name='Planned', exact=True)).to_have_attribute('aria-pressed', 'true')
-            assert params()['filter'] == ['planned'] and params().get('id'), page.url
-            report['scenarios'].append('Planned row deep link hands off to the real package Files destination and opens the fixture package file reader; Back restores the selected Planned tab')
+            expect(filters.get_by_role('button', name='Ready', exact=True)).to_have_attribute('aria-pressed', 'true')
+            assert params()['filter'] == ['ready'] and params().get('id'), page.url
+            report['scenarios'].append('Planned row deep link hands off to the real package Files destination and opens the fixture package file reader; Back restores the selected Ready tab')
 
             # Legacy query keys continue to select the renamed tabs and their
             # existing predicates, so saved links keep working.
@@ -2388,19 +2389,19 @@ try:
             open_route('epics', ws='fixture')
             page.get_by_role('button', name='browser', exact=True).click()
             expect(page.locator('h1')).to_have_text('Specs')
-            assert params()['filter'] == ['planned'], page.url
-            expect(filters.get_by_role('button', name='Planned', exact=True)).to_have_attribute('aria-pressed', 'true')
+            assert params()['filter'] == ['ready'], page.url
+            expect(filters.get_by_role('button', name='Ready', exact=True)).to_have_attribute('aria-pressed', 'true')
             expect(rows).to_have_count(1)
             expect(rows.first).to_have_attribute('aria-pressed', 'true')
-            expect(page.locator('article.detail h2')).to_have_text('browser')
-            report['scenarios'].append('Epic member navigation selects Planned inventory over an inactive historical run')
+            expect(page.locator('.object-head h2')).to_have_text('browser')
+            report['scenarios'].append('Epic member navigation selects the Ready inventory over an inactive historical run')
 
             open_route('specs', ws='fixture', filter='planned')
             expect(rows).to_have_count(1)
             expect(rows.first.locator('.run-title')).to_have_text('browser')
             page.set_viewport_size({'width': 390, 'height': 844})
             page.screenshot(path=str(evidence / 'sentinel-planned-filter-mobile.png'), full_page=True)
-            expect(filters.get_by_role('button', name='Planned', exact=True)).to_have_attribute('aria-pressed', 'true')
+            expect(filters.get_by_role('button', name='Ready', exact=True)).to_have_attribute('aria-pressed', 'true')
 
         if case == 'specs-overview':
             (evidence / 'screens').mkdir(parents=True, exist_ok=True)
@@ -2726,27 +2727,27 @@ try:
                     'coverage': {'state': 'complete', 'reasons': []}}
             planned = {'workspace': 'fixture', 'package': package, 'package_ref': 'fixture/browser',
                        'source_paths': ['spec.md', 'work-tour.html'], 'obligation': 'Prepare the specs variants overview',
-                       'spec_progress': {'total_steps': 5}, 'epic': {'epic': 'variants-roadmap', 'workspace': 'fixture'},
+                       'step_count': 5, 'prepared': False, 'preparation': {'outcome': 'missing'},
+                       'epic': {'epic': 'variants-roadmap', 'workspace': 'fixture'},
                        'targets': [{'id': 'main', 'primary': receipt['checkout']}]}
             state['value'] = variant_envelope(planned=[planned], epics=[epic])
             open_route('specs', ws='fixture', filter='planned', id=planned_key)
             expect(page.locator('.object-head h2')).to_have_text('browser')
-            expect(page.locator('.progress-head strong')).to_have_text('5 prepared steps')
-            expect(page.locator('.progress-head .muted')).to_have_text('No run recorded')
-            expect(page.locator('.progress-track .progress-value')).to_have_count(0)
-            expect(page.locator('.detail-body .facts')).to_have_count(0)
-            expect(page.locator('.detail-body')).not_to_contain_text('Elapsed')
-            expect(page.locator('.detail-body')).not_to_contain_text('Time since spec start')
-            expect(page.locator('.detail-body')).not_to_contain_text('Needs attention')
-            expect(page.locator('.obligation')).to_contain_text('Prepare the specs variants overview')
-            expect(page.locator('.detail-body .table-wrap')).to_contain_text('Variants roadmap')
-            expect(page.locator('.detail-body .table-wrap')).to_contain_text('0 of 1 landed')
-            expect(page.locator('#planned-assignment')).to_be_visible()
-            expect(page.locator('#planned-assignment-preview')).to_be_visible()
-            open_files = page.locator('.detail-actions').get_by_role('button', name='Open files', exact=True)
+            expect(page.locator('#spec-readiness')).to_have_attribute('data-state', 'incomplete')
+            expect(page.locator('#spec-readiness [data-fact=prepared-steps]')).to_contain_text('5')
+            expect(page.locator('#spec-readiness [data-fact=preparation-report]')).to_contain_text('Missing')
+            expect(page.locator('#spec-readiness [data-fact=preparation-report]')).to_contain_text('No preparation report was observed')
+            expect(page.locator('#spec-readiness .ds-callout.warning')).to_contain_text('Implementation is unavailable until preparation completes')
+            expect(page.locator('#spec-readiness .ds-callout.warning')).to_contain_text('The preparation report is missing or not confirmed')
+            expect(page.locator('#spec-readiness .table-wrap')).to_contain_text('Variants roadmap')
+            expect(page.locator('#spec-readiness .table-wrap')).to_contain_text('member 1 of 1')
+            expect(page.locator('#planned-assignment')).to_have_count(0)
+            expect(page.locator('#spec-readiness-actions .ds-btn--primary')).to_have_count(1)
+            expect(page.get_by_role('button', name='Resume planning', exact=True)).to_be_enabled()
+            open_files = page.locator('.detail-actions').get_by_role('button', name='Open spec files', exact=True)
             expect(open_files).to_be_enabled()
             assert 'ds-btn--primary' not in (open_files.get_attribute('class') or ''), open_files.get_attribute('class')
-            report['scenarios'].append('Planned Overview shows the prepared total without a progress fill, No run recorded, the related epic row and the retained launch form with files as a secondary action')
+            report['scenarios'].append('Ready Overview shows the observed readiness facts, the related epic row and one Resume planning primary with files as a secondary action')
             capture_both('planned')
             page.get_by_role('navigation', name='Spec sections').get_by_role('button', name='Activity', exact=True).click()
             expect(page.locator('.detail-body')).to_contain_text('No run recorded')
@@ -3137,11 +3138,11 @@ try:
             filters.get_by_role('button', name='Done', exact=True).click()
             expect(rows.first.locator('.run-title')).to_have_text('done-c')
             expect(page.locator('.list-caption')).to_have_text('Done · 1 observed specs')
-            filters.get_by_role('button', name='Planned', exact=True).click()
+            filters.get_by_role('button', name='Ready', exact=True).click()
             expect(rows.first.locator('.run-title')).to_have_text('planned-d')
-            expect(page.locator('.list-caption')).to_have_text('Planned · 1 observed specs')
+            expect(page.locator('.list-caption')).to_have_text('Prepared, not started · 1 specs')
 
-            for key, label, slug in [('attention', 'Blocked', 'blocked-z'), ('completed', 'Done', 'done-c'), ('planned', 'Planned', 'planned-d')]:
+            for key, label, slug in [('attention', 'Blocked', 'blocked-z'), ('completed', 'Done', 'done-c'), ('planned', 'Ready', 'planned-d')]:
                 open_route('specs', ws='fixture', filter=key)
                 expect(filters.get_by_role('button', name=label, exact=True)).to_have_attribute('aria-pressed', 'true')
                 expect(rows.first.locator('.run-title')).to_have_text(slug)

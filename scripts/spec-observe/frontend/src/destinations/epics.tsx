@@ -5,7 +5,7 @@ import { time } from '../format';
 import { formatHash, type RouteState } from '../route';
 import { clearIncompatibleFields } from '../scope';
 import { EpicDetail } from './epic-detail';
-import { epicCoverageReasons, epicRecordedState, epicViewState, visibleEpics } from './epic-state';
+import { epicCoverageReasons, epicPlanningSummary, epicRecordedState, epicViewState, visibleEpics } from './epic-state';
 import { epicStats } from '../observation-format';
 import type { DestinationProps } from './index';
 
@@ -40,10 +40,18 @@ const epicSlug = (id: unknown): string | null => {
   }
 };
 
-function EpicRow(props: { epic: WireRecord; selected: boolean; route: RouteState; onSelect: (id: string) => void }) {
+function EpicRow(props: {
+  epic: WireRecord;
+  records: WireRecord[];
+  assignments: WireRecord[];
+  selected: boolean;
+  route: RouteState;
+  onSelect: (id: string) => void;
+}) {
   const recorded = () => epicRecordedState(props.epic);
+  const planning = () => epicPlanningSummary(props.epic, props.records, props.assignments);
   const stats = () => epicStats(props.epic);
-  const incomplete = () => (Array.isArray(props.epic.members) ? props.epic.members : [])
+  const evidenceIncomplete = () => (Array.isArray(props.epic.members) ? props.epic.members : [])
     .some(member => ['unknown', 'missing', 'unobserved'].includes(member?.status));
   const subtitle = () => {
     const workspace = text(props.epic.workspace);
@@ -51,10 +59,11 @@ function EpicRow(props: { epic: WireRecord; selected: boolean; route: RouteState
     return [workspace, summary].filter(Boolean).join(' · ') || text(props.epic.epic);
   };
   const summary = () => {
-    const parts = [`${stats().landed} of ${stats().total} landed`];
-    if (text(props.epic.next)) parts.push(`next: ${text(props.epic.next)}`);
+    const parts = [`${planning().prepared} of ${planning().total} prepared`];
+    if (planning().planning > 0) parts.push(`${planning().planning} planning`);
+    if (planning().next) parts.push(`next to plan: ${text(planning().next!.name)}`);
     if (stats().attention > 0) parts.push(`${stats().attention} need attention`);
-    if (incomplete()) parts.push('evidence incomplete');
+    if (evidenceIncomplete()) parts.push('evidence incomplete');
     return parts.join(' · ');
   };
   const href = () => formatHash({ ...clearIncompatibleFields(props.route), id: String(props.epic.key ?? '') });
@@ -73,7 +82,12 @@ function EpicRow(props: { epic: WireRecord; selected: boolean; route: RouteState
     >
       <div class="row-heading">
         <strong>{text(props.epic.title) || text(props.epic.epic) || 'Untitled epic'}</strong>
-        <StatusText tone={recorded().tone}>{recorded().label}</StatusText>
+        <Show
+          when={planning().incomplete}
+          fallback={<StatusText tone={recorded().tone}>{recorded().label}</StatusText>}
+        >
+          <StatusText tone="warning">Planning incomplete</StatusText>
+        </Show>
       </div>
       <p>{subtitle()}</p>
       <small>{summary()}</small>
@@ -342,7 +356,7 @@ export default function EpicsDestination(props: DestinationProps) {
                 </Show>
                 <Show when={view().empty === 'none'}>
                   <For each={rows()}>
-                    {epicRow => <EpicRow epic={epicRow} selected={epicRow.key === props.route.id} route={props.route} onSelect={props.onSelect} />}
+                    {epicRow => <EpicRow epic={epicRow} records={props.records} assignments={props.assignments} selected={epicRow.key === props.route.id} route={props.route} onSelect={props.onSelect} />}
                   </For>
                 </Show>
               </Show>
@@ -360,6 +374,7 @@ export default function EpicsDestination(props: DestinationProps) {
             </div>
             <div class="detail-body">
               <div class="facts">
+                <RegionalSkeleton rows={1} label="Reading epic facts" />
                 <RegionalSkeleton rows={1} label="Reading epic facts" />
                 <RegionalSkeleton rows={1} label="Reading epic facts" />
                 <RegionalSkeleton rows={1} label="Reading epic facts" />
@@ -421,6 +436,7 @@ export default function EpicsDestination(props: DestinationProps) {
                 <EpicDetail
                   epic={epic()}
                   records={props.records}
+                  workspace={props.workspace}
                   rememberedMember={rememberedMember()}
                   onSelectPackage={rememberMember}
                   catalog={props.catalog}
@@ -428,6 +444,12 @@ export default function EpicsDestination(props: DestinationProps) {
                   onNavigate={props.onNavigate}
                   notice={notice}
                   transportPrimary={Boolean(transport())}
+                  route={props.route}
+                  assignments={props.assignments}
+                  token={props.token}
+                  live={props.live}
+                  onOpenPackageFiles={props.onOpenPackageFiles}
+                  canOpenPackageFiles={props.canOpenPackageFiles}
                 />
               );
             }}

@@ -9,10 +9,14 @@ import {
   epicDocumentLinks,
   epicMemberRequires,
   epicMemberStatus,
+  epicMemberPlanningRow,
+  epicPlanningIncomplete,
   epicRecordedState,
   epicViewState,
   focusMember,
+  memberPlanning,
   memberRecords,
+  nextToPlan,
   visibleEpics,
 } from './epic-state';
 
@@ -238,4 +242,61 @@ test('prototype-name vocabulary stays literal with neutral tone', () => {
     assert.deepEqual(epicRecordedState({ state: key }), { label: key, tone: 'neutral', conflict: false });
     assert.deepEqual(epicMemberStatus({ status: key }), { label: key, tone: 'neutral' });
   }
+});
+
+test('epic planning readiness uses positive preparation instead of legacy statuses', () => {
+  assert.equal(memberPlanning({ name: 'a', status: 'prepared' }), null);
+  assert.equal(epicPlanningIncomplete({ members: [{ name: 'a', status: 'prepared' }] }), true);
+  const positive = { name: 'a', status: 'proposed', planning: { prepared: true, decision: null, step_count: 2, preparation: { outcome: 'prepared' } } };
+  assert.equal(epicPlanningIncomplete({ members: [positive] }), false);
+  assert.equal(epicPlanningIncomplete({ members: [{ name: 'b', status: 'merged' }, positive] }), false);
+  const facts = memberPlanning(positive);
+  assert.equal(facts?.prepared, true);
+  assert.equal(facts?.steps, 2);
+  assert.equal(nextToPlan({ workspace: 'w', members: [positive] }), null);
+  const proposed = {
+    name: 'c', status: 'proposed', package: 'c', workspace: 'w', requires: [],
+    planning: { prepared: false, decision: null, step_count: null, preparation: { outcome: 'missing' }, receipts: [], worktree_recorded: null },
+  };
+  assert.equal(nextToPlan({ workspace: 'w', members: [proposed] })?.name, 'c');
+});
+
+test('epic actions reuse readiness refusals for incomplete coverage and unavailable preparation', () => {
+  const member = {
+    name: 'a', workspace: 'w', package: 'a', status: 'prepared', requires: ['base'],
+    planning: { prepared: true, step_count: 2, preparation: { outcome: 'prepared' }, decision: null },
+  };
+  const epic = { workspace: 'w', members: [{ name: 'base', status: 'merged' }, member] };
+  const record = { workspace: 'w', package: '/store/specs/a' };
+  for (const state of ['partial', 'unknown']) {
+    const row = epicMemberPlanningRow(epic, member, [{ ...record, assignment_coverage: { state } }]);
+    assert.equal(row.status.label, 'Ready to implement');
+    assert.equal(row.action.kind, 'implement');
+    assert.equal(row.action.disabled, true);
+    assert.match(row.action.reason!, new RegExp(`Assignment coverage ${state}`));
+  }
+  assert.equal(epicMemberPlanningRow(epic, member, [{ ...record, assignment_coverage: { state: 'complete' } }]).action.disabled, false);
+  const unavailable = { ...member, status: 'proposed', planning: {
+    ...member.planning, prepared: null, preparation: { outcome: 'unavailable' },
+  } };
+  const row = epicMemberPlanningRow(epic, unavailable, [{ ...record, assignment_coverage: { state: 'complete' } }]);
+  assert.equal(row.status.label, 'Readiness unknown');
+  assert.equal(row.action.disabled, true);
+  assert.match(row.action.reason!, /preparation read is unavailable/);
+  assert.equal(nextToPlan({ ...epic, members: [unavailable] }), null);
+});
+
+test('epic planning accepts prepared prerequisites but refuses an unconfirmed owner', () => {
+  const member = { name: 'a', workspace: 'w', package: 'a', status: 'proposed', requires: ['base'],
+    planning: { prepared: false, step_count: null, preparation: { outcome: 'missing' }, decision: null } };
+  const epic = { workspace: 'w', members: [
+    { name: 'base', status: 'prepared', planning: { prepared: true } }, member,
+  ] };
+  const record = { workspace: 'w', package: '/store/specs/a' };
+  const covered = epicMemberPlanningRow(epic, member, [{ ...record, assignment_coverage: { state: 'complete' } }]);
+  assert.equal(covered.status.label, 'Not planned');
+  assert.equal(covered.action.disabled, false);
+  const partial = epicMemberPlanningRow(epic, member, [{ ...record, assignment_coverage: { state: 'partial' } }]);
+  assert.equal(partial.action.disabled, true);
+  assert.match(partial.action.reason!, /owner is not confirmed/);
 });

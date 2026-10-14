@@ -2560,6 +2560,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
     "references",
     "skill",
     "spec_package",
+    "publication_authority",
   ]);
   const DIRECT_LAUNCH_KEYS = new Set([...DIRECT_PREVIEW_KEYS, "expectedDigest"]);
 
@@ -2592,6 +2593,11 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
     if (specPackage !== null && (typeof specPackage !== "string" || specPackage === "")) {
       throw typedError("invalid-handoff", "spec_package must be a non-empty string when provided");
     }
+    const publicationAuthority =
+      input.publication_authority === undefined ? "none" : input.publication_authority;
+    if (publicationAuthority !== "none" && publicationAuthority !== "draft-pr") {
+      throw typedError("invalid-handoff", "publication_authority must be none or draft-pr");
+    }
     let expectedDigest = null;
     if (launch) {
       if (typeof input.expectedDigest !== "string" || !/^[0-9a-f]{64}$/.test(input.expectedDigest)) {
@@ -2607,6 +2613,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
       repositoryId,
       skill,
       specPackage,
+      publicationAuthority,
       references: validateReferences(input.references),
       expectedDigest,
     };
@@ -2654,7 +2661,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
         harness: "pi",
         project_trust: null,
         workflow_id: null,
-        publication_authority: "none",
+        publication_authority: validated.publicationAuthority,
         attempt_kind: "initial",
         supersedes: null,
       },

@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { makeFixture, put } from '../spec-location/fixture.mjs';
-import { EPIC_LIMITS, buildEpics, changedMembers, deriveMemberStatus, epicWaitState, epicWaves, parseEpic, readWorkspaceEpics } from './epics.mjs';
+import { EPIC_LIMITS, buildEpics, changedMembers, collectEpics, deriveMemberStatus, epicWaitState, epicWaves, parseEpic, readWorkspaceEpics } from './epics.mjs';
 
 const record = (extra = {}) => ({ schema_version: 1, epic: 'demo', title: 'Demo', state: 'active',
   packages: [{ package: 'a' }, { package: 'b', requires: ['a'] }], ...extra });
@@ -162,4 +162,108 @@ test('epic wait wakes on status, attention or launched-session changes, not step
   assert.deepEqual(changedMembers(before, after), ['b', 'c']);
   assert.deepEqual(changedMembers(before, before), []);
   assert.deepEqual(changedMembers(before, epicWaitState({ members: [member('a', { attention: true }), member('b'), member('c')] }, [session('c', 'live')])), ['a']);
+});
+
+// Run alone: node --test --test-name-pattern='planning facts' scripts/spec-observe/epics.test.mjs
+test('collectEpics publishes planning facts while legacy prepared lifecycle and landed counts stay unchanged', async () => {
+  const fx = makeFixture();
+  try {
+    const specDir = join(fx.tmp, 'member-specs');
+    put(join(specDir, 'blocked-index', 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1, name: 'One' }] }));
+    put(join(fx.tmp, 'plain'), 'not a directory\n');
+    const docs = new Map([
+      ['spec-prepare.md', 'Outcome: blocked\n'],
+      ['proposal.md', '---\ncritique_recommended: true\n---\n# Proposal\n'],
+      ['critique.md', '# Critique\n'],
+    ]);
+    const readBounded = async file => docs.has(basename(file))
+      ? { outcome: 'ok', text: docs.get(basename(file)), bytes: docs.get(basename(file)).length }
+      : { outcome: 'missing', bytes: 0 };
+    const budget = { bytes: 0, fits: () => true };
+    const path = name => join(specDir, name);
+    const facts = new Map([
+      [path('blocked-index'), { packagePath: path('blocked-index'),
+        stepIndex: { steps: [{ step: 1, name: 'One' }], readiness_valid: true, source: join(path('blocked-index'), 'spec-steps.json') } }],
+      [path('cached-planned'), { packagePath: path('cached-planned') }],
+      [path('merged'), { packagePath: path('merged'), completion: { completion_basis: 'merged-pr', completed_at: '2026-10-01T00:00:00.000Z' } }],
+      [path('complete'), { packagePath: path('complete'), completion: { completion_basis: 'manual', completed_at: '2026-10-01T00:00:00.000Z' } }],
+    ]);
+    const cached = { step_count: 2, prepared: true, preparation: { outcome: 'prepared' }, decision: null,
+      proposal: true, critique: true, critique_recommended: true, receipts: [{ id: 'settled', state: 'cancelled' }], worktree_recorded: null };
+    const packages = ['blocked-index', 'cached-planned', 'missing', 'unobserved', 'merged', 'complete'];
+    const entry = {
+      slug: 'planning', dir: join(fx.tmp, 'epics', 'planning'), file: join(fx.tmp, 'epics', 'planning', 'epic.json'),
+      workspace: 'demo', plan: null,
+      epic: { epic: 'planning', title: 'Planning', state: 'active', note: null, plan: null, designs: [],
+        packages: packages.map(name => ({ package: name, requires: [], note: null })) },
+      packageDirs: packages.map(name => ({ dir: name === 'unobserved' ? join(fx.tmp, 'plain', 'unobserved') : path(name) })),
+    };
+    const { epics } = await collectEpics({ entries: [entry], facts, runs: [], recentlyCompleted: [], runConditions: () => [],
+      readTime: '2026-10-06T12:00:00.000Z', budget, readBounded, planningCache: new Map([[path('cached-planned'), cached]]) });
+    const members = Object.fromEntries(epics[0].members.map(member => [member.name, member]));
+    assert.equal(members['blocked-index'].status, 'prepared', 'the legacy prepared lifecycle from spec-steps.json is retained');
+    assert.equal(members['blocked-index'].planning.prepared, false, 'a blocked report is not positive preparation');
+    assert.equal(members['blocked-index'].planning.preparation.outcome, 'blocked');
+    assert.equal(members['blocked-index'].planning.proposal, true);
+    assert.equal(members['blocked-index'].planning.step_count, 1);
+    assert.deepEqual(members['cached-planned'].planning, {
+      proposal: true, critique: true, critique_recommended: true, prepared: true, step_count: 2,
+      preparation: { outcome: 'prepared' }, decision: null });
+    assert.ok(!('receipts' in members['cached-planned'].planning), 'planned-row-only facts stay out of the planning projection');
+    assert.equal(members.missing.status, 'missing');
+    assert.equal(members.missing.planning, null, 'a missing member publishes no planning facts');
+    assert.equal(members.unobserved.status, 'unobserved');
+    assert.equal(members.unobserved.planning, null, 'an unobserved member publishes no planning facts');
+    assert.deepEqual(epics[0].summary, { total: 6, merged: 1, complete: 1, published: 0, in_progress: 0,
+      prepared: 1, proposed: 1, missing: 1, unobserved: 1, unknown: 0, attention: 0 });
+    assert.deepEqual(epics[0].members.map(member => member.requires), packages.map(() => []), 'declared requirements keep their order');
+    const bare = { workspace: 'w', file: 'f', dir: 'd', plan: null,
+      epic: { epic: 'bare', title: 'Bare', state: 'active', note: null, designs: [], packages: [{ package: 'x', requires: [], note: null }] },
+      members: [{ path: '/s/x', observed: true, exists: true }] };
+    assert.equal(buildEpics([bare]).epics[0].members[0].planning, null, 'buildEpics projects null planning when collectEpics published none');
+  } finally { fx.cleanup(); }
+});
+
+// Run alone: node --test --test-name-pattern='planning facts' scripts/spec-observe/epics.test.mjs
+test('collectEpics planning facts obtain an uncached member index through the shared owner', async () => {
+  const fx = makeFixture();
+  try {
+    const specDir = join(fx.tmp, 'uncached-specs');
+    const memberDir = join(specDir, 'uncached');
+    const indexFile = join(memberDir, 'spec-steps.json');
+    put(indexFile, JSON.stringify({ steps: [{ step: 1, name: 'One' }, { step: 2, name: 'Two' }] }));
+    const docs = new Map([
+      ['spec-prepare.md', 'Outcome: prepared\nPrepared: 2026-10-06\n'],
+      ['proposal.md', '# Proposal\n'],
+      ['critique.md', '# Critique\n'],
+    ]);
+    const readBounded = async file => docs.has(basename(file))
+      ? { outcome: 'ok', text: docs.get(basename(file)), bytes: docs.get(basename(file)).length }
+      : { outcome: 'missing', bytes: 0 };
+    const budget = { bytes: 0, fits: () => true };
+    // No stepIndex on the fact: the member was excluded from planned inventory,
+    // so the fallback must obtain the index instead of publishing unknown.
+    const facts = new Map([[memberDir, { packagePath: memberDir, stepIndex: null }]]);
+    let calls = 0;
+    const readStepIndex = async fact => {
+      calls++;
+      fact.stepIndex = { steps: [{ step: 1, name: 'One' }, { step: 2, name: 'Two' }],
+        readiness_valid: true, source: indexFile };
+      return fact.stepIndex;
+    };
+    const entry = {
+      slug: 'uncached', dir: join(fx.tmp, 'epics', 'uncached'), file: join(fx.tmp, 'epics', 'uncached', 'epic.json'),
+      workspace: 'demo', plan: null,
+      epic: { epic: 'uncached', title: 'Uncached', state: 'active', note: null, plan: null, designs: [],
+        packages: [{ package: 'uncached', requires: [], note: null }] },
+      packageDirs: [{ dir: memberDir }],
+    };
+    const { epics } = await collectEpics({ entries: [entry], facts, runs: [], recentlyCompleted: [], runConditions: () => [],
+      readTime: '2026-10-06T12:00:00.000Z', budget, readBounded, readStepIndex });
+    const [member] = epics[0].members;
+    assert.equal(calls, 1, 'the shared index owner is consulted once for the uncached member');
+    assert.equal(member.planning.prepared, true, 'fallback preparation reflects the actual prepared report');
+    assert.equal(member.planning.step_count, 2, 'fallback step count reflects the obtained index');
+    assert.equal(member.planning.preparation.outcome, 'prepared');
+  } finally { fx.cleanup(); }
 });

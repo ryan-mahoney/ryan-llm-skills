@@ -1,7 +1,9 @@
 // Step 6 focused store-boundary cases for launch-state. Each case builds a
 // fresh createLaunchStore() and scopes a fake fetch whose responses resolve
 // from explicit deferred slots; the previous fetch is restored after every
-// case and no case uses timers or sleeps. launch-client.test.ts keeps the
+// case and no case uses timers or sleeps. Package target preparation is
+// acknowledged separately before the deferred preview; launch-client.test.ts
+// keeps its exact ordering/body coverage and the
 // adapter decoding/normalization coverage; these cases assert store identity
 // and transition behavior plus the exact bodies the real adapter submits
 // (displayed digest and minted UUIDs).
@@ -46,6 +48,14 @@ function scopeFetch(t: TestContext): FetchScope {
   const deferreds: DeferredResponse[] = [];
   const original = globalThis.fetch;
   globalThis.fetch = (async (input: string | URL | Request, init: RequestInit = {}) => {
+    if (String(input) === '/api/dispatch/prepare-spec-target') {
+      const body = JSON.parse(String(init.body));
+      assert.equal(init.method, 'POST');
+      assert.ok(body.workspace_id);
+      assert.ok(body.spec_package);
+      assert.ok(body.thread_id || body.repository_id);
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
     calls.push({ url: String(input), init, body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined });
     const deferred = new DeferredResponse();
     deferreds.push(deferred);

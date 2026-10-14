@@ -15,6 +15,7 @@ const DIGEST = 'a'.repeat(64);
 
 type CapturedCall = { url: string; body: any; init: RequestInit };
 type FetchScope = { after: (callback: () => void) => void };
+type AuthorityContext = LaunchContext & { authority: 'none' | 'draft-pr' };
 
 function jsonResponse(status: number, payload: unknown): Response {
   return new Response(JSON.stringify(payload), { status, headers: { 'content-type': 'application/json' } });
@@ -89,6 +90,7 @@ test('refusal metadata distinguishes fixed reasons and retains only a valid targ
 test('thread save sends identity-only references and preview/launch carry stored-reference bindings', async (t) => {
   const calls = scopeFetch(t, [
     jsonResponse(200, { brief: 'briefs/req-1.md' }),
+    jsonResponse(200, {}),
     jsonResponse(200, { record: { assignment_id: ASSIGNMENT_ID }, contractDigest: DIGEST, inputPreview: { brief: 'B', instruction: FIXED_INSTRUCTION, references: [] } }),
     jsonResponse(200, { assignment: { assignment_id: ASSIGNMENT_ID }, observation: { assignment_id: ASSIGNMENT_ID } }),
   ]);
@@ -101,9 +103,12 @@ test('thread save sends identity-only references and preview/launch carry stored
   assert.deepEqual(saved, { brief: 'briefs/req-1.md' });
   assert.deepEqual(preview.record, { assignment_id: ASSIGNMENT_ID });
   assert.deepEqual(launch, { assignment: { assignment_id: ASSIGNMENT_ID }, observation: { assignment_id: ASSIGNMENT_ID } });
-  const [saveCall, previewCall, launchCall] = calls;
+  const [saveCall, prepareCall, previewCall, launchCall] = calls;
+  assert.equal(calls.length, 4);
   assert.equal(saveCall.url, '/api/thread/save-brief');
   assert.deepEqual(saveCall.body, { workspace_id: 'ws-1', thread_id: 'thread-1', request_id: REQUEST_ID, title: 'Title', content: 'Body', references: [{ kind: 'skill', id: 'skill-1' }] });
+  assert.equal(prepareCall.url, '/api/dispatch/prepare-spec-target');
+  assert.deepEqual(prepareCall.body, { workspace_id: 'ws-1', spec_package: '/storage/proj/specs/pkg', thread_id: 'thread-1' });
   assert.equal(previewCall.url, '/api/thread/preview-assignment');
   assert.deepEqual(previewCall.body, { workspace_id: 'ws-1', thread_id: 'thread-1', request_id: REQUEST_ID, assignment_id: ASSIGNMENT_ID, instructions: FIXED_INSTRUCTION, skill: 'review', specPackage: '/storage/proj/specs/pkg' });
   assert.equal(launchCall.url, '/api/thread/launch-assignment');
@@ -118,6 +123,7 @@ test('thread save sends identity-only references and preview/launch carry stored
 test('direct bodies bind repository_id/spec_package with identity-only references and default skill', async (t) => {
   const calls = scopeFetch(t, [
     jsonResponse(200, { brief: 'briefs/req-1.md' }),
+    jsonResponse(200, {}),
     jsonResponse(200, { record: { assignment_id: ASSIGNMENT_ID }, contractDigest: DIGEST }),
     jsonResponse(200, { assignment: { assignment_id: ASSIGNMENT_ID }, observation: { assignment_id: ASSIGNMENT_ID } }),
   ]);
@@ -127,14 +133,147 @@ test('direct bodies bind repository_id/spec_package with identity-only reference
   await previewLaunchAssignment(ctx, { requestId: REQUEST_ID, assignmentId: ASSIGNMENT_ID, references: [richReference] }, TOKEN);
   await submitLaunchAssignment(ctx, { requestId: REQUEST_ID, assignmentId: ASSIGNMENT_ID, expectedDigest: DIGEST, references: [richReference] }, TOKEN);
 
-  const [saveCall, previewCall, launchCall] = calls;
+  const [saveCall, prepareCall, previewCall, launchCall] = calls;
+  assert.equal(calls.length, 4);
   assert.equal(saveCall.url, '/api/dispatch/save-brief');
   assert.deepEqual(saveCall.body, { workspace_id: 'ws-2', request_id: REQUEST_ID, title: 'T', content: 'C' });
+  assert.equal(prepareCall.url, '/api/dispatch/prepare-spec-target');
+  assert.deepEqual(prepareCall.body, { workspace_id: 'ws-2', spec_package: '/storage/proj/specs/direct', repository_id: 'repo-2' });
   assert.equal(previewCall.url, '/api/dispatch/preview');
   assert.deepEqual(previewCall.body, { workspace_id: 'ws-2', repository_id: 'repo-2', request_id: REQUEST_ID, assignment_id: ASSIGNMENT_ID, instructions: FIXED_INSTRUCTION, references: [{ kind: 'file', id: 'src/b.ts' }], skill: 'general', spec_package: '/storage/proj/specs/direct' });
   assert.equal(launchCall.url, '/api/dispatch/launch');
   assert.deepEqual(launchCall.body, { ...previewCall.body, expectedDigest: DIGEST });
   assertNoOverrides(calls);
+});
+
+// A bound direct request carries the package's canonical primary path while
+// the workspace inventory declares the repository as ~/relative/symlink text:
+// the stored physical canonical_path resolves it to the registered id, and the
+// request context itself stays unchanged. The declared-path fallback stays for
+// older snapshots and the fixture.
+test('direct canonical package target maps repository id via canonical_path without mutating the context', async (t) => {
+  const workspace = {
+    directory: '/home/operator/projects/ws-canonical',
+    repositories: [{ id: 'repo-canonical', path: '~/checkouts/primary', status: 'ok', canonical_path: '/checkout/primary' }],
+  };
+  const calls = scopeFetch(t, [
+    jsonResponse(200, workspace),
+    jsonResponse(200, {}),
+    jsonResponse(200, { record: { assignment_id: ASSIGNMENT_ID }, contractDigest: DIGEST }),
+    jsonResponse(200, workspace),
+    jsonResponse(200, { assignment: { assignment_id: ASSIGNMENT_ID }, observation: { assignment_id: ASSIGNMENT_ID } }),
+  ]);
+  const ctx: LaunchContext = { ws: 'ws-canonical', target: '/checkout/primary', package: '/storage/proj/specs/canonical' };
+  const original = { ...ctx };
+  const preview = await previewLaunchAssignment(ctx, { requestId: REQUEST_ID, assignmentId: ASSIGNMENT_ID }, TOKEN);
+  const launch = await submitLaunchAssignment(ctx, { requestId: REQUEST_ID, assignmentId: ASSIGNMENT_ID, expectedDigest: DIGEST }, TOKEN);
+
+  assert.deepEqual(preview, { record: { assignment_id: ASSIGNMENT_ID }, contractDigest: DIGEST });
+  assert.deepEqual(launch, { assignment: { assignment_id: ASSIGNMENT_ID }, observation: { assignment_id: ASSIGNMENT_ID } });
+  assert.deepEqual(ctx, original);
+  const [workspaceCall, prepareCall, previewCall, workspaceAgain, launchCall] = calls;
+  assert.equal(calls.length, 5);
+  assert.equal(workspaceCall.url, '/api/workspace?id=ws-canonical');
+  assert.equal(prepareCall.url, '/api/dispatch/prepare-spec-target');
+  assert.deepEqual(prepareCall.body, { workspace_id: 'ws-canonical', spec_package: '/storage/proj/specs/canonical', repository_id: 'repo-canonical' });
+  assert.equal(previewCall.url, '/api/dispatch/preview');
+  assert.deepEqual(previewCall.body, {
+    workspace_id: 'ws-canonical', repository_id: 'repo-canonical', request_id: REQUEST_ID, assignment_id: ASSIGNMENT_ID,
+    instructions: FIXED_INSTRUCTION, references: [], skill: 'general', spec_package: '/storage/proj/specs/canonical',
+  });
+  assert.equal(workspaceAgain.url, '/api/workspace?id=ws-canonical');
+  assert.equal(launchCall.url, '/api/dispatch/launch');
+  assert.deepEqual(launchCall.body, { ...previewCall.body, expectedDigest: DIGEST });
+  assertNoOverrides([prepareCall, previewCall, launchCall]);
+});
+
+// An ambiguous usable mapping refuses before prepare/preview; only the
+// workspace read happens.
+test('direct canonical package target refuses an ambiguous usable mapping before any POST', async (t) => {
+  const calls = scopeFetch(t, [jsonResponse(200, {
+    directory: '/home/operator/projects/ws-canonical',
+    repositories: [
+      { id: 'repo-one', path: '/checkout/primary', status: 'ok', canonical_path: '/checkout/primary' },
+      { id: 'repo-two', path: '~/checkouts/primary', status: 'ok', canonical_path: '/checkout/primary' },
+    ],
+  })]);
+  const ctx: LaunchContext = { ws: 'ws-canonical', target: '/checkout/primary', package: '/storage/proj/specs/canonical' };
+  await assert.rejects(
+    previewLaunchAssignment(ctx, { requestId: REQUEST_ID, assignmentId: ASSIGNMENT_ID }, TOKEN),
+    /matches more than one repository/,
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, '/api/workspace?id=ws-canonical');
+});
+
+// A matching canonical_path on an unusable record never counts, and an absent
+// mapping refuses before prepare/preview.
+test('direct canonical package target refuses an absent or unusable mapping before any POST', async (t) => {
+  const calls = scopeFetch(t, [jsonResponse(200, {
+    directory: '/home/operator/projects/ws-canonical',
+    repositories: [
+      { id: 'repo-other', path: '/checkout/other', status: 'ok', canonical_path: '/checkout/other' },
+      { id: 'repo-unusable', path: '~/checkouts/primary', status: 'not_git', canonical_path: '/checkout/primary' },
+    ],
+  })]);
+  const ctx: LaunchContext = { ws: 'ws-canonical', target: '/checkout/primary', package: '/storage/proj/specs/canonical' };
+  await assert.rejects(
+    previewLaunchAssignment(ctx, { requestId: REQUEST_ID, assignmentId: ASSIGNMENT_ID }, TOKEN),
+    /is not a usable repository/,
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, '/api/workspace?id=ws-canonical');
+});
+
+// The bound direct surface sends the publication authority it was seeded with
+// on preview and launch; thread requests keep the stored binding and never
+// carry it. Authority-unset defaults stay covered by the earlier
+// forbidden-override checks.
+test('direct authority reaches preview and launch bodies while thread contexts omit it', async (t) => {
+  const calls = scopeFetch(t, [
+    jsonResponse(200, { record: { assignment_id: ASSIGNMENT_ID }, contractDigest: DIGEST }),
+    jsonResponse(200, { assignment: { assignment_id: ASSIGNMENT_ID }, observation: { assignment_id: ASSIGNMENT_ID } }),
+    jsonResponse(200, { record: { assignment_id: ASSIGNMENT_ID }, contractDigest: DIGEST }),
+    jsonResponse(200, { assignment: { assignment_id: ASSIGNMENT_ID }, observation: { assignment_id: ASSIGNMENT_ID } }),
+    jsonResponse(200, { record: { assignment_id: ASSIGNMENT_ID }, contractDigest: DIGEST }),
+    jsonResponse(200, { assignment: { assignment_id: ASSIGNMENT_ID }, observation: { assignment_id: ASSIGNMENT_ID } }),
+  ]);
+  const noneCtx: AuthorityContext = { ws: 'ws-auth', target: 'repo-auth', authority: 'none' };
+  const draftCtx: AuthorityContext = { ws: 'ws-auth', target: 'repo-auth', authority: 'draft-pr' };
+  const threadCtx: AuthorityContext = { ws: 'ws-auth', thread: 'thread-auth', authority: 'draft-pr' };
+  const ids = { requestId: REQUEST_ID, assignmentId: ASSIGNMENT_ID };
+  const launchIds = { ...ids, expectedDigest: DIGEST };
+  await previewLaunchAssignment(noneCtx, ids, TOKEN);
+  await submitLaunchAssignment(noneCtx, launchIds, TOKEN);
+  await previewLaunchAssignment(draftCtx, ids, TOKEN);
+  await submitLaunchAssignment(draftCtx, launchIds, TOKEN);
+  await previewLaunchAssignment(threadCtx, ids, TOKEN);
+  await submitLaunchAssignment(threadCtx, launchIds, TOKEN);
+
+  const [nonePreview, noneLaunch, draftPreview, draftLaunch, threadPreview, threadLaunch] = calls;
+  assert.equal(nonePreview.url, '/api/dispatch/preview');
+  assert.equal(nonePreview.body.publication_authority, 'none');
+  assert.equal(noneLaunch.url, '/api/dispatch/launch');
+  assert.equal(noneLaunch.body.publication_authority, 'none');
+  assert.equal(draftPreview.url, '/api/dispatch/preview');
+  assert.equal(draftPreview.body.publication_authority, 'draft-pr');
+  assert.equal(draftLaunch.url, '/api/dispatch/launch');
+  assert.equal(draftLaunch.body.publication_authority, 'draft-pr');
+  assert.equal(threadPreview.url, '/api/thread/preview-assignment');
+  assert.equal('publication_authority' in threadPreview.body, false, 'thread preview keeps the stored binding');
+  assert.equal(threadLaunch.url, '/api/thread/launch-assignment');
+  assert.equal('publication_authority' in threadLaunch.body, false, 'thread launch keeps the stored binding');
+
+  // Only the explicit publication_authority field may appear on direct
+  // requests; every other runtime override stays out, and the thread requests
+  // keep the complete default check.
+  for (const call of [nonePreview, noneLaunch, draftPreview, draftLaunch]) {
+    for (const field of FORBIDDEN_FIELDS) {
+      if (field === 'publication_authority') continue;
+      assert.equal(field in call.body, false, `${field} must not be sent to ${call.url}`);
+    }
+  }
+  assertNoOverrides([threadPreview, threadLaunch]);
 });
 
 test('absent target and package are omitted per surface while skill defaults to general', async (t) => {

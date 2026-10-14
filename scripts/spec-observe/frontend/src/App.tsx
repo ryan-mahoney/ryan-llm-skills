@@ -16,7 +16,7 @@ import { getConversationReturnId } from './conversations-state';
 import { armLaunchPickerIntent, cancelLaunchPickerIntent, createLaunchPickerIntent, shouldApplyPickerReset, shouldResetAcknowledgedDraft } from './launch-picker-intent';
 import { agentCoverage, effectiveAgentFilter, retainSelectedAgent, visibleAgents } from './agent-state';
 
-type Filter = 'active' | 'attention' | 'completed' | 'planned';
+type Filter = 'active' | 'attention' | 'completed' | 'ready';
 type Catalog = WorkspaceCatalog;
 const liveBrowser = () => location.protocol !== 'file:';
 
@@ -73,7 +73,9 @@ export default function App() {
   const query = () => route().q ?? '';
   const filter = (): Filter => {
     const value = route().filter;
-    return value === 'attention' || value === 'completed' || value === 'planned' ? value : 'active';
+    if (value === 'attention' || value === 'completed') return value;
+    if (value === 'ready' || value === 'planned') return 'ready';
+    return 'active';
   };
   const q = () => query().trim().toLowerCase();
   const visibleRecords = createMemo(() => visibleSpecs(scopedRecords(), filter(), query()));
@@ -133,7 +135,13 @@ export default function App() {
   const crumbs = () => [scopeLabel(scopeWs(), catalogEntries(), scopeWs() ? undefined : portfolioTargetId()), title()];
   const packageFilesRoute = () => route().dest === 'files' && route().source === 'package' && Boolean(route().id);
   const pickerRequired = () => needsWorkspacePicker(route()) && !packageFilesRoute();
-  const detailWorkspaceId = createMemo(() => route().dest === 'workspaces' ? route().ws : requiresWorkspace(route().dest) && !packageFilesRoute() ? route().ws : undefined);
+  // Workspaces, the workspace-required destinations and Epics keep the current
+  // workspace detail. Epics resolves a decision's canonical package target to
+  // its repository alias from that record before seeding a conversation; the
+  // record stays optional there and never gates the route or its picker.
+  const detailWorkspaceId = createMemo(() => route().dest === 'workspaces' || route().dest === 'epics'
+    ? route().ws
+    : requiresWorkspace(route().dest) && !packageFilesRoute() ? route().ws : undefined);
 
   function go(next: RouteState, options: { keepExpected?: boolean } = {}) {
     if (!options.keepExpected) { setExpectedCompletionKey(null); setExpectedCompletionRoute(null); expectedSeen = false; }
@@ -224,7 +232,7 @@ export default function App() {
     const next: RouteState = { dest: 'specs', id: target.key };
     if (scopeWs() !== undefined) next.ws = scopeWs();
     if (target.recent_completion) next.filter = 'completed';
-    else if (target.planned) next.filter = 'planned';
+    else if (target.planned) next.filter = 'ready';
     go(next);
   }
   function canOpenPackageFiles(item: WireRecord) {

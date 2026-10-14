@@ -165,3 +165,16 @@ test('completion errors separate confirmed refusal from transport uncertainty', 
   }
   assert.equal(classifyCompletionError(undefined).kind, 'uncertain');
 });
+
+test('Ready and planned partitions share readiness order and exclude starting rows', () => {
+  const plannedRow = (workspace: string, facts: Record<string, unknown> = {}) => ({ workspace, package: `/repo/${workspace}`, planned: true, ...facts });
+  const ready = plannedRow('ready', { step_count: 3, prepared: true, preparation: { outcome: 'prepared' }, decision: null, receipts: [] });
+  const decision = plannedRow('decision', { step_count: 3, prepared: false, decision: { stage: 'specification', question: 'q', recorded_at: '2026-10-10T00:00:00Z' } });
+  const notPlanned = plannedRow('a-not-planned', { step_count: null, prepared: false, preparation: { outcome: 'missing' }, decision: null });
+  const unknown = plannedRow('unknown');
+  const starting = { workspace: 'z-starting', package: '/repo/z-starting', implementation_starting: true, assignment_id: 'a-1' };
+  const rows = [unknown, notPlanned, decision, ready, starting];
+  assert.deepEqual(visibleSpecs(rows, 'ready', '').map(record => record.workspace), ['ready', 'decision', 'a-not-planned', 'unknown']);
+  assert.deepEqual(visibleSpecs(rows, 'planned', '').map(record => record.workspace), ['ready', 'decision', 'a-not-planned', 'unknown']);
+  assert.deepEqual(visibleSpecs(rows, 'active', '').map(record => record.workspace), ['z-starting']);
+});

@@ -886,6 +886,7 @@ test("workspace target status: reports retained repositories, context and artifa
   const repositories = new Map(result.repositories.map((entry) => [entry.id, entry]));
   assert.equal(repositories.size, 6);
   assert.equal(repositories.get("repo-ok").status, "ok");
+  assert.equal(repositories.get("repo-ok").canonical_path, await realpath(repoOk));
   assert.equal(repositories.get("repo-sub").status, "not_git");
   assert.equal(repositories.get("repo-file").status, "not_git");
   assert.equal(repositories.get("repo-bare").status, "not_git");

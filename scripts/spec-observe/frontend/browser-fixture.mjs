@@ -1,18 +1,28 @@
 // Isolated integration fixture: real dashboard HTTP/file routes, fake discussion workers.
 import {createServer} from 'node:http';
-import {mkdtemp,realpath,mkdir,writeFile,rm,rename,access} from 'node:fs/promises';
+import {mkdtemp,realpath,mkdir,readFile,writeFile,rm,rename,access} from 'node:fs/promises';
 import {tmpdir,hostname} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
-import {execFileSync} from 'node:child_process';
+import {execFileSync,spawn} from 'node:child_process';
 import {createDashboardServer} from '../dashboard.mjs';
+import {collectWorkspace} from '../sentinel.mjs';
+import {createDiscussionService} from '../../workspaces/discussion.mjs';
 import {createReferenceCatalog} from '../../workspaces/references.mjs';
+import {createSessionControl} from '../../workspaces/session-control.mjs';
 import {resolveAssignment,prepareAssignmentSpecTarget} from '../../workspaces/assignments.mjs';
 import {setupStorage,createWorkspace,fetchWorkspace,resolveRepositoryPath} from '../../workspaces/store.mjs';
 import {newPackage} from '../../spec-location/index.mjs';
 const plannedLaunch=process.env.SENTINEL_PLANNED_LAUNCH==='1';
+const specsReadiness=process.env.SENTINEL_SPECS_READINESS==='1';
+const epicPlanning=process.env.SENTINEL_EPIC_PLANNING==='1';
 const filesFixture=process.env.SENTINEL_REPOSITORY_FILES==='1';
+const handoffIntegration=process.env.SENTINEL_HANDOFF_INTEGRATION==='1'&&(plannedLaunch||specsReadiness||epicPlanning);
 const root=await realpath(await mkdtemp(join(tmpdir(),'sentinel-solid-browser-')));
+// Real final-integration resolution reads HOME and PATH: isolate both to this
+// fixture root so the real catalog sees root/.agents skills and the fake pi
+// file, never the live operator home.
+if(handoffIntegration){process.env.HOME=root;process.env.PATH=`${root}:${process.env.PATH??''}`;}
 const storage=join(root,'storage');await setupStorage(storage);
 const workspace=await createWorkspace(storage,{id:'fixture',name:'Browser fixture'});
 await createWorkspace(storage,{id:'other',name:'Other workspace'});
@@ -55,6 +65,51 @@ if(plannedLaunch){const created=await newPackage({root:storage,workspace:'fixtur
 if(plannedLaunch){const created=await newPackage({root:storage,workspace:'fixture',slug:'other-browser',targets:[{id:'fixture-repo'},{id:'fixture-repo-two'}]});if(!created.ok)throw new Error(`Planned fixture package setup failed: ${created.code} ${created.message}`);}
 const pkg=join(workspace.directory,'specs','browser');await mkdir(pkg,{recursive:true});
 const otherPkg=join(workspace.directory,'specs','other-browser');if(plannedLaunch){await mkdir(otherPkg,{recursive:true});await writeFile(join(otherPkg,'spec.md'),'# Other planned browser specification\n');}
+// Specs readiness extras (gated): waiting, incomplete, legacy-unknown and
+// decision packages so the Ready list/detail states have real observed rows
+// without changing the review/result fixture inventory. Create them through
+// the same lifecycle as browser/other-browser so Resume planning resolves a
+// real prepared package (scope/locations), then seed the observation files.
+const readinessSlugs=specsReadiness?['waiting-browser','incomplete-browser','legacy-browser','decision-browser']:[];
+const readinessPackageDirs=readinessSlugs.map(slug=>join(workspace.directory,'specs',slug));
+if(specsReadiness)for(const slug of readinessSlugs){
+ const created=await newPackage({root:storage,workspace:'fixture',slug,targets:[{id:'fixture-repo'}]});
+ if(!created.ok)throw new Error(`Specs readiness fixture package setup failed: ${created.code} ${created.message}`);
+ await writeFile(join(workspace.directory,'specs',slug,'spec.md'),`# ${slug} specification\n`);
+}
+if(specsReadiness){await writeFile(join(workspace.directory,'specs','waiting-browser','spec-prepare.md'),'# Preparation report\n');await writeFile(join(workspace.directory,'specs','incomplete-browser','proposal.md'),'---\ncritique_recommended: false\n---\n\n# Incomplete browser proposal\nA recorded proposal resumes without re-architecture.\n');await writeFile(join(workspace.directory,'specs','decision-browser','spec-prepare.md'),'# Preparation report\n');}
+// Epic-planning case packages: real prepared-looking directories for members
+// whose rows exercise prepared-prerequisite truth and index-only blockers.
+// The missing member deliberately gets no package directory.
+const epicPlanningSlugs=epicPlanning?['prepared-prereq-browser','index-browser','blocked-browser']:[];
+if(epicPlanning)for(const slug of epicPlanningSlugs){const created=await newPackage({root:storage,workspace:'fixture',slug,targets:[{id:'fixture-repo'}]});if(!created.ok)throw new Error(`Epic planning fixture package setup failed: ${created.code} ${created.message}`);await writeFile(join(workspace.directory,'specs',slug,'spec.md'),`# ${slug} specification\n`);}
+// Opt-in real final-integration seeds: the same package files a real host
+// reads drive readiness, planning and epic membership for this mode only.
+const handoffPackageDirs=new Map([['fixture/browser',pkg],['fixture/other-browser',otherPkg]]);
+for(const slug of readinessSlugs)handoffPackageDirs.set(`fixture/${slug}`,join(workspace.directory,'specs',slug));
+for(const slug of epicPlanningSlugs)handoffPackageDirs.set(`fixture/${slug}`,join(workspace.directory,'specs',slug));
+if(epicPlanning)handoffPackageDirs.set('fixture/missing-browser',join(workspace.directory,'specs','missing-browser'));
+const integrationSteps=(count=3)=>JSON.stringify({schema_version:1,steps:Array.from({length:count},(_,index)=>({step:index+1,name:`Integration step ${index+1}`,description:`Complete integration step ${index+1}.`,difficulty:'easy',visualDesign:false,evidence:[],repository:'fixture-repo'}))},null,2);
+if(handoffIntegration){
+ await mkdir(otherPkg,{recursive:true});
+ await writeFile(join(otherPkg,'spec.md'),'# Other planned browser specification\n');
+ await writeFile(join(pkg,'spec-steps.json'),integrationSteps(3));
+ await writeFile(join(pkg,'spec-prepare.md'),'# Preparation report\n\nPrepared 2026-10-10\noutcome: prepared\n');
+ if(specsReadiness){
+  const waitingDir=join(workspace.directory,'specs','waiting-browser');
+  await writeFile(join(waitingDir,'spec-steps.json'),integrationSteps(5));
+  await writeFile(join(waitingDir,'spec-prepare.md'),'# Preparation report\n\nPrepared 2026-10-10\noutcome: prepared\n');
+  await writeFile(join(workspace.directory,'specs','incomplete-browser','proposal.md'),'---\ncritique_recommended: false\n---\n\n# Incomplete browser proposal\nA recorded proposal resumes without re-architecture.\n');
+  const decisionDir=join(workspace.directory,'specs','decision-browser');
+  await writeFile(join(decisionDir,'decision-required.md'),'---\nstage: specification\nquestion: "Should integration resume specification without re-architecture?"\nrecommendation: "Resume spec-write after the operator answers."\nrecorded_at: 2026-10-15T00:00:00.000Z\n---\n\n# Decision required\n\nResume the recorded specification stage.\n');
+  await writeFile(join(decisionDir,'spec-prepare.md'),'# Preparation report\n\noutcome: decision-required\n');
+ }
+ const epicPackages=[{package:'base'},{package:'browser'},{package:'other-browser'}];
+ if(specsReadiness)epicPackages.push({package:'waiting-browser',requires:['other-browser']},{package:'incomplete-browser'},{package:'decision-browser'});
+ if(epicPlanning)epicPackages.push({package:'prepared-prereq-browser',requires:['base']},{package:'index-browser'},{package:'blocked-browser',requires:['index-browser']},{package:'missing-browser'});
+ const epicDir=join(storage,'projects','fixture','epics','demo');await mkdir(epicDir,{recursive:true});
+ await writeFile(join(epicDir,'epic.json'),`${JSON.stringify({schema_version:1,epic:'demo',title:'Demo epic',state:'active',created_at:'2026-10-01T00:00:00.000Z',packages:epicPackages},null,2)}\n`);
+}
 await writeFile(join(pkg,'work-tour.html'),'<html><body><h1>Isolated work tour</h1></body></html>');
 await writeFile(join(pkg,'linked.md'),'# Linked evidence\n');
 await writeFile(join(pkg,'spec.md'),'# Browser specification\n[Evidence](linked.md)\n<script>unsafe()</script>\n');
@@ -96,10 +151,147 @@ await writeFile(join(designDir,'design.json'),JSON.stringify({schema_version:1,d
 const observerDir=join(root,'agent','spec-sentinel','a'.repeat(64),'observers');await mkdir(observerDir,{recursive:true});
 const observerFile=join(observerDir,'a.json');
 const mismatchObserverFile=join(observerDir,'b.json');
-const skillPath=plannedLaunch?join(root,'.agents','skills','spec-end-to-end','SKILL.md'):join(root,'skills','fixture-skill','SKILL.md');await mkdir(join(skillPath,'..'),{recursive:true});
+const skillPath=(plannedLaunch||handoffIntegration)?join(root,'.agents','skills','spec-end-to-end','SKILL.md'):join(root,'skills','fixture-skill','SKILL.md');await mkdir(join(skillPath,'..'),{recursive:true});
 await writeFile(skillPath,plannedLaunch?'---\nname: spec-end-to-end\ndescription: Implement a spec package end to end.\n---\n# Spec end to end fixture\nUse the attached brief and the referenced package.\n':'---\nname: fixture-skill\ndescription: Plan work from the chosen brief.\n---\n# Fixture skill\nApply the selected workflow and read references relative to this skill directory.\n');
+// Bound plan/review fixture skills plus the generic fallback live under the
+// fake home so the real resolver can find each requested skill file.
+if(plannedLaunch||handoffIntegration)for(const skillName of ['spec-architect-initial','spec-architect-critics','spec-write','fixture-skill']){const boundSkillPath=join(root,'.agents','skills',skillName,'SKILL.md');await mkdir(join(boundSkillPath,'..'),{recursive:true});await writeFile(boundSkillPath,`---\nname: ${skillName}\ndescription: Bound package review fixture.\n---\n# ${skillName} fixture\n`);}
 const piPath=join(root,'pi');await writeFile(piPath,'#!/bin/sh\nexit 0\n',{mode:0o755});
 const referenceCatalog=createReferenceCatalog({home:root,agentDir:join(root,'agent'),skillLoader:()=>({skills:[{name:plannedLaunch?'spec-end-to-end':'fixture-skill',description:plannedLaunch?'Implement a spec package end to end.':'Plan work from the chosen brief.',filePath:skillPath,baseDir:join(skillPath,'..'),sourceInfo:{scope:'user'}}],diagnostics:[]})});
+// --- Opt-in real final-integration boundary --------------------------------
+// SENTINEL_HANDOFF_INTEGRATION=1 delegates the five direct dispatch methods to
+// the real discussion service. The final tmux process boundary stays fake:
+// new-session starts an owned inert Node child as the pane PID, session probes
+// answer from a fixture-owned session map, and completing a recorded planning
+// assignment marks its session absent. Nothing else is simulated: the service
+// keeps its canonical brief/preview/launch/claim/guard logic, and the resolver
+// reads this fixture root's skills and fake pi through the isolated HOME/PATH.
+const handoffSessions=new Map();
+const handoffTmuxCalls=[];
+let handoffNewSessions=0;
+function endHandoffSession(session){if(!session||session.ended)return;session.ended=true;try{session.dummy.kill('SIGKILL');}catch{}}
+function handoffTargetName(rest){const index=rest.indexOf('-t');if(index!==-1)return String(rest[index+1]??'').replace(/^=/,'').replace(/:$/,'');const candidate=rest.find(token=>typeof token==='string'&&token.startsWith('='));return candidate?candidate.replace(/^=/,'').replace(/:$/,''):null;}
+async function handoffTmuxRun(socketPath,args){
+ const list=Array.isArray(args)?args:[];
+ handoffTmuxCalls.push({socketPath,args:[...list]});
+ const segments=[];let current=[];
+ for(const token of list){if(token===';'){if(current.length)segments.push(current);current=[];}else current.push(token);}
+ if(current.length)segments.push(current);
+ let stdout='';
+ for(const segment of segments){
+  const [command,...rest]=segment;
+  if(command==='start-server'||command==='set-option'||command==='list-clients'||command==='list-panes')continue;
+  if(command==='new-session'){
+   const nameIndex=rest.indexOf('-s');const name=nameIndex!==-1?rest[nameIndex+1]:null;
+   const marker=rest.find(token=>typeof token==='string'&&token.startsWith('ADJACENT_ASSIGNMENT_ID='));
+   const assignmentId=marker?marker.slice('ADJACENT_ASSIGNMENT_ID='.length):null;
+   if(!name||!assignmentId)return {ok:false,code:1,stdout:'',stderr:'new-session requires -s and ADJACENT_ASSIGNMENT_ID',message:'invalid-session'};
+   if(handoffSessions.has(`${socketPath}#${name}`))return {ok:false,code:1,stdout:'',stderr:'duplicate session',message:'duplicate-session'};
+   const cwdIndex=rest.indexOf('-c');const cwd=cwdIndex!==-1&&typeof rest[cwdIndex+1]==='string'&&rest[cwdIndex+1].startsWith('/')?rest[cwdIndex+1]:root;
+   const dummy=spawn(process.execPath,['-e','setInterval(() => {}, 1000)'],{stdio:'ignore',cwd});
+   handoffNewSessions++;
+   handoffSessions.set(`${socketPath}#${name}`,{socketPath,name,assignmentId,dummy,ended:false,paneId:'%1',startedAt:new Date().toISOString()});
+   continue;
+  }
+  if(command==='has-session'){
+   const name=handoffTargetName(rest);const session=name?handoffSessions.get(`${socketPath}#${name}`):null;
+   if(!session||session.ended)return {ok:false,code:1,stdout:'',stderr:"can't find session",message:"can't find session"};
+   continue;
+  }
+  if(command==='display-message'){
+   const name=handoffTargetName(rest);const session=name?handoffSessions.get(`${socketPath}#${name}`):null;
+   if(!session||session.ended)return {ok:false,code:1,stdout:'',stderr:"can't find session",message:"can't find session"};
+   stdout+=`%1 ${session.dummy.pid}\n`;
+   continue;
+  }
+  if(command==='show-options'){
+   const name=handoffTargetName(rest);const session=name?handoffSessions.get(`${socketPath}#${name}`):null;
+   stdout+=`${session&&!session.ended?session.assignmentId:''}\n`;
+   continue;
+  }
+  if(command==='list-sessions'){
+   for(const session of handoffSessions.values())if(!session.ended&&session.socketPath===socketPath)stdout+=`${session.name}: 1 windows (created fixture)\n`;
+   continue;
+  }
+  if(command==='kill-session'||command==='kill-server'){
+   if(command==='kill-server'){for(const session of handoffSessions.values())if(session.socketPath===socketPath)endHandoffSession(session);}
+   else{const name=handoffTargetName(rest);const session=name?handoffSessions.get(`${socketPath}#${name}`):null;if(session)endHandoffSession(session);}
+   continue;
+  }
+  if(command==='if-shell'){
+   // Durable end: only the exact recorded session whose tmux condition still
+   // matches the stored assignment, pane and PID is ended; anything else
+   // answers identity-changed so the canonical end refuses.
+   const name=handoffTargetName(rest);const session=name?handoffSessions.get(`${socketPath}#${name}`):null;
+   const conditionIndex=rest.indexOf('-t')+2;const condition=conditionIndex>1?String(rest[conditionIndex]??''):'';
+   const expected=session?`#{&&:#{==:#{@adjacent_assignment_id},${session.assignmentId}},#{&&:#{==:#{pane_id},${session.paneId}},#{==:#{pane_pid},${session.dummy.pid}}}}`:'';
+   if(!session||session.ended||condition!==expected)return {ok:true,code:0,stdout:'identity-changed\n',stderr:''};
+   endHandoffSession(session);
+   continue;
+  }
+  return {ok:false,code:1,stdout:'',stderr:`unexpected tmux command: ${segment.join(' ')}`,message:'unexpected-command'};
+ }
+ return {ok:true,code:0,stdout,stderr:''};
+}
+const handoffPsRun=()=>({stdout:'',complete:true});
+const integrationCatalog=handoffIntegration?createReferenceCatalog({home:root,agentDir:join(root,'agent')}):null;
+const handoffService=handoffIntegration?createDiscussionService({root:storage,agentDir:join(root,'agent'),referenceCatalog:integrationCatalog,assignmentAdapters:{tmuxRun:handoffTmuxRun,observationProbes:{tmuxRun:handoffTmuxRun,psRun:handoffPsRun}}}):null;
+const integrationSessionControl=handoffIntegration?createSessionControl({storageRoot:storage,transport:{run:handoffTmuxRun}}):null;
+let integrationPublishChain=Promise.resolve();
+function publishIntegrationSnapshot(){
+ const run=async()=>{
+  if(!handoffIntegration)return null;
+  const snapshot=await collectWorkspace({storageRoot:storage,agentDir:join(root,'agent'),skipManagedIndex:true,assignmentProbes:{tmuxRun:handoffTmuxRun,psRun:handoffPsRun}});
+  const wrapper={schema_version:1,observer_id:'fixture-integration',state:'observing',published_at:new Date().toISOString(),snapshot};
+  const temporary=`${observerFile}.publishing`;
+  await writeFile(temporary,JSON.stringify(wrapper));
+  await rename(temporary,observerFile);
+  return wrapper;
+ };
+ const result=integrationPublishChain.then(run);
+ integrationPublishChain=result.then(()=>undefined,()=>undefined);
+ return result;
+}
+async function handoffAssignmentRecord(ref,assignmentId){
+ if(typeof ref!=='string'||!handoffPackageDirs.has(ref))throw new Error(`unknown fixture package reference: ${ref}`);
+ if(typeof assignmentId!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(assignmentId))throw new Error('assignment_id must be a UUID');
+ const directory=handoffPackageDirs.get(ref);
+ const recordPath=join(storage,'projects','fixture','assignments',`${assignmentId}.json`);
+ const record=JSON.parse(await readFile(recordPath,'utf8'));
+ if(record.assignment_id!==assignmentId)throw new Error('assignment record identity mismatch');
+ const storedPackage=typeof record.spec_package==='string'?record.spec_package:(typeof record.package_ref==='string'?record.package_ref:null);
+ if(storedPackage===null)throw new Error('assignment record does not name its spec package');
+ const matches=storedPackage===ref||(await realpath(storedPackage).catch(()=>null))===(await realpath(directory).catch(()=>null));
+ if(!matches)throw new Error(`assignment record package mismatch: ${storedPackage}`);
+ return {record,directory,recordPath};
+}
+async function completeHandoffPlanning(url){
+ const ref=url.searchParams.get('package_ref')??'';const assignmentId=url.searchParams.get('assignment_id')??'';const stage=url.searchParams.get('stage')||'proposal';
+ if(!['proposal','prepared'].includes(stage))throw new Error(`unsupported handoff planning stage: ${stage}`);
+ const {record,directory}=await handoffAssignmentRecord(ref,assignmentId);
+ const skill=typeof record.skill==='string'?record.skill:'';
+ if(!['spec-architect-initial','spec-architect-critics','spec-write'].includes(skill))throw new Error(`handoff-complete-planning requires a planning skill, got ${skill||'unrecorded'}`);
+ const description=await integrationSessionControl.describe(assignmentId);
+ if(!description.can_end)throw new Error(`handoff-complete-planning requires a verified open session, got ${description.state}: ${description.reason}`);
+ await integrationSessionControl.end({assignment_id:assignmentId,confirm:true,expected_identity:description.identity});
+ if(stage==='proposal')await writeFile(join(directory,'proposal.md'),'---\ncritique_recommended: true\n---\n\n# Integration proposal\nPlanning completed; critique is recommended before specification.\n');
+ else{await writeFile(join(directory,'critique.md'),'# Integration critique\nArchitecture reviewed; proceed to specification.\n');await writeFile(join(directory,'spec-prepare.md'),'# Preparation report\n\nPrepared 2026-10-15\noutcome: prepared\n');await writeFile(join(directory,'spec-steps.json'),integrationSteps(3));}
+ const wrapper=await publishIntegrationSnapshot();
+ return {control:'handoff-complete-planning',package_ref:ref,assignment_id:assignmentId,stage,snapshot:wrapper?.snapshot??null,processStarts:handoffNewSessions};
+}
+async function writeHandoffReceipt(url){
+ const ref=url.searchParams.get('package_ref')??'';const assignmentId=url.searchParams.get('assignment_id')??'';
+ const {record,directory}=await handoffAssignmentRecord(ref,assignmentId);
+ if(record.skill!=='spec-end-to-end')throw new Error(`handoff-write-receipt requires spec-end-to-end, got ${typeof record.skill==='string'?record.skill:'unrecorded'}`);
+ const now=new Date().toISOString();
+ const receipt={schema_version:1,id:assignmentId,assignment_id:assignmentId,package_ref:ref,package:directory,state:'running',started_at:now,dispatch_requested_at:now,step:'step-1-subspec.md',checkout:typeof record.execution_dir==='string'?record.execution_dir:checkout};
+ await mkdir(join(directory,'runtime','runs'),{recursive:true});
+ const receiptPath=join(directory,'runtime','runs',`${assignmentId}.json`);
+ await writeFile(receiptPath,`${JSON.stringify(receipt)}\n`);
+ await writeFile(join(directory,'runtime','run.json'),`${JSON.stringify(receipt)}\n`);
+ const wrapper=await publishIntegrationSnapshot();
+ return {control:'handoff-write-receipt',package_ref:ref,assignment_id:assignmentId,receiptPath,snapshot:wrapper?.snapshot??null,processStarts:handoffNewSessions};
+}
 const savedBriefs=new Map(),launchResolutions=new Map();let delaySuggestions=false,briefWritesPending=0,completedBriefWrites=0;
 const thread1='11111111-1111-4111-8111-111111111111',thread2='22222222-2222-4222-8222-222222222222',thread3='44444444-4444-4444-8444-444444444444';
 // thread1 carries a recorded repository target so Prepare can pass the recorded
@@ -124,9 +316,15 @@ let delayCreate=false,failCreate=false;
 // Review/dispatch controls: hold pending responses until both widths are
 // captured, then release; typed refusals drive each presentation state.
 let holdDispatchPreview=false,holdDispatchLaunch=false,dispatchPreviewRefusal='none',dispatchLaunchRefusal='none';
+// Explicit observed planning facts, independently controlled per package.
+const specsPlanningOverrides=new Map();
+const plannedPlanningOverrides=new Map();
 // Result controls: the launch reply selects the recorded outcome, and the
 // observer snapshot exposes a published assignment as an observed row.
 let dispatchLaunchOutcome='live';
+// Bound review conflicts: a published holding run supplies the identity the
+// run-active refusal opens; refused dispatches never start a worker.
+let reviewHoldingRun=null;
 const launchedAssignments=new Map();
 const dispatchPreviewWaiters=[],dispatchLaunchWaiters=[],threadWaiters=[],sendWaiters=[],createWaiters=[];
 const busyAssignmentId='b42f1903-9508-46c1-a4aa-a0842dbce617';
@@ -158,7 +356,7 @@ const projectsBackup=join(root,'projects-backup');
 const invalidKitDir=join(projectsDir,'broken');
 const partialKit=`version: 1\nid: fixture\nname: Browser fixture\nrepositories:\n  - id: fixture-repo\n    path: ${checkout}\n    role: Browser verification\n  - id: fixture-missing\n    path: ${join(root,'checkout-missing')}\n    role: Missing checkout\ncontext:\n  - ${contextPath}\n  - ${join(root,'outside-context.md')}\n`;
 const exists=async path=>{try{await access(path);return true;}catch{return false;}};
-const resetBoundaryControls=()=>{boundary.catalogFail=false;boundary.detailFail=false;boundary.stateFail=false;boundary.catalogDelayMs=0;boundary.detailDelayMs=0;boundary.detailDelayId='';boundary.stateDelayMs=0;boundary.stateClockOffsetMs=0;boundary.catalogMode='healthy';delayDispatchBrief=false;failDispatchBrief=false;delayDispatchSuggestions=false;holdDispatchPreview=false;holdDispatchLaunch=false;dispatchPreviewRefusal='none';dispatchLaunchRefusal='none';dispatchLaunchOutcome='live';launchedAssignments.clear();delayCreate=false;failCreate=false;holdThreadsWorkspace='';incompleteTail=false;invalidRecords=false;listFailStatus=0;historyFailStatus=0;releaseWaiters(dispatchPreviewWaiters);releaseWaiters(dispatchLaunchWaiters);releaseWaiters(createWaiters);if(activeBoundary.size===0){boundaryLog.length=0;boundaryAttempt=0;}};
+const resetBoundaryControls=()=>{specsPlanningOverrides.clear();plannedPlanningOverrides.clear();reviewHoldingRun=null;boundary.catalogFail=false;boundary.detailFail=false;boundary.stateFail=false;boundary.catalogDelayMs=0;boundary.detailDelayMs=0;boundary.detailDelayId='';boundary.stateDelayMs=0;boundary.stateClockOffsetMs=0;boundary.catalogMode='healthy';delayDispatchBrief=false;failDispatchBrief=false;delayDispatchSuggestions=false;holdDispatchPreview=false;holdDispatchLaunch=false;dispatchPreviewRefusal='none';dispatchLaunchRefusal='none';dispatchLaunchOutcome='live';launchedAssignments.clear();delayCreate=false;failCreate=false;holdThreadsWorkspace='';incompleteTail=false;invalidRecords=false;listFailStatus=0;historyFailStatus=0;releaseWaiters(dispatchPreviewWaiters);releaseWaiters(dispatchLaunchWaiters);releaseWaiters(createWaiters);if(activeBoundary.size===0){boundaryLog.length=0;boundaryAttempt=0;}};
 // Response-state shapes for screens 20-25. The queued shape keeps one
 // persisted queue_position on the selected row and names thread2 as the
 // in-scope owner; queued-absent leaves no owner row so the surface must use
@@ -170,6 +368,7 @@ const resetBoundaryControls=()=>{boundary.catalogFail=false;boundary.detailFail=
 // unowned while thread2 owns the slot. default/clear restores the base rows.
 const responseStatePatch=state=>state==='responding'?{state:'active',owns_response:true}:state==='queued'||state==='queued-absent'?{queue:[{id:'queued-1',text:'Use the existing file reader contract and keep the current source visible.',state:'queued',queue_position:2}]}:state==='paused'?{queue:[{id:'queued-1',text:'Use the existing file reader contract and keep the current source visible.',state:'queued',queue_position:null}],queue_paused:true}:state==='paused-owned'?{queue:[{id:'delivering-head',text:'Delivering head message.',state:'delivering'},{id:'queued-1',text:'Use the existing file reader contract and keep the current source visible.',state:'queued',queue_position:null}],queue_paused:true,owns_response:true}:state==='queued-blocked'?{queue:[{id:'blocked-head',text:'Delivering head message.',state:'delivering'},{id:'queued-1',text:'Use the existing file reader contract and keep the current source visible.',state:'queued',queue_position:null}]}:state==='history-only'?{history_only:true}:state==='stalled'?{attention:'stalled',owns_response:true}:state==='stalled-unowned'?{attention:'stalled'}:state==='stalled-elsewhere'?{attention:'stalled'}:state==='start-failed'?{attention:'start-failed'}:{};
 const applyResponseState=state=>{responseState=state;const first=threads[0].thread_id,second=threads[1]?threads[1].thread_id:null;const base=responseStatePatch(state);threads=threads.map(t=>({...t,state:'idle',attention:null,queue:[],queue_paused:false,owns_response:false,history_only:false,...(t.thread_id===first?base:{})}));if((state==='queued'||state==='stalled-elsewhere')&&second)threads=threads.map(t=>t.thread_id===second?{...t,state:'active',owns_response:true}:t);};
+reviewHoldingRun=null;
 async function moveProjectsToBackup(){await rm(projectsBackup,{recursive:true,force:true});await rename(projectsDir,projectsBackup);}
 async function restoreHealthyWorkspace(){if(await exists(projectsBackup)){await rm(projectsDir,{recursive:true,force:true});await rename(projectsBackup,projectsDir);}await rm(invalidKitDir,{recursive:true,force:true});await writeFile(join(workspace.directory,'kit.yaml'),healthyKit);}
 async function applyCatalogMode(mode){if(mode==='empty'){await restoreHealthyWorkspace();await moveProjectsToBackup();await mkdir(projectsDir,{recursive:true});}else if(mode==='missing_projects'){await restoreHealthyWorkspace();await moveProjectsToBackup();}else if(mode==='partial'){await restoreHealthyWorkspace();await mkdir(invalidKitDir,{recursive:true});await writeFile(join(invalidKitDir,'kit.yaml'),'id: [broken\n');await writeFile(join(workspace.directory,'kit.yaml'),partialKit);}else{await restoreHealthyWorkspace();}boundary.catalogMode=mode;}
@@ -191,8 +390,8 @@ async function fixtureAssignmentTarget(threadId){
  if(matches.length!==1)throw new Error('Fixture worktree target has no unique canonical repository binding.');
  return matches[0];
 }
-const discussion={
- async prepareSpecTarget(input){posts.push({name:'prepareSpecTarget',input});return prepareAssignmentSpecTarget({storageRoot:storage,workspace_id:input.workspace_id,target:await fixtureAssignmentTarget(input.thread_id),specPackage:input.spec_package});},
+const fixtureDiscussion={
+ async prepareSpecTarget(input){posts.push({name:'prepareSpecTarget',input});const directTarget=typeof input.repository_id==='string'&&dispatchRepos.some(repo=>repo.id===input.repository_id)?input.repository_id:null;return prepareAssignmentSpecTarget({storageRoot:storage,workspace_id:input.workspace_id,target:directTarget??await fixtureAssignmentTarget(input.thread_id),specPackage:input.spec_package});},
  async suggestions(input){posts.push({name:'suggestions',input});if(delaySuggestions)await new Promise(r=>setTimeout(r,650));const thread=threads.find(item=>item.thread_id===input.thread_id);if(!thread)throw Object.assign(new Error('Thread not found'),{code:'thread-not-found'});const target=thread.target&&typeof thread.target==='object'?thread.target:{};let executionDir=workspace.directory;if(target.kind==='repository'){const match=dispatchRepos.find(repo=>repo.id===target.repository_id);if(match)executionDir=await realpath(match.path);}else if(target.kind==='worktree'&&typeof target.path==='string'){executionDir=await realpath(target.path);}return referenceCatalog.suggest({workspace:{...workspace,repositories:dispatchRepos.map(repo=>({id:repo.id,path:repo.path}))},executionDir,kind:input.kind,query:input.query});},
  async list({workspace_id}){if(holdThreads&&(!holdThreadsWorkspace||workspace_id===holdThreadsWorkspace))await waitForRelease(threadWaiters);if(failThreads)throw Object.assign(new Error('Fixture thread list unavailable'),{code:'service-closed'});return {threads:workspace_id==='fixture'?copied(threads):[],invalid:workspace_id==='fixture'&&invalidRecords?[{reason:'invalid-json'},{reason:'fixture-secret-token'}]:[]};},
  async history({before}){if(before)return {entries:[{id:'entry-old',message:{role:'user',content:'Older message'}}],truncated:false,incomplete_tail:false};if(longHistory)return {entries:Array.from({length:48},(_,index)=>({id:`entry-long-${index+1}`,timestamp:new Date(Date.now()-index*60000).toISOString(),message:{role:index%2?'assistant':'user',content:`Long history message ${index+1}. Fixture transcript line for the retained reading position. A second sentence keeps each row tall enough to scroll.`}})),truncated:true,incomplete_tail:false};return {entries:copied(entries),truncated:true,incomplete_tail:incompleteTail};},
@@ -209,15 +408,49 @@ const discussion={
  // Direct preview/launch resolve the request's identity-only references through
  // the real reference catalog, mirroring directHandoffInput; execution, workers
  // and launch outcomes stay fake, so this proves the browser boundary only.
- async dispatchPreview(input){posts.push({name:'dispatchPreview',input});if(holdDispatchPreview)await waitForRelease(dispatchPreviewWaiters);if(dispatchPreviewRefusal==='stale')throw Object.assign(new Error('Stale fixture preview'),{code:'stale-preview'});if(dispatchPreviewRefusal==='busy')throw Object.assign(new Error('Busy fixture target'),{code:'target-busy',assignment_id:busyAssignmentId});if(dispatchPreviewRefusal==='run-active')throw Object.assign(new Error('Active fixture run'),{code:'run-active'});if(dispatchPreviewRefusal==='service')throw Object.assign(new Error('Fixture dispatch unavailable'),{code:'service-closed'});if(dispatchPreviewRefusal==='error')throw new Error('Fixture resolution failure');const saved=savedBriefs.get(input.request_id);const resolution=await resolveAssignment({workspace_id:'fixture',assignment_id:input.assignment_id,storageRoot:storage,brief:saved.path,instructions:input.instructions,pi_path:piPath,context_references:input.references??saved.references},{referenceCatalog});noteResolution('dispatchPreview',input,resolution,{refused:false,refusal:null});return resolution;},
- async dispatchLaunch(input){posts.push({name:'dispatchLaunch',input});if(holdDispatchLaunch)await waitForRelease(dispatchLaunchWaiters);if(dispatchLaunchRefusal==='stale')throw Object.assign(new Error('Stale fixture launch'),{code:'stale-preview'});const saved=savedBriefs.get(input.request_id);const fresh=await resolveAssignment({workspace_id:'fixture',assignment_id:input.assignment_id,storageRoot:storage,brief:saved.path,instructions:input.instructions,pi_path:piPath,context_references:input.references??saved.references},{referenceCatalog});const matched=fresh.contractDigest===input.expectedDigest;noteResolution('dispatchLaunch',input,fresh,{expected_digest:input.expectedDigest??null,fresh_digest:fresh.contractDigest,matched,refused:!matched,refusal:matched?null:'digest-mismatch'});if(!matched)throw Object.assign(new Error('Changed source'),{code:'stale-preview'});if(dispatchLaunchOutcome==='failed')return {assignment:{assignment_id:input.assignment_id,state:'launch_failed'},observation:{state:'failed'}};if(dispatchLaunchOutcome==='unknown')return {assignment:{assignment_id:input.assignment_id,state:'unknown'},observation:{state:'unknown'}};return {assignment:{assignment_id:input.assignment_id,state:'live',tmux_session:'fixture'},observation:{state:'live'}};},
+ async dispatchPreview(input){posts.push({name:'dispatchPreview',input});if(holdDispatchPreview)await waitForRelease(dispatchPreviewWaiters);if(dispatchPreviewRefusal==='stale')throw Object.assign(new Error('Stale fixture preview'),{code:'stale-preview'});if(dispatchPreviewRefusal==='busy')throw Object.assign(new Error('Busy fixture target'),{code:'target-busy',assignment_id:busyAssignmentId});if(dispatchPreviewRefusal==='run-active')throw Object.assign(new Error('Active fixture run'),{code:'run-active'});if(dispatchPreviewRefusal==='service')throw Object.assign(new Error('Fixture dispatch unavailable'),{code:'service-closed'});if(dispatchPreviewRefusal==='error')throw new Error('Fixture resolution failure');const saved=savedBriefs.get(input.request_id);const resolution=await resolveAssignment({workspace_id:'fixture',assignment_id:input.assignment_id,storageRoot:storage,brief:saved.path,instructions:input.instructions,pi_path:piPath,home:root,context_references:input.references??saved.references,specPackage:input.spec_package??null,target:input.repository_id??null,skill:input.skill??'general',publication_authority:input.publication_authority??'none',provider:input.provider??null,model:input.model??null,thinking:input.thinking??null,harness:input.harness??null},{referenceCatalog});noteResolution('dispatchPreview',input,resolution,{refused:false,refusal:null});return resolution;},
+ async dispatchLaunch(input){posts.push({name:'dispatchLaunch',input});if(holdDispatchLaunch)await waitForRelease(dispatchLaunchWaiters);if(dispatchLaunchRefusal==='stale'||staleLaunch)throw Object.assign(new Error('Stale fixture launch'),{code:'stale-preview'});const saved=savedBriefs.get(input.request_id);const fresh=await resolveAssignment({workspace_id:'fixture',assignment_id:input.assignment_id,storageRoot:storage,brief:saved.path,instructions:input.instructions,pi_path:piPath,home:root,context_references:input.references??saved.references,specPackage:input.spec_package??null,target:input.repository_id??null,skill:input.skill??'general',publication_authority:input.publication_authority??'none',provider:input.provider??null,model:input.model??null,thinking:input.thinking??null,harness:input.harness??null},{referenceCatalog});const matched=fresh.contractDigest===input.expectedDigest;noteResolution('dispatchLaunch',input,fresh,{expected_digest:input.expectedDigest??null,fresh_digest:fresh.contractDigest,matched,refused:!matched,refusal:matched?null:'digest-mismatch'});if(!matched)throw Object.assign(new Error('Changed source'),{code:'stale-preview'});if(dispatchLaunchOutcome==='failed')return {assignment:{assignment_id:input.assignment_id,state:'launch_failed'},observation:{state:'failed'}};if(dispatchLaunchOutcome==='unknown')return {assignment:{assignment_id:input.assignment_id,state:'unknown'},observation:{state:'unknown'}};return {assignment:{assignment_id:input.assignment_id,state:'live',tmux_session:'fixture',launch_completed_at:new Date().toISOString()},observation:{state:'live'}};},
  subscribe({thread_id},callback){subscribers.add({thread_id,callback});const current=()=>threads.find(t=>t.thread_id===thread_id);const timer=setInterval(()=>callback({type:'state',event:copied(current()??{}),workspace_id:'fixture',thread_id,generation:1}),700);return ()=>{clearInterval(timer);for(const item of subscribers)if(item.callback===callback)subscribers.delete(item);};},
 };
+const observedDispatch=name=>async input=>{const entry={name,input};posts.push(entry);try{const result=await handoffService[name](input);entry.result=result;return result;}catch(error){entry.error={code:error?.code??null,message:error?.message??String(error)};throw error;}};
+const discussion=handoffIntegration?{...fixtureDiscussion,list:observedDispatch('list'),prepareSpecTarget:observedDispatch('prepareSpecTarget'),dispatchSuggestions:observedDispatch('dispatchSuggestions'),dispatchSaveBrief:observedDispatch('dispatchSaveBrief'),dispatchPreview:observedDispatch('dispatchPreview'),dispatchLaunch:observedDispatch('dispatchLaunch')}:fixtureDiscussion;
+// Result-case epic inventory: the bound planning result returns to this epic
+// and offers the next independent member while its launch runs.
+const plannedEpic={workspace:'fixture',epic:'demo',title:'Demo epic',state:'active',next:'other-browser',members:[{name:'base',package:'base',workspace:'fixture',status:specsReadiness?'merged':'prepared',requires:[],waiting_on:[],attention:false,planning:{prepared:true,step_count:2,preparation:{outcome:'prepared',reported_at:'2026-10-09T12:00:00Z',source:'spec-prepare.md',read:'ok',bytes:80},decision:null,receipts:[]}},{name:'browser',package:'browser',workspace:'fixture',status:'prepared',requires:['base'],waiting_on:[],attention:false,planning:{prepared:true,step_count:3,preparation:{outcome:'prepared',reported_at:'2026-10-10T12:00:00Z',source:'spec-prepare.md',read:'ok',bytes:120},decision:null,receipts:[]}},{name:'other-browser',package:'other-browser',workspace:'fixture',status:'proposed',requires:[],waiting_on:[],attention:false,planning:{proposal:false,prepared:false,step_count:0,preparation:{outcome:'missing'},decision:null,receipts:[]}}],summary:{total:3,merged:0,complete:0,attention:0},coverage:{state:'complete',reasons:[]}};
+let specsAssignmentCoverage='complete';
+if(specsReadiness){plannedEpic.members.push({name:'waiting-browser',package:'waiting-browser',workspace:'fixture',status:'prepared',requires:['other-browser'],waiting_on:['other-browser'],attention:false,planning:{prepared:true,step_count:5,preparation:{outcome:'prepared',reported_at:'2026-10-10T12:00:00Z',source:'spec-prepare.md',read:'ok',bytes:90},decision:null,receipts:[]}},{name:'incomplete-browser',package:'incomplete-browser',workspace:'fixture',status:'prepared',requires:[],waiting_on:[],attention:false,planning:{proposal:true,critique:false,critique_recommended:false,prepared:false,step_count:4,preparation:{outcome:'missing'},decision:null,receipts:[]}},{name:'legacy-browser',package:'legacy-browser',workspace:'fixture',status:'prepared',requires:[],waiting_on:[],attention:false},{name:'decision-browser',package:'decision-browser',workspace:'fixture',status:'prepared',requires:[],waiting_on:[],attention:false,planning:{prepared:true,step_count:6,preparation:{outcome:'prepared',reported_at:'2026-10-10T12:00:00Z',source:'spec-prepare.md',read:'ok',bytes:90},decision:{question:'Choose the storage layout'},receipts:[]}});plannedEpic.summary.total=plannedEpic.members.length;}
+// Epic-planning members: prepared-prerequisite truth (base is prepared, not
+// landed), an index-only prerequisite on an executing member, and a missing
+// package directory whose Plan action must stay disabled.
+if(epicPlanning)plannedEpic.members.push(
+ {name:'prepared-prereq-browser',package:'prepared-prereq-browser',workspace:'fixture',status:'proposed',requires:['base'],waiting_on:[],attention:false,planning:{proposal:false,prepared:false,step_count:null,preparation:{outcome:'missing'},decision:null,receipts:[]}},
+ {name:'index-browser',package:'index-browser',workspace:'fixture',status:'in-progress',requires:[],waiting_on:[],attention:false,planning:{prepared:false,step_count:2,preparation:{outcome:'missing'},decision:null,receipts:[]}},
+ {name:'blocked-browser',package:'blocked-browser',workspace:'fixture',status:'proposed',requires:['index-browser'],waiting_on:[],attention:false,planning:{proposal:false,prepared:false,step_count:null,preparation:{outcome:'missing'},decision:null,receipts:[]}},
+ {name:'missing-browser',package:'missing-browser',workspace:'fixture',status:'missing',requires:[],waiting_on:[],attention:false});
+if(epicPlanning)plannedEpic.summary.total=plannedEpic.members.length;
 const makeSnapshot=()=>{const now=new Date().toISOString();const run={workspace:'fixture',package:pkg,package_ref:'fixture/browser',assignment_id:'run-1',workflow_id:'workflow-1',execution:'running',workflow_state:'waiting-worker',is_current_assignment:true,activity:'Building the dashboard',obligation:'Keep editors stable',observed_at:now,coverage:{state:'complete',reasons:[]},spec_progress:{current_position:(tick%3)+1,total_steps:3,current_name:'Migrate view'},timing:{started_at:now,attempts:[]},evidence:{state:'recorded',verdict:'ready',scope:'declared-artifact',source:'work-tour.html',commit:'abc123',observed_at:now},epic:{epic:'demo',workspace:'fixture'}};
 const runAssignment={assignment_id:'run-1',workspace_id:'fixture',task_activity:{state:'idle',reason:'The last response finished. The session is waiting for input.',finished_at:now,last_reply:'Architecture proposal complete.'},spec_package:'fixture/browser',workflow_id:'workflow-1',display:terminalAssignment==='ended'?'ended':'live',state:'live',executionDir:root,terminal:'fixture',coverage:{state:'complete',reasons:[]},nextAction:'Attach to the terminal'};
-const snapshot={workspace:'fixture',coverage:{state:'complete',observed_at:now,reasons:[]},runs:plannedLaunch?[]:[run],recently_completed:plannedLaunch?[]:[{...run,assignment_id:'landed',package:pkg,completion_basis:'merged-pr',completed_at:now,is_current_assignment:false}],assignments:plannedLaunch?[]:[...(terminalAssignment==='absent'?[]:[runAssignment]),...[...launchedAssignments.values()].map(copied)],assignment_coverage:{state:'complete',reasons:[]},epics:plannedLaunch?[]:[{workspace:'fixture',epic:'demo',title:'Demo epic',state:'active',members:[{name:'browser',package:'browser',workspace:'fixture',status:'in-progress',waiting_on:[],attention:false}],summary:{total:1,merged:0,complete:0,attention:0},next:'browser',coverage:{state:'complete',reasons:[]}}]};if(plannedLaunch)snapshot.planned_packages=[{workspace:'fixture',package:pkg,package_ref:'fixture/browser',planned_at:'2026-10-10T12:00:00Z',targets:[{id:'main',primary:checkout},{id:'alternate',primary:secondCheckout}],source_paths:['spec.md']},{workspace:'fixture',package:otherPkg,package_ref:'fixture/other-browser',planned_at:'2026-10-11T12:00:00Z',targets:[{id:'main',primary:checkout},{id:'alternate',primary:secondCheckout}],source_paths:['spec.md']}];return {schema_version:1,observer_id:'fixture',state:'observing',published_at:now,snapshot};};
+const snapshot={workspace:'fixture',coverage:{state:'complete',observed_at:now,reasons:[]},runs:plannedLaunch?(reviewHoldingRun?[reviewHoldingRun]:[]):[run],recently_completed:plannedLaunch?[]:[{...run,assignment_id:'landed',package:pkg,completion_basis:'merged-pr',completed_at:now,is_current_assignment:false}],assignments:[...(plannedLaunch||terminalAssignment==='absent'?[]:[runAssignment]),...[...launchedAssignments.values()].map(copied)],assignment_coverage:{state:'complete',reasons:[]},epics:plannedLaunch?[plannedEpic]:[{workspace:'fixture',epic:'demo',title:'Demo epic',state:'active',members:[{name:'browser',package:'browser',workspace:'fixture',status:'in-progress',waiting_on:[],attention:false}],summary:{total:1,merged:0,complete:0,attention:0},next:'browser',coverage:{state:'complete',reasons:[]}}]};if(plannedLaunch)snapshot.planned_packages=[{workspace:'fixture',package:pkg,package_ref:'fixture/browser',planned_at:'2026-10-10T12:00:00Z',prepared:true,step_count:3,preparation:{outcome:'prepared',reported_at:'2026-10-10T12:00:00Z',source:'spec-prepare.md',read:'ok',bytes:120},decision:null,receipts:[],targets:specsReadiness||epicPlanning?[{id:'main',primary:checkout}]:[{id:'main',primary:checkout},{id:'alternate',primary:secondCheckout}],source_paths:['spec.md']},{workspace:'fixture',package:otherPkg,package_ref:'fixture/other-browser',planned_at:'2026-10-11T12:00:00Z',prepared:false,step_count:0,preparation:{outcome:'missing'},decision:null,receipts:[],targets:specsReadiness||epicPlanning?[{id:'main',primary:checkout}]:[{id:'main',primary:checkout},{id:'alternate',primary:secondCheckout}],source_paths:['spec.md']}];
+if(specsReadiness)snapshot.planned_packages.push({workspace:'fixture',package:readinessPackageDirs[0],package_ref:'fixture/waiting-browser',planned_at:'2026-10-10T12:00:00Z',prepared:true,step_count:5,preparation:{outcome:'prepared',reported_at:'2026-10-10T12:00:00Z',source:'spec-prepare.md',read:'ok',bytes:90},decision:null,receipts:[],requires:['other-browser'],targets:[{id:'main',primary:checkout}],source_paths:['spec.md']},{workspace:'fixture',package:readinessPackageDirs[1],package_ref:'fixture/incomplete-browser',planned_at:'2026-10-10T12:00:00Z',proposal:true,critique:false,critique_recommended:false,prepared:false,step_count:4,preparation:{outcome:'missing'},decision:null,receipts:[],targets:[{id:'main',primary:checkout}],source_paths:['spec.md']},{workspace:'fixture',package:readinessPackageDirs[2],package_ref:'fixture/legacy-browser',planned_at:'2026-10-10T12:00:00Z',source_paths:['spec.md'],targets:[{id:'main',primary:checkout}]},{workspace:'fixture',package:readinessPackageDirs[3],package_ref:'fixture/decision-browser',planned_at:'2026-10-10T12:00:00Z',prepared:true,step_count:6,preparation:{outcome:'prepared',reported_at:'2026-10-10T12:00:00Z',source:'spec-prepare.md',read:'ok',bytes:90},decision:{question:'Choose the storage layout'},receipts:[],targets:[{id:'main',primary:checkout}],source_paths:['spec.md']});
+if(specsReadiness||epicPlanning)snapshot.assignment_coverage.state=specsAssignmentCoverage;
+if(specsReadiness){
+ snapshot.assignment_coverage.state=specsAssignmentCoverage;
+ // Match collectFact: requires lives on the epic, report sources are absolute.
+ for(const row of snapshot.planned_packages){
+  delete row.requires;
+  if(row.preparation?.source)row.preparation.source=join(row.package,'spec-prepare.md');
+ }
+}
+if(epicPlanning)for(const slug of epicPlanningSlugs)snapshot.planned_packages.push({workspace:'fixture',package:join(workspace.directory,'specs',slug),package_ref:`fixture/${slug}`,planned_at:'2026-10-10T12:00:00Z',prepared:false,decision:null,receipts:[],targets:[{id:'main',primary:checkout}],source_paths:['spec.md']});
+// Ordinary route fixtures have no planned inventory. Overrides only change
+// observed planning facts, never manufacture packages in that mode.
+for(const row of snapshot.planned_packages??[]){
+ const override=specsPlanningOverrides.get(row.package_ref)??plannedPlanningOverrides.get(row.package_ref);
+ if(override)Object.assign(row,override);
+}
+return {schema_version:1,observer_id:'fixture',state:'observing',published_at:now,snapshot};};
 const makeMismatchSnapshot=()=>{const now=new Date().toISOString();const run=(workspaceName,packagePath,packageRef,activity)=>({workspace:workspaceName,package:packagePath,package_ref:packageRef,assignment_id:'mismatch-run',workflow_id:'mismatch-workflow',execution:'running',workflow_state:'waiting-external',is_current_assignment:true,activity,obligation:activity,observed_at:now,coverage:{state:'complete',reasons:[]},spec_progress:{current_position:1,total_steps:2,current_name:'Mismatch step'},timing:{started_at:now,attempts:[]}});return {schema_version:1,observer_id:'mismatch-fixture',state:'observing',published_at:now,snapshot:{workspace:'physical',coverage:{state:'complete',observed_at:now,reasons:[]},runs:[run('physical',alphaKitPackage,'alpha/alpha-kit','Alpha kit run'),run('alpha',physicalKitPackage,'physical/physical-kit','Neighbor physical run')],recently_completed:[],assignments:[{assignment_id:'alpha-assignment',workspace_id:'alpha',workspace:'physical',spec_package:'alpha/alpha-kit',workflow_id:'mismatch-workflow',display:'live',state:'live',executionDir:root,coverage:{state:'complete',reasons:[]},task_activity:{state:'idle',reason:'Waiting for mismatch review.'},nextAction:'Review mismatch assignment'},{assignment_id:'physical-assignment',workspace_id:'physical',workspace:'alpha',spec_package:'physical/physical-kit',workflow_id:'mismatch-workflow',display:'live',state:'live',executionDir:root,coverage:{state:'complete',reasons:[]},task_activity:{state:'idle',reason:'Waiting for mismatch review.'},nextAction:'Review mismatch assignment'}],assignment_coverage:{state:'complete',reasons:[]},epics:[{workspace:'physical',epic:'alpha-kit-epic',title:'Alpha kit epic',state:'active',members:[{name:'alpha-kit',package:'alpha-kit',workspace:'physical',status:'in-progress',waiting_on:[],attention:false}],summary:{total:1,merged:0,complete:0,attention:0},next:'alpha-kit',coverage:{state:'complete',reasons:[]}},{workspace:'alpha',epic:'physical-neighbor-epic',title:'Neighbor physical epic',state:'active',members:[{name:'physical-kit',package:'physical-kit',workspace:'alpha',status:'in-progress',waiting_on:[],attention:false}],summary:{total:1,merged:0,complete:0,attention:0},next:'physical-kit',coverage:{state:'complete',reasons:[]}}]}};};
-await writeFile(mismatchObserverFile,JSON.stringify(makeMismatchSnapshot()));
+if(!handoffIntegration)await writeFile(mismatchObserverFile,JSON.stringify(makeMismatchSnapshot()));
 let sessionEnded=false,sessionEndFails=false,sessionIdentity='fixture-identity';
 const sessionControl={
  async describe(id){return {assignment_id:id,identity:sessionIdentity,state:sessionEnded?'ended':'open',can_end:!sessionEnded,reason:sessionEnded?'Session has ended. Saved files and transcript remain available.':'Terminal session is open.',attach_command:sessionEnded?null:"ssh -t operator@host 'tmux -S /tmp/fixture.sock attach-session -t =fixture'",local_command:sessionEnded?null:'tmux -S /tmp/fixture.sock attach-session -t =fixture'};},
@@ -282,12 +515,16 @@ async function handleTerminalRequest(req,res,url,assetMatch){
  if(terminalFailAsset===kind||terminalFailAsset==='both'){send(503,{error:'Fixture player asset failure.'});return;}
  send(200,kind==='styles'?TERMINAL_STUB_STYLES:TERMINAL_STUB_SCRIPT,kind==='styles'?'text/css; charset=utf-8':'text/javascript; charset=utf-8');
 }
-await writeFile(observerFile,JSON.stringify(makeSnapshot()));
+if(handoffIntegration)await publishIntegrationSnapshot();
+else await writeFile(observerFile,JSON.stringify(makeSnapshot()));
 const dashboard=createDashboardServer({agentDir:join(root,'agent'),storageRoot:storage,publicHost:'dashboard.example',discussion,sessionControl});
 const server=createServer(async(req,res)=>{
  const url=new URL(req.url,'http://fixture');
  if(url.pathname==='/__fixture/control'){
   const action=url.searchParams.get('action');
+  let controlResult=null;
+  if(handoffIntegration&&action==='handoff-complete-planning')try{controlResult=await completeHandoffPlanning(url);}catch(error){controlResult={control:'handoff-complete-planning',error:String(error?.message??error)};}
+  if(handoffIntegration&&action==='handoff-write-receipt')try{controlResult=await writeHandoffReceipt(url);}catch(error){controlResult={control:'handoff-write-receipt',error:String(error?.message??error)};}
   if(action==='session-end-fails')sessionEndFails=url.searchParams.get('value')==='true';
   if(action==='session-identity'){const next=url.searchParams.get('value');sessionIdentity=next?next:'fixture-identity';}
   if(action==='terminal-state')terminalState=url.searchParams.get('value')||'none';
@@ -326,8 +563,33 @@ const server=createServer(async(req,res)=>{
   if(action==='dispatch-preview-refusal')dispatchPreviewRefusal=url.searchParams.get('value')||'none';
   if(action==='dispatch-launch-refusal')dispatchLaunchRefusal=url.searchParams.get('value')||'none';
   if(action==='dispatch-launch-outcome')dispatchLaunchOutcome=url.searchParams.get('value')||'live';
-  if(action==='publish-assignment'){const id=url.searchParams.get('value')||'';if(id){launchedAssignments.set(id,{assignment_id:id,workspace_id:'fixture',spec_package:'fixture/browser',workflow_id:'workflow-1',display:'live',state:'live',executionDir:root,terminal:'fixture',coverage:{state:'complete',reasons:[]},task_activity:{state:'idle',reason:'Fixture assignment is waiting for input.'},nextAction:'Attach to the terminal'});await writeFile(observerFile,JSON.stringify(makeSnapshot()));}}
+  if(action==='review-preview-refusal'){const value=url.searchParams.get('value')||'none';dispatchPreviewRefusal=value==='target-busy'?'busy':value==='stale'?'stale':value==='run-active'?'run-active':value==='service'?'service':value==='error'?'error':'none';}
+  if(action==='review-launch-refusal'){dispatchLaunchRefusal=url.searchParams.get('value')||'none';}
+  if(action==='review-hold-preview')holdDispatchPreview=url.searchParams.get('value')==='true';
+  if(action==='review-release-preview'){holdDispatchPreview=false;releaseWaiters(dispatchPreviewWaiters);}
+  if(action==='review-hold-launch')holdDispatchLaunch=url.searchParams.get('value')==='true';
+  if(action==='review-release-launch'){holdDispatchLaunch=false;releaseWaiters(dispatchLaunchWaiters);}
+  if(action==='review-holding-run'){const value=url.searchParams.get('value')||'';reviewHoldingRun=value?{workspace:'fixture',package:pkg,package_ref:'fixture/browser',assignment_id:value,workflow_id:'workflow-1',execution:'running',workflow_state:'waiting-worker',is_current_assignment:true,activity:'Holding fixture/browser',obligation:'Finish before another review',observed_at:new Date().toISOString(),coverage:{state:'complete',reasons:[]}}:null;}
+  if(action==='publish-assignment'){const id=url.searchParams.get('value')||'';const skill=url.searchParams.get('skill')||'';const specPackage=url.searchParams.get('package')||'fixture/browser';if(id){launchedAssignments.set(id,{assignment_id:id,workspace_id:'fixture',spec_package:specPackage,workflow_id:'workflow-1',display:'live',state:'live',executionDir:root,terminal:'fixture',coverage:{state:'complete',reasons:[]},task_activity:{state:'idle',reason:'Fixture assignment is waiting for input.'},nextAction:'Attach to the terminal',...(skill?{skill}:{})});await writeFile(observerFile,JSON.stringify(makeSnapshot()));}}
   if(action==='clear-launch-publications')launchedAssignments.clear();
+  if(action==='planned-planning-facts'&&plannedLaunch){
+   const ref=url.searchParams.get('package_ref')||'fixture/browser';
+   const value=url.searchParams.get('value');
+   if(!value||value==='null')plannedPlanningOverrides.delete(ref);else plannedPlanningOverrides.set(ref,JSON.parse(value));
+  }
+  if(action==='specs-package-facts'&&(specsReadiness||epicPlanning)){
+   const ref=url.searchParams.get('package_ref')||'';
+   const value=url.searchParams.get('value');
+   if(ref){if(!value||value==='null')specsPlanningOverrides.delete(ref);else specsPlanningOverrides.set(ref,JSON.parse(value));}
+  }
+  if(action==='specs-assignment-coverage'&&(specsReadiness||epicPlanning))specsAssignmentCoverage=url.searchParams.get('value')||'unknown';
+  if(action==='epic-planning-facts'&&epicPlanning){
+   const member=plannedEpic.members.find(item=>item.name===(url.searchParams.get('member')||'other-browser'));
+   const value=url.searchParams.get('value');
+   if(member&&value)member.planning=JSON.parse(value);
+  }
+  if(action==='epic-base-status'&&epicPlanning)plannedEpic.members[0].status=url.searchParams.get('value')||'prepared';
+  if(action==='specs-publish-snapshot'&&(specsReadiness||epicPlanning))await writeFile(observerFile,JSON.stringify(makeSnapshot()));
   if(action==='attention')threads=threads.map((t,i)=>i===0?{...t,attention:'stalled',owns_response:true}:t);
   if(action==='queue')threads=threads.map((t,i)=>i===0?{...t,attention:'uncertain',queue:[{id:'uncertain-1',text:'Uncertain message',state:'uncertain'}]}:t);
   if(action==='clear-attention')threads=threads.map(t=>({...t,attention:null,queue:[],queue_paused:false,owns_response:false}));
@@ -350,7 +612,7 @@ const server=createServer(async(req,res)=>{
   if(action==='state-delay-ms')boundary.stateDelayMs=numberValue(url.searchParams.get('value'),0,5000);
   if(action==='state-clock-offset-ms')boundary.stateClockOffsetMs=numberValue(url.searchParams.get('value'),-120000,120000);
   if(action==='catalog-mode')await applyCatalogMode(url.searchParams.get('value')||'healthy');
-  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({...packageIdentity,posts,threads,createdThreads,tick,boundary,threadControls:{holdThreads,holdThreadsWorkspace,failThreads,longHistory,incompleteTail,invalidRecords,listFailStatus,historyFailStatus,responseState},subscribedThreadIds:[...new Set([...subscribers].map(item=>item.thread_id))],createControls:{delayCreate,failCreate},session:{identity:sessionIdentity,ended:sessionEnded},terminal:{state:terminalState,delayMs:terminalDelayMs,openDelayMs:terminalOpenDelayMs,failAsset:terminalFailAsset,assignment:terminalAssignment,counts:terminalCounts},review:{holdDispatchPreview,holdDispatchLaunch,dispatchPreviewRefusal,dispatchLaunchRefusal,staleLaunch},launch:{outcome:dispatchLaunchOutcome,published:[...launchedAssignments.keys()]},diagnostics:{resolvers:resolverDiagnostics},boundaryLog:boundaryLog.slice(-60),active:[...activeBoundary.values()],launchResolutions:Object.fromEntries(launchResolutions),briefWritesPending,completedBriefWrites}));return;
+  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({...packageIdentity,posts,threads,createdThreads,tick,boundary,threadControls:{holdThreads,holdThreadsWorkspace,failThreads,longHistory,incompleteTail,invalidRecords,listFailStatus,historyFailStatus,responseState},subscribedThreadIds:[...new Set([...subscribers].map(item=>item.thread_id))],createControls:{delayCreate,failCreate},session:{identity:sessionIdentity,ended:sessionEnded},terminal:{state:terminalState,delayMs:terminalDelayMs,openDelayMs:terminalOpenDelayMs,failAsset:terminalFailAsset,assignment:terminalAssignment,counts:terminalCounts},review:{holdDispatchPreview,holdDispatchLaunch,dispatchPreviewRefusal,dispatchLaunchRefusal,staleLaunch,holdingRun:reviewHoldingRun?.assignment_id??null},launch:{outcome:dispatchLaunchOutcome,published:[...launchedAssignments.keys()]},diagnostics:{resolvers:resolverDiagnostics},boundaryLog:boundaryLog.slice(-60),active:[...activeBoundary.values()],launchResolutions:Object.fromEntries(launchResolutions),briefWritesPending,completedBriefWrites,integration:handoffIntegration?{enabled:true,processStarts:handoffNewSessions,sessions:[...handoffSessions.values()].map(session=>({session:session.name,socket:session.socketPath,assignment_id:session.assignmentId,ended:session.ended})),tmuxCalls:handoffTmuxCalls.length}:{enabled:false},...(controlResult??{})}));return;
  }
  const terminalAsset=/^\/api\/assignment-terminal\/([^/]+)\/([^/]+)$/.exec(url.pathname);
  if(url.pathname==='/api/assignment-terminal/open'||terminalAsset){await handleTerminalRequest(req,res,url,terminalAsset);return;}
@@ -401,7 +663,19 @@ server.on('upgrade',(req,socket,head)=>{
  dashboard.emit('upgrade',req,socket,head);
 });
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
-const timer=setInterval(()=>{tick++;void writeFile(observerFile,JSON.stringify(makeSnapshot()));void writeFile(mismatchObserverFile,JSON.stringify(makeMismatchSnapshot()));},1000);
-console.log(JSON.stringify({url:`http://127.0.0.1:${server.address().port}`,root,checkout,secondCheckout,otherPackage:otherPkg,...packageIdentity,thread1,thread2,thread3,worktreeTarget:docsCheckout}));
-async function close(){clearInterval(timer);const drained=dashboard.closeTerminalViews();server.closeAllConnections();await new Promise(r=>server.close(r));await drained.catch(()=>{});await rm(root,{recursive:true,force:true});process.exit(0);}
+const timer=setInterval(()=>{
+ if(handoffIntegration){void publishIntegrationSnapshot().catch(()=>{});return;}
+ tick++;void writeFile(observerFile,JSON.stringify(makeSnapshot()));void writeFile(mismatchObserverFile,JSON.stringify(makeMismatchSnapshot()));
+},1000);
+console.log(JSON.stringify({url:`http://127.0.0.1:${server.address().port}`,root,checkout,secondCheckout,otherPackage:otherPkg,...packageIdentity,thread1,thread2,thread3,worktreeTarget:docsCheckout,integration:handoffIntegration}));
+async function close(){
+ clearInterval(timer);
+ if(handoffIntegration){
+  await integrationPublishChain.catch(()=>{});
+  if(handoffService)await handoffService.close().catch(()=>{});
+  for(const session of handoffSessions.values())endHandoffSession(session);
+ }
+ const drained=dashboard.closeTerminalViews();
+ server.closeAllConnections();await new Promise(r=>server.close(r));await drained.catch(()=>{});await rm(root,{recursive:true,force:true});process.exit(0);
+}
 process.on('SIGTERM',()=>void close());process.on('SIGINT',()=>void close());

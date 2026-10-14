@@ -89,12 +89,16 @@ large-body cap, while preview and launch accept the 8 KiB administrative cap.
 | --- | --- | --- |
 | `POST /api/dispatch/save-brief` | `{workspace_id, request_id, title, content}` | `{brief}` — canonical workspace-relative path; starts nothing |
 | `GET /api/dispatch/suggestions` | `?workspace_id=&repository_id=&kind=skill\|file&query=` | ranked skills or files for the selected target |
-| `POST /api/dispatch/preview` | `{workspace_id, request_id, assignment_id, instructions, skill, references, repository_id?, spec_package?}` | resolved contract: `{record, contractDigest, inputPreview}` |
+| `POST /api/dispatch/preview` | `{workspace_id, request_id, assignment_id, instructions, skill, references, repository_id?, spec_package?, publication_authority?}` | resolved contract: `{record, contractDigest, inputPreview}` |
 | `POST /api/dispatch/launch` | preview body plus the reviewed `expectedDigest` | `{assignment, observation}` |
 
 `repository_id` is optional; without it the target is the whole workspace. The
-`skill` default is `general`, the harness is `pi`, publication authority is
-`none`, and saved-brief references cross as identities only (`{kind, id}`).
+`skill` default is `general`, the harness is `pi`, and `publication_authority`
+is optional with a default of `none`. Only `none` and `draft-pr` are accepted;
+`pr`, `null`, unknown values and non-strings refuse with `invalid-handoff`
+before any resolution. The resolved contract digest binds the selected
+authority, so changing it after preview invalidates the reviewed digest.
+Saved-brief references cross as identities only (`{kind, id}`).
 Preview recomputes the contract digest (64 lowercase hex characters) and launch
 compares it with `expectedDigest`, refusing a mismatch with 409 `stale-preview`.
 `target-busy`, `run-active` and `request-conflict` also refuse with 409, and an
