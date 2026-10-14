@@ -19,9 +19,28 @@ SENTINEL_EVIDENCE_DIR=/tmp/sentinel-handoff-evidence uv run --script \
 SENTINEL_EVIDENCE_DIR=/tmp/sentinel-handoff-evidence uv run --script \
   scripts/spec-observe/frontend/handoff-browser-check.py --case final-review
 
+SENTINEL_EVIDENCE_DIR=/tmp/sentinel-handoff-evidence uv run --script \
+  scripts/spec-observe/frontend/handoff-browser-check.py --case all
+
+The all case runs review, result, specs, epic, decision, final-review and
+integration as independent bounded subprocesses (180 seconds each, 300 seconds
+total) and
+aggregates their observed revision/dirty, scenarios and capture paths into
+SENTINEL_EVIDENCE_DIR/report.json atomically, even on failure. It requires the
+thirteen app-ui-plan-screens references to each have a matching production
+capture at 1280 and 1600 and never reports a failed, timed-out or unstarted
+case as passed.
+
 The final-review case runs both observation gates and covers planning entry
 eligibility with requires only on the epic member plus cold bound production
 seeding for implementation and resume planning.
+
+The integration case opts into the real final-integration fixture mode on top of
+the planned, readiness and epic flags. It drives the real discussion service
+over the fixture's own package files, canonical assignment records and fake tmux
+boundary: Plan member, the recorded critique stop, Resume planning, Ready to
+implement, direct draft-pr publication and the first implementation receipt.
+It requires SENTINEL_HANDOFF_INTEGRATION=1; no other case enables it.
 
 The fixture runs with SENTINEL_PLANNED_LAUNCH=1 so the real package resolver,
 saved brief, skill lookup and contract digest drive the bound review and result
@@ -35,7 +54,9 @@ import os
 import re
 import select
 import shutil
+import signal
 import subprocess
+import sys
 import time
 import traceback
 from pathlib import Path
@@ -46,14 +67,168 @@ from playwright.sync_api import expect, sync_playwright
 BUSY_ASSIGNMENT = "b42f1903-9508-46c1-a4aa-a0842dbce617"
 HOLDING_RUN = "7c2a91d4-3e58-4b06-a1f7-95d0e6b83c12"
 
+CASES = ("review", "result", "specs", "epic", "decision", "final-review", "integration")
+CASE_EVIDENCE_DIRS = {
+    "review": "04-states",
+    "result": "06-states",
+    "specs": "07-states",
+    "epic": "01-states",
+    "decision": "03-states",
+    "final-review": "08-final-review",
+    "integration": "09-states",
+}
+ALL_TOTAL_BUDGET_SECONDS = 300
+ALL_CASE_BUDGET_SECONDS = 180
+SCREEN_WIDTHS = (1280, 1600)
+# Reference design screen -> (producing case, existing production capture name).
+REFERENCE_SCREENS = (
+    ("01-epic-planning-incomplete", "epic", "epic-planning-incomplete"),
+    ("02-epic-planning-active", "epic", "epic-planning-active"),
+    ("03-epic-planning-decision", "decision", "epic-decision"),
+    ("04-plan-review", "review", "plan-review"),
+    ("05-plan-review-denied", "review", "target-busy-denied"),
+    ("06-plan-result", "result", "plan-result"),
+    ("07-specs-ready", "specs", "ready"),
+    ("08-spec-ready-waiting", "specs", "waiting"),
+    ("09-spec-ready-unverified", "specs", "incomplete"),
+    ("10-specs-ready-empty", "specs", "ready-empty"),
+    ("11-implement-review", "review", "implement-review"),
+    ("12-implement-review-denied", "review", "implement-denied"),
+    ("13-implement-result", "result", "implement-result"),
+)
+
+
+def run_all_case(case, script, evidence_root, deadline):
+    """Run one independent case as a bounded subprocess with its own isolated
+    fixture and real consumer, then aggregate its exact observed revision/dirty,
+    scenarios and capture paths. A failed, timed-out or unstarted case is never
+    reported passed."""
+    case_report_path = evidence_root / CASE_EVIDENCE_DIRS[case] / f"handoff-browser-{case}.json"
+    case_report_path.unlink(missing_ok=True)
+    entry = {"case": case, "status": "not-run", "captures": [], "scenarios": []}
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        entry["error"] = "total budget exhausted before this case started"
+        return entry
+    timeout = min(ALL_CASE_BUDGET_SECONDS, remaining)
+    case_started = time.monotonic()
+    process = subprocess.Popen(
+        [sys.executable, str(script), "--case", case],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+        entry["exitCode"] = process.returncode
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        stdout, stderr = process.communicate()
+        entry["status"] = "failed"
+        entry["error"] = f"case exceeded the {timeout:.0f} second subprocess deadline"
+    entry["elapsedSeconds"] = round(time.monotonic() - case_started, 3)
+    case_report = None
+    if case_report_path.is_file():
+        try:
+            case_report = json.loads(case_report_path.read_text())
+        except ValueError as error:
+            entry["status"] = "failed"
+            entry["error"] = f"case report is not valid JSON: {error}"
+    if case_report is not None:
+        entry["observedCommit"] = case_report.get("observedCommit")
+        entry["dirty"] = case_report.get("dirty")
+        entry["scenarios"] = case_report.get("scenarios", [])
+        entry["captures"] = case_report.get("captures", [])
+        if entry["status"] != "failed":
+            entry["status"] = "passed" if entry.get("exitCode") == 0 and case_report.get("status") == "passed" else "failed"
+            if entry["status"] == "failed":
+                entry["error"] = case_report.get("error") or (stderr or stdout)[-4000:]
+    elif entry["status"] != "failed":
+        entry["status"] = "failed"
+        entry["error"] = f"case exited {entry.get('exitCode')} without a report: {((stderr or '') + (stdout or ''))[-4000:]}"
+    return entry
+
+
+def run_all():
+    """Run every independent case under a total budget and write one atomic
+    aggregate report even when a case fails or the budget expires. The
+    aggregate proves isolated contract/composition captures only: it runs no
+    planning model and performs no push, merge or live publication."""
+    evidence_root = Path(os.environ.get("SENTINEL_EVIDENCE_DIR", "/tmp/sentinel-handoff-evidence"))
+    evidence_root.mkdir(parents=True, exist_ok=True)
+    report_path = evidence_root / "report.json"
+    script = Path(__file__).resolve()
+    started = time.monotonic()
+    deadline = started + ALL_TOTAL_BUDGET_SECONDS
+    report = {
+        "status": "failed",
+        "case": "all",
+        "totalBudgetSeconds": ALL_TOTAL_BUDGET_SECONDS,
+        "perCaseMaxSeconds": ALL_CASE_BUDGET_SECONDS,
+        "cases": [],
+        "referenceScreens": [],
+        "scenarios": [],
+        "captures": [],
+    }
+    try:
+        report["observedCommit"] = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=script.parent, text=True).strip()
+        report["dirty"] = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=script.parent, text=True).strip())
+        for case in CASES:
+            report["cases"].append(run_all_case(case, script, evidence_root, deadline))
+    except BaseException:
+        report["error"] = traceback.format_exc()
+        raise
+    finally:
+        by_case = {entry["case"]: entry for entry in report["cases"]}
+        for reference, case, capture_name in REFERENCE_SCREENS:
+            case_entry = by_case.get(case) or {}
+            captures = {}
+            missing = []
+            for width in SCREEN_WIDTHS:
+                expected = evidence_root / CASE_EVIDENCE_DIRS[case] / f"production-{capture_name}-{width}.png"
+                listed = str(expected) in (case_entry.get("captures") or [])
+                present = expected.is_file() and expected.stat().st_size > 0
+                if case_entry.get("status") == "passed" and listed and present:
+                    captures[str(width)] = str(expected)
+                else:
+                    missing.append(str(width))
+            report["referenceScreens"].append({
+                "reference": reference,
+                "producingCase": case,
+                "productionCapture": capture_name,
+                "captures": captures,
+                "status": "captured" if not missing else "missing",
+            })
+        for entry in report["cases"]:
+            report["scenarios"].extend(entry.get("scenarios") or [])
+            report["captures"].extend(entry.get("captures") or [])
+        complete = len(report["cases"]) == len(CASES) and not report.get("error")
+        passed = complete and all(entry.get("status") == "passed" for entry in report["cases"]) and all(
+            item["status"] == "captured" for item in report["referenceScreens"]
+        )
+        report["status"] = "passed" if passed else "failed"
+        report["elapsedSeconds"] = round(time.monotonic() - started, 3)
+        temporary = report_path.with_name(f".{report_path.name}.{os.getpid()}.tmp")
+        temporary.write_text(json.dumps(report, indent=2) + "\n")
+        os.replace(temporary, report_path)
+        print(json.dumps(report, indent=2))
+    if report["status"] != "passed":
+        failed = [entry["case"] for entry in report["cases"] if entry.get("status") != "passed"]
+        raise SystemExit(f"--case all failed: {', '.join(failed) or 'aggregate did not complete'}")
+
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--case", default="review")
 arguments = parser.parse_args()
-if arguments.case not in ("review", "result", "specs", "epic", "decision", "final-review"):
+if arguments.case not in (*CASES, "all"):
     raise SystemExit(f"unsupported case: {arguments.case}")
+if arguments.case == "all":
+    run_all()
+    raise SystemExit(0)
 
 root = Path(__file__).resolve().parent
-evidence = Path(os.environ.get("SENTINEL_EVIDENCE_DIR", "/tmp/sentinel-handoff-evidence")) / ("08-final-review" if arguments.case == "final-review" else "07-states" if arguments.case == "specs" else "06-states" if arguments.case == "result" else "01-states" if arguments.case == "epic" else "03-states" if arguments.case == "decision" else "04-states")
+evidence = Path(os.environ.get("SENTINEL_EVIDENCE_DIR", "/tmp/sentinel-handoff-evidence")) / CASE_EVIDENCE_DIRS[arguments.case]
 evidence.mkdir(parents=True, exist_ok=True)
 started = time.monotonic()
 report = {"status": "failed", "case": arguments.case, "scenarios": [], "pageErrors": [], "captures": []}
@@ -72,7 +247,12 @@ def design_screens() -> Path | None:
 
 
 fixture_env = dict(os.environ)
+fixture_env.pop("SENTINEL_HANDOFF_INTEGRATION", None)
 fixture_env["SENTINEL_PLANNED_LAUNCH"] = "1"
+if arguments.case == "integration":
+    fixture_env["SENTINEL_HANDOFF_INTEGRATION"] = "1"
+    fixture_env["SENTINEL_SPECS_READINESS"] = "1"
+    fixture_env["SENTINEL_EPIC_PLANNING"] = "1"
 if arguments.case == "specs":
     fixture_env["SENTINEL_SPECS_READINESS"] = "1"
 if arguments.case == "epic":
@@ -116,7 +296,7 @@ try:
                     screenshot = evidence / f"reference-{name}-{width}.png"
                     reference_page.screenshot(path=str(screenshot), full_page=True)
                     report["captures"].append(str(screenshot))
-                    if arguments.case in ("result", "specs", "epic", "decision"):
+                    if arguments.case in ("result", "specs", "epic", "decision", "review", "integration"):
                         # Scrolled lower-pane evidence: full-page captures clip
                         # the lower inner content, so scroll to the populated
                         # lower content and capture the viewport as well.
@@ -290,6 +470,7 @@ try:
             assert worker_starts() == []
             report["scenarios"].append("Bound implementation review renders the resolved package contract with one Start implementation control and starts no worker")
             capture("implement-review")
+            capture_scrolled("implement-review")
 
             # Bound planning review: truthful planning-only stop, worktree
             # disclosure and no publication authority.
@@ -315,6 +496,7 @@ try:
             assert worker_starts() == []
             report["scenarios"].append("Bound planning review discloses the package worktree, canonical stages, prepared stop and None authority without starting a worker")
             capture("plan-review")
+            capture_scrolled("plan-review")
 
             # Target-busy conflict routes to the writer in Agents and leaves the
             # commitment and the process-start count unchanged.
@@ -1535,6 +1717,377 @@ try:
             report["scenarios"].append("A cold result URL stays an exact inspection and is never converted into a fresh bound attempt")
             check_deadline("end")
 
+        def run_integration():
+            # Real final-integration lifecycle: real service, resolver, store
+            # and consumer over the fixture's own package files, with only the
+            # final tmux session boundary fake. No client module is injected.
+            deadline = started + 180
+
+            def check_deadline(label):
+                if time.monotonic() > deadline:
+                    raise RuntimeError(f"integration case exceeded the 180 second deadline at {label}")
+
+            def state_snapshot():
+                response = context.request.get(receipt["url"] + "/api/state")
+                assert response.ok, response.status
+                payload = response.json()
+                observers = payload.get("observers") or []
+                chosen = next((item for item in observers if item.get("observer_id") == "fixture-integration"), observers[0] if observers else None)
+                assert chosen is not None, payload
+                return chosen["snapshot"]
+
+            def fresh_state():
+                # The dashboard caches /api/state for one second and the fixture
+                # publishes on a serial interval; expire the cache before reading.
+                time.sleep(1.05)
+                return state_snapshot()
+
+            def wait_state(predicate, label):
+                limit = time.monotonic() + 15
+                while time.monotonic() < limit:
+                    snapshot = fresh_state()
+                    if predicate(snapshot):
+                        return snapshot
+                raise AssertionError(f"integration state did not satisfy {label}")
+
+            def planned_row(snapshot, ref):
+                return next((row for row in snapshot.get("planned_packages", []) if row.get("package_ref") == ref), None)
+
+            def ensure_bound_review(kind):
+                heading = page.locator("#launch-heading")
+                expect(heading).to_have_text(re.compile(r"^(Prepare assignment|Review (planning|implementation) assignment)$"))
+                if heading.inner_text() == "Prepare assignment":
+                    target = page.locator("#launch-target")
+                    if target.count() == 1 and target.is_visible():
+                        # The real workspace inventory resolves asynchronously:
+                        # wait for the canonical option to attach before
+                        # inspecting the DOM instead of racing the loader.
+                        try:
+                            expect(target.locator('option[value="fixture-repo"]')).to_be_attached()
+                        except AssertionError:
+                            report["integration"]["targetInventoryFailure"] = {
+                                "kind": kind,
+                                "values": target.locator("option").evaluate_all("options => options.map(option => option.value)"),
+                                "dom": page.locator("#launch-form, #launch-heading, #launch-cold-bound").all_inner_texts(),
+                            }
+                            raise
+                        values = target.locator("option").evaluate_all("options => options.map(option => option.value)")
+                        if target.input_value() != "fixture-repo":
+                            assert "fixture-repo" in values, f"canonical repository fixture-repo missing from target options {values}"
+                            target.select_option("fixture-repo")
+                    expect(page.locator("#launch-brief-title")).not_to_have_value("")
+                    expect(page.locator("#launch-brief-content")).not_to_have_value("")
+                    page.locator("#launch-save").click()
+                expect(page.locator("#launch-review .launch-contract")).to_be_visible()
+                expect(heading).to_have_text(f"Review {kind} assignment")
+
+            def launch_review(label):
+                posts_before = len(posts("dispatchLaunch"))
+                page.locator("#launch-assignment-launch").click()
+                expect(page.locator("#launch-heading")).to_have_text(label)
+                dispatched = posts("dispatchLaunch")
+                assert len(dispatched) == posts_before + 1, dispatched[-1:]
+                return dispatched[-1]["input"]["assignment_id"]
+
+            check_deadline("start")
+            report["integration"] = {}
+            initial = state_snapshot()
+            browser_row = planned_row(initial, "fixture/browser")
+            other_row = planned_row(initial, "fixture/other-browser")
+            assert browser_row is not None, "fixture/browser is not a real planned package"
+            assert other_row is not None, "fixture/other-browser is not a real planned package"
+            assert browser_row.get("prepared") is True, browser_row
+            assert browser_row.get("step_count") == 3, browser_row
+            assert browser_row.get("receipts") == [], browser_row
+            assert other_row.get("proposal") is False and other_row.get("prepared") is False, other_row
+            assert initial.get("runs") == [], initial.get("runs")
+            assert initial.get("assignments") == [], initial.get("assignments")
+            browser_targets = {target.get("id"): target.get("primary") for target in browser_row.get("targets", [])}
+            assert browser_targets.get("fixture-repo") == receipt["checkout"], browser_targets
+            assert browser_targets.get("fixture-repo-two") == receipt["secondCheckout"], browser_targets
+            for skill in ("spec-architect-initial", "spec-architect-critics", "spec-write", "spec-end-to-end"):
+                skill_file = Path(receipt["root"]) / ".agents" / "skills" / skill / "SKILL.md"
+                assert skill_file.is_file() and skill_file.stat().st_size > 0, skill_file
+            report["integration"]["initial"] = {
+                "browser": {"prepared": browser_row.get("prepared"), "step_count": browser_row.get("step_count"),
+                            "receipts": browser_row.get("receipts"), "targets": browser_targets},
+                "other": {"proposal": other_row.get("proposal"), "prepared": other_row.get("prepared")},
+                "runs": len(initial.get("runs", [])), "assignments": len(initial.get("assignments", [])),
+            }
+            report["scenarios"].append("Real-snapshot prerequisites hold: browser positively prepared with no runs or assignments, other-browser proposal explicitly absent, canonical package targets and root/.agents skills present")
+            check_deadline("initial-snapshot")
+
+            # Plan other-browser from the real epic row and launch the initial
+            # architecture review through the real service.
+            page.goto(receipt["url"] + "/#/epics?" + urlencode({"ws": "fixture"}), wait_until="domcontentloaded")
+            page.locator(".records a.record").filter(has_text="Demo epic").click()
+            expect(page.locator(".object-head h2")).to_have_text("Demo epic")
+            capture("integration-epic-planning")
+            capture_scrolled("integration-epic-planning")
+            other_member = page.locator("table.epic-members tbody tr").filter(has=page.get_by_role("button", name="other-browser", exact=True))
+            expect(other_member.locator('[data-action="plan"]')).to_be_enabled()
+            other_member.locator('[data-action="plan"]').click()
+            ensure_bound_review("planning")
+            expect(fact("stages")).to_contain_text("spec-architect-initial")
+            expect(fact("authority")).to_have_text("None")
+            expect(fact("stop")).to_contain_text("Prepared")
+            expect(fact("target")).to_contain_text("fixture-repo")
+            capture("integration-plan-review")
+            capture_scrolled("integration-plan-review")
+            planning_stages = fact("stages").inner_text()
+            planning_assignment = launch_review("Planning is live")
+            assert control()["integration"]["processStarts"] == 1, control()["integration"]
+            published = wait_state(lambda snapshot: any(item.get("assignment_id") == planning_assignment for item in snapshot.get("assignments", [])), "published planning assignment")
+            planning_row = next(item for item in published["assignments"] if item.get("assignment_id") == planning_assignment)
+            report["integration"]["identity"] = {
+                "assignment": planning_row,
+                "observerWorkspace": published.get("workspace"),
+                "plannedOtherBrowser": planned_row(published, "fixture/other-browser"),
+            }
+            recorded_package = str(planning_row.get("spec_package") or planning_row.get("package") or "")
+            assert recorded_package in ("fixture/other-browser", receipt["otherPackage"]) or receipt["otherPackage"] in recorded_package, planning_row
+            report["integration"]["planningAssignment"] = planning_assignment
+            report["integration"]["planningStages"] = planning_stages
+            report["scenarios"].append("Epic Plan member opens the real initial architecture review with None authority and publishes one real assignment through the service")
+            capture("integration-plan-result")
+            capture_scrolled("integration-plan-result")
+            check_deadline("plan-launch")
+
+            # Open epic returns to the same epic and the recorded planning
+            # assignment renders as Planning.
+            open_epic = page.locator("#launch-result-open-epic")
+            if open_epic.count() and open_epic.is_visible():
+                open_epic.click()
+            else:
+                page.goto(receipt["url"] + "/#/epics?" + urlencode({"ws": "fixture"}), wait_until="domcontentloaded")
+                page.locator(".records a.record").filter(has_text="Demo epic").click()
+            other_browser_row = page.locator("table.epic-members tbody tr").filter(has=page.get_by_role("button", name="other-browser", exact=True))
+            try:
+                expect(other_browser_row).to_contain_text("Planning")
+            except AssertionError:
+                screenshot = evidence / "diagnostic-integration-planning-identity.png"
+                page.screenshot(path=str(screenshot), full_page=True)
+                report["integration"]["planningIdentityDiagnostic"] = {
+                    "state": context.request.get(receipt["url"] + "/api/state").json(),
+                    "epicRow": other_browser_row.all_inner_texts(),
+                    "url": page.url,
+                    "screenshot": str(screenshot),
+                }
+                raise
+            capture("integration-planning-active")
+            capture_scrolled("integration-planning-active")
+            check_deadline("planning-active")
+
+            # Complete the recorded planning assignment at the proposal stop.
+            proposal = control("handoff-complete-planning", package_ref="fixture/other-browser", assignment_id=planning_assignment, stage="proposal")
+            assert proposal.get("control") == "handoff-complete-planning" and proposal.get("stage") == "proposal", proposal
+            proposal_row = planned_row(proposal["snapshot"], "fixture/other-browser")
+            assert proposal_row["proposal"] is True, proposal_row
+            assert proposal_row["critique_recommended"] is True, proposal_row
+            assert proposal_row["critique"] is False, proposal_row
+            assert proposal_row["prepared"] is False, proposal_row
+            proposal_text = (Path(receipt["otherPackage"]) / "proposal.md").read_text()
+            assert "critique_recommended: true" in proposal_text, proposal_text
+            report["integration"]["proposal"] = {"proposal": proposal_row["proposal"], "critique_recommended": proposal_row["critique_recommended"],
+                                                "critique": proposal_row["critique"], "prepared": proposal_row["prepared"]}
+            report["scenarios"].append("Recorded planning completion writes the actual proposal with critique_recommended true and no critique artifact")
+            check_deadline("proposal-control")
+
+            # Resume planning from Ready: critics then spec-write, no initial
+            # architecture, then complete prepared.
+            page.goto(receipt["url"] + "/#/specs?" + urlencode({"ws": "fixture", "filter": "ready"}), wait_until="domcontentloaded")
+            page.locator(".records button.record").filter(has_text="other-browser").click()
+            expect(page.locator("#spec-readiness")).to_have_attribute("data-state", "not-planned")
+            resume = page.get_by_role("button", name="Resume planning", exact=True)
+            expect(resume).to_be_enabled()
+            resume.click()
+            ensure_bound_review("planning")
+            expect(fact("stages")).to_contain_text("spec-architect-critics")
+            expect(fact("stages")).to_contain_text("spec-write")
+            expect(fact("stages")).not_to_contain_text("spec-architect-initial")
+            expect(fact("authority")).to_have_text("None")
+            capture("integration-resume-review")
+            capture_scrolled("integration-resume-review")
+            resume_stages = fact("stages").inner_text()
+            resume_assignment = launch_review("Planning is live")
+            assert resume_assignment != planning_assignment
+            assert control()["integration"]["processStarts"] == 2, control()["integration"]
+            report["integration"]["resumeAssignment"] = resume_assignment
+            report["integration"]["resumeStages"] = resume_stages
+            prepared = control("handoff-complete-planning", package_ref="fixture/other-browser", assignment_id=resume_assignment, stage="prepared")
+            assert prepared.get("control") == "handoff-complete-planning" and prepared.get("stage") == "prepared", prepared
+            prepared_snapshot = prepared["snapshot"]
+            prepared_row = planned_row(prepared_snapshot, "fixture/other-browser")
+            assert prepared_row["prepared"] is True and prepared_row["step_count"] == 3, prepared_row
+            assert prepared_row["preparation"]["outcome"] == "prepared", prepared_row["preparation"]
+            assert prepared_row["critique"] is True and prepared_row["critique_recommended"] is True, prepared_row
+            assert prepared_row["receipts"] == [], prepared_row
+            epic = prepared_snapshot["epics"][0]
+            assert epic["summary"]["merged"] == 0 and epic["summary"]["complete"] == 0 and epic["summary"]["attention"] == 0, epic["summary"]
+            other_member_row = next(member for member in epic["members"] if member["name"] == "other-browser")
+            assert other_member_row["attention"] is False, other_member_row
+            assert not [item for item in prepared_snapshot.get("attention", []) if item.get("package") == "other-browser"], prepared_snapshot.get("attention")
+            report["integration"]["prepared"] = {"prepared": prepared_row["prepared"], "step_count": prepared_row["step_count"],
+                                                 "preparation": prepared_row["preparation"]["outcome"], "receipts": prepared_row["receipts"],
+                                                 "merged": epic["summary"]["merged"], "complete": epic["summary"]["complete"], "attention": epic["summary"]["attention"]}
+            report["scenarios"].append("Resume planning reviews critics then spec-write without re-architecture; prepared completion yields a positive report/index with no landed or attention contribution")
+            page.goto(receipt["url"] + "/#/specs?" + urlencode({"ws": "fixture", "filter": "ready"}), wait_until="domcontentloaded")
+            page.locator(".records button.record").filter(has_text="other-browser").click()
+            expect(page.locator("#spec-readiness")).to_have_attribute("data-state", "ready")
+            expect(page.locator("#spec-readiness-actions .ds-btn--primary")).to_have_count(1)
+            capture("integration-ready-prepared")
+            capture_scrolled("integration-ready-prepared")
+            check_deadline("prepared-ready")
+
+            # Ready to implement for browser: real draft-pr publication.
+            page.goto(receipt["url"] + "/#/specs?" + urlencode({"ws": "fixture", "filter": "ready"}), wait_until="domcontentloaded")
+            page.locator(".records button.record").filter(has=page.locator(".run-title", has_text=re.compile("^browser$"))).click()
+            expect(page.locator("#spec-readiness")).to_have_attribute("data-state", "ready")
+            implement = page.get_by_role("button", name="Implement spec", exact=True)
+            expect(implement).to_be_enabled()
+            implement.click()
+            ensure_bound_review("implementation")
+            expect(fact("workflow")).to_have_text("spec-end-to-end")
+            expect(fact("stop")).to_have_text("Draft pull request")
+            expect(fact("authority")).to_have_text("Draft pull request only")
+            capture("integration-implement-review")
+            capture_scrolled("integration-implement-review")
+            starts_before = control()["integration"]["processStarts"]
+            implement_assignment = launch_review("Implementation is live")
+            implement_input = posts("dispatchLaunch")[-1]["input"]
+            assert implement_input.get("publication_authority") == "draft-pr", implement_input
+            assert implement_input.get("skill") == "spec-end-to-end", implement_input
+            assert control()["integration"]["processStarts"] == starts_before + 1, control()["integration"]
+            wait_state(lambda snapshot: any(item.get("assignment_id") == implement_assignment for item in snapshot.get("assignments", [])), "published implementation assignment")
+            # Real persisted facts: the assignment record, its brief snapshot
+            # and the saved brief replace the retired planned-launch checks.
+            fixture_workspace = Path(receipt["root"]) / "storage" / "projects" / "fixture"
+            saved_entry = posts("dispatchSaveBrief")[-1]
+            saved_brief = saved_entry["result"]["brief"]
+            saved_input = saved_entry["input"]
+            submitted_content = saved_input["content"]
+            brief_path = fixture_workspace / saved_brief
+            expected_brief = f"# {saved_input['title']}\n\n{submitted_content}{'' if submitted_content.endswith(chr(10)) else chr(10)}"
+            assert brief_path.read_text() == expected_brief, brief_path
+            record_path = fixture_workspace / "assignments" / f"{implement_assignment}.json"
+            record = json.loads(record_path.read_text())
+            assert record["brief"] == saved_brief, record
+            assert record["package_ref"] == "fixture/browser", record
+            assert record["spec_package"] == receipt["package"], record
+            assert record["repository_id"] == "fixture-repo", record
+            assert record["execution_branch"] == "spec-browser", record
+            assert Path(record["skill_path"]).resolve() == (Path(receipt["root"]) / ".agents" / "skills" / "spec-end-to-end" / "SKILL.md").resolve(), record
+            assert record.get("provider") in (None, "") and record.get("model") in (None, ""), record
+            assert record["publication_authority"] == "draft-pr", record
+            preview_result = posts("dispatchPreview")[-1]["result"]
+            assert preview_result["contractDigest"] == implement_input["expectedDigest"] == record["contract_digest"], record
+
+            def git_value(directory, arguments):
+                return subprocess.check_output(["git", "-C", directory, *arguments], text=True).strip()
+
+            assert git_value(record["execution_dir"], ["rev-parse", "--abbrev-ref", "HEAD"]) == "spec-browser", record["execution_dir"]
+            execution_common = (Path(record["execution_dir"]) / git_value(record["execution_dir"], ["rev-parse", "--git-common-dir"])).resolve()
+            checkout_common = (Path(receipt["checkout"]) / git_value(receipt["checkout"], ["rev-parse", "--git-common-dir"])).resolve()
+            assert execution_common == checkout_common, (execution_common, checkout_common)
+            snapshot_brief = (fixture_workspace / "assignments" / f"{implement_assignment}.brief.md").read_text()
+            assert submitted_content in snapshot_brief, snapshot_brief[:400]
+            assert posts("create") == [], posts("create")
+            assert posts("send") == [], posts("send")
+            report["integration"]["implementationAssignment"] = implement_assignment
+            report["integration"]["implementationAuthority"] = implement_input.get("publication_authority")
+            report["scenarios"].append("Ready to implement reviews Draft PR only and publishes one real draft-pr assignment through the service")
+            capture("integration-implement-result")
+            capture_scrolled("integration-implement-result")
+            check_deadline("implement-launch")
+
+            # The implementation is starting Active and absent from Ready
+            # before any receipt is written.
+            spec_link = page.locator("#launch-result-open-spec")
+            if spec_link.count() and spec_link.is_visible():
+                spec_href = spec_link.get_attribute("href")
+                assert spec_href and spec_href.startswith("#/specs?ws=fixture"), spec_href
+                page.goto(receipt["url"] + spec_href, wait_until="domcontentloaded")
+            else:
+                page.goto(receipt["url"] + "/#/specs?" + urlencode({"ws": "fixture", "filter": "active"}), wait_until="domcontentloaded")
+                page.locator(".records button.record").filter(has=page.locator(".run-title", has_text=re.compile("^browser$"))).click()
+            expect(page.locator("#spec-readiness")).to_have_attribute("data-state", "starting")
+            capture("integration-active-starting")
+            capture_scrolled("integration-active-starting")
+            page.goto(receipt["url"] + "/#/specs?" + urlencode({"ws": "fixture", "filter": "ready"}), wait_until="domcontentloaded")
+            assert page.locator(".records button.record").filter(has=page.locator(".run-title", has_text=re.compile("^browser$"))).count() == 0
+            report["scenarios"].append("The live implementation is starting Active and absent from Ready before any receipt exists")
+            check_deadline("starting-active")
+
+            # First canonical implementation receipt replaces the starting
+            # projection with the observed run, keeping the identity and no
+            # duplicate row.
+            receipt_control = control("handoff-write-receipt", package_ref="fixture/browser", assignment_id=implement_assignment)
+            assert receipt_control.get("control") == "handoff-write-receipt", receipt_control
+            receipt_snapshot = receipt_control["snapshot"]
+            runs = [run for run in receipt_snapshot.get("runs", []) if run.get("assignment_id") == implement_assignment]
+            assert len(runs) == 1, receipt_snapshot.get("runs")
+            browser_runs = [run for run in receipt_snapshot.get("runs", []) if run.get("package_ref") == "fixture/browser"]
+            assert len(browser_runs) == 1, browser_runs
+            run = runs[0]
+            assert run.get("spec_progress", {}).get("total_steps") == 3, run.get("spec_progress")
+            assert run.get("spec_progress", {}).get("current_position") == 1, run.get("spec_progress")
+            assignments = [item for item in receipt_snapshot.get("assignments", []) if item.get("assignment_id") == implement_assignment]
+            assert len(assignments) == 1, assignments
+            assert all(row.get("package_ref") != "fixture/browser" for row in receipt_snapshot.get("planned_packages", [])), receipt_snapshot.get("planned_packages")
+            assert Path(receipt_control["receiptPath"]).is_file(), receipt_control["receiptPath"]
+            report["integration"]["receipt"] = {"receiptPath": receipt_control["receiptPath"], "runAssignment": run.get("assignment_id"),
+                                                "totalSteps": run.get("spec_progress", {}).get("total_steps"), "assignments": len(assignments)}
+            report["scenarios"].append("The first implementation receipt replaces the starting projection with one observed run, keeps the assignment identity, writes no duplicate and leaves the package out of Ready")
+            page.goto(receipt["url"] + "/#/specs?" + urlencode({"ws": "fixture", "filter": "active"}), wait_until="domcontentloaded")
+            active_rows = page.locator(".records button.record").filter(has=page.locator(".run-title", has_text=re.compile("^browser$")))
+            expect(active_rows).to_have_count(1)
+            active_rows.click()
+            # A real receipt replaces the readiness component: the observed run
+            # renders SpecOverview's progress head and Current obligation markup.
+            expect(page.locator("#spec-readiness")).to_have_count(0)
+            expect(page.locator(".progress-head strong")).to_contain_text("Step 1 of 3")
+            expect(page.locator(".progress-head strong")).to_contain_text("Integration step 1")
+            obligation = page.locator("section.section").filter(has=page.get_by_role("heading", name="Current obligation", exact=True))
+            expect(obligation.locator(".obligation")).to_contain_text("step 1 of 3")
+            expect(obligation.locator(".obligation")).to_contain_text("Integration step 1")
+            capture("integration-first-receipt")
+            capture_scrolled("integration-first-receipt")
+            report["integration"]["processStarts"] = control()["integration"]["processStarts"]
+            check_deadline("receipt")
+
+            # The canonical decision-required file reaches the real consumer:
+            # the epic notice seeds the production Start conversation dialog
+            # unsent, with no create/send request or worker start.
+            check_deadline("decision-start")
+            starts_before_decision = control()["integration"]["processStarts"]
+            creates_before_decision = len(posts("create"))
+            sends_before_decision = len(posts("send"))
+            page.goto(receipt["url"] + "/#/epics?" + urlencode({"ws": "fixture"}), wait_until="domcontentloaded")
+            page.locator(".records a.record").filter(has_text="Demo epic").click()
+            expect(page.locator(".object-head h2")).to_have_text("Demo epic")
+            decision_notice = page.locator("section.epic-decision")
+            expect(decision_notice.locator(".ds-callout")).to_contain_text("Should integration resume specification without re-architecture?")
+            discuss = page.locator('[data-action="discuss-decision"]')
+            expect(discuss).to_be_visible()
+            expect(discuss).to_be_enabled()
+            discuss.click()
+            expect(page).to_have_url(re.compile(r"#/conversations\?[^#]*tab=new"))
+            assert "Should integration resume specification without re-architecture?" not in page.url
+            dialog = page.locator("#thread-new-dialog")
+            expect(dialog).to_be_visible()
+            expect(page.locator("#thread-new-title")).to_have_text("Start conversation")
+            expect(page.locator("#thread-new-fields .thread-new-prepared")).to_contain_text("Prepared message · unsent")
+            expect(page.locator("#thread-new-fields .thread-new-prepared")).to_contain_text("Should integration resume specification without re-architecture?")
+            expect(page.locator("#thread-new-fields .thread-new-prepared")).to_contain_text("Resume spec-write after the operator answers.")
+            expect(page.locator("#thread-new-target")).to_have_value("fixture-repo")
+            assert control()["integration"]["processStarts"] == starts_before_decision, control()["integration"]
+            assert len(posts("create")) == creates_before_decision, posts("create")
+            assert len(posts("send")) == sends_before_decision, posts("send")
+            report["integration"]["decisionDialog"] = {"question": "Should integration resume specification without re-architecture?", "processStarts": starts_before_decision, "creates": creates_before_decision, "sends": sends_before_decision}
+            report["scenarios"].append("The canonical decision-required file drives the epic notice and the production Start conversation dialog with the prepared question unsent and no create, send or worker start")
+            capture("integration-decision-dialog")
+            check_deadline("decision-dialog")
+
         if arguments.case == "review":
             run_review()
         elif arguments.case == "result":
@@ -1545,6 +2098,8 @@ try:
             run_decision()
         elif arguments.case == "final-review":
             run_final_review()
+        elif arguments.case == "integration":
+            run_integration()
         else:
             run_specs()
 

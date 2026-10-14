@@ -113,7 +113,11 @@ export function collectAssignments(payload:Envelope|null):WireRecord[]{
  const map=new Map<string,WireRecord>();
  for(const o of authoritativeObservers(payload?.observers??[])){
   if(!o.snapshot)continue;const workspace=o.snapshot.workspace||o.observer_id||o.source||'unknown';const rank=(o.state==='observing'&&!stale(o.published_at)?1e15:0)+(Date.parse(o.snapshot.coverage?.observed_at)||0);
-  for(const a of o.snapshot.assignments??[]){if(typeof a.assignment_id!=='string'||!a.assignment_id)continue;const k=JSON.stringify([workspace,a.assignment_id]);if(!map.has(k)||map.get(k)!.rank<rank)map.set(k,{...a,observer:o,workspace,key:k,rank,assignment_coverage:o.snapshot.assignment_coverage??null});}
+  for(const a of o.snapshot.assignments??[]){if(typeof a.assignment_id!=='string'||!a.assignment_id)continue;
+   // The assignment record's own workspace identity wins: the observer
+   // snapshot's workspace is a collector hash and must not replace it.
+   const assignmentWorkspace=typeof a.workspace_id==='string'&&a.workspace_id?a.workspace_id:typeof a.workspace==='string'&&a.workspace?a.workspace:workspace;
+   const k=JSON.stringify([assignmentWorkspace,a.assignment_id]);if(!map.has(k)||map.get(k)!.rank<rank)map.set(k,{...a,observer:o,workspace:assignmentWorkspace,key:k,rank,assignment_coverage:o.snapshot.assignment_coverage??null});}
  }
  const ended=(a:WireRecord)=>['ended','launch-failed'].includes(a.display);
  return [...map.values()].sort((a,b)=>Number(ended(a))-Number(ended(b))||str(a.spec_package).localeCompare(str(b.spec_package))||a.assignment_id.localeCompare(b.assignment_id));

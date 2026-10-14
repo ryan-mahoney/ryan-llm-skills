@@ -431,6 +431,61 @@ from inside the workspace (`font-src 'self'`); network access stays disabled.
 Read-only; nothing writes a design record. Contract:
 [docs/design-packages.md](../../docs/design-packages.md).
 
+### Ready planning and hand-offs
+
+Specs' **Ready** filter (URL `filter=ready`; the older `planned` key normalizes to it)
+lists prepared, not-started packages with a derived status — **Ready to implement**,
+**Prepared · waiting**, **Preparation incomplete**, **Not planned** or **Implementation
+starting** — and the observed basis for it. **Implement spec** on a ready package opens the
+bound `#/launch` implementation review: canonical target alias, `spec-end-to-end`, draft-PR
+stop and merge stays with the operator. Nothing starts before the explicit launch control. A
+waiting package keeps **Open prerequisite** as its single primary and disables Implement with
+the named prerequisite; **Resume planning** appears only when the intact proposal facts allow
+it; unreadable preparation facts or assignment coverage render unknown and refuse entry even
+on a synthetic click.
+
+On an epic whose members are not all planned, each eligible **Plan** row and the **Plan
+member** primary open the bound planning review (`spec-architect-initial`, or the derived
+`spec-write` stage, authority None, stop at Prepared). A member that stopped at
+`decision-required` shows **Decision needed** with the recorded question and recommendation;
+**Discuss decision** seeds the one-use `seedNewThreadDraft` prepared text and target and opens
+the route-addressable `#/conversations?ws=<workspace>&tab=new` Start conversation dialog with
+nothing sent. Closing retains the draft; only explicit create transfers it and only Send
+sends it.
+
+The isolated package-bound journeys run after the frontend build:
+
+```sh
+npm run build --prefix scripts/spec-observe/frontend
+SENTINEL_EVIDENCE_DIR=<package>/evidence/browser uv run --script \
+  scripts/spec-observe/frontend/handoff-browser-check.py --case all
+```
+
+`--case all` runs the seven `review`, `result`, `specs`, `epic`, `decision`, `final-review`
+and `integration` cases as independent subprocesses (180 seconds each, 300 seconds total) and
+writes one `report.json` under `SENTINEL_EVIDENCE_DIR` atomically, even on failure; a failed,
+timed-out or unstarted case is never reported passed. It requires all thirteen
+`app-ui-plan-screens` references to have matching production captures at 1280 and 1600. The
+earlier unbound journey stays separate:
+
+```sh
+SENTINEL_EVIDENCE_DIR=<package>/evidence/browser uv run --script \
+  scripts/spec-observe/frontend/browser-handoff-check.py
+```
+
+`--case integration` additionally runs the opt-in `SENTINEL_HANDOFF_INTEGRATION=1` fixture:
+the five direct dispatch methods delegate to the real `createDiscussionService`, snapshots
+come from `collectWorkspace` over the fixture's real package files and canonical assignment
+records, and only the final tmux process boundary is fake. The other presentation cases keep
+their bounded refusal and observation controls; they prove the browser contract and the
+observed states, not model compliance. The retired planned-launch checker's protections now
+live in the integration case's canonical worktree, skill, reviewed digest and saved brief and
+in the unbound journey's stale-source, dirty-save and double-submit proof. Each check keeps
+its own temporary workspace/Git fixture and drives the real launch client, resolver,
+readiness and conversation consumers; only the final worker process is fake. Proof limit:
+these runs show isolated route/contract composition and the captured states, not real
+planning-model compliance or live publication.
+
 ### Launch flow and assignment handoff
 
 The **Agents** view's **Launch agent** action (`#launch-agent-action`) starts the

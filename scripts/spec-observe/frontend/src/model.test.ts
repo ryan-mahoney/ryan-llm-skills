@@ -3,7 +3,7 @@ import { afterEach, test } from 'node:test';
 import { activeRun, attention, packageFilterMatches, setClock, statusMarkdown } from './format';
 import { collectAssignments, collectEpics, collectRecords, normalizeEnvelope, type Envelope, type Observer } from './model';
 import { completionLabel, epicMemberTone, epicStats, runState, specProgress } from './observation-format';
-import { specReadiness } from './readiness';
+import { planningAssignmentFor, specReadiness } from './readiness';
 
 const now = '2026-10-10T12:00:00.000Z';
 const observer = (id: string, workspace: string, snapshot: Record<string, any>, overrides: Record<string, any> = {}):Observer => ({
@@ -189,6 +189,41 @@ test('agent assignments deduplicate within workspace and epics retain their memb
   assert.deepEqual(epicStats(roadmap), { total: 2, landed: 1, attention: 1 });
   assert.equal(epicMemberTone(roadmap.members[0]), 'good');
   assert.equal(epicMemberTone(roadmap.members[1]), 'warn');
+});
+
+// Run from scripts/spec-observe/frontend: node --import tsx --test --test-name-pattern='agent assignments preserve recorded workspace identity' src/model.test.ts
+test('agent assignments preserve recorded workspace identity', () => {
+  const hash = '1590cafe00000000000000000000000000000000000000000000000000000000';
+  const hashObserver = observer('hash-observer', hash, {
+    assignments: [
+      { assignment_id: 'same', workspace_id: 'alpha', spec_package: '/store/alpha/specs/browser', display: 'live', skill: 'spec-architect-initial' },
+      { assignment_id: 'same', workspace_id: 'beta', spec_package: '/store/beta/specs/browser', display: 'live', skill: 'spec-architect-initial' },
+      { assignment_id: 'fallback', spec_package: '/store/alpha/specs/other', display: 'live', skill: 'spec-architect-initial' },
+    ],
+  });
+  const assignments = collectAssignments(normalizeEnvelope(envelope(hashObserver)));
+
+  // One UUID recorded under two workspaces inside one hash-keyed observer stays
+  // two distinct rows carrying the recorded workspace, not the collector hash.
+  assert.deepEqual(assignments.map(item => [item.workspace, item.assignment_id]).sort(), [
+    [hash, 'fallback'], ['alpha', 'same'], ['beta', 'same'],
+  ]);
+  assert.deepEqual(assignments.map(item => item.key).sort(), [
+    JSON.stringify([hash, 'fallback']), JSON.stringify(['alpha', 'same']), JSON.stringify(['beta', 'same']),
+  ]);
+
+  // The planned canonical alpha package resolves its planning owner, and the
+  // same UUID under beta resolves the beta owner rather than a cross-match.
+  const planned = { workspace: 'alpha', package: '/store/alpha/specs/browser', package_ref: 'alpha/browser', prepared: false, step_count: 0, preparation: { outcome: 'missing' }, decision: null, receipts: [] };
+  const owner = planningAssignmentFor(planned, assignments);
+  assert.ok(owner);
+  assert.equal(owner!.workspace, 'alpha');
+  assert.equal(owner!.assignment_id, 'same');
+  assert.equal(planningAssignmentFor({ ...planned, workspace: 'beta', package: '/store/beta/specs/browser', package_ref: 'beta/browser' }, assignments)!.workspace, 'beta');
+
+  // A row without an explicit workspace still falls back to the observer workspace.
+  const fallback = assignments.find(item => item.assignment_id === 'fallback')!;
+  assert.equal(fallback.workspace, hash);
 });
 
 // Run from scripts/spec-observe/frontend: node --import tsx --test --test-name-pattern='sparse progress' src/model.test.ts

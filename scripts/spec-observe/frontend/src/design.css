@@ -354,3 +354,8 @@ th.col-action,td.col-action{width:148px;white-space:nowrap}
 .list-hint{padding:16px;font-size:13px;color:var(--ds-muted)}
 @media(max-width:1350px){.facts.four{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:1023px){.facts--4{grid-template-columns:repeat(2,minmax(0,1fr))}}
+/* Decision-state epic action bar: keep the primary Plan button and every
+   secondary action/reason from squeezing into one-word columns at 1280px. */
+.detail-actions:has([data-action="discuss-decision"]){flex-wrap:wrap}
+.detail-actions:has([data-action="discuss-decision"]) .ds-btn{flex-shrink:0}
+.detail-actions:has([data-action="discuss-decision"]) [data-action-note]{flex:1 1 20ch;min-width:0;max-width:35ch;white-space:normal;overflow-wrap:anywhere;margin-left:0}
