@@ -32,6 +32,8 @@ import { navigate } from './route';
 import { ActionBar, EmptyState, MasterDetail, RegionalSkeleton, StateNotice, StatusText, type StatusTone } from './primitives';
 import { scopeLabel } from './scope';
 import type { DestinationProps } from './destinations';
+import ModelPicker from './ModelPicker';
+import type { ModelChoice } from './models-state';
 
 // launch-state.ts remains the single owner of the one-use result-draft Map;
 // this surface re-exports its seed contract instead of copying the store.
@@ -78,6 +80,7 @@ export default function Conversations(props: Props) {
   const [draft, setDraft] = createSignal('');
   const [newText, setNewText] = createSignal('');
   const [newTarget, setNewTarget] = createSignal('');
+  const [newModel, setNewModel] = createSignal<ModelChoice | null>(null);
   const [newBusy, setNewBusy] = createSignal(false);
   const [newError, setNewError] = createSignal('');
   const [newEnabled, setNewEnabled] = createSignal(false);
@@ -956,6 +959,7 @@ export default function Conversations(props: Props) {
               </select>
               <small>Workspace: {workspaceName()}</small>
             </div>
+            <ModelPicker id="thread-new-model" value={newModel()} onChange={setNewModel} disabled={newBusy()} live={props.live} onManage={() => props.onNavigate({ dest: 'models' })} />
             <div id="thread-new-fields" class="thread-new-fields"><Show when={newText()}><div class="thread-new-prepared"><p class="small muted">Prepared message · unsent. It opens in the composer after creation.</p><p class="thread-text">{newText()}</p></div></Show></div>
             <Show when={newError()}><div class="ds-callout error" role="alert"><div><strong>Creation could not be confirmed</strong><p>{newError()}</p><p class="small muted">Check the thread list before creating another thread; retrying could duplicate the conversation.</p></div></div></Show>
             <div class="actions">

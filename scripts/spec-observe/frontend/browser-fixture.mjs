@@ -31,6 +31,7 @@ let modelsReadAt=Date.now();
 let modelsCatalogFail=false;
 let observerMode=false;
 let modelsPreferencePosts=0;
+let modelsCatalogDrop='';
 const modelsPreferredSeed=`{"version":1,"preferred":[{"provider":"pi-claude-cli","model":"claude-sonnet-5-5"},{"provider":"pi-claude-cli","model":"claude-haiku-5-5"},{"provider":"zai","model":"glm-5.3"},{"provider":"deepseek","model":"deepseek-v4-pro"},{"provider":"kimi-coding","model":"k3"},{"provider":"openai-codex","model":"gpt-6-sol"},{"provider":"old-provider","model":"retired-model"}],"updated_at":"2026-10-14T14:31:00.000Z"}`;
 if(modelsFixture){
  const prefDir=join(root,'agent','spec-sentinel');await mkdir(prefDir,{recursive:true});
@@ -79,7 +80,11 @@ const fixtureCatalog={
  host:'fixture-host',
  async read(){
   if(modelsCatalogFail)return {state:'failed',host:'fixture-host',failed_at:new Date(modelsReadAt).toISOString(),reason:'catalog-unavailable'};
-  const models=parseModelCatalog(modelsCatalogTable);
+  let models=parseModelCatalog(modelsCatalogTable);
+  if(modelsCatalogDrop){
+   const [provider,model]=modelsCatalogDrop.split('|');
+   models=models.filter(m=>!(m.provider===provider&&m.model===model));
+  }
   return {state:'ready',host:'fixture-host',read_at:new Date(modelsReadAt).toISOString(),providers:new Set(models.map(m=>m.provider)).size,models};
  }
 };
@@ -667,7 +672,9 @@ const server=createServer(async(req,res)=>{
   if(modelsFixture&&action==='models-catalog-fail')modelsCatalogFail=url.searchParams.get('value')==='true';
   if(modelsFixture&&action==='models-stale'){modelsReadAt=url.searchParams.get('value')==='true'?Date.now()-30*60*60*1000:Date.now();}
   if(modelsFixture&&action==='models-preferences-broken')await writeFile(join(root,'agent','spec-sentinel','preferred-models.json'),url.searchParams.get('value')==='true'?'{ broken json':modelsPreferredSeed);
-  const modelsState=modelsFixture?{catalogFail:modelsCatalogFail,readAt:new Date(modelsReadAt).toISOString(),stale:Date.now()-modelsReadAt>24*60*60*1000}:null;
+  if(modelsFixture&&action==='models-preferences-empty')await writeFile(join(root,'agent','spec-sentinel','preferred-models.json'),url.searchParams.get('value')==='true'?`{"version":1,"preferred":[],"updated_at":"2026-10-14T14:31:00.000Z"}`:modelsPreferredSeed);
+  if(modelsFixture&&action==='models-catalog-drop')modelsCatalogDrop=url.searchParams.get('value')||'';
+  const modelsState=modelsFixture?{catalogFail:modelsCatalogFail,drop:modelsCatalogDrop,readAt:new Date(modelsReadAt).toISOString(),stale:Date.now()-modelsReadAt>24*60*60*1000}:null;
   res.setHeader('Content-Type','application/json');res.end(JSON.stringify({...packageIdentity,posts,threads,createdThreads,tick,boundary,threadControls:{holdThreads,holdThreadsWorkspace,failThreads,longHistory,incompleteTail,invalidRecords,listFailStatus,historyFailStatus,responseState},subscribedThreadIds:[...new Set([...subscribers].map(item=>item.thread_id))],createControls:{delayCreate,failCreate},session:{identity:sessionIdentity,ended:sessionEnded},terminal:{state:terminalState,delayMs:terminalDelayMs,openDelayMs:terminalOpenDelayMs,failAsset:terminalFailAsset,assignment:terminalAssignment,counts:terminalCounts},review:{holdDispatchPreview,holdDispatchLaunch,dispatchPreviewRefusal,dispatchLaunchRefusal,staleLaunch,holdingRun:reviewHoldingRun?.assignment_id??null},launch:{outcome:dispatchLaunchOutcome,published:[...launchedAssignments.keys()]},diagnostics:{resolvers:resolverDiagnostics},boundaryLog:boundaryLog.slice(-60),active:[...activeBoundary.values()],launchResolutions:Object.fromEntries(launchResolutions),briefWritesPending,completedBriefWrites,integration:handoffIntegration?{enabled:true,processStarts:handoffNewSessions,sessions:[...handoffSessions.values()].map(session=>({session:session.name,socket:session.socketPath,assignment_id:session.assignmentId,ended:session.ended})),tmuxCalls:handoffTmuxCalls.length}:{enabled:false},models:modelsState,...(controlResult??{})}));return;
  }
  const terminalAsset=/^\/api\/assignment-terminal\/([^/]+)\/([^/]+)$/.exec(url.pathname);

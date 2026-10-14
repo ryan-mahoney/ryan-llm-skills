@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import threading
 import time
+import traceback
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -25,7 +26,7 @@ from pathlib import Path
 from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--case', choices=['models'], default='models')
+parser.add_argument('--case', choices=['models', 'picker'], default='models')
 parser.add_argument('--reference-dir', default=None)
 options = parser.parse_args()
 case = options.case
@@ -36,7 +37,7 @@ checkout = root.parents[2]
 evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-models-evidence'))
 browser_evidence = evidence / 'browser'
 browser_evidence.mkdir(parents=True, exist_ok=True)
-receipt_path = evidence / 'step-005-models-result.json'
+receipt_path = evidence / 'step-006-models-result.json' if case == 'picker' else evidence / 'step-005-models-result.json'
 started = time.monotonic()
 
 report = {
@@ -406,6 +407,285 @@ def run(url, page):
                 pass
 
 
+def pick_option_label(opt) -> str:
+    model = opt.locator('.mid').text_content().strip()
+    prov = opt.locator('.mprov').text_content().strip()
+    return f'{model} ({prov})'
+
+
+def run_picker(url, page):
+    global reference_server
+
+    def control(action, value=''):
+        response = context.request.get(url + '/__fixture/control?action=' + action + '&value=' + value)
+        assert response.ok
+        return response.json()
+
+    def goto_conversations_page(page):
+        page.goto(url + '/#/conversations?ws=fixture&tab=new', wait_until='domcontentloaded')
+        page.wait_for_selector('dialog#thread-new-dialog', timeout=5000)
+
+    def cap_picker(page, name, widths=(1280, 1600)):
+        for width in widths:
+            page.set_viewport_size({'width': width, 'height': 900})
+            page.wait_for_timeout(200)
+            path = browser_evidence / f'picker-{name}@{width}.png'
+            page.screenshot(path=str(path))
+            report['captures'].append(str(path))
+
+    def pick_close(page):
+        if page.locator('#thread-new-model-list').count() > 0:
+            page.keyboard.press('Escape')
+            page.wait_for_selector('#thread-new-model-list', state='hidden', timeout=1000)
+
+    def active_option(page):
+        desc = page.locator('#thread-new-model').get_attribute('aria-activedescendant')
+        if desc:
+            return page.locator('#' + desc)
+        return page.locator('')
+
+    def passed(label):
+        report['scenarios'].append(label)
+
+    try:
+        goto_conversations_page(page)
+        dialog = page.locator('dialog#thread-new-dialog')
+        expect(dialog).to_be_visible()
+
+        # a. ideal
+        page.locator('#thread-new-model').click()
+        page.wait_for_selector('#thread-new-model-list')
+        opts = page.locator('#thread-new-model-list [role="option"]')
+        assert opts.count() >= 2, 'expected at least 2 options'
+        expect(page.locator('#thread-new-model')).to_contain_text('Pi default')
+
+        opt_labels = []
+        for i in range(1, opts.count()):
+            opt = opts.nth(i)
+            opt_labels.append(pick_option_label(opt))
+
+        expected_order = [
+            'claude-haiku-5-5 (pi-claude-cli)',
+            'claude-sonnet-5-5 (pi-claude-cli)',
+            'deepseek-v4-pro (deepseek)',
+            'glm-5.3 (zai)',
+            'gpt-6-sol (openai-codex)',
+            'k3 (kimi-coding)',
+            'retired-model (old-provider)'
+        ]
+        assert opt_labels == expected_order, f'Expected {expected_order}, got {opt_labels}'
+
+        retired = page.locator('#thread-new-model-list [role="option"]').filter(has_text='retired-model')
+        expect(retired).to_have_attribute('aria-disabled', 'true')
+        expect(retired.locator('.why')).to_contain_text('Not in fixture-host catalog')
+
+        footer_text = page.locator('#thread-new-model-manage').text_content().strip()
+        assert footer_text == 'Manage preferred models'
+
+        cap_picker(page, 'ideal')
+        passed('ideal')
+
+        # b. keyboard
+        pick_close(page)
+        page.locator('#thread-new-model').click()
+        page.wait_for_selector('#thread-new-model-list')
+        page.keyboard.press('Home')
+        active = active_option(page)
+        assert active.count() == 1, 'expected one active option after Home'
+        assert active.locator('.mid').text_content().strip() == 'Pi default', 'expected Pi default after Home'
+        page.keyboard.press('ArrowDown')
+        page.wait_for_timeout(100)
+        active = active_option(page)
+        assert active.count() == 1, 'expected one active option after ArrowDown'
+        assert active.locator('.mid').text_content().strip() == 'claude-haiku-5-5', 'expected claude-haiku-5-5 after ArrowDown'
+        assert active.get_attribute('aria-disabled') != 'true', 'expected first enabled option not disabled'
+        page.keyboard.press('ArrowDown')
+        page.wait_for_timeout(100)
+        active = active_option(page)
+        assert active.locator('.mid').text_content().strip() == 'claude-sonnet-5-5', 'expected claude-sonnet-5-5 after second ArrowDown'
+        page.keyboard.press('End')
+        page.wait_for_timeout(100)
+        active = active_option(page)
+        assert active.locator('.mid').text_content().strip() == 'k3', 'expected k3 after End'
+        page.keyboard.press('Enter')
+        page.wait_for_timeout(300)
+        expect(page.locator('#thread-new-model')).to_contain_text('k3')
+        expect(page.locator('#thread-new-model')).to_contain_text('kimi-coding')
+        page.locator('#thread-new-model').click()
+        page.wait_for_selector('#thread-new-model-list')
+        for _ in range(8):
+            page.keyboard.press('ArrowDown')
+            page.wait_for_timeout(50)
+            active = active_option(page)
+            assert active.get_attribute('aria-disabled') != 'true', 'expected active option never disabled in ArrowDown loop'
+        cap_picker(page, 'keyboard')
+        passed('keyboard')
+
+        # c. typeahead
+        pick_close(page)
+        page.locator('#thread-new-model').click()
+        page.wait_for_selector('#thread-new-model-list')
+        trigger_text_before = page.locator('#thread-new-model').text_content().strip()
+        page.keyboard.type('r')
+        page.wait_for_timeout(100)
+        page.wait_for_timeout(700)
+        active = active_option(page)
+        assert active.count() == 0 or active.get_attribute('aria-disabled') != 'true', 'expected no option or not disabled after r'
+        assert page.locator('#thread-new-model').text_content().strip() == trigger_text_before, 'expected trigger unchanged after r'
+        page.keyboard.type('k')
+        page.wait_for_timeout(100)
+        active = active_option(page)
+        assert active.count() == 1, 'expected one active option after k'
+        assert active.locator('.mid').text_content().strip() == 'k3', 'expected k3 after k'
+        page.keyboard.press('Escape')
+        page.wait_for_timeout(200)
+        expect(dialog).to_be_visible()
+        expect(page.locator('#thread-new-model')).to_contain_text('k3')
+        cap_picker(page, 'typeahead')
+        passed('typeahead')
+
+        # d. mouse
+        pick_close(page)
+        page.locator('#thread-new-model').click()
+        page.wait_for_selector('#thread-new-model-list')
+        glm_opt = page.locator('#thread-new-model-list [role="option"]').filter(has_text='glm-5.3')
+        glm_opt.click()
+        page.wait_for_timeout(300)
+        expect(page.locator('#thread-new-model')).to_contain_text('glm-5.3')
+        expect(page.locator('#thread-new-model')).to_contain_text('zai')
+        page.locator('#thread-new-model').click()
+        page.wait_for_selector('#thread-new-model-list')
+        expect(glm_opt).to_have_attribute('aria-selected', 'true')
+        page.keyboard.press('Escape')
+        cap_picker(page, 'mouse')
+        passed('mouse')
+
+        # e. tab-away
+        pick_close(page)
+        page.locator('#thread-new-model').click()
+        page.wait_for_selector('#thread-new-model-list')
+        page.keyboard.press('Tab')
+        page.wait_for_timeout(200)
+        expect(page.locator('#thread-new-model-list')).to_have_count(0)
+        expect(dialog).to_be_visible()
+        cap_picker(page, 'tab-away')
+        passed('tab-away')
+
+        # f. empty
+        control('models-preferences-empty', 'true')
+        page.reload(wait_until='domcontentloaded')
+        goto_conversations_page(page)
+        page.locator('#thread-new-model').click()
+        page.wait_for_selector('#thread-new-model-list')
+        opts = page.locator('#thread-new-model-list [role="option"]')
+        assert opts.count() == 1, 'expected exactly 1 option'
+        expect(opts.first).to_have_attribute('aria-selected', 'true')
+        expect(page.locator('#thread-new-model-list .mnote')).to_contain_text('No preferred models yet')
+        footer_text = page.locator('#thread-new-model-manage').text_content().strip()
+        assert footer_text == 'Choose preferred models'
+        cap_picker(page, 'empty')
+        passed('empty')
+
+        control('models-preferences-empty', 'false')
+        page.reload(wait_until='domcontentloaded')
+        goto_conversations_page(page)
+
+        # g. disabled option in place
+        pick_close(page)
+        page.locator('#thread-new-model').click()
+        page.wait_for_selector('#thread-new-model-list')
+        retired = page.locator('#thread-new-model-list [role="option"]').filter(has_text='retired-model')
+        assert retired.get_attribute('aria-disabled') == 'true'
+        assert retired.locator('.why').text_content().strip() == 'Not in fixture-host catalog'
+        trigger_text = page.locator('#thread-new-model').text_content().strip()
+        retired.dispatch_event('click')
+        page.wait_for_timeout(300)
+        new_trigger_text = page.locator('#thread-new-model').text_content().strip()
+        assert new_trigger_text == trigger_text, 'expected trigger unchanged after clicking disabled option'
+        cap_picker(page, 'disabled-option-in-place')
+        passed('disabled option in place')
+
+        reference_captures = []
+        if reference_dir:
+            ref_screens = reference_dir / 'screens'
+            if ref_screens.exists() and (ref_screens / 'vendor').exists() and (ref_screens / 'vendor' / 'tailwind.js').exists():
+                class RefHandler(SimpleHTTPRequestHandler):
+                    def translate_path(self, path):
+                        return str(ref_screens) + path
+                server = ThreadingHTTPServer(('127.0.0.1', 0), RefHandler)
+                threading.Thread(target=server.serve_forever, daemon=True).start()
+                for ref in ['12-thread-model-picker.html', '14-model-picker-empty.html', '15-model-picker-unavailable.html']:
+                    ref_path = ref_screens / ref
+                    if ref_path.exists():
+                        for width in [1280, 1600]:
+                            page.set_viewport_size({'width': width, 'height': 900})
+                            page.wait_for_timeout(200)
+                            cap_path = browser_evidence / f'picker-reference-{ref}@{width}.png'
+                            page.screenshot(path=str(cap_path))
+                            reference_captures.append(str(cap_path))
+                server.shutdown()
+
+        report['visual'] = {
+            'route': '#/conversations?ws=fixture&tab=new + #thread-new-model',
+            'widths': [1280, 1600],
+            'productionCaptures': report['captures'],
+            'referenceCaptures': reference_captures,
+        }
+
+        visual_md = evidence / 'picker-visual-inspection.md'
+        visual_md.write_text(
+            '# Picker Visual Inspection\n\n'
+            '## Captures\n\n'
+            '\n'.join(f'- {c}' for c in report['captures']) + '\n\n'
+            '## Reference Captures\n\n'
+            '\n'.join(f'- {c}' for c in reference_captures) + '\n\n'
+            '## States Covered\n\n'
+            '\n'.join(f'- {s}' for s in report['scenarios']) + '\n'
+        )
+
+        assert not report.get('failures'), report.get('failures')
+        assert not report['pageErrors']
+        report['status'] = 'passed'
+
+    except Exception as error:
+        report.setdefault('failures', []).append({
+            'scenario': 'runtime error',
+            'error': str(error),
+            'traceback': traceback.format_exc(),
+        })
+    finally:
+        for r in held_routes:
+            try:
+                r.abort()
+            except:
+                pass
+        if reference_server:
+            reference_server.shutdown()
+        if context:
+            context.close()
+        if browser:
+            browser.close()
+        if fixture:
+            try:
+                fixture.terminate()
+                for _ in range(10):
+                    if fixture.poll() is not None:
+                        break
+                    time.sleep(0.5)
+                if fixture.poll() is None:
+                    fixture.kill()
+            except:
+                pass
+        cleanup['fixtureTerminated'] = True
+        cleanup['browserClosed'] = True
+        if fixture_info.get('root'):
+            try:
+                shutil.rmtree(fixture_info['root'])
+                cleanup['temporaryFixtureRootRemoved'] = fixture_info['root']
+            except:
+                pass
+
+
 def main():
     global fixture, reference_server, browser, context, fixture_info
     fixture = subprocess.Popen(
@@ -445,7 +725,7 @@ def main():
             page.on('pageerror', lambda e: report['pageErrors'].append(str(e)))
             page.on('console', lambda c: report['consoleErrors'].append(c.text) if c.type == 'error' else None)
             page.on('requestfailed', lambda r: report['requestFailures'].append(r.url))
-            run(fixture_url, page)
+            run_picker(fixture_url, page) if case == 'picker' else run(fixture_url, page)
     finally:
         report['cleanup'] = cleanup
         write_receipt()
