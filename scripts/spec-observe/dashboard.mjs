@@ -22,6 +22,7 @@ import { createPreviewService } from '../dev-preview/service.mjs';
 import { createPackagePreviewRoutes } from './package-preview-routes.mjs';
 import { createRepositoryFileRoutes } from './repository-files.mjs';
 import { createDiscussionRoutes } from '../workspaces/discussion-routes.mjs';
+import { createModelRoutes, createModelCatalog } from './model-routes.mjs';
 import { applyManualCompletions, writeManualCompletion } from './manual-completion.mjs';
 import { observerExpired } from './observer-retention.mjs';
 
@@ -161,7 +162,7 @@ function refuseUpgrade(socket, status, message) {
   }
 }
 
-export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi/agent'), publicHost, storageRoot, discussion, sessionControl, previewService, terminalViews } = {}) {
+export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi/agent'), publicHost, storageRoot, discussion, sessionControl, previewService, terminalViews, modelCatalog } = {}) {
   let cached, read;
   const actionToken = randomBytes(32).toString('hex');
   const discussionRoutes = createDiscussionRoutes({ discussion, actionToken });
@@ -184,6 +185,7 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
     authorize: async requested => authorizePackage(await readDashboardState(agentDir), requested, authorizedWorkspace),
   });
   const repositoryRoutes = createRepositoryFileRoutes({ authorizedKit, exclude: workspaceExclude });
+  const modelRoutes = createModelRoutes({ agentDir, actionToken, catalog: modelCatalog ?? createModelCatalog() });
   const server = createServer(async (request, response) => {
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
@@ -221,6 +223,7 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
         remote: remote && !publicRequest,
         expectedOrigin: publicRequest ? `https://${publicName}` : `http://${host}`,
       })) return;
+      if (await modelRoutes(request, response, url, { remote: remote && !publicRequest, expectedOrigin: publicRequest ? `https://${publicName}` : `http://${host}` })) return;
       if (await repositoryRoutes(request, response, url)) return;
       if (!['GET', 'HEAD'].includes(request.method) && !completionRequest) { response.writeHead(405, { Allow: 'GET, HEAD' }); response.end(); return; }
       if (completionRequest) {

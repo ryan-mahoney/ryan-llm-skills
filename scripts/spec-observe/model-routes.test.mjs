@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, chmodSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, chmodSync, readFileSync, mkdirSync, existsSync, lstatSync, symlinkSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseModelCatalog, createModelCatalog, CATALOG_HEADERS, CATALOG_LIMITS } from './model-routes.mjs';
+import { execFileSync } from 'node:child_process';
+import { parseModelCatalog, createModelCatalog, CATALOG_HEADERS, CATALOG_LIMITS, createPreferredModels, PREFERRED_LIMITS } from './model-routes.mjs';
 
 function buildTable(rows) {
   const header = CATALOG_HEADERS;
@@ -192,4 +193,186 @@ test('timeout fail-closed', async t => {
     process.env.PATH = origPath;
     rmSync(tmpDir, { recursive: true, force: true });
   }
+});
+
+test('createPreferredModels: missing file resolves to empty', async t => {
+  const agentDir = mkdtempSync(join(tmpdir(), 'model-routes-test-'));
+  t.after(() => rmSync(agentDir, { recursive: true, force: true }));
+
+  const prefs = createPreferredModels({ agentDir, now: () => 1000 });
+  const r = await prefs.read();
+  assert.equal(r.state, 'ready');
+  assert.deepEqual(r.preferred, []);
+  assert.equal(r.updated_at, null);
+});
+
+test('createPreferredModels: persist and modes', async t => {
+  const agentDir = mkdtempSync(join(tmpdir(), 'model-routes-test-'));
+  t.after(() => rmSync(agentDir, { recursive: true, force: true }));
+
+  const prefs = createPreferredModels({ agentDir, now: () => 1000 });
+  const r1 = await prefs.setPreference({ provider: 'a', model: 'm1', preferred: true });
+  assert.equal(r1.state, 'ready');
+  assert.equal(r1.preferred.length, 1);
+
+  const r2 = await prefs.setPreference({ provider: 'b', model: 'm2', preferred: true });
+  assert.equal(r2.state, 'ready');
+  assert.equal(r2.preferred.length, 2);
+
+  const filePath = join(agentDir, 'spec-sentinel', 'preferred-models.json');
+  assert.ok(existsSync(filePath));
+  const data = JSON.parse(readFileSync(filePath, 'utf8'));
+  assert.equal(data.version, 1);
+  assert.deepEqual(data.preferred, [{ provider: 'a', model: 'm1' }, { provider: 'b', model: 'm2' }]);
+  assert.ok(data.updated_at.endsWith('Z'));
+
+  const dirMode = lstatSync(join(agentDir, 'spec-sentinel')).mode & 0o777;
+  assert.equal(dirMode, 0o700);
+  const fileMode = lstatSync(filePath).mode & 0o777;
+  assert.equal(fileMode, 0o600);
+});
+
+test('createPreferredModels: concurrency', async t => {
+  const agentDir = mkdtempSync(join(tmpdir(), 'model-routes-test-'));
+  t.after(() => rmSync(agentDir, { recursive: true, force: true }));
+
+  const prefs = createPreferredModels({ agentDir, now: () => 1000 });
+  await Promise.all([
+    prefs.setPreference({ provider: 'p1', model: 'm1', preferred: true }),
+    prefs.setPreference({ provider: 'p2', model: 'm2', preferred: true })
+  ]);
+
+  const filePath = join(agentDir, 'spec-sentinel', 'preferred-models.json');
+  const data = JSON.parse(readFileSync(filePath, 'utf8'));
+  assert.equal(data.preferred.length, 2);
+
+  const prefs2 = createPreferredModels({ agentDir, now: () => 2000 });
+  const r = await prefs2.read();
+  assert.equal(r.state, 'ready');
+  assert.equal(r.preferred.length, 2);
+});
+
+test('createPreferredModels: idempotent add/remove', async t => {
+  const agentDir = mkdtempSync(join(tmpdir(), 'model-routes-test-'));
+  t.after(() => rmSync(agentDir, { recursive: true, force: true }));
+
+  const prefs = createPreferredModels({ agentDir, now: () => 1000 });
+  const r1 = await prefs.setPreference({ provider: 'a', model: 'm', preferred: true });
+  const data1 = readFileSync(join(agentDir, 'spec-sentinel', 'preferred-models.json'), 'utf8');
+  const r2 = await prefs.setPreference({ provider: 'a', model: 'm', preferred: true });
+  assert.equal(r2.updated_at, r1.updated_at);
+  assert.equal(readFileSync(join(agentDir, 'spec-sentinel', 'preferred-models.json'), 'utf8'), data1);
+});
+
+test('createPreferredModels: remove', async t => {
+  const agentDir = mkdtempSync(join(tmpdir(), 'model-routes-test-'));
+  t.after(() => rmSync(agentDir, { recursive: true, force: true }));
+
+  const prefs = createPreferredModels({ agentDir, now: () => 1000 });
+  await prefs.setPreference({ provider: 'a', model: 'm1', preferred: true });
+  await prefs.setPreference({ provider: 'b', model: 'm2', preferred: true });
+  const r = await prefs.setPreference({ provider: 'a', model: 'm1', preferred: false });
+  assert.equal(r.state, 'ready');
+  assert.equal(r.preferred.length, 1);
+  assert.equal(r.preferred[0].provider, 'b');
+});
+
+test('createPreferredModels: retry after failed write', async t => {
+  const agentDir = mkdtempSync(join(tmpdir(), 'model-routes-test-'));
+  t.after(() => rmSync(agentDir, { recursive: true, force: true }));
+
+  const dirPath = join(agentDir, 'spec-sentinel');
+  mkdirSync(dirPath, { mode: 0o700 });
+  const filePath = join(dirPath, 'preferred-models.json');
+
+  const tmpPath = join(agentDir, 'tmp.json');
+  writeFileSync(tmpPath, '{"test":true}');
+  symlinkSync(tmpPath, filePath);
+
+  const prefs = createPreferredModels({ agentDir, now: () => 1000 });
+  const r1 = await prefs.setPreference({ provider: 'a', model: 'm', preferred: true });
+  assert.equal(r1.state, 'failed');
+
+  unlinkSync(filePath);
+  const r2 = await prefs.setPreference({ provider: 'a', model: 'm', preferred: true });
+  assert.equal(r2.state, 'ready');
+  assert.ok(existsSync(filePath));
+});
+
+test('createPreferredModels: refuse and preserve', async t => {
+  const agentDir = mkdtempSync(join(tmpdir(), 'model-routes-test-'));
+  t.after(() => rmSync(agentDir, { recursive: true, force: true }));
+
+  const dirPath = join(agentDir, 'spec-sentinel');
+  mkdirSync(dirPath, { mode: 0o700 });
+  const filePath = join(dirPath, 'preferred-models.json');
+
+  const cases = [
+    ['corrupt', '{'],
+    ['version2', '{"version":2,"preferred":[{"provider":"a","model":"m"}],"updated_at":null}'],
+    ['duplicate', '{"version":1,"preferred":[{"provider":"a","model":"m"},{"provider":"a","model":"m"}],"updated_at":null}'],
+    ['oversize', JSON.stringify({ version: 1, preferred: [{ provider: 'a', model: 'b'.repeat(PREFERRED_LIMITS.bytes) }], updated_at: new Date(0).toISOString() })],
+  ];
+
+  for (const [name, bytes] of cases) {
+    writeFileSync(filePath, bytes);
+    const prefs = createPreferredModels({ agentDir, now: () => 1000 });
+    const r = await prefs.read();
+    assert.equal(r.state, 'failed', `${name}: state`);
+    assert.equal(r.reason, 'preferences-unavailable', `${name}: reason`);
+    assert.equal(readFileSync(filePath, 'utf8'), bytes, `${name}: bytes preserved`);
+    unlinkSync(filePath);
+  }
+
+  const targetPath = join(agentDir, 'target.json');
+  const targetBytes = '{"valid":true}';
+  writeFileSync(targetPath, targetBytes);
+  symlinkSync(targetPath, filePath);
+  const prefs = createPreferredModels({ agentDir, now: () => 1000 });
+  const r = await prefs.read();
+  assert.equal(r.state, 'failed');
+  assert.equal(r.reason, 'preferences-unavailable');
+  assert.equal(readFileSync(targetPath, 'utf8'), targetBytes);
+  assert.ok(lstatSync(filePath).isSymbolicLink());
+  unlinkSync(filePath);
+
+  execFileSync('mkfifo', [filePath]);
+  const prefs2 = createPreferredModels({ agentDir, now: () => 1000 });
+  const r2 = await prefs2.read();
+  assert.equal(r2.state, 'failed');
+  assert.equal(r2.reason, 'preferences-unavailable');
+  unlinkSync(filePath);
+});
+
+test('createPreferredModels: capacity', async t => {
+  const agentDir = mkdtempSync(join(tmpdir(), 'model-routes-test-'));
+  t.after(() => rmSync(agentDir, { recursive: true, force: true }));
+
+  const dirPath = join(agentDir, 'spec-sentinel');
+  mkdirSync(dirPath, { mode: 0o700 });
+  const filePath = join(dirPath, 'preferred-models.json');
+
+  const preferred = Array.from({ length: 200 }, (_, i) => ({ provider: `p${i}`, model: `m${i}` }));
+  const content = JSON.stringify({ version: 1, preferred, updated_at: new Date(1000).toISOString() });
+  writeFileSync(filePath, content);
+
+  const prefs = createPreferredModels({ agentDir, now: () => 1000 });
+  const r = await prefs.setPreference({ provider: 'p200', model: 'm200', preferred: true });
+  assert.equal(r.state, 'failed');
+  assert.equal(r.reason, 'preference-limit');
+  assert.equal(readFileSync(filePath, 'utf8'), content);
+
+  const r2 = await prefs.setPreference({ provider: 'p0', model: 'm0', preferred: false });
+  assert.equal(r2.state, 'ready');
+  assert.equal(r2.preferred.length, 199);
+});
+
+test('createPreferredModels: identifier guard', async t => {
+  const agentDir = mkdtempSync(join(tmpdir(), 'model-routes-test-'));
+  t.after(() => rmSync(agentDir, { recursive: true, force: true }));
+
+  const prefs = createPreferredModels({ agentDir, now: () => 1000 });
+  const r = await prefs.setPreference({ provider: '', model: 'm', preferred: true });
+  assert.equal(r.state, 'failed');
+  assert.equal(existsSync(join(agentDir, 'spec-sentinel', 'preferred-models.json')), false);
 });

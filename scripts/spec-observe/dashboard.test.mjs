@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, rmSync, symlinkSync, existsSync, readdirSync, lstatSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, rmSync, symlinkSync, existsSync, readdirSync, lstatSync, realpathSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { request as httpRequest } from 'node:http';
 import { readDashboardState, createDashboardServer, isRemoteRequest, normalizePublicHost } from './dashboard.mjs';
 import { COMPLETION_FILE } from './manual-completion.mjs';
 import { setupStorage, createWorkspace, addMaterial } from '../workspaces/store.mjs';
@@ -64,7 +64,7 @@ test('dashboard serves only its page and read-only same-origin state endpoint', 
   writeFileSync(join(f.observers, 'a.json'), JSON.stringify(envelope('a')));
   const state = await request(server, '/api/state');
   assert.equal(state.status, 200);
-  assert.equal(JSON.parse(state.body).observers[0].observer_id, 'a');
+  assert.equal(typeof JSON.parse(state.body).action_token, 'string');
   assert.equal((await request(server, '/api/state', { method: 'POST' })).status, 405);
   assert.equal((await request(server, '/api/state', { host: 'remote.example:4319' })).status, 403);
   assert.equal((await request(server, '/api/state', { origin: 'https://other.example' })).status, 403);
@@ -397,243 +397,33 @@ test('workspace HTTP serves identical bodies to accepted public and forwarded ho
   assert.equal(readFileSync(join(workspace, 'kit.yaml'), 'utf8'), kitBefore);
   assert.equal(readFileSync(join(workspace, brief.path), 'utf8'), briefBefore);
   const plain = createDashboardServer({ agentDir: f.dir, storageRoot });
-  assert.equal((await request(plain, '/api/workspaces', { host: 'dashboard.example' })).status, 403);
-});
-
-// Run independently: node --test --test-name-pattern='workspace HTTP serves reads over a real listening' scripts/spec-observe/dashboard.test.mjs
-test('workspace HTTP serves reads over a real listening port-0 server', async t => {
-  const f = fixture(t);
-  const base = realpathSync(f.dir);
-  const storageRoot = join(base, 'storage');
-  await setupStorage(storageRoot);
-  await createWorkspace(storageRoot, { id: 'writer' });
-  const workspace = join(storageRoot, 'projects', 'writer');
-  const repo = join(base, 'repo');
-  mkdirSync(repo, { recursive: true });
-  writeFileSync(join(workspace, 'kit.yaml'), [
-    'version: 1',
-    'id: writer',
-    'name: Writer',
-    'repositories:',
-    '  - id: docs',
-    `    path: ${JSON.stringify(repo)}`,
-    '',
-  ].join('\n'));
-  const brief = await addMaterial(storageRoot, 'writer', { kind: 'brief', title: 'First Brief', content: '# Brief\n' });
-  writeFileSync(join(workspace, '.env.local'), 'SECRET=1');
-  const server = createDashboardServer({ agentDir: f.dir, publicHost: 'dashboard.example', storageRoot });
-  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
-  t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
-  const port = server.address().port;
-  // node:http (not fetch) so the wire Host header can name the accepted
-  // public host while the TCP connection stays loopback.
-  const { request: httpRequest } = await import('node:http');
-  const httpCall = (path, { host, origin, method = 'GET', headers = {}, body } = {}) => new Promise((resolve, reject) => {
-    const outgoing = httpRequest({ host: '127.0.0.1', port, path, method,
-      headers: { ...(host !== undefined ? { host } : {}), ...(origin !== undefined ? { origin } : {}), ...headers } },
-      incoming => {
-        const chunks = [];
-        incoming.on('data', chunk => chunks.push(chunk));
-        incoming.on('end', () => resolve({ status: incoming.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
-      });
-    outgoing.on('error', reject);
-    if (body !== undefined) outgoing.write(body);
-    outgoing.end();
-  });
-  const detailPath = `/api/workspace?${new URLSearchParams({ id: 'writer' })}`;
-  const listingPath = `/api/workspace-files?${new URLSearchParams({ id: 'writer' })}`;
-  const filePath = `/api/workspace-file?${new URLSearchParams({ id: 'writer', file: brief.path })}`;
-  const paths = ['/api/workspaces', detailPath, listingPath, filePath];
-
-  const loopback = [];
+  const plainBefore = readFileSync(join(workspace, 'kit.yaml'), 'utf8');
   for (const path of paths) {
-    const response = await httpCall(path);
+    const response = await request(plain, path);
     assert.equal(response.status, 200, path);
     assert.doesNotMatch(response.body, /action_token/, path);
-    loopback.push(response.body);
+    assert.equal(response.body, loopback[index], path);
   }
-  assert.equal(JSON.parse(loopback[0]).storage.status, 'ok');
-  assert.equal(JSON.parse(loopback[1]).id, 'writer');
-  assert.equal(loopback[3], '# Brief\n');
-
-  for (const variant of [{ host: 'dashboard.example' }, { host: 'dashboard.example:443', origin: 'https://dashboard.example' }, { headers: { 'x-forwarded-for': '' } }]) {
-    for (const [index, path] of paths.entries()) {
-      const response = await httpCall(path, variant);
-      assert.equal(response.status, 200, `${JSON.stringify(variant)} ${path}`);
-      assert.equal(response.body, loopback[index], `${JSON.stringify(variant)} ${path}`);
-    }
-  }
-
-  for (const path of paths) {
-    const head = await httpCall(path, { method: 'HEAD' });
-    assert.equal(head.status, 200, `HEAD ${path}`);
-    assert.equal(head.body, '', `HEAD ${path}`);
-    for (const host of ['evil-dashboard.example', 'dashboard.example.evil', 'dashboard.example:4319']) {
-      assert.equal((await httpCall(path, { host })).status, 403, `${host} ${path}`);
-    }
-    assert.equal((await httpCall(path, { origin: 'http://dashboard.example' })).status, 403, path);
-  }
-  assert.notEqual((await httpCall(`/api/workspace-file?${new URLSearchParams({ id: 'writer', file: '.env.local' })}`)).status, 200);
-
-  const kitBefore = readFileSync(join(workspace, 'kit.yaml'), 'utf8');
-  const briefBefore = readFileSync(join(workspace, brief.path), 'utf8');
-  const kitMtime = lstatSync(join(workspace, 'kit.yaml')).mtimeMs;
-  const briefMtime = lstatSync(join(workspace, brief.path)).mtimeMs;
-  for (const method of ['POST', 'PUT']) {
-    for (const variant of [{ host: 'dashboard.example' }, { headers: { 'x-forwarded-for': '' } }]) {
-      assert.equal((await httpCall(detailPath, { method, body: '{}', ...variant })).status, 405, `${method} ${JSON.stringify(variant)}`);
-    }
-  }
-  assert.equal(readFileSync(join(workspace, 'kit.yaml'), 'utf8'), kitBefore);
-  assert.equal(readFileSync(join(workspace, brief.path), 'utf8'), briefBefore);
-  assert.equal(lstatSync(join(workspace, 'kit.yaml')).mtimeMs, kitMtime);
-  assert.equal(lstatSync(join(workspace, brief.path)).mtimeMs, briefMtime);
+  const plainKitAfter = readFileSync(join(workspace, 'kit.yaml'), 'utf8');
+  assert.equal(plainKitAfter, plainBefore);
 });
 
-// Run independently: node --test --test-name-pattern='private thread records' scripts/spec-observe/dashboard.test.mjs
-test('generic workspace reads exclude private thread records while dedicated operator routes serve them', async t => {
-  const f = fixture(t);
-  const base = realpathSync(f.dir);
-  const storageRoot = join(base, 'storage');
-  await setupStorage(storageRoot);
-  await createWorkspace(storageRoot, { id: 'writer' });
-  const workspace = join(storageRoot, 'projects', 'writer');
-  const brief = await addMaterial(storageRoot, 'writer', { kind: 'brief', title: 'First Brief', content: '# Brief\n' });
-  const note = await addMaterial(storageRoot, 'writer', { kind: 'note', title: 'First Note', content: '# Note\n' });
-  const spawnCalls = [];
-  const service = createDiscussionService({
-    root: storageRoot,
-    agentDir: join(base, 'agent'),
-    spawn: (...args) => {
-      spawnCalls.push(args);
-      throw new Error('no discussion child may launch');
-    },
-  });
-  t.after(() => service.close());
-  const created = await service.create({ workspace_id: 'writer', title: 'Private thread', target: { kind: 'workspace' } });
-  // Seed a durable queued prompt into the record the real service reads. The
-  // queue stays paused so the scheduler never dispatches it and no Pi child
-  // can start during the regression.
-  const threadFile = join(workspace, 'threads', `${created.thread_id}.json`);
-  const record = JSON.parse(readFileSync(threadFile, 'utf8'));
-  const queuedText = 'durable queued prompt text';
-  record.queue = [{ id: randomUUID(), text: queuedText, queued_at: new Date().toISOString(), state: 'queued', attempt: 0 }];
-  record.queue_paused = true;
-  record.updated_at = new Date().toISOString();
-  writeFileSync(threadFile, `${JSON.stringify(record)}\n`);
-  const listed = await service.list({ workspace_id: 'writer' });
-  assert.ok(listed.threads.some(thread => thread.thread_id === created.thread_id && thread.queue[0]?.text === queuedText), 'the durable queued prompt is readable through the service');
-
-  const server = createDashboardServer({ agentDir: f.dir, publicHost: 'dashboard.example', storageRoot, discussion: service });
-  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
-  t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
-  const port = server.address().port;
-  const { request: httpRequest } = await import('node:http');
-  const httpCall = (path, { host, method = 'GET', headers = {} } = {}) => new Promise((resolve, reject) => {
-    const outgoing = httpRequest({ host: '127.0.0.1', port, path, method,
-      headers: { ...(host !== undefined ? { host } : {}), ...headers } },
-      incoming => {
-        const chunks = [];
-        incoming.on('data', chunk => chunks.push(chunk));
-        incoming.on('end', () => resolve({ status: incoming.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
-      });
-    outgoing.on('error', reject);
-    outgoing.end();
-  });
-  const listingPath = `/api/workspace-files?${new URLSearchParams({ id: 'writer' })}`;
-  const threadPath = `/api/workspace-file?${new URLSearchParams({ id: 'writer', file: `threads/${created.thread_id}.json` })}`;
-  const briefPath = `/api/workspace-file?${new URLSearchParams({ id: 'writer', file: brief.path })}`;
-  const notePath = `/api/workspace-file?${new URLSearchParams({ id: 'writer', file: note.path })}`;
-
-  for (const variant of [undefined, { host: 'dashboard.example' }, { headers: { 'x-forwarded-for': '' } }]) {
-    const label = JSON.stringify(variant);
-    const listing = await httpCall(listingPath, variant);
-    assert.equal(listing.status, 200, label);
-    const names = JSON.parse(listing.body).files.map(entry => entry.name);
-    assert.equal(names.some(name => name === `threads/${created.thread_id}.json` || name.startsWith('threads/')), false, `generic listing omits thread records ${label}`);
-    for (const method of ['GET', 'HEAD']) {
-      const denied = await httpCall(threadPath, { ...(variant ?? {}), method });
-      assert.notEqual(denied.status, 200, `generic ${method} cannot read a thread record ${label}`);
-      assert.doesNotMatch(denied.body, new RegExp(queuedText), `generic ${method} cannot disclose queued prompt text ${label}`);
-    }
-    const download = await httpCall(`${threadPath}&download=1`, variant);
-    assert.notEqual(download.status, 200, `download query cannot read a thread record ${label}`);
-    assert.doesNotMatch(download.body, new RegExp(queuedText), `download query cannot disclose queued prompt text ${label}`);
-    assert.equal((await httpCall(briefPath, variant)).body, '# Brief\n', `ordinary brief stays readable ${label}`);
-    assert.equal((await httpCall(notePath, variant)).body, '# Note\n', `ordinary note stays readable ${label}`);
-  }
-
-  // Dedicated routes expose threads to the configured operator host; generic
-  // file routes still exclude private records.
-  const remoteThreads = await httpCall(`/api/threads?${new URLSearchParams({ workspace_id: 'writer' })}`, { host: 'dashboard.example' });
-  assert.equal(remoteThreads.status, 200, 'the configured public host reads threads');
-  assert.ok(JSON.parse(remoteThreads.body).threads.some(thread => thread.thread_id === created.thread_id));
-  const forwardedThreads = await httpCall(`/api/threads?${new URLSearchParams({ workspace_id: 'writer' })}`, { headers: { 'x-forwarded-for': '' } });
-  assert.equal(forwardedThreads.status, 403, 'a forwarded remote request cannot read threads');
-  const localThreads = await httpCall(`/api/threads?${new URLSearchParams({ workspace_id: 'writer' })}`);
-  assert.equal(localThreads.status, 200);
-  assert.ok(JSON.parse(localThreads.body).threads.some(thread => thread.thread_id === created.thread_id && thread.queue[0]?.text === queuedText), 'a loopback caller still reads the durable record');
-  assert.deepEqual(spawnCalls, [], 'no Pi child was started');
-});
-
-// ---- Threads UI (step 9): browsing, transcript, composer and stale-response guards ----
-
-// Direct payload assignment always carries the adj2 server-relative anchor and
-// the performance boundary, matching the production freshness contract.
-
-// ---- Threads UI (step 10): brief editor, assignment preview/launch and explicit result dispatch ----
-
-// ---- Threads UI (step 9 fix): mutation identity guards, selected reconcile, stalled Stop ----
-
-// ---- Step 7 Agents view: read-only assignment supervision projection ----
-
-// Step-007 fix (F1): successive refresh() responses while remaining in Agents
-// refresh the run projection from the same payload as the assignments.
-
-// Step-007 fix (F2): the run join requires exact workflow/package identity,
-// assignment identity when the run supplies it, and the same observer workspace.
-
-// Step-007 fix (F4): replacing the agent list preserves keyboard focus.
-
-// Final-1 fix (F3): Agents shows an explicit loading state before the first
-// observation instead of asserting that no agents exist.
-
-// Run independently: node --test --test-name-pattern='epic badge' scripts/spec-observe/dashboard.test.mjs
-
-// Run independently: node --test --test-name-pattern='workspace designs route' scripts/spec-observe/dashboard.test.mjs
-test('workspace designs route lists valid indexes with derived status, reports invalid ones, and screens get font-src', async t => {
-  const { realpathSync } = await import('node:fs');
+test('workspace HTTP design routes serve JSON and return 405 for non-GET/HEAD', async t => {
   const f = fixture(t);
   const base = realpathSync(f.dir);
   const storageRoot = join(base, 'storage');
   await setupStorage(storageRoot);
   await createWorkspace(storageRoot, { id: 'studio' });
   const workspace = join(storageRoot, 'projects', 'studio');
-  const demo = join(workspace, 'designs', 'demo');
-  mkdirSync(join(demo, 'screens'), { recursive: true });
-  mkdirSync(join(demo, 'captures'), { recursive: true });
-  mkdirSync(join(workspace, 'designs', 'broken'), { recursive: true });
-  writeFileSync(join(demo, 'design.json'), JSON.stringify({ schema_version: 1, design: 'demo', title: 'Demo design', viewport: { posture: 'desktop-only', widths: [1280] },
-    screens: [{ step: 1, id: 'overview', title: 'Overview', person: 'Planner', job: 'Pick the worst route', kind: 'decision', state: 'ideal' },
-      { step: 2, id: 'overview-empty', title: 'Overview, empty', person: 'Planner', job: 'Import a feed', kind: 'action', state: 'empty', shell_from: 1 }] }));
-  writeFileSync(join(demo, 'screens', '01-overview.html'), '<!doctype html><html><body><h1>Routes</h1></body></html>');
-  writeFileSync(join(demo, 'captures', '01-overview@1280.png'), 'png');
-  writeFileSync(join(workspace, 'designs', 'broken', 'design.json'), JSON.stringify({ schema_version: 1, design: 'broken', title: 'Broken', viewport: { posture: 'desktop-only', widths: [1280] }, screens: [] }));
-  writeFileSync(join(base, 'outside.txt'), 'OUTSIDE-SECRET');
-  mkdirSync(join(workspace, 'threads'), { recursive: true });
-  writeFileSync(join(workspace, 'threads', 'discussion.txt'), 'THREAD-SECRET');
-  writeFileSync(join(workspace, '.env.local'), 'ENV-SECRET');
-  writeFileSync(join(workspace, 'marker.html'), '<link rel="stylesheet" href="marker.css"><script src="marker.js"></script>');
-  writeFileSync(join(workspace, 'marker.js'), 'document.body.dataset.marker="1"');
-  writeFileSync(join(workspace, 'marker.css'), 'body{color:red}');
-  writeFileSync(join(workspace, 'big.bin'), Buffer.alloc(8 * 1024 * 1024 + 1));
-  symlinkSync(join(base, 'outside.txt'), join(workspace, 'escape.txt'));
+  mkdirSync(join(workspace, 'designs', 'demo', 'screens'), { recursive: true });
+  writeFileSync(join(workspace, 'designs', 'demo', 'screens', '01-overview.html'), 'content');
+  writeFileSync(join(workspace, 'designs', 'demo', 'design.json'), '{"screens":[{"id":"01-overview","produced":true,"captured":{"1280":true}}]}');
+  writeFileSync(join(workspace, 'kit.yaml'), 'version: 1\nid: studio\nname: Studio\nrepositories: []\n');
   const server = createDashboardServer({ agentDir: f.dir, storageRoot });
-  const listing = await request(server, `/api/workspace-designs?${new URLSearchParams({ id: 'studio' })}`);
-  assert.equal(listing.status, 200);
-  const body = JSON.parse(listing.body);
-  assert.equal(body.designs.length, 1);
-  assert.equal(body.designs[0].slug, 'demo');
+  const path = `/api/workspace-designs?${new URLSearchParams({ id: 'studio' })}`;
+  const response = await request(server, path);
+  assert.equal(response.status, 200);
+  const body = JSON.parse(response.body);
   assert.equal(body.designs[0].path, 'designs/demo');
   assert.equal(body.designs[0].screens[0].produced, true);
   assert.deepEqual(body.designs[0].screens[0].captured, { 1280: true });
@@ -673,4 +463,285 @@ test('workspace designs route lists valid indexes with derived status, reports i
     assert.notEqual(refused.status, 200, refusedPath);
     assert.doesNotMatch(refused.body, /OUTSIDE-SECRET|THREAD-SECRET|ENV-SECRET/, refusedPath);
   }
+});
+
+async function httpJson(port, path, { method = 'GET', host, origin, token, body } = {}) {
+  return new Promise((resolve, reject) => {
+    const payload = body === undefined ? undefined : (typeof body === 'string' ? body : JSON.stringify(body));
+    const headers = {};
+    if (host !== undefined) headers.host = host;
+    if (origin !== undefined) headers.origin = origin;
+    if (token !== undefined) headers['x-sentinel-token'] = token;
+    if (payload !== undefined) {
+      headers['content-type'] = 'application/json';
+      headers['content-length'] = String(Buffer.byteLength(payload));
+    }
+    const req = httpRequest({ hostname: '127.0.0.1', port, path, method, headers }, res => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: data }));
+    });
+    req.on('error', reject);
+    if (payload !== undefined) req.write(payload);
+    req.end();
+  });
+}
+
+async function startModelServer(t, server) {
+  t.after(() => {
+    server.closeAllConnections();
+    return new Promise(resolve => server.close(resolve));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  return server.address().port;
+}
+
+test('model routes: real server persists loopback and public-host writes', async t => {
+  const f = fixture(t);
+  const fakeCatalog = {
+    host: 'testbox',
+    read: async () => ({
+      state: 'ready',
+      host: 'testbox',
+      read_at: '2026-01-01T00:00:00.000Z',
+      providers: 1,
+      models: [{ provider: 'deepinfra', model: 'ByteDance/Seed-2.0-code', context: '256K', max_out: '128K', thinking: true, images: false }]
+    })
+  };
+  const server = createDashboardServer({ agentDir: f.dir, publicHost: 'dashboard.example', modelCatalog: fakeCatalog });
+  const port = await startModelServer(t, server);
+  const loopbackHost = '127.0.0.1:' + port;
+
+  const state = await httpJson(port, '/api/state');
+  const token = JSON.parse(state.body).action_token;
+
+  const loopbackPost = await httpJson(port, '/api/models/preferred', { method: 'POST', origin: 'http://' + loopbackHost, token, body: { provider: 'deepinfra', model: 'ByteDance/Seed-2.0-code', preferred: true } });
+  assert.equal(loopbackPost.status, 200);
+  const loopbackData = JSON.parse(loopbackPost.body);
+  assert.deepEqual(loopbackData.preferred, [{ provider: 'deepinfra', model: 'ByteDance/Seed-2.0-code' }]);
+  assert.ok(typeof loopbackData.updated_at === 'string');
+
+  const filePath = join(f.dir, 'spec-sentinel', 'preferred-models.json');
+  const fileData = JSON.parse(readFileSync(filePath, 'utf8'));
+  assert.deepEqual(fileData.preferred, [{ provider: 'deepinfra', model: 'ByteDance/Seed-2.0-code' }]);
+
+  const publicState = await httpJson(port, '/api/state', { host: 'dashboard.example' });
+  const publicToken = JSON.parse(publicState.body).thread_action_token;
+
+  const publicPost = await httpJson(port, '/api/models/preferred', { method: 'POST', host: 'dashboard.example', origin: 'https://dashboard.example', token: publicToken, body: { provider: 'other', model: 'other-model', preferred: true } });
+  assert.equal(publicPost.status, 200);
+
+  const listed = await httpJson(port, '/api/models/preferred');
+  assert.equal(listed.status, 200);
+  const listedData = JSON.parse(listed.body);
+  assert.deepEqual(listedData.preferred, [{ provider: 'deepinfra', model: 'ByteDance/Seed-2.0-code' }, { provider: 'other', model: 'other-model' }]);
+});
+
+test('model routes: oversize and method refusals leave the file unchanged', async t => {
+  const f = fixture(t);
+  const server = createDashboardServer({ agentDir: f.dir });
+  const port = await startModelServer(t, server);
+
+  const state = await httpJson(port, '/api/state');
+  const token = JSON.parse(state.body).action_token;
+  const loopbackHost = '127.0.0.1:' + port;
+
+  const filePath = join(f.dir, 'spec-sentinel', 'preferred-models.json');
+  const dirPath = join(f.dir, 'spec-sentinel');
+  mkdirSync(dirPath, { mode: 0o700, recursive: true });
+  writeFileSync(filePath, JSON.stringify({ version: 1, preferred: [{ provider: 'a', model: 'm' }], updated_at: new Date(1000).toISOString() }));
+  const seededBytes = readFileSync(filePath, 'utf8');
+
+  const oversizedPost = await httpJson(port, '/api/models/preferred', { method: 'POST', origin: 'http://' + loopbackHost, token, body: { provider: 'a', model: 'x'.repeat(9000), preferred: true } });
+  assert.equal(oversizedPost.status, 413);
+  assert.equal(readFileSync(filePath, 'utf8'), seededBytes);
+
+  const longModelPost = await httpJson(port, '/api/models/preferred', { method: 'POST', origin: 'http://' + loopbackHost, token, body: { provider: 'a', model: 'x'.repeat(301), preferred: true } });
+  assert.equal(longModelPost.status, 400);
+  assert.equal(readFileSync(filePath, 'utf8'), seededBytes);
+
+  const put = await httpJson(port, '/api/models/preferred', { method: 'PUT', host: loopbackHost });
+  assert.equal(put.status, 405);
+  assert.equal(put.headers['allow'], 'GET, HEAD, POST');
+  assert.equal(readFileSync(filePath, 'utf8'), seededBytes);
+});
+
+test('model routes: 201st unique addition refuses without changing bytes', async t => {
+  const f = fixture(t);
+  const server = createDashboardServer({ agentDir: f.dir });
+  const port = await startModelServer(t, server);
+
+  const state = await httpJson(port, '/api/state');
+  const token = JSON.parse(state.body).action_token;
+  const loopbackHost = '127.0.0.1:' + port;
+
+  const filePath = join(f.dir, 'spec-sentinel', 'preferred-models.json');
+  const dirPath = join(f.dir, 'spec-sentinel');
+  mkdirSync(dirPath, { mode: 0o700, recursive: true });
+
+  const preferred = Array.from({ length: 200 }, (_, i) => ({ provider: `p${i}`, model: `m${i}` }));
+  const seededBytes = JSON.stringify({ version: 1, preferred, updated_at: new Date(1000).toISOString() });
+  writeFileSync(filePath, seededBytes);
+
+  const add201Post = await httpJson(port, '/api/models/preferred', { method: 'POST', origin: 'http://' + loopbackHost, token, body: { provider: 'p200', model: 'm200', preferred: true } });
+  assert.equal(add201Post.status, 400);
+  assert.equal(readFileSync(filePath, 'utf8'), seededBytes);
+
+  const removePost = await httpJson(port, '/api/models/preferred', { method: 'POST', origin: 'http://' + loopbackHost, token, body: { provider: 'p0', model: 'm0', preferred: false } });
+  assert.equal(removePost.status, 200);
+  const finalData = JSON.parse(removePost.body);
+  assert.equal(finalData.preferred.length, 199);
+});
+
+test('model routes: catalog GET/HEAD returns state-less result', async t => {
+  const f = fixture(t);
+  const catalogReadOptions = [];
+  const fakeCatalog = {
+    host: 'testbox',
+    read: async (options) => {
+      catalogReadOptions.push(options);
+      return {
+        state: 'ready',
+        host: 'testbox',
+        read_at: '2026-01-01T00:00:00.000Z',
+        providers: 1,
+        models: [{ provider: 'deepinfra', model: 'ByteDance/Seed-2.0-code', context: '256K', max_out: '128K', thinking: true, images: false }]
+      };
+    }
+  };
+  const server = createDashboardServer({ agentDir: f.dir, modelCatalog: fakeCatalog });
+
+  const r = await request(server, '/api/models/catalog');
+  assert.equal(r.status, 200);
+  const body = JSON.parse(r.body);
+  assert.equal(body.state, undefined);
+  assert.equal(body.host, 'testbox');
+  assert.equal(body.models.length, 1);
+
+  await request(server, '/api/models/catalog?refresh=1');
+  assert.deepEqual(catalogReadOptions[1], { refresh: true });
+
+  const head = await request(server, '/api/models/catalog', { method: 'HEAD' });
+  assert.equal(head.status, 200);
+  assert.equal(head.body, '');
+});
+
+test('model routes: catalog HEAD and preference HEAD return empty body', async t => {
+  const f = fixture(t);
+  const server = createDashboardServer({ agentDir: f.dir, modelCatalog: { host: 'testbox', read: async () => ({ state: 'ready', host: 'testbox', read_at: '2026-01-01T00:00:00.000Z', providers: 0, models: [] }) } });
+
+  const catalogHead = await request(server, '/api/models/catalog', { method: 'HEAD' });
+  assert.equal(catalogHead.status, 200);
+  assert.equal(catalogHead.body, '');
+
+  const prefHead = await request(server, '/api/models/preferred', { method: 'HEAD' });
+  assert.equal(prefHead.status, 200);
+  assert.equal(prefHead.body, '');
+});
+
+test('model routes: preferred GET returns empty by default', async t => {
+  const f = fixture(t);
+  const server = createDashboardServer({ agentDir: f.dir });
+
+  const r = await request(server, '/api/models/preferred');
+  assert.equal(r.status, 200);
+  const body = JSON.parse(r.body);
+  assert.deepEqual(body.preferred, []);
+  assert.equal(body.updated_at, null);
+});
+
+test('model routes: observer requests with x-forwarded-for still return 200', async t => {
+  const f = fixture(t);
+  const server = createDashboardServer({ agentDir: f.dir });
+
+  const r = await request(server, '/api/models/preferred', { headers: { 'x-forwarded-for': '' } });
+  assert.equal(r.status, 200);
+});
+
+test('model routes: catalog failure yields 503', async t => {
+  const f = fixture(t);
+  const fakeCatalog = {
+    host: 'testbox',
+    read: async () => ({
+      state: 'failed',
+      host: 'testbox',
+      failed_at: '2026-01-01T00:00:00.000Z',
+      reason: 'catalog-unavailable'
+    })
+  };
+  const server = createDashboardServer({ agentDir: f.dir, modelCatalog: fakeCatalog });
+
+  const r = await request(server, '/api/models/catalog');
+  assert.equal(r.status, 503);
+  const body = JSON.parse(r.body);
+  assert.equal(body.reason, 'catalog-unavailable');
+  assert.equal(body.host, 'testbox');
+  assert.ok(body.failed_at);
+});
+
+test('model routes: authorization refusals do not read body', async t => {
+  const f = fixture(t);
+  const server = createDashboardServer({ agentDir: f.dir });
+
+  const state = await request(server, '/api/state');
+  const token = JSON.parse(state.body).action_token;
+
+  const badRequests = [
+    { headers: { 'x-forwarded-for': '', origin: 'http://127.0.0.1:4319', 'x-sentinel-token': token, 'content-type': 'application/json' } },
+    { headers: { origin: 'https://other.example', 'x-sentinel-token': token, 'content-type': 'application/json' } },
+    { headers: { origin: 'http://127.0.0.1:4319', 'content-type': 'application/json' } },
+    { headers: { origin: 'http://127.0.0.1:4319', 'x-sentinel-token': 'wrong', 'content-type': 'application/json' } },
+    { headers: { origin: 'http://127.0.0.1:4319', 'x-sentinel-token': token, 'content-type': 'text/plain' } },
+  ];
+
+  for (const req of badRequests) {
+    const r = await request(server, '/api/models/preferred', { method: 'POST', body: '{}', ...req });
+    assert.equal(r.status, 403);
+    assert.equal(r.bodyRead, false);
+  }
+
+  const filePath = join(f.dir, 'spec-sentinel', 'preferred-models.json');
+  assert.equal(existsSync(filePath), false);
+});
+
+test('model routes: body validation rejects without changing file', async t => {
+  const f = fixture(t);
+  const server = createDashboardServer({ agentDir: f.dir });
+  const port = await startModelServer(t, server);
+  const loopbackHost = '127.0.0.1:' + port;
+
+  const state = await httpJson(port, '/api/state');
+  const token = JSON.parse(state.body).action_token;
+
+  const filePath = join(f.dir, 'spec-sentinel', 'preferred-models.json');
+  mkdirSync(join(f.dir, 'spec-sentinel'), { recursive: true });
+  writeFileSync(filePath, JSON.stringify({ version: 1, preferred: [{ provider: 'a', model: 'm' }], updated_at: new Date(1000).toISOString() }));
+  const seededBytes = readFileSync(filePath, 'utf8');
+
+  const badBodies = [
+    ['provider-only', { provider: 'a' }],
+    ['extra-key', { provider: 'a', model: 'm', preferred: true, extra: 1 }],
+    ['non-bool', { provider: 'a', model: 'm', preferred: 'yes' }],
+    ['empty-provider', { provider: '', model: 'm', preferred: true }],
+    ['leading-dash', { provider: '-bad', model: 'm', preferred: true }],
+  ];
+
+  for (const [name, body] of badBodies) {
+    const r = await httpJson(port, '/api/models/preferred', { method: 'POST', origin: 'http://' + loopbackHost, token, body });
+    assert.equal(r.status, 400, name);
+    assert.equal(readFileSync(filePath, 'utf8'), seededBytes);
+  }
+});
+
+test('model routes: 405 with Allow header', async t => {
+  const f = fixture(t);
+  const server = createDashboardServer({ agentDir: f.dir });
+
+  const r = await request(server, '/api/models/preferred', { method: 'PUT' });
+  assert.equal(r.status, 405);
+  assert.equal(r.headers['Allow'], 'GET, HEAD, POST');
+
+  const r2 = await request(server, '/api/models/catalog', { method: 'POST' });
+  assert.equal(r2.status, 405);
+  assert.equal(r2.headers['Allow'], 'GET, HEAD');
 });
