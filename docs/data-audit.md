@@ -124,7 +124,7 @@ These are ordered by consequence. Each one cites the section that has the eviden
 5. **Some stored state contradicts the state derived from it.**
    - Stored `epic.state` disagrees with member status derived from package files. `adj7` (not undertaken) will stay `prepared` because no "dropped" status exists (§2, §4).
    - `spec-prepare.md` and the subspec verdicts in `adj1` and `adj3` still say `blocked` after merge (§1).
-   - `sentinel-merge.json` is written only in shadow or recover mode, so it goes stale under the observe-only host (§4).
+   - `sentinel-merge.json` is written in shadow or recover mode and by the headless host (`sentinel-host.mjs`), whose reader is replaced after a failed scan and would otherwise lose its in-memory merge evidence (§4).
    - Two Phoenix-era threads are still marked `active` (§3).
 6. **References dangle, and the Sentinel is near its limits.**
    - 46 of 114 package paths and 49 of 823 run-index manifests in `~/.pi/agent/spec-runtime/` point at missing targets (§5).

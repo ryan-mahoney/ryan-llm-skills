@@ -73,7 +73,9 @@ export async function validateMergeCache(record, input, readBranch = readMergeBr
   const branch = input.pr.branch ?? record.branch;
   if (!validRef(branch)) return false;
   const local = await readBranch(input.primary, branch);
-  if (local.state === 'unknown' || local.state === 'present' && local.head !== record.head) return false;
+  // `tip` is the local branch head observed at confirmation; it may sit behind
+  // the PR head when later commits were pushed from another machine.
+  if (local.state === 'unknown' || local.state === 'present' && local.head !== record.head && local.head !== record.tip) return false;
   if (record.evidence_source !== 'local-git') return true;
   if (!validRef(record.base) || input.pr.base != null && input.pr.base !== record.base) return false;
   const tracked = await readGitRef(input.primary, 'refs/remotes/origin/' + record.base);
@@ -91,6 +93,12 @@ function apiFailure(error) {
   if (/authenticate|authentication|not.logged|gh.auth|HTTP\s*401|bad.credentials/i.test(text)) return 'api-authentication-unavailable';
   if (/connecting|connection|ENET|ECONN|EAI_AGAIN|ENOTFOUND|TLS|SSL/i.test(text)) return 'api-network-unavailable';
   return 'api-request-failed';
+}
+// A local branch that stopped short of the merged head (later commits were
+// pushed from elsewhere) is still merged when the merge commit contains it.
+// Any failure, including an exhausted local budget, is treated as not contained.
+async function containedInMerge(run, cwd, commit, mergeCommit) {
+  try { await run(cwd, ['merge-base', '--is-ancestor', commit, mergeCommit]); return true; } catch { return false; }
 }
 async function localMergeEvidence(input, prior, { run, readBranch, now }) {
   const fail = reason => ({ state: 'unknown', reason });
@@ -127,12 +135,13 @@ async function localMergeEvidence(input, prior, { run, readBranch, now }) {
     }
     if (matches.length !== 1) return fail(matches.length ? 'local-pr-merge-ambiguous' : 'local-pr-merge-not-found');
     const match = matches[0], branch = await readBranch(input.primary, match.branch);
-    if (branch.state !== 'present' || branch.head !== match.head) return fail('local-head-mismatch');
+    if (branch.state !== 'present') return fail('local-head-mismatch');
+    if (branch.head !== match.head && !await containedInMerge(run, input.primary, branch.head, match.commit)) return fail('local-head-mismatch');
     if (!Number.isFinite(Date.parse(match.time)) || Date.parse(match.time) > now()) return fail('local-merge-time-unavailable');
     const currentBase = await readGitRef(input.primary, 'refs/remotes/origin/' + base);
     if (currentBase.head !== tracked.head) return fail('local-tracked-base-changed');
     const record = { schema_version: 1, package_ref: input.ref, target: input.target, binding: mergeBinding(input), url: input.pr.url,
-      branch: match.branch, base, tip: match.head, head: match.head, base_tip: tracked.head,
+      branch: match.branch, base, tip: branch.head, head: match.head, base_tip: tracked.head,
       checked_at: new Date(now()).toISOString(), state: 'merged', reason: 'local-pr-merge',
       merge_commit: match.commit, merged_at: match.time, evidence_source: 'local-git' };
     return applicableMerge(record, input) ? record : fail('newer-dispatch-or-checkpoint');
@@ -201,10 +210,12 @@ export function createMergeReconciler({ persist = false, now = Date.now, monoton
       record = { ...record, branch, base: pr.baseRefName, tip: local.head ?? null,
         state: pr.state === 'MERGED' ? 'unknown' : 'unmerged', reason: pr.state === 'MERGED' ? 'head-mismatch' : 'pr-not-merged' };
       if (pr.state !== 'MERGED') record.authoritative_unmerged_at = record.checked_at;
+      const validCommits = /^[a-f0-9]{40,64}$/.test(pr.headRefOid ?? '') && /^[a-f0-9]{40,64}$/.test(pr.mergeCommit?.oid ?? '');
+      const behindMergedHead = pr.state === 'MERGED' && validCommits && local.state === 'present' && local.head !== pr.headRefOid
+        && await containedInMerge(runLocal, input.primary, local.head, pr.mergeCommit.oid);
       if (local.state === 'unknown') record.reason = 'branch-tip-unavailable';
-      else if (pr.state === 'MERGED' && (local.state === 'missing' || local.head === pr.headRefOid)
-        && /^[a-f0-9]{40,64}$/.test(pr.headRefOid ?? '') && Number.isFinite(Date.parse(pr.mergedAt))
-        && /^[a-f0-9]{40,64}$/.test(pr.mergeCommit?.oid ?? '')) {
+      else if (pr.state === 'MERGED' && (local.state === 'missing' || local.head === pr.headRefOid || behindMergedHead)
+        && validCommits && Number.isFinite(Date.parse(pr.mergedAt))) {
         record = { ...record, state: 'merged', reason: 'authoritative-pr', head: pr.headRefOid,
           local_branch_absent: local.state === 'missing', authoritative_unmerged_at: null, merge_commit: pr.mergeCommit.oid, merged_at: pr.mergedAt };
         if (!applicableMerge(record, input)) record = { ...record, state: 'unknown', reason: 'newer-dispatch-or-checkpoint' };
