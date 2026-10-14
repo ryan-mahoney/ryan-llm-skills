@@ -1,6 +1,6 @@
 import { createEffect, createSignal, For, Show } from 'solid-js';
 import type { ModelChoice } from './models-state';
-import { pickerOptions, catalog, loadPreferences, loadCatalog, preferred, availabilityOf } from './models-state';
+import { pickerOptions, catalog, loadPreferences, loadCatalog, preferred, availabilityMessage } from './models-state';
 
 type Props = {
   id: string;
@@ -179,14 +179,9 @@ export default function ModelPicker(props: Props) {
 
   const catalogView = () => catalog();
 
-  // availabilityOf is the shared availability owner used by the Models page;
-  // reusing it keeps picker reasons and the inline error consistent with it.
-  const selectedAvailability = () => props.value ? availabilityOf(props.value, catalog()) : 'available';
-
-  const showFieldError = () => {
-    if (!props.value || selectedAvailability() === 'available') return false;
-    return true;
-  };
+  // availabilityMessage is the shared availability-copy owner used by the
+  // Models page and the launch review; one condition renders one sentence.
+  const fieldErrorMessage = () => props.value ? availabilityMessage(props.value, catalog()) : null;
 
   const errorHost = () => catalogView().host ?? 'catalog';
 
@@ -290,15 +285,11 @@ export default function ModelPicker(props: Props) {
         </div>
       </Show>
 
-      <Show when={showFieldError()}>
+      <Show when={fieldErrorMessage()}>{message => (
         <div class="field-error" role="alert">
-          <Show when={selectedAvailability() === 'missing'} fallback={
-            <span>Availability of {selected()!.model} is unknown; the catalog has not been read. Choose Pi default or refresh the Models page.</span>
-          }>
-            <span>{selected()!.model} is not in the {errorHost()} catalog. Choose another model or manage preferred models.</span>
-          </Show>
+          <span>{message()}</span>
         </div>
-      </Show>
+      )}</Show>
     </div>
   );
 }

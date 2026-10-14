@@ -19,7 +19,7 @@ import {
   type HandoffInput, type HandoffKind, type PackagePlanningPlan, type PlannedTarget,
 } from './launch-handoff';
 import ModelPicker from './ModelPicker';
-import { availabilityOf, catalog, formatModelChoice, type ModelChoice } from './models-state';
+import { availabilityMessage, catalog, formatModelChoice, type ModelChoice } from './models-state';
 import { observedSpecReadiness } from './readiness';
 import { packagePlanningPlan } from '../../../workspaces/spec-prompt.mjs';
 import type { BriefReference } from './composerTypes';
@@ -570,23 +570,22 @@ export default function Launch(props: LaunchProps) {
 
   const modelRefusalMessage = () => {
     const m = draft()?.model;
-    if (!m) return null;
-    const state = availabilityOf(m, catalog());
-    if (state === 'missing') {
-      return `${m.model} is not in the ${catalog().host ?? 'catalog'} catalog. Choose another model or manage preferred models.`;
-    }
-    if (state === 'unknown') {
-      return `Availability of ${m.model} is unknown; the catalog has not been read. Choose Pi default or refresh the Models page.`;
-    }
-    return null;
+    return m ? availabilityMessage(m, catalog()) : null;
   };
+
+  // The review surface renders one model alert for every view that offers a
+  // guarded Save/Review/Launch action and no longer mounts the brief picker,
+  // so guardModel always has a focusable surface to reject the action on.
+  const reviewModelErrorVisible = () => Boolean(modelRefusalMessage()) && !showBrief()
+    && ['current', 'stale', 'denied', 'error', 'saved', 'unsaved'].includes(reviewView());
 
   const guardModel = () => {
     const message = modelRefusalMessage();
     if (message) {
       const picker = document.getElementById('launch-model');
       if (picker) picker.focus();
-      else reviewModelErrorRegion?.focus();
+      else if (reviewModelErrorRegion) reviewModelErrorRegion.focus();
+      else setAnnouncer(message);
       return false;
     }
     return true;
@@ -757,9 +756,6 @@ export default function Launch(props: LaunchProps) {
                       <StateNotice tone="success" title="Brief saved" announce={false}>
                         The brief is held for review. Saving does not start an agent or send a thread message.
                       </StateNotice>
-                      <Show when={modelRefusalMessage()}>
-                        <p id="launch-model-review-error" class="field-error" role="alert" tabindex="-1" ref={reviewModelErrorRegion}>{modelRefusalMessage()}</p>
-                      </Show>
                       <dl class="launch-facts" aria-label="Saved brief facts">
                         <div><dt>Title</dt><dd>{value.title}</dd></div>
                         <div><dt>Runs in</dt><dd>{requestedTargetLabel()}</dd></div>
@@ -822,9 +818,6 @@ export default function Launch(props: LaunchProps) {
                       <button id="launch-assignment-review" class="ds-btn" type="button" disabled={!canReview()} onClick={review}>Review assignment</button>
                       <button id="launch-assignment-edit" class="ds-btn" type="button" onClick={editAssignment}>{editLabel()}</button>
                     </ActionBar>
-                    <Show when={modelRefusalMessage()}>
-                      <p id="launch-model-review-error" class="field-error" role="alert" tabindex="-1" ref={reviewModelErrorRegion}>{modelRefusalMessage()}</p>
-                    </Show>
                     <p class="contract-note">{bound()
                       ? packageKind() === 'plan'
                         ? 'Starting planning runs one package-bound planning assignment and stops before implementation. No branch push or pull request is authorized.'
@@ -834,9 +827,6 @@ export default function Launch(props: LaunchProps) {
                   <Match when={reviewView() === 'stale'}>
                     <div id="launch-review-error" class="launch-review-error" tabindex="-1" ref={reviewErrorRegion}>
                       <StateNotice tone="warning" title="The reviewed contract changed" announce={false}>
-                        <Show when={modelRefusalMessage()}>
-                          <p id="launch-model-review-error" class="field-error" role="alert" tabindex="-1" ref={reviewModelErrorRegion}>{modelRefusalMessage()}</p>
-                        </Show>
                         The target, saved brief or model differs from this review. Review again to obtain a current contract; the previous digest does not authorize a launch.
                       </StateNotice>
                     </div>
@@ -984,6 +974,9 @@ export default function Launch(props: LaunchProps) {
                     </ActionBar>
                   </Match>
                 </Switch>
+                <Show when={reviewModelErrorVisible()}>
+                  <p id="launch-model-review-error" class="field-error" role="alert" tabindex="-1" ref={reviewModelErrorRegion}>{modelRefusalMessage()}</p>
+                </Show>
               </section>
             </Show>
           </Show>

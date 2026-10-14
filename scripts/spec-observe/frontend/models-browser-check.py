@@ -1062,6 +1062,33 @@ def run_assignment(url, page):
         cap_assignment(page, 'review')
         passed('form and reviewed pair')
 
+        # 1b. AVAILABILITY LOSS AFTER REVIEW BLOCKS LAUNCH
+        # A current review exists for glm-5.3. Drop that pair from the catalog,
+        # re-read the catalog through the brief form's picker, then return to
+        # the review surface where the picker is absent and attempt the guarded
+        # launch: the front-end availability guard must refuse and send no
+        # dispatch.
+        control('models-catalog-drop', 'zai|glm-5.3')
+        page.locator('#launch-assignment-edit').click()
+        page.wait_for_selector('#launch-model')
+        page.locator('#launch-model').click()
+        page.wait_for_selector('#launch-model-list')
+        expect(page.locator('.mfield .field-error')).to_contain_text('not in the fixture-host catalog')
+        page.keyboard.press('Escape')
+        page.wait_for_selector('#launch-model-list', state='hidden', timeout=1000)
+        page.goto(url + '/#/agents?ws=fixture', wait_until='domcontentloaded')
+        review_route(page)
+        launch_error = page.locator('#launch-model-review-error')
+        launch_error.wait_for(state='visible')
+        expect(launch_error).to_contain_text('not in the fixture-host catalog')
+        before_launch = len(posts_of('dispatchLaunch'))
+        page.locator('#launch-assignment-launch').click()
+        expect(launch_error).to_be_focused()
+        assert len(posts_of('dispatchLaunch')) == before_launch, 'unavailable reviewed pair reached dispatchLaunch'
+        cap_assignment(page, 'unavailable-after-review')
+        control('models-catalog-drop', '')
+        passed('availability loss after review blocks launch')
+
         # 2. MODEL EDIT EXPIRES APPROVAL
         page.locator('#launch-assignment-edit').click()
         page.wait_for_selector('#launch-model')

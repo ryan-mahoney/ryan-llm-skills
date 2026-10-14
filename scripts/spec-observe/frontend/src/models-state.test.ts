@@ -10,6 +10,7 @@ import {
   emptyCatalogView,
   catalogFromReply,
   availabilityOf,
+  availabilityMessage,
   pickerOptions,
   catalogProjection,
   createModelsStore,
@@ -105,6 +106,30 @@ test('availability: ready+present=available, ready+absent=missing, loading/faile
   assert.equal(opts[0].label, 'Pi default');
   assert.equal(opts[0].availability, 'available');
   assert.equal(opts[0].disabled, false);
+});
+
+// Card (b): one shared availability sentence for the picker and the review alert
+test('availabilityMessage: missing and unknown share one sentence; available is null', () => {
+  const readyCatalog: CatalogView = {
+    status: 'ready',
+    host: 'test.example.com',
+    read_at: '2024-01-15T10:00:00Z',
+    failed_at: null,
+    stale: false,
+    refreshing: false,
+    error: null,
+    models: [{ provider: 'P1', model: 'M1', context: '128K', max_out: '4096', thinking: true, images: true }]
+  };
+  assert.equal(availabilityMessage({ provider: 'P1', model: 'M1' }, readyCatalog), null);
+  assert.equal(
+    availabilityMessage({ provider: 'P2', model: 'M1' }, readyCatalog),
+    'M1 is not in the test.example.com catalog. Choose another model or manage preferred models.'
+  );
+  const loadingCatalog: CatalogView = { ...readyCatalog, status: 'loading', host: null, models: [] };
+  assert.equal(
+    availabilityMessage({ provider: 'P1', model: 'M1' }, loadingCatalog),
+    'Availability of M1 is unknown; the catalog has not been read. Choose Pi default or refresh the Models page.'
+  );
 });
 
 // Card (c): filtering with projection contract assertions

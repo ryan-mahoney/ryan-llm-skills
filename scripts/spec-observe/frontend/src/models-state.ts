@@ -117,6 +117,20 @@ export function availabilityOf(choice: ModelChoice, catalog: CatalogView): Avail
   return found ? 'available' : 'missing';
 }
 
+// Single owner for the user-facing availability explanation, shared by the
+// picker's inline error and the launch review's model alert so one condition
+// cannot render two different sentences. Null means the pair is usable.
+export function availabilityMessage(choice: ModelChoice, catalog: CatalogView): string | null {
+  const state = availabilityOf(choice, catalog);
+  if (state === 'missing') {
+    return `${choice.model} is not in the ${catalog.host ?? 'catalog'} catalog. Choose another model or manage preferred models.`;
+  }
+  if (state === 'unknown') {
+    return `Availability of ${choice.model} is unknown; the catalog has not been read. Choose Pi default or refresh the Models page.`;
+  }
+  return null;
+}
+
 export function pickerOptions(params: { preferred: ModelChoice[]; catalog: CatalogView; selected: ModelChoice | null }): PickerOption[] {
   const { preferred, catalog, selected } = params;
   const options: PickerOption[] = [];
