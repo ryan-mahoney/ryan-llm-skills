@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, statSync, symlinkSync, rmSync } from 'node:fs';
 import { realpath } from 'node:fs/promises';
+import fsPromises from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { authorizePackage, listPackageFiles, readPackageFile } from './package-files.mjs';
@@ -61,4 +63,34 @@ test('workspace exclusions omit private components from listings, reads and late
  assert.equal([...first.files,...second.files].filter(f=>visible.has(f.name)).length,521);
  // Refusals survive when exclusions are requested.
  await assert.rejects(readPackageFile(root,'../traversal',{exclude}));await assert.rejects(readPackageFile(root,'link',{exclude}));
+});
+
+test('readPackageFile honors a smaller caller cap without changing default reads',async t=>{
+ const dir=await realpath(mkdtempSync(join(tmpdir(),'package-cap-')));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+ writeFileSync(join(dir,'exact.txt'),'a'.repeat(64));writeFileSync(join(dir,'over.txt'),'b'.repeat(65));
+ // The caller cap refuses a file above it; a file exactly at the cap is bounded.
+ await assert.rejects(readPackageFile(dir,'over.txt',{maxBytes:64}),/not a bounded regular file/);
+ await assert.rejects(readPackageFile(dir,'exact.txt',{maxBytes:63}),/not a bounded regular file/);
+ assert.equal((await readPackageFile(dir,'exact.txt',{maxBytes:64})).bytes.length,64);
+ assert.equal((await readPackageFile(dir,'over.txt',{maxBytes:65})).bytes.length,65);
+ // The unchanged default bound still reads the file refused by the smaller cap.
+ assert.equal((await readPackageFile(dir,'over.txt')).bytes.length,65);
+ // Caps must be positive safe integers no larger than the shared default.
+ for(const maxBytes of [0,-1,1.5,NaN,Infinity,'64',null,8*1024*1024+1])await assert.rejects(readPackageFile(dir,'exact.txt',{maxBytes}),/Invalid file size limit/);
+});
+
+test('a file that grows after fstat fails the shared cap+1 read boundary',async t=>{
+ const dir=await realpath(mkdtempSync(join(tmpdir(),'package-grow-')));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+ const path=join(dir,'grow.txt');writeFileSync(path,'g'.repeat(63));
+ // The real handle is wrapped so the fixture grows after the reader's fstat
+ // and before its cap+1 read; the actual bytes must still be refused.
+ const originalOpen=fsPromises.open;
+ fsPromises.open=async(file,...rest)=>{const handle=await originalOpen(file,...rest);return{
+  stat:async()=>{const info=await handle.stat();appendFileSync(file,'x');return info;},
+  read:(...args)=>handle.read(...args),close:()=>handle.close()};};
+ syncBuiltinESMExports();
+ try{
+  await assert.rejects(readPackageFile(dir,'grow.txt',{maxBytes:63}),/File changed or exceeds limit/);
+  assert.equal(statSync(path).size,64,'the fixture grew after fstat to cap+1 bytes');
+ }finally{fsPromises.open=originalOpen;syncBuiltinESMExports();}
 });

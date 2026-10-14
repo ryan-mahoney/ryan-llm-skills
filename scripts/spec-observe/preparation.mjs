@@ -24,6 +24,8 @@ const STAGES = new Set(['architecture', 'specification']);
 const DECISION_KEYS = ['stage', 'question', 'recommendation', 'recorded_at'];
 const DECISION_KEY_SET = new Set(DECISION_KEYS);
 const PROPOSAL_KEY_SET = new Set(['critique_recommended']);
+const VERDICT_KEY_SET = new Set(['verdict']);
+const VERDICTS = new Set(['COMPATIBLE', 'COMPATIBLE_WITH_CAVEATS', 'INCOMPATIBLE']);
 const OUTCOME_LINE = /^\s*(?:overall\s+)?outcome\s*:\s*(?:`([a-z][a-z-]*)`|([a-z][a-z-]*))(?=$|[\s.,;:!?])/i;
 const DATE_HINT = /\b(?:prepared|date|review)/i;
 const DATE_VALUE = /\b((?:19|20)\d\d-\d\d-\d\d)\b/;
@@ -126,6 +128,19 @@ export function parseProposalFrontMatter(text) {
   if (normalized === 'true') return true;
   if (normalized === 'false') return false;
   return null;
+}
+
+// The proposal's leading front matter also carries the compatibility verdict.
+// Only the three exact recognized spellings count; absent, unknown, malformed
+// or duplicated verdict metadata is unknown (null). The verdict is parsed with
+// its own recognized key set, so a duplicate or malformed
+// critique_recommended key never changes the verdict result (and vice versa).
+export function parseProposalVerdict(text) {
+  const fields = frontMatterFields(text, VERDICT_KEY_SET);
+  if (!fields || !fields.has('verdict')) return null;
+  const value = scalarValue(fields.get('verdict'));
+  if (typeof value !== 'string') return null;
+  return VERDICTS.has(value) ? value : null;
 }
 
 function readArtifact(readBounded, file, budget, within, memo) {

@@ -5,7 +5,7 @@ import { realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import {
-  PREPARATION_BYTES, parsePreparation, parseDecision, parseProposalFrontMatter,
+  PREPARATION_BYTES, parsePreparation, parseDecision, parseProposalFrontMatter, parseProposalVerdict,
   readPreparation, readDecision, readPlanningArtifacts,
 } from './preparation.mjs';
 // Run independently: node --test scripts/spec-observe/preparation.test.mjs
@@ -228,6 +228,37 @@ test('front matter rejects duplicate recognized keys instead of overwriting', ()
   assert.equal(parseDecision('---\nstage: architecture\nstage: specification\nquestion: "Q"\nrecommendation: ""\nrecorded_at: 2026-10-13T19:00:00.000Z\n---\n', 's'), null, 'duplicate stage is malformed');
   assert.equal(parseDecision('---\nstage: architecture\nquestion: "First"\nquestion: "Second"\nrecommendation: ""\nrecorded_at: 2026-10-13T19:00:00.000Z\n---\n', 's'), null, 'duplicate question is malformed');
   assert.equal(parseProposalFrontMatter('---\nnote: one\nnote: two\ncritique_recommended: true\n---\n'), true, 'duplicate unrecognized keys stay ignored');
+});
+
+test('proposal verdict reads only the three recognized compatibility spellings', () => {
+  assert.equal(parseProposalVerdict('---\nverdict: COMPATIBLE\ncritique_recommended: true\n---\n\n# Proposal\n'), 'COMPATIBLE');
+  assert.equal(parseProposalVerdict('---\nverdict: COMPATIBLE_WITH_CAVEATS\n---\n'), 'COMPATIBLE_WITH_CAVEATS');
+  assert.equal(parseProposalVerdict('---\nverdict: INCOMPATIBLE\n---\n'), 'INCOMPATIBLE');
+  assert.equal(parseProposalVerdict('---\nverdict: "COMPATIBLE"\n---\n'), 'COMPATIBLE', 'a quoted value is the same scalar');
+  assert.equal(parseProposalVerdict('---\nverdict: COMPATIBLE\nunknown_key: ignored\n---\n'), 'COMPATIBLE');
+});
+
+test('proposal verdict is unknown when absent, unrecognized or malformed', () => {
+  for (const text of [
+    '# Proposal\n---\nverdict: COMPATIBLE\n---\n',
+    '---\ncritique_recommended: true\n---\n',
+    '---\nverdict:\n---\n',
+    '---\nverdict: compatible\n---\n',
+    '---\nverdict: PARTIAL\n---\n',
+    '---\nverdict: "COMPATIBLE\n---\n',
+    '---\nverdict: COMPATIBLE\n',
+    '---\nverdict: COMPATIBLE\nverdict: INCOMPATIBLE\n---\n',
+    '---\nverdict: COMPATIBLE\nverdict: COMPATIBLE\n---\n',
+  ]) assert.equal(parseProposalVerdict(text), null, text);
+  assert.equal(parseProposalVerdict(null), null);
+});
+
+test('verdict and critique recommendation parse independently', () => {
+  assert.equal(parseProposalVerdict('---\nverdict: COMPATIBLE\ncritique_recommended: true\ncritique_recommended: false\n---\n'), 'COMPATIBLE', 'a duplicated recommendation key is not the verdict parser’s concern');
+  assert.equal(parseProposalVerdict('---\nverdict: INCOMPATIBLE\ncritique_recommended: maybe\n---\n'), 'INCOMPATIBLE', 'an unrecognized recommendation does not hide the verdict');
+  assert.equal(parseProposalFrontMatter('---\nverdict: COMPATIBLE\nverdict: INCOMPATIBLE\ncritique_recommended: false\n---\n'), false, 'a duplicated verdict does not hide the recommendation');
+  assert.equal(parseProposalFrontMatter('---\ncritique_recommended: true\ncritique_recommended: false\nverdict: COMPATIBLE\n---\n'), null, 'the recommendation keeps refusing its own duplicate');
+  assert.equal(parseProposalFrontMatter('---\nverdict: COMPATIBLE\ncritique_recommended: true\n---\n'), true);
 });
 
 test('planning artifacts report presence and the proposal recommendation conservatively', async t => {

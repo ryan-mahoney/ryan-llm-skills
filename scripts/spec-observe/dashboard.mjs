@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 
 import { authorizePackage, listPackageFiles, readPackageFile } from './package-files.mjs';
 import { listWorkspaceDesigns } from './designs.mjs';
+import { scanNextSteps } from './next-steps.mjs';
 import { fetchWorkspace, listWorkspaces, resolveStorageRoot, storageStatus } from '../workspaces/store.mjs';
 import { createPreviewService } from '../dev-preview/service.mjs';
 import { createPackagePreviewRoutes } from './package-preview-routes.mjs';
@@ -254,6 +255,16 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
         response.end(request.method === 'HEAD' ? undefined : JSON.stringify(remote
           ? { ...cached.value, completion: 'local-only', ...(publicRequest ? { thread_action_token: actionToken } : {}) }
           : { ...cached.value, action_token: actionToken }));
+      } else if (path === '/api/next-steps') {
+        // The bounded scan runs for GET and HEAD alike; HEAD returns headers only.
+        const scan = await scanNextSteps(workspaceRoot);
+        if (scan.coverage.state === 'unavailable') {
+          response.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8' });
+          response.end(request.method === 'HEAD' ? undefined : JSON.stringify(scan));
+        } else {
+          response.setHeader('Content-Type', 'application/json; charset=utf-8');
+          response.end(request.method === 'HEAD' ? undefined : JSON.stringify(scan));
+        }
       } else if (path === '/api/package-files' || path === '/api/package-file' || path.startsWith('/package-view/')) {
         const state = await readDashboardState(agentDir);
         const view = path.startsWith('/package-view/') ? path.slice('/package-view/'.length).split('/') : null;

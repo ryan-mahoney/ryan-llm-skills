@@ -57,15 +57,16 @@ export async function listPackageFiles(root, cursor = 0, { exclude } = {}) {
   await walk(root, '', 0);
   return { files: files.sort((a,b) => a.name.localeCompare(b.name)), truncated:truncated||depthTruncated, next_cursor:truncated&&pageLimit<PACKAGE_FILE_LIMITS.totalEntries?pageLimit:null, errors, limits: PACKAGE_FILE_LIMITS };
 }
-export async function readPackageFile(root, name, { exclude } = {}) {
+export async function readPackageFile(root, name, { exclude, maxBytes = PACKAGE_FILE_LIMITS.bytes } = {}) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0 || maxBytes > PACKAGE_FILE_LIMITS.bytes) throw Error('Invalid file size limit');
   const path = await resolvePackageFilePath(root, name, { exclude });
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const info = await handle.stat();
-    if (!info.isFile() || info.size > PACKAGE_FILE_LIMITS.bytes) throw Error('File is not a bounded regular file');
-    const buffer = Buffer.alloc(PACKAGE_FILE_LIMITS.bytes + 1);
+    if (!info.isFile() || info.size > maxBytes) throw Error('File is not a bounded regular file');
+    const buffer = Buffer.alloc(maxBytes + 1);
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    if (bytesRead > PACKAGE_FILE_LIMITS.bytes || await realpath(path) !== path) throw Error('File changed or exceeds limit');
+    if (bytesRead > maxBytes || await realpath(path) !== path) throw Error('File changed or exceeds limit');
     const bytes = buffer.subarray(0, bytesRead), extension = extname(name).toLowerCase();
     const images = { '.svg':'image/svg+xml', '.png':'image/png', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.gif':'image/gif', '.webp':'image/webp', '.avif':'image/avif', '.ico':'image/x-icon' };
     const text = ['.md','.markdown','.json','.yaml','.yml','.txt','.log','.csv','.ts','.js','.mjs','.css','.toml','.xml','.svg','.sh','.html','.htm'].includes(extension) || !extension;
