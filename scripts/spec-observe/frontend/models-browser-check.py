@@ -22,22 +22,24 @@ import traceback
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlencode
 
 from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--case', choices=['models', 'picker'], default='models')
+parser.add_argument('--case', choices=['models', 'picker', 'assignment'], default='models')
 parser.add_argument('--reference-dir', default=None)
 options = parser.parse_args()
 case = options.case
 reference_dir = Path(options.reference_dir).resolve() if options.reference_dir else None
+planned_env = {'SENTINEL_PLANNED_LAUNCH': '1'} if case == 'assignment' else {}
 
 root = Path(__file__).resolve().parent
 checkout = root.parents[2]
 evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-models-evidence'))
 browser_evidence = evidence / 'browser'
 browser_evidence.mkdir(parents=True, exist_ok=True)
-receipt_path = evidence / 'step-006-models-result.json' if case == 'picker' else evidence / 'step-005-models-result.json'
+receipt_path = evidence / 'step-008-models-result.json' if case == 'assignment' else (evidence / 'step-006-models-result.json' if case == 'picker' else evidence / 'step-005-models-result.json')
 started = time.monotonic()
 
 report = {
@@ -767,11 +769,229 @@ def run_picker(url, page):
                 pass
 
 
+def run_assignment(url, page):
+    global reference_server
+
+    def control(action, value=''):
+        response = context.request.get(url + '/__fixture/control?action=' + action + '&value=' + value)
+        assert response.ok
+        return response.json()
+
+    def posts_of(name):
+        return [p for p in control('')['posts'] if p['name'] == name]
+
+    def brief(page):
+        page.goto(url + '/#/launch?' + urlencode({'ws': 'fixture', 'target': 'fixture-repo'}), wait_until='domcontentloaded')
+        page.wait_for_selector('#launch-model')
+
+    def review_route(page):
+        page.goto(url + '/#/launch?' + urlencode({'ws': 'fixture', 'tab': 'review', 'target': 'fixture-repo'}), wait_until='domcontentloaded')
+
+    def choose(page, model):
+        page.locator('#launch-model').click()
+        page.wait_for_selector('#launch-model-list')
+        page.locator('#launch-model-list [role="option"]').filter(has_text=model).first.click()
+        page.wait_for_timeout(200)
+
+    def model_fact(page):
+        return page.locator('#launch-review .launch-contract [data-fact=model] dd')
+
+    def cap_assignment(page, name):
+        for width in (1280, 1600):
+            page.set_viewport_size({'width': width, 'height': 900})
+            page.wait_for_timeout(200)
+            path = browser_evidence / f'assignment-{name}@{width}.png'
+            page.screenshot(path=str(path))
+            report['captures'].append(str(path))
+
+    def fill_and_save(page, title, content):
+        page.locator('#launch-brief-title').fill(title)
+        page.locator('#launch-brief-content').fill(content)
+        page.locator('#launch-save').click()
+
+    def passed(label):
+        report['scenarios'].append(label)
+
+    def capture_references():
+        reference_captures = []
+        if reference_dir:
+            reference_root = reference_dir
+            assert (reference_root / 'vendor' / 'tailwind.js').is_file()
+            global reference_server
+            reference_server = ThreadingHTTPServer(('127.0.0.1', 0), partial(QuietRequestHandler, directory=str(reference_root)))
+            port = reference_server.server_address[1]
+            reference_thread = threading.Thread(target=reference_server.serve_forever, daemon=True)
+            reference_thread.start()
+            files = ['13-assignment-model-picker.html', '15-model-picker-unavailable.html']
+            ref_page = context.new_page()
+            ref_page.on('pageerror', lambda e: report['pageErrors'].append(str(e)))
+            for f in files:
+                for width in (1280, 1600):
+                    ref_page.goto(f'http://127.0.0.1:{port}/screens/{f}')
+                    ref_page.wait_for_timeout(300)
+                    ref_page.set_viewport_size({'width': width, 'height': 900})
+                    ref_page.wait_for_timeout(150)
+                    path = browser_evidence / f'assignment-reference-{f.replace(".html", "")}@{width}.png'
+                    ref_page.screenshot(path=str(path))
+                    reference_captures.append(str(path))
+            ref_page.close()
+            reference_server.shutdown()
+        return reference_captures
+
+    try:
+        reference_captures = capture_references()
+
+        # 1. FORM + REVIEW PAIR
+        brief(page)
+        expect(page.locator('#launch-heading')).to_contain_text('Prepare assignment')
+        expect(page.locator('#launch-model')).to_contain_text('Pi default')
+        choose(page, 'glm-5.3')
+        expect(page.locator('#launch-model')).to_contain_text('glm-5.3')
+        expect(page.locator('#launch-model')).to_contain_text('zai')
+        expect(page.locator('#launch-form details p')).to_contain_text('glm-5.3 · zai')
+        cap_assignment(page, 'form')
+        fill_and_save(page, 'Model assignment', 'Verify the chosen model reaches the reviewed contract.')
+        page.locator('#launch-review .launch-contract').wait_for(state='visible')
+        expect(model_fact(page)).to_contain_text('glm-5.3 · zai')
+        last_preview = posts_of('dispatchPreview')[-1]['input']
+        assert last_preview.get('provider') == 'zai'
+        assert last_preview.get('model') == 'glm-5.3'
+        cap_assignment(page, 'review')
+        passed('form and reviewed pair')
+
+        # 2. MODEL EDIT EXPIRES APPROVAL
+        page.locator('#launch-assignment-edit').click()
+        page.wait_for_selector('#launch-model')
+        choose(page, 'claude-haiku-5-5')
+        page.goto(url + '/#/agents?ws=fixture', wait_until='domcontentloaded')
+        review_route(page)
+        page.locator('#launch-review-error').wait_for(state='visible')
+        expect(page.locator('#launch-review-error')).to_contain_text('model')
+        expect(page.locator('#launch-assignment-launch')).to_have_count(0)
+        assert len(posts_of('dispatchLaunch')) == 0
+        page.locator('#launch-assignment-review').click()
+        page.locator('#launch-review .launch-contract [data-fact=model] dd').wait_for(state='visible')
+        expect(model_fact(page)).to_contain_text('claude-haiku-5-5 · pi-claude-cli')
+        passed('model edit expires approval and re-review binds new pair')
+
+        # 3. UNAVAILABLE BEFORE SAVE
+        page.reload(wait_until='domcontentloaded')
+        brief(page)
+        choose(page, 'glm-5.3')
+        control('models-catalog-drop', 'zai|glm-5.3')
+        page.locator('#launch-model').click()
+        page.wait_for_selector('#launch-model-list')
+        page.keyboard.press('Escape')
+        before = len(posts_of('dispatchSaveBrief'))
+        page.locator('#launch-save').click()
+        page.locator('.mfield .field-error').wait_for(state='visible')
+        expect(page.locator('.mfield .field-error')).to_contain_text('not in the fixture-host catalog')
+        expect(page.locator('#launch-model')).to_be_focused()
+        assert len(posts_of('dispatchSaveBrief')) == before
+        cap_assignment(page, 'unavailable')
+        page.locator('#launch-model').click()
+        page.wait_for_selector('#launch-model-list')
+        page.locator('#launch-model-list [role="option"]').filter(has_text='Pi default').first.click()
+        expect(page.locator('.mfield .field-error')).to_have_count(0)
+        expect(page.locator('#launch-model')).to_contain_text('Pi default')
+        control('models-catalog-drop', '')
+        passed('unavailable selection blocks save and Pi default recovers')
+
+        # 4. REAL MATCHING LAUNCH
+        page.reload(wait_until='domcontentloaded')
+        brief(page)
+        choose(page, 'deepseek-v4-pro')
+        fill_and_save(page, 'Launch with model', 'Record the reviewed provider and model in the launch contract.')
+        expect(model_fact(page)).to_contain_text('deepseek-v4-pro · deepseek')
+        last_preview = posts_of('dispatchPreview')[-1]['input']
+        assert last_preview.get('provider') == 'deepseek'
+        assert last_preview.get('model') == 'deepseek-v4-pro'
+        before_launch = len(posts_of('dispatchLaunch'))
+        page.locator('#launch-assignment-launch').click()
+        page.locator('#launch-result-facts').wait_for(state='visible')
+        assert len(posts_of('dispatchLaunch')) == before_launch + 1
+        last_launch = posts_of('dispatchLaunch')[-1]
+        assert last_launch['input'].get('provider') == 'deepseek'
+        assert last_launch['input'].get('model') == 'deepseek-v4-pro'
+        entry = next((d for d in control('')['resolverDiagnostics'] if d.get('name') == 'dispatchLaunch'), None)
+        assert entry is not None
+        assert entry.get('matched') is True
+        cap_assignment(page, 'launched')
+        passed('real matching launch records the reviewed pair')
+
+        # 5. PACKAGE DEFAULT
+        page.goto(url + '/#/launch?' + urlencode({'ws': 'fixture', 'tab': 'brief', 'package': 'fixture/browser', 'skill': 'spec-end-to-end', 'target': 'fixture-repo'}), wait_until='domcontentloaded')
+        page.wait_for_selector('#launch-model')
+        expect(page.locator('#launch-model')).to_contain_text('Pi default')
+        fill_and_save(page, 'Implement fixture/browser', 'Bound package assignment for the model default check.')
+        page.locator('#launch-review .launch-contract--package').wait_for(state='visible')
+        expect(page.locator('#launch-review .launch-contract--package [data-fact=model] dd')).to_contain_text('Host default')
+        passed('package review keeps Host default')
+
+        report['visual'] = {
+            'route': '#/launch + #/launch-review',
+            'widths': [1280, 1600],
+            'productionCaptures': report['captures'],
+            'referenceCaptures': reference_captures,
+        }
+
+        if reference_dir:
+            assert len(reference_captures) == 4, f'expected 4 assignment reference captures, got {len(reference_captures)}'
+
+        visual_md = evidence / 'assignment-visual-inspection.md'
+        visual_md.write_text(
+            '# Assignment Visual Inspection\n\n'
+            '## Captures\n\n'
+            + '\n'.join(f'- {c}' for c in report['captures']) + '\n\n'
+            '## Reference Captures\n\n'
+            + '\n'.join(f'- {c}' for c in reference_captures) + '\n\n'
+            '## States Covered\n\n'
+            + '\n'.join(f'- {s}' for s in report['scenarios']) + '\n'
+        )
+
+        assert not report.get('failures'), report.get('failures')
+        assert not report['pageErrors']
+        report['status'] = 'passed'
+
+    except Exception as error:
+        report.setdefault('failures', []).append({
+            'scenario': 'runtime error',
+            'error': str(error),
+            'traceback': traceback.format_exc(),
+        })
+    finally:
+        if reference_server:
+            reference_server.shutdown()
+        if context:
+            context.close()
+        if browser:
+            browser.close()
+        if fixture:
+            try:
+                fixture.terminate()
+                for _ in range(10):
+                    if fixture.poll() is not None:
+                        break
+                    time.sleep(0.5)
+                if fixture.poll() is None:
+                    fixture.kill()
+            except:
+                pass
+        cleanup['fixtureTerminated'] = True
+        cleanup['browserClosed'] = True
+        if fixture_info.get('root'):
+            try:
+                shutil.rmtree(fixture_info['root'])
+                cleanup['temporaryFixtureRootRemoved'] = fixture_info['root']
+            except:
+                pass
+
+
 def main():
     global fixture, reference_server, browser, context, fixture_info
     fixture = subprocess.Popen(
         ['node', str(root / 'browser-fixture.mjs')],
-        env={**os.environ, 'SENTINEL_MODELS': '1'},
+        env={**os.environ, 'SENTINEL_MODELS': '1', **planned_env},
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True
@@ -806,7 +1026,7 @@ def main():
             page.on('pageerror', lambda e: report['pageErrors'].append(str(e)))
             page.on('console', lambda c: report['consoleErrors'].append(c.text) if c.type == 'error' else None)
             page.on('requestfailed', lambda r: report['requestFailures'].append(r.url))
-            run_picker(fixture_url, page) if case == 'picker' else run(fixture_url, page)
+            run_picker(fixture_url, page) if case == 'picker' else (run_assignment(fixture_url, page) if case == 'assignment' else run(fixture_url, page))
     finally:
         report['cleanup'] = cleanup
         write_receipt()

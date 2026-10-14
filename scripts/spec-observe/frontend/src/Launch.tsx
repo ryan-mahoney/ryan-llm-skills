@@ -9,7 +9,7 @@ import BriefComposer from './BriefComposer';
 import { ActionBar, RegionalSkeleton, StateNotice, StatusText } from './primitives';
 import { str } from './format';
 import {
-  beginCorrectedAttempt, changeLaunchTarget, editLaunchDraft, getLaunchDraft, launchReviewedDraft, resolveLaunchStage,
+  beginCorrectedAttempt, changeLaunchTarget, changeLaunchModel, editLaunchDraft, getLaunchDraft, launchReviewedDraft, resolveLaunchStage,
   reviewLaunchDraft, saveLaunchDraft, seedLaunchDraft, seedThreadDraft,
   type LaunchContext, type LaunchDraftError, type LaunchPreview,
 } from './launch-state';
@@ -18,6 +18,8 @@ import {
   plannedTargetChoices, publicationAuthorityForSkill, seedColdHandoff,
   type HandoffInput, type HandoffKind, type PackagePlanningPlan, type PlannedTarget,
 } from './launch-handoff';
+import ModelPicker from './ModelPicker';
+import { availabilityOf, catalog, formatModelChoice, type ModelChoice } from './models-state';
 import { observedSpecReadiness } from './readiness';
 import { packagePlanningPlan } from '../../../workspaces/spec-prompt.mjs';
 import type { BriefReference } from './composerTypes';
@@ -51,6 +53,12 @@ type ThreadTarget = { kind: 'repository' | 'worktree' | 'workspace'; label: stri
 // Read-only display of the target stored on the exact requested thread. A
 // worktree keeps its stored path and is never collapsed to an inferred
 // repository; only the stored record, never route.target, supplies the value.
+const reviewedModel = (record: WireRecord): ModelChoice | null => {
+  const provider = str(record.provider);
+  const model = str(record.model);
+  return provider && model ? { provider, model } : null;
+};
+
 function threadTargetOf(record: WireRecord | null | undefined): ThreadTarget | null {
   if (!record) return null;
   const target = record.target;
@@ -83,7 +91,7 @@ export function AssignmentContract(props: { preview: LaunchPreview }) {
     ...(record().execution_branch ? [{ key: 'branch', label: 'Branch', value: str(record().execution_branch) }] : []),
     { key: 'brief', label: 'Saved brief', value: str(record().brief) || 'Recorded' },
     { key: 'skill', label: 'Skill', value: str(record().skill) || 'General' },
-    { key: 'model', label: 'Model', value: str(record().model) || 'Pi default' },
+    { key: 'model', label: 'Model', value: formatModelChoice(reviewedModel(record()), 'Pi default') },
     { key: 'authority', label: 'Publication authority', value: authority() },
     { key: 'assignment', label: 'Assignment', value: str(record().assignment_id) },
     { key: 'digest', label: 'Contract digest', value: props.preview.contractDigest },
@@ -135,7 +143,7 @@ function PreviousReviewedFacts(props: { preview: LaunchPreview }) {
         <div data-fact="previous-execution"><dt>Execution directory</dt><dd class="mono">{str(record().execution_dir) || 'Unresolved'}</dd></div>
         <div data-fact="previous-brief"><dt>Reviewed brief</dt><dd class="mono">{str(record().brief) || 'Recorded'}</dd></div>
         <div data-fact="previous-skill"><dt>Skill</dt><dd>{str(record().skill) || 'General'}</dd></div>
-        <div data-fact="previous-model"><dt>Model</dt><dd>{str(record().model) || 'Pi default'}</dd></div>
+        <div data-fact="previous-model"><dt>Model</dt><dd>{formatModelChoice(reviewedModel(record()), 'Pi default')}</dd></div>
         <div data-fact="previous-authority"><dt>Publication authority</dt><dd>{authority()}</dd></div>
         <div data-fact="previous-assignment"><dt>Reviewed assignment</dt><dd class="mono">{str(record().assignment_id)}</dd></div>
         <div data-fact="previous-contract-digest"><dt>Reviewed digest</dt><dd class="mono">{props.preview.contractDigest}</dd></div>
@@ -151,6 +159,7 @@ export default function Launch(props: LaunchProps) {
   let titleInput: HTMLInputElement | undefined;
   let errorRegion: HTMLDivElement | undefined;
   let reviewErrorRegion: HTMLDivElement | undefined;
+  let reviewModelErrorRegion: HTMLDivElement | undefined;
   const [titleError, setTitleError] = createSignal('');
   const [announcer, setAnnouncer] = createSignal('');
   const [editing, setEditing] = createSignal(false);
@@ -559,7 +568,32 @@ export default function Launch(props: LaunchProps) {
     editLaunchDraft(context(), changes);
   }
 
+  const modelRefusalMessage = () => {
+    const m = draft()?.model;
+    if (!m) return null;
+    const state = availabilityOf(m, catalog());
+    if (state === 'missing') {
+      return `${m.model} is not in the ${catalog().host ?? 'catalog'} catalog. Choose another model or manage preferred models.`;
+    }
+    if (state === 'unknown') {
+      return `Availability of ${m.model} is unknown; the catalog has not been read. Choose Pi default or refresh the Models page.`;
+    }
+    return null;
+  };
+
+  const guardModel = () => {
+    const message = modelRefusalMessage();
+    if (message) {
+      const picker = document.getElementById('launch-model');
+      if (picker) picker.focus();
+      else reviewModelErrorRegion?.focus();
+      return false;
+    }
+    return true;
+  };
+
   function save() {
+    if (!guardModel()) return;
     if (locked()) return;
     if (savedCurrent()) {
       setAnnouncer('The brief is already saved. Review the saved facts before continuing.');
@@ -575,11 +609,13 @@ export default function Launch(props: LaunchProps) {
   }
 
   function review() {
+    if (!guardModel()) return;
     if (!canReview()) return;
     void reviewLaunchDraft(context(), props.token!).catch(() => undefined);
   }
 
   function launch() {
+    if (!guardModel()) return;
     if (!canLaunch()) return;
     void launchReviewedDraft(context(), props.token!).catch(() => undefined);
   }
@@ -688,6 +724,9 @@ export default function Launch(props: LaunchProps) {
                   </Show>
                 </div>
                 <div class="field">
+                  <ModelPicker id="launch-model" value={draft()?.model ?? null} onChange={choice => changeLaunchModel(context(), choice)} disabled={locked()} live={props.live} onManage={() => props.onNavigate?.({ dest: 'models' })} />
+                </div>
+                <div class="field">
                   <label for="launch-brief-title">Brief title</label>
                   <input id="launch-brief-title" class="ds-input" type="text" maxlength="200" required value={title()} disabled={locked()}
                     aria-describedby="launch-brief-title-help" aria-invalid={titleError() ? 'true' : undefined} ref={titleInput}
@@ -703,7 +742,7 @@ export default function Launch(props: LaunchProps) {
                 </div>
                 <details>
                   <summary>Execution defaults</summary>
-                  <p>General assignment · host model default · no publication authority. The resolved execution contract is reviewed before launch.</p>
+                  <p>General assignment · {formatModelChoice(draft()?.model ?? null, 'host model default')} · no publication authority. The resolved execution contract is reviewed before launch.</p>
                 </details>
                 <Show when={saveFailure()}>
                   <div id="launch-error" ref={errorRegion} tabindex="-1" role="alert">
@@ -718,6 +757,9 @@ export default function Launch(props: LaunchProps) {
                       <StateNotice tone="success" title="Brief saved" announce={false}>
                         The brief is held for review. Saving does not start an agent or send a thread message.
                       </StateNotice>
+                      <Show when={modelRefusalMessage()}>
+                        <p id="launch-model-review-error" class="field-error" role="alert" tabindex="-1" ref={reviewModelErrorRegion}>{modelRefusalMessage()}</p>
+                      </Show>
                       <dl class="launch-facts" aria-label="Saved brief facts">
                         <div><dt>Title</dt><dd>{value.title}</dd></div>
                         <div><dt>Runs in</dt><dd>{requestedTargetLabel()}</dd></div>
@@ -780,6 +822,9 @@ export default function Launch(props: LaunchProps) {
                       <button id="launch-assignment-review" class="ds-btn" type="button" disabled={!canReview()} onClick={review}>Review assignment</button>
                       <button id="launch-assignment-edit" class="ds-btn" type="button" onClick={editAssignment}>{editLabel()}</button>
                     </ActionBar>
+                    <Show when={modelRefusalMessage()}>
+                      <p id="launch-model-review-error" class="field-error" role="alert" tabindex="-1" ref={reviewModelErrorRegion}>{modelRefusalMessage()}</p>
+                    </Show>
                     <p class="contract-note">{bound()
                       ? packageKind() === 'plan'
                         ? 'Starting planning runs one package-bound planning assignment and stops before implementation. No branch push or pull request is authorized.'
@@ -789,7 +834,10 @@ export default function Launch(props: LaunchProps) {
                   <Match when={reviewView() === 'stale'}>
                     <div id="launch-review-error" class="launch-review-error" tabindex="-1" ref={reviewErrorRegion}>
                       <StateNotice tone="warning" title="The reviewed contract changed" announce={false}>
-                        The target or saved brief differs from this review. Review again to obtain a current contract; the previous digest does not authorize a launch.
+                        <Show when={modelRefusalMessage()}>
+                          <p id="launch-model-review-error" class="field-error" role="alert" tabindex="-1" ref={reviewModelErrorRegion}>{modelRefusalMessage()}</p>
+                        </Show>
+                        The target, saved brief or model differs from this review. Review again to obtain a current contract; the previous digest does not authorize a launch.
                       </StateNotice>
                     </div>
                     <RequestedFacts workspace={props.workspaceName || ws()} target={requestedTargetLabel()} brief={saved()?.brief || 'Recorded'} previousDigest={previousDigest() || undefined} />
