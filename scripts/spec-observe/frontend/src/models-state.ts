@@ -221,6 +221,7 @@ export function catalogProjection(params: { catalog: CatalogView; preferred: Mod
   preferred.forEach(p => {
     const key = pairKey(p);
     const found = catalog.models.find(m => pairKey(m) === key);
+    const availability = availabilityOf(p, catalog);
     if (found) {
       if (matchesRow(found)) {
         preferredRows.push({
@@ -229,11 +230,12 @@ export function catalogProjection(params: { catalog: CatalogView; preferred: Mod
           maxOut: found.max_out,
           thinking: found.thinking,
           images: found.images,
-          availability: 'available'
+          availability: availability
         });
       }
     } else {
-      // Not found in catalog
+      // Not found in a successful read: 'missing' when the catalog is ready,
+      // 'unknown' while it is pending or has no successful read
       const q = query.toLowerCase();
       const qMatches = !q || p.provider.toLowerCase().includes(q) || p.model.toLowerCase().includes(q);
       if (qMatches && !thinking && !images && !context1m) {
@@ -243,7 +245,7 @@ export function catalogProjection(params: { catalog: CatalogView; preferred: Mod
           maxOut: '',
           thinking: false,
           images: false,
-          availability: 'missing'
+          availability: availability
         });
       }
     }
@@ -252,6 +254,7 @@ export function catalogProjection(params: { catalog: CatalogView; preferred: Mod
   const sortedPreferred = sortModelChoices(preferredRows.map(r => r.choice))
     .map((choice): CatalogRow => {
       const found = catalog.models.find(m => pairKey(m) === pairKey(choice));
+      const availability = availabilityOf(choice, catalog);
       if (found) {
         return {
           choice,
@@ -259,7 +262,7 @@ export function catalogProjection(params: { catalog: CatalogView; preferred: Mod
           maxOut: found.max_out,
           thinking: found.thinking,
           images: found.images,
-          availability: 'available'
+          availability: availability
         };
       } else {
         return {
@@ -268,7 +271,7 @@ export function catalogProjection(params: { catalog: CatalogView; preferred: Mod
           maxOut: '',
           thinking: false,
           images: false,
-          availability: 'missing'
+          availability: availability
         };
       }
     });
@@ -310,7 +313,7 @@ export function createModelsStore(options?: { transport?: ModelsTransport; now?:
   let loadPrefsPromise: Promise<void> | null = null;
   let loadCatalogPromise: Promise<void> | null = null;
   let preferenceGen = 0;
-  let saveQueue: Array<{ choice: ModelChoice; preferred: boolean; token: string; resolve: (value: void) => void; reject: (reason: unknown) => void }> = [];
+  let saveQueue: Array<{ choice: ModelChoice; preferred: boolean; token: string; resolve: (value: void) => void }> = [];
   let saveProcessing = false;
 
   function processSaveQueue() {
@@ -427,14 +430,14 @@ export function createModelsStore(options?: { transport?: ModelsTransport; now?:
   }
 
   function setPreference(choice: ModelChoice, pref: boolean, token: string): Promise<void> {
-    return new Promise((resolve, reject) => {
+    return new Promise(resolve => {
       const key = pairKey(choice);
       setRowStates(prev => {
         const m = new Map(prev);
         m.set(key, { pending: true, outcome: null, requested: pref });
         return m;
       });
-      saveQueue.push({ choice, preferred: pref, token, resolve, reject });
+      saveQueue.push({ choice, preferred: pref, token, resolve });
       processSaveQueue();
     });
   }

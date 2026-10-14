@@ -261,3 +261,81 @@ test('formatModelChoice uses AD-7 middot; contextTokens parses K/M case-insensit
   assert.equal(contextTokens(''), null);
   assert.equal(contextTokens('M'), null);
 });
+
+// Card (b)/(c): the projection shares availabilityOf, so a non-ready catalog is unknown, never missing
+test('catalog projection: retained preferred rows are unknown while the catalog is loading or failed', () => {
+  const preferred: ModelChoice[] = [
+    { provider: 'ProviderA', model: 'ModelX' },
+    { provider: 'ProviderZ', model: 'ModelZ' }
+  ];
+  const ready: CatalogView = {
+    status: 'ready',
+    host: 'test.com',
+    read_at: '2024-01-15T10:00:00Z',
+    failed_at: null,
+    stale: false,
+    refreshing: false,
+    error: null,
+    models: [{ provider: 'ProviderA', model: 'ModelX', context: '1.0M', max_out: '4096', thinking: true, images: true }]
+  };
+  const filter = { query: '', thinking: false, images: false, context1m: false };
+
+  assert.deepEqual(
+    catalogProjection({ catalog: ready, preferred, filter }).preferred.map(r => [r.choice.provider, r.availability]),
+    [['ProviderA', 'available'], ['ProviderZ', 'missing']]
+  );
+
+  const loading: CatalogView = { ...emptyCatalogView(), refreshing: true };
+  const loadingProjection = catalogProjection({ catalog: loading, preferred, filter });
+  assert.deepEqual(
+    loadingProjection.preferred.map(r => [r.choice.provider, r.availability]),
+    [['ProviderA', 'unknown'], ['ProviderZ', 'unknown']]
+  );
+
+  const failed: CatalogView = {
+    status: 'failed',
+    host: null,
+    read_at: null,
+    failed_at: '2024-01-15T12:00:00Z',
+    stale: false,
+    refreshing: false,
+    error: 'catalog read failed',
+    models: []
+  };
+  const failedProjection = catalogProjection({ catalog: failed, preferred, filter });
+  assert.deepEqual(
+    failedProjection.preferred.map(r => [r.choice.provider, r.availability]),
+    [['ProviderA', 'unknown'], ['ProviderZ', 'unknown']]
+  );
+  // Unknown rows carry no catalog metadata, and unknown capabilities never match a capability chip
+  failedProjection.preferred.forEach(row => {
+    assert.equal(row.availability, availabilityOf(row.choice, failed));
+    assert.equal(row.context, '');
+    assert.equal(row.thinking, false);
+    assert.equal(row.images, false);
+  });
+  assert.deepEqual(catalogProjection({ catalog: loading, preferred, filter: { query: '', thinking: true, images: false, context1m: false } }).preferred, []);
+});
+
+// Card (b): the same unknown status reaches the Models page through the real store signals
+test('store projection: a retained preference stays unknown while the catalog read is unresolved or failed', async () => {
+  const transport = new FakeTransport();
+  const store = createModelsStore({ transport, now: clock });
+  const filter = { query: '', thinking: false, images: false, context1m: false };
+
+  const prefs = store.loadPreferences();
+  transport.resolveGetJson({ preferred: [{ provider: 'P1', model: 'M1' }], updated_at: '2024-01-15T12:00:00Z' });
+  await prefs;
+
+  const catalogLoad = store.loadCatalog();
+  const loadingProjection = catalogProjection({ catalog: store.catalog(), preferred: store.preferred(), filter });
+  assert.equal(store.catalog().status, 'loading');
+  assert.equal(loadingProjection.preferred.length, 1);
+  assert.equal(loadingProjection.preferred[0].availability, 'unknown');
+
+  transport.rejectGetJson(new Error('catalog down'));
+  await catalogLoad;
+  const failedProjection = catalogProjection({ catalog: store.catalog(), preferred: store.preferred(), filter });
+  assert.equal(store.catalog().status, 'failed');
+  assert.equal(failedProjection.preferred[0].availability, 'unknown');
+});
