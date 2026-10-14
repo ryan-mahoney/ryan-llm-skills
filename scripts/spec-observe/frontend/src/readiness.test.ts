@@ -93,6 +93,24 @@ test('readiness separates ready, waiting, incomplete, not-planned, decision and 
   const notPlanned = specReadiness(preparedRow({ step_count: null, prepared: false, preparation: { outcome: 'missing' } }), { coverage: { state: 'complete' } });
   assert.equal(notPlanned.state, 'not-planned');
 
+  // Planning entry shares the observed prerequisite truth: a prepared
+  // dependency may plan before merge, unresolved or unknown dependencies and
+  // incomplete coverage refuse entry.
+  const notPlannedRow = preparedRow({ step_count: null, prepared: false, preparation: { outcome: 'missing' } });
+  const planPrepared = specReadiness(notPlannedRow, { action: 'plan', coverage: { state: 'complete' }, prerequisites: [{ name: 'base', state: 'prepared' }] });
+  assert.equal(planPrepared.state, 'not-planned');
+  assert.equal(planPrepared.launchable, true);
+  assert.equal(planPrepared.reason, null);
+  const planWaiting = specReadiness(notPlannedRow, { action: 'plan', coverage: { state: 'complete' }, prerequisites: [{ name: 'base', state: 'unresolved' }] });
+  assert.equal(planWaiting.launchable, false);
+  assert.equal(planWaiting.reason, 'Waiting on base');
+  const planUnknown = specReadiness(notPlannedRow, { action: 'plan', coverage: { state: 'complete' }, prerequisites: [{ name: 'base', state: 'unknown' }] });
+  assert.equal(planUnknown.launchable, false);
+  assert.equal(planUnknown.reason, 'base is not observed');
+  const planUncovered = specReadiness(notPlannedRow, { action: 'plan', coverage: { state: 'partial' }, prerequisites: [{ name: 'base', state: 'prepared' }] });
+  assert.equal(planUncovered.launchable, false);
+  assert.match(String(planUncovered.reason), /coverage partial/);
+
   const decision = specReadiness(preparedRow({ prepared: false, decision: { stage: 'specification', question: 'Choose the storage shape', recommendation: '', recorded_at: '2026-10-10T12:00:00Z', source: 'decision-required.md' } }), { coverage: { state: 'complete' } });
   assert.equal(decision.state, 'decision');
   assert.equal(decision.reason, 'Choose the storage shape');

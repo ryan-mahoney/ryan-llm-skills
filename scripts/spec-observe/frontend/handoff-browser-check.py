@@ -16,6 +16,13 @@ SENTINEL_EVIDENCE_DIR=/tmp/sentinel-handoff-evidence uv run --script \
 SENTINEL_EVIDENCE_DIR=/tmp/sentinel-handoff-evidence uv run --script \
   scripts/spec-observe/frontend/handoff-browser-check.py --case epic
 
+SENTINEL_EVIDENCE_DIR=/tmp/sentinel-handoff-evidence uv run --script \
+  scripts/spec-observe/frontend/handoff-browser-check.py --case final-review
+
+The final-review case runs both observation gates and covers planning entry
+eligibility with requires only on the epic member plus cold bound production
+seeding for implementation and resume planning.
+
 The fixture runs with SENTINEL_PLANNED_LAUNCH=1 so the real package resolver,
 saved brief, skill lookup and contract digest drive the bound review and result
 while the final worker process boundary stays fake. Reference captures load the
@@ -42,11 +49,11 @@ HOLDING_RUN = "7c2a91d4-3e58-4b06-a1f7-95d0e6b83c12"
 parser = argparse.ArgumentParser()
 parser.add_argument("--case", default="review")
 arguments = parser.parse_args()
-if arguments.case not in ("review", "result", "specs", "epic"):
+if arguments.case not in ("review", "result", "specs", "epic", "final-review"):
     raise SystemExit(f"unsupported case: {arguments.case}")
 
 root = Path(__file__).resolve().parent
-evidence = Path(os.environ.get("SENTINEL_EVIDENCE_DIR", "/tmp/sentinel-handoff-evidence")) / ("07-states" if arguments.case == "specs" else "06-states" if arguments.case == "result" else "01-states" if arguments.case == "epic" else "04-states")
+evidence = Path(os.environ.get("SENTINEL_EVIDENCE_DIR", "/tmp/sentinel-handoff-evidence")) / ("08-final-review" if arguments.case == "final-review" else "07-states" if arguments.case == "specs" else "06-states" if arguments.case == "result" else "01-states" if arguments.case == "epic" else "04-states")
 evidence.mkdir(parents=True, exist_ok=True)
 started = time.monotonic()
 report = {"status": "failed", "case": arguments.case, "scenarios": [], "pageErrors": [], "captures": []}
@@ -69,6 +76,9 @@ fixture_env["SENTINEL_PLANNED_LAUNCH"] = "1"
 if arguments.case == "specs":
     fixture_env["SENTINEL_SPECS_READINESS"] = "1"
 if arguments.case == "epic":
+    fixture_env["SENTINEL_EPIC_PLANNING"] = "1"
+if arguments.case == "final-review":
+    fixture_env["SENTINEL_SPECS_READINESS"] = "1"
     fixture_env["SENTINEL_EPIC_PLANNING"] = "1"
 fixture = subprocess.Popen(
     ["node", str(root / "browser-fixture.mjs")],
@@ -193,13 +203,45 @@ try:
                 "ws": "fixture", "tab": "result", "id": assignment, "package": package, "skill": skill, "target": "fixture-repo",
             })
 
-        def open_review(package, skill, title, brief):
+        def open_review(package, skill, title, brief, delayed_inventory=False):
+            if delayed_inventory:
+                control("detail-delay-ms", 1500)
             page.goto(launch_route(package, skill), wait_until="domcontentloaded")
             expect(page.locator("#launch-heading")).to_have_text("Prepare assignment")
+            if delayed_inventory:
+                expect(page.locator("#launch-cold-bound")).to_have_attribute("data-cold-bound", "waiting")
+                expect(page.locator("#launch-brief-title")).to_have_value("")
+                expect(page.locator("#launch-save")).to_be_disabled()
+                expect(page.locator("#launch-target")).to_have_value(receipt["checkout"])
+                expect(page.locator("#launch-brief-title")).not_to_have_value("")
+                control("detail-delay-ms", 0)
+                report["scenarios"].append("Cold multi-target alias waits for workspace inventory before its first seed and resolves to the package primary without posting")
             page.locator("#launch-brief-title").fill(title)
             page.locator("#launch-brief-content").fill(brief)
             page.locator("#launch-save").click()
             expect(page.locator("#launch-review .launch-contract")).to_be_visible()
+
+        PLAN_BROWSER_FRESH = {
+            "proposal": False, "critique_recommended": False, "critique": False,
+            "prepared": True, "step_count": 3,
+            "preparation": {"outcome": "prepared", "reported_at": "2026-10-10T12:00:00Z", "source": "spec-prepare.md", "read": "ok", "bytes": 120},
+            "decision": None, "receipts": [],
+        }
+        PLAN_BROWSER_WRITE = {**PLAN_BROWSER_FRESH, "proposal": True, "critique_recommended": False, "critique": False}
+        PLAN_BROWSER_CRITICS = {**PLAN_BROWSER_FRESH, "proposal": True, "critique_recommended": True, "critique": False}
+        PLAN_OTHER_WRITE = {
+            "proposal": True, "critique_recommended": False, "critique": False,
+            "prepared": False, "step_count": 0,
+            "preparation": {"outcome": "missing"},
+            "decision": None, "receipts": [],
+        }
+
+        def planning_facts(package_ref, facts):
+            # Cold bound planning entry derives its stage from observed proposal
+            # facts; publish the matching truth and let the dashboard's state
+            # cache expire before the cold URL reads it.
+            control("planned-planning-facts", json.dumps(facts), package_ref=package_ref)
+            time.sleep(1.1)
 
         def refresh_state():
             # The hidden launch destination has no header refresh control: refresh
@@ -216,7 +258,7 @@ try:
         def run_review():
             # Bound implementation review through the real route, brief save and
             # automatic resolution. Reviewing must not start a worker.
-            open_review("fixture/browser", "spec-end-to-end", "Implement fixture/browser through draft PR", "/spec-end-to-end Resume prepared implementation for fixture/browser.")
+            open_review("fixture/browser", "spec-end-to-end", "Implement fixture/browser through draft PR", "/spec-end-to-end Resume prepared implementation for fixture/browser.", delayed_inventory=True)
             expect(page.locator("#launch-heading")).to_have_text("Review implementation assignment")
             expect(page.locator("#launch-review-heading")).to_have_text("Review implementation assignment")
             expect(fact("package")).to_have_text("fixture/browser")
@@ -248,6 +290,7 @@ try:
 
             # Bound planning review: truthful planning-only stop, worktree
             # disclosure and no publication authority.
+            planning_facts("fixture/browser", PLAN_BROWSER_FRESH)
             open_review("fixture/browser", "spec-architect-initial", "Plan fixture/browser through preparation", "/spec-architect-initial Plan fixture/browser.")
             expect(page.locator("#launch-heading")).to_have_text("Review planning assignment")
             expect(page.locator("#launch-review-heading")).to_have_text("Review planning assignment")
@@ -360,6 +403,7 @@ try:
 
             # Preview error in a fresh bound context: no contract, no launch.
             control("review-preview-refusal", "error")
+            planning_facts("fixture/other-browser", PLAN_OTHER_WRITE)
             page.goto(launch_route("fixture/other-browser", "spec-write"), wait_until="domcontentloaded")
             expect(page.locator("#launch-heading")).to_have_text("Prepare assignment")
             page.locator("#launch-brief-title").fill("Plan fixture/other-browser")
@@ -392,6 +436,7 @@ try:
             # Confirmed planning launch: same-epic return, Planning outcomes and
             # the next independent member offered from the epic inventory.
             control("dispatch-launch-outcome", "live")
+            planning_facts("fixture/browser", PLAN_BROWSER_FRESH)
             open_review("fixture/browser", "spec-architect-initial", "Plan fixture/browser through preparation", "/spec-architect-initial Plan fixture/browser.")
             expect(page.locator("#launch-heading")).to_have_text("Review planning assignment")
             page.locator("#launch-assignment-launch").click()
@@ -485,6 +530,7 @@ try:
             # Lost acknowledgement: unconfirmed stays generic, never claims a
             # package result and never offers a retry submission.
             control("dispatch-launch-outcome", "unknown")
+            planning_facts("fixture/browser", PLAN_BROWSER_CRITICS)
             open_review("fixture/browser", "spec-architect-critics", "Plan fixture/browser critique", "/spec-architect-critics Plan fixture/browser.")
             expect(page.locator("#launch-heading")).to_have_text("Review planning assignment")
             launches_before = len(posts("dispatchLaunch"))
@@ -506,6 +552,7 @@ try:
             # transition; mismatched and cold result links stay exact
             # inspections and never fabricate success.
             control("dispatch-launch-outcome", "failed")
+            planning_facts("fixture/browser", PLAN_BROWSER_WRITE)
             open_review("fixture/browser", "spec-write", "Plan fixture/browser specification", "/spec-write Plan fixture/browser.")
             expect(page.locator("#launch-heading")).to_have_text("Review planning assignment")
             page.locator("#launch-assignment-launch").click()
@@ -842,6 +889,12 @@ try:
             blocked = member_row("blocked-browser")
             expect(blocked.locator('[data-action="plan"]')).to_be_disabled()
             expect(blocked.locator(".action-note")).to_contain_text("Waiting on index-browser")
+            # An unresolved dependency stays refused even when the disabled
+            # control is activated directly: no brief is ever saved.
+            blocked_saves = len(posts("dispatchSaveBrief"))
+            blocked.locator('[data-action="plan"]').dispatch_event("click")
+            time.sleep(0.2)
+            assert len(posts("dispatchSaveBrief")) == blocked_saves
             index = member_row("index-browser")
             expect(index).to_contain_text("In progress")
             expect(index.locator('[data-action="plan"]')).to_have_count(0)
@@ -885,6 +938,29 @@ try:
                 expect(page.locator(".obligation")).not_to_contain_text("architect starts")
             report["scenarios"].append("Epic planning explanation resumes intact proposals with spec-write or critics then spec-write, without re-architecture")
 
+            # An unreadable proposal presence refuses planning on an otherwise
+            # plannable row; a forced click cannot post, and explicit absence
+            # restores genuine fresh planning.
+            control("epic-planning-facts", json.dumps({
+                "proposal": None, "prepared": False, "step_count": 0,
+                "preparation": {"outcome": "missing"}, "decision": None,
+            }))
+            refresh_epic()
+            unknown_proposal = member_row("other-browser")
+            expect(unknown_proposal.locator('[data-action="plan"]')).to_be_disabled()
+            expect(unknown_proposal.locator(".action-note")).to_contain_text("proposal presence is not observed")
+            proposal_saves = len(posts("dispatchSaveBrief"))
+            unknown_proposal.locator('[data-action="plan"]').dispatch_event("click")
+            time.sleep(0.2)
+            assert len(posts("dispatchSaveBrief")) == proposal_saves
+            control("epic-planning-facts", json.dumps({
+                "proposal": False, "prepared": False, "step_count": 0,
+                "preparation": {"outcome": "missing"}, "decision": None,
+            }))
+            refresh_epic()
+            expect(member_row("other-browser").locator('[data-action="plan"]')).to_be_enabled()
+            report["scenarios"].append("An unreadable proposal presence refuses planning on an otherwise plannable epic row and explicit absence restores it without a save")
+
             # Real row and primary entry must refuse unknown ownership/reads,
             # even with a live token and usable targets; forced clicks cannot POST.
             control("epic-base-status", "merged")
@@ -912,7 +988,7 @@ try:
             report["scenarios"].append("Epic row and primary refuse partial/unknown assignment coverage and unavailable preparation without posting")
             control("epic-base-status", "prepared")
             control("epic-planning-facts", json.dumps({
-                "prepared": False, "step_count": 0, "preparation": {"outcome": "missing"}, "decision": None,
+                "proposal": False, "prepared": False, "step_count": 0, "preparation": {"outcome": "missing"}, "decision": None,
             }))
             refresh_epic()
 
@@ -957,12 +1033,324 @@ try:
             report["scenarios"].append("Missing directory disables Plan with its create-package reason and never posts")
             check_deadline("end")
 
+        def run_final_review():
+            # Planning entry eligibility with requires only on the epic member
+            # (Specs surface), unreadable proposal refusal in both entry
+            # surfaces, and cold bound production seeding for implementation
+            # and resume planning in fresh browser contexts.
+            deadline = started + 240
+
+            def check_deadline(label):
+                if time.monotonic() > deadline:
+                    raise RuntimeError(f"final-review case exceeded the 240 second deadline at {label}")
+
+            def specs_route(**params):
+                return receipt["url"] + "/#/specs?" + urlencode({"ws": "fixture", **params})
+
+            def publish_specs():
+                control("specs-publish-snapshot")
+                # Expire the dashboard's one-second state cache before reading.
+                time.sleep(1.05)
+                page.goto(receipt["url"] + "/#/agents?ws=fixture", wait_until="domcontentloaded")
+                with page.expect_response(lambda response: "/api/state" in response.url):
+                    page.locator("header").get_by_role("button", name="Refresh state", exact=True).click()
+
+            def open_spec(slug):
+                publish_specs()
+                page.goto(specs_route(filter="ready"), wait_until="domcontentloaded")
+                page.locator(".records button.record").filter(has_text=slug).click()
+
+            def set_package_facts(package_ref, facts):
+                control("specs-package-facts", json.dumps(facts), package_ref=package_ref)
+
+            specs_dir = Path(receipt["package"]).parent
+
+            check_deadline("start")
+            # Planning entry reads the epic member's requires (the planned row
+            # carries none): an unresolved dependency refuses even a synthetic
+            # click and saves nothing.
+            set_package_facts("fixture/blocked-browser", {
+                "proposal": False, "prepared": False, "step_count": None,
+                "preparation": {"outcome": "missing"}, "decision": None, "receipts": [],
+            })
+            open_spec("blocked-browser")
+            expect(page.locator("#spec-readiness")).to_have_attribute("data-state", "not-planned")
+            resume = page.get_by_role("button", name="Resume planning", exact=True)
+            expect(resume).to_be_disabled()
+            expect(page.locator("#spec-readiness-actions [data-action-note=resume-planning]")).to_contain_text("Waiting on index-browser")
+            saves = len(posts("dispatchSaveBrief"))
+            page.locator("[data-action=resume-planning]").dispatch_event("click")
+            time.sleep(0.2)
+            assert len(posts("dispatchSaveBrief")) == saves
+            report["scenarios"].append("An unresolved epic prerequisite refuses Specs planning entry on a synthetic click without a save")
+
+            # A positively prepared prerequisite may plan before merge.
+            control("epic-base-status", "prepared")
+            set_package_facts("fixture/prepared-prereq-browser", {
+                "proposal": False, "prepared": False, "step_count": None,
+                "preparation": {"outcome": "missing"}, "decision": None, "receipts": [],
+            })
+            open_spec("prepared-prereq-browser")
+            expect(page.locator("#spec-readiness")).to_have_attribute("data-state", "not-planned")
+            expect(page.get_by_role("button", name="Resume planning", exact=True)).to_be_enabled()
+            report["scenarios"].append("A positively prepared epic prerequisite restores Specs planning entry before merge")
+            capture("final-review-prepared-prerequisite")
+
+            # An unreadable proposal presence refuses Specs planning entry even
+            # on a synthetic click; explicit absence restores fresh planning.
+            set_package_facts("fixture/other-browser", {
+                "proposal": None, "prepared": False, "step_count": 0,
+                "preparation": {"outcome": "missing"}, "decision": None, "receipts": [],
+            })
+            open_spec("other-browser")
+            expect(page.locator("#spec-readiness")).to_have_attribute("data-state", "incomplete")
+            expect(page.get_by_role("button", name="Resume planning", exact=True)).to_be_disabled()
+            expect(page.locator("#spec-readiness-actions [data-action-note=resume-planning]")).to_contain_text("proposal presence is not observed")
+            saves = len(posts("dispatchSaveBrief"))
+            page.locator("[data-action=resume-planning]").dispatch_event("click")
+            time.sleep(0.2)
+            assert len(posts("dispatchSaveBrief")) == saves
+            report["scenarios"].append("An unreadable proposal presence refuses Specs planning entry on a synthetic click without a save")
+
+            set_package_facts("fixture/other-browser", {
+                "proposal": False, "prepared": False, "step_count": 0,
+                "preparation": {"outcome": "missing"}, "decision": None, "receipts": [],
+            })
+            open_spec("other-browser")
+            expect(page.get_by_role("button", name="Resume planning", exact=True)).to_be_enabled()
+            report["scenarios"].append("Explicit proposal absence restores genuine fresh Specs planning")
+            check_deadline("specs-entry")
+
+            # Cold bound implementation in a fresh context: nonempty derived
+            # brief, canonical primary target, no POST before the explicit save.
+            saves = len(posts("dispatchSaveBrief"))
+            launches = len(posts("dispatchLaunch"))
+            starts = len(worker_starts())
+            cold_impl = browser.new_context(viewport={"width": 1280, "height": 900})
+            cold_impl_page = cold_impl.new_page()
+            cold_impl_page.on("pageerror", lambda error: report["pageErrors"].append(str(error)))
+            cold_impl_page.goto(launch_route(receipt["package"], "spec-end-to-end"), wait_until="domcontentloaded")
+            expect(cold_impl_page.locator("#launch-heading")).to_have_text("Prepare assignment")
+            expect(cold_impl_page.locator("#launch-brief-title")).not_to_have_value("")
+            expect(cold_impl_page.locator("#launch-brief-content")).not_to_have_value("")
+            expect(cold_impl_page.locator("#launch-target")).to_have_value(receipt["checkout"])
+            assert len(posts("dispatchSaveBrief")) == saves
+            assert len(posts("dispatchLaunch")) == launches
+            assert len(worker_starts()) == starts
+            impl_shot = evidence / "production-cold-bound-implement.png"
+            cold_impl_page.screenshot(path=str(impl_shot), full_page=True)
+            report["captures"].append(str(impl_shot))
+            cold_impl_page.locator("#launch-save").click()
+            expect(cold_impl_page.locator("#launch-heading")).to_have_text("Review implementation assignment")
+            expect(cold_impl_page.locator("#launch-review .launch-contract--package")).to_be_visible()
+            expect(cold_impl_page.locator("#launch-review .launch-contract--package [data-fact=workflow] dd")).to_have_text("spec-end-to-end")
+            expect(cold_impl_page.locator("#launch-review .launch-contract--package [data-fact=authority] dd")).to_have_text("Draft pull request only")
+            assert len(posts("dispatchLaunch")) == launches
+            assert len(worker_starts()) == starts
+            cold_impl.close()
+            report["scenarios"].append("Cold bound implementation seeds the derived brief with the canonical primary target and reaches review only after the explicit save with no worker")
+            check_deadline("cold-implementation")
+
+            # Cold bound resume planning in a fresh context: intact proposal
+            # facts derive spec-write, None authority and the Prepared stop.
+            saves = len(posts("dispatchSaveBrief"))
+            launches = len(posts("dispatchLaunch"))
+            starts = len(worker_starts())
+            incomplete_path = str(specs_dir / "incomplete-browser")
+            cold_plan = browser.new_context(viewport={"width": 1280, "height": 900})
+            cold_plan_page = cold_plan.new_page()
+            cold_plan_page.on("pageerror", lambda error: report["pageErrors"].append(str(error)))
+            cold_plan_page.goto(launch_route(incomplete_path, "spec-write"), wait_until="domcontentloaded")
+            expect(cold_plan_page.locator("#launch-brief-title")).not_to_have_value("")
+            plan_brief = cold_plan_page.locator("#launch-brief-content").input_value()
+            assert "spec-write" in plan_brief, plan_brief
+            assert "spec-architect-initial" not in plan_brief, plan_brief
+            assert len(posts("dispatchSaveBrief")) == saves
+            assert len(posts("dispatchLaunch")) == launches
+            assert len(worker_starts()) == starts
+            plan_shot = evidence / "production-cold-bound-resume-planning.png"
+            cold_plan_page.screenshot(path=str(plan_shot), full_page=True)
+            report["captures"].append(str(plan_shot))
+            cold_plan_page.locator("#launch-save").click()
+            expect(cold_plan_page.locator("#launch-heading")).to_have_text("Review planning assignment")
+            expect(cold_plan_page.locator("#launch-review .launch-contract--package")).to_be_visible()
+            plan_stages = cold_plan_page.locator("#launch-review .launch-contract--package [data-fact=stages] dd")
+            expect(plan_stages).to_contain_text("spec-write")
+            expect(plan_stages).not_to_contain_text("spec-architect-initial")
+            expect(cold_plan_page.locator("#launch-review .launch-contract--package [data-fact=authority] dd")).to_have_text("None")
+            expect(cold_plan_page.locator("#launch-review .launch-contract--package [data-fact=stop] dd")).to_contain_text("Prepared")
+            assert len(posts("dispatchLaunch")) == launches
+            assert len(worker_starts()) == starts
+            cold_plan.close()
+            report["scenarios"].append("Cold bound resume planning derives the intact spec-write stage with None authority and reaches review only after the explicit save with no worker")
+            check_deadline("cold-resume-planning")
+
+            # A cold bound URL with an unreadable proposal shows an honest
+            # unavailable reason, seeds nothing and posts nothing.
+            other_path = str(specs_dir / "other-browser")
+            set_package_facts("fixture/other-browser", {
+                "proposal": None, "prepared": False, "step_count": 0,
+                "preparation": {"outcome": "missing"}, "decision": None, "receipts": [],
+            })
+            publish_specs()
+            saves = len(posts("dispatchSaveBrief"))
+            cold_unknown = browser.new_context(viewport={"width": 1280, "height": 900})
+            cold_unknown_page = cold_unknown.new_page()
+            cold_unknown_page.on("pageerror", lambda error: report["pageErrors"].append(str(error)))
+            cold_unknown_page.goto(launch_route(other_path, "spec-write"), wait_until="domcontentloaded")
+            expect(cold_unknown_page.locator("#launch-cold-bound")).to_have_attribute("data-cold-bound", "unavailable")
+            expect(cold_unknown_page.locator("#launch-cold-bound")).to_contain_text("proposal presence is not observed")
+            expect(cold_unknown_page.locator("#launch-brief-title")).to_have_value("")
+            expect(cold_unknown_page.locator("#launch-save")).to_be_disabled()
+            cold_unknown_page.locator("#launch-save").dispatch_event("click")
+            time.sleep(0.2)
+            assert len(posts("dispatchSaveBrief")) == saves
+            cold_unknown.close()
+            report["scenarios"].append("A cold bound planning URL with an unreadable proposal shows an honest unavailable reason with no draft and no POST")
+
+            # Unknown critique recommendation and unknown recommended-critique
+            # outcome use the same conservative plan-stage rules as normal
+            # entry: each boundary refuses cold, seeds nothing and posts nothing.
+            saves = len(posts("dispatchSaveBrief"))
+            set_package_facts("fixture/other-browser", {
+                "proposal": True, "critique_recommended": None, "critique": None,
+                "prepared": False, "step_count": 0,
+                "preparation": {"outcome": "missing"}, "decision": None, "receipts": [],
+            })
+            publish_specs()
+            cold_no_recommendation = browser.new_context(viewport={"width": 1280, "height": 900})
+            cold_no_recommendation_page = cold_no_recommendation.new_page()
+            cold_no_recommendation_page.on("pageerror", lambda error: report["pageErrors"].append(str(error)))
+            cold_no_recommendation_page.goto(launch_route(other_path, "spec-write"), wait_until="domcontentloaded")
+            expect(cold_no_recommendation_page.locator("#launch-cold-bound")).to_have_attribute("data-cold-bound", "unavailable")
+            expect(cold_no_recommendation_page.locator("#launch-cold-bound")).to_contain_text("does not record whether critique is recommended")
+            expect(cold_no_recommendation_page.locator("#launch-brief-title")).to_have_value("")
+            expect(cold_no_recommendation_page.locator("#launch-save")).to_be_disabled()
+            cold_no_recommendation_page.locator("#launch-save").dispatch_event("click")
+            time.sleep(0.2)
+            assert len(posts("dispatchSaveBrief")) == saves
+            cold_no_recommendation.close()
+            report["scenarios"].append("A cold bound planning URL whose proposal does not record a critique recommendation refuses with no draft and no POST")
+
+            set_package_facts("fixture/other-browser", {
+                "proposal": True, "critique_recommended": True, "critique": None,
+                "prepared": False, "step_count": 0,
+                "preparation": {"outcome": "missing"}, "decision": None, "receipts": [],
+            })
+            publish_specs()
+            cold_no_critique = browser.new_context(viewport={"width": 1280, "height": 900})
+            cold_no_critique_page = cold_no_critique.new_page()
+            cold_no_critique_page.on("pageerror", lambda error: report["pageErrors"].append(str(error)))
+            cold_no_critique_page.goto(launch_route(other_path, "spec-architect-critics"), wait_until="domcontentloaded")
+            expect(cold_no_critique_page.locator("#launch-cold-bound")).to_have_attribute("data-cold-bound", "unavailable")
+            expect(cold_no_critique_page.locator("#launch-cold-bound")).to_contain_text("recommended critique outcome is not observed")
+            expect(cold_no_critique_page.locator("#launch-brief-title")).to_have_value("")
+            expect(cold_no_critique_page.locator("#launch-save")).to_be_disabled()
+            cold_no_critique_page.locator("#launch-save").dispatch_event("click")
+            time.sleep(0.2)
+            assert len(posts("dispatchSaveBrief")) == saves
+            cold_no_critique.close()
+            report["scenarios"].append("A cold bound planning URL whose recommended critique outcome is unknown refuses with no draft and no POST")
+
+            # An unused critique value with no recommendation is not a reason
+            # to block: the same cold URL derives spec-write normally.
+            set_package_facts("fixture/other-browser", {
+                "proposal": True, "critique_recommended": False, "critique": None,
+                "prepared": False, "step_count": 0,
+                "preparation": {"outcome": "missing"}, "decision": None, "receipts": [],
+            })
+            publish_specs()
+            cold_unused_critique = browser.new_context(viewport={"width": 1280, "height": 900})
+            cold_unused_critique_page = cold_unused_critique.new_page()
+            cold_unused_critique_page.on("pageerror", lambda error: report["pageErrors"].append(str(error)))
+            cold_unused_critique_page.goto(launch_route(other_path, "spec-write"), wait_until="domcontentloaded")
+            expect(cold_unused_critique_page.locator("#launch-brief-title")).not_to_have_value("")
+            unused_brief = cold_unused_critique_page.locator("#launch-brief-content").input_value()
+            assert "spec-write" in unused_brief, unused_brief
+            expect(cold_unused_critique_page.locator("#launch-cold-bound")).to_have_count(0)
+            assert len(posts("dispatchSaveBrief")) == saves
+            assert len(posts("dispatchLaunch")) == launches
+            assert len(worker_starts()) == starts
+            cold_unused_critique.close()
+            report["scenarios"].append("A cold bound planning URL with no critique recommendation and an unused critique value derives spec-write without a POST")
+
+            # A requested planning skill that disagrees with the derived stage
+            # refuses the same way instead of guessing a stage.
+            cold_wrong = browser.new_context(viewport={"width": 1280, "height": 900})
+            cold_wrong_page = cold_wrong.new_page()
+            cold_wrong_page.on("pageerror", lambda error: report["pageErrors"].append(str(error)))
+            cold_wrong_page.goto(launch_route(incomplete_path, "spec-architect-initial"), wait_until="domcontentloaded")
+            expect(cold_wrong_page.locator("#launch-cold-bound")).to_have_attribute("data-cold-bound", "unavailable")
+            expect(cold_wrong_page.locator("#launch-cold-bound")).to_contain_text("does not match the observed package stage")
+            assert len(posts("dispatchSaveBrief")) == saves
+            cold_wrong.close()
+            report["scenarios"].append("A cold bound planning URL whose requested skill disagrees with the derived stage shows an honest unavailable reason with no POST")
+
+            # Explicit proposal absence restores a derived fresh-planning brief
+            # for the same cold URL through the shared presentation owner.
+            set_package_facts("fixture/other-browser", {
+                "proposal": False, "prepared": False, "step_count": 0,
+                "preparation": {"outcome": "missing"}, "decision": None, "receipts": [],
+            })
+            publish_specs()
+            cold_fresh = browser.new_context(viewport={"width": 1280, "height": 900})
+            cold_fresh_page = cold_fresh.new_page()
+            cold_fresh_page.on("pageerror", lambda error: report["pageErrors"].append(str(error)))
+            cold_fresh_page.goto(launch_route(other_path, "spec-architect-initial"), wait_until="domcontentloaded")
+            expect(cold_fresh_page.locator("#launch-brief-title")).not_to_have_value("")
+            fresh_brief = cold_fresh_page.locator("#launch-brief-content").input_value()
+            assert "spec-architect-initial" in fresh_brief, fresh_brief
+            assert len(posts("dispatchLaunch")) == launches
+            assert len(worker_starts()) == starts
+            cold_fresh.close()
+            report["scenarios"].append("Explicit proposal absence restores a derived cold fresh-planning brief without a POST")
+
+            # A loaded observation that holds no records for this workspace is
+            # a definite absence, not still-loading: the cold bound URL shows
+            # the not-observed reason instead of waiting forever.
+            saves = len(posts("dispatchSaveBrief"))
+            empty_route = receipt["url"] + "/#/launch?" + urlencode({
+                "ws": "other", "tab": "brief", "package": other_path, "skill": "spec-architect-initial", "target": "fixture-repo",
+            })
+            cold_empty = browser.new_context(viewport={"width": 1280, "height": 900})
+            cold_empty_page = cold_empty.new_page()
+            cold_empty_page.on("pageerror", lambda error: report["pageErrors"].append(str(error)))
+            cold_empty_page.goto(empty_route, wait_until="domcontentloaded")
+            expect(cold_empty_page.locator("#launch-cold-bound")).to_have_attribute("data-cold-bound", "unavailable")
+            expect(cold_empty_page.locator("#launch-cold-bound")).to_contain_text("not observed in this workspace")
+            expect(cold_empty_page.locator("#launch-brief-title")).to_have_value("")
+            expect(cold_empty_page.locator("#launch-save")).to_be_disabled()
+            cold_empty_page.locator("#launch-save").dispatch_event("click")
+            time.sleep(0.2)
+            assert len(posts("dispatchSaveBrief")) == saves
+            cold_empty.close()
+            report["scenarios"].append("A loaded observation with no records for the launch workspace shows the not-observed reason instead of waiting")
+            check_deadline("cold-unavailable")
+
+            # A cold result URL stays an exact inspection and is never seeded as
+            # an actionable fresh bound attempt.
+            saves = len(posts("dispatchSaveBrief"))
+            cold_result = browser.new_context(viewport={"width": 1280, "height": 900})
+            cold_result_page = cold_result.new_page()
+            cold_result_page.on("pageerror", lambda error: report["pageErrors"].append(str(error)))
+            cold_result_id = "0f6a6c6e-3f0e-4a4a-9a6a-1f6a6c6e3f1a"
+            cold_result_page.goto(result_route(receipt["package"], "spec-end-to-end", cold_result_id), wait_until="domcontentloaded")
+            expect(cold_result_page.locator("#launch-result-inspection")).to_be_visible()
+            expect(cold_result_page.locator("[data-fact=requested-result] dd")).to_have_text(cold_result_id)
+            expect(cold_result_page.locator("#launch-cold-bound")).to_have_count(0)
+            assert len(posts("dispatchSaveBrief")) == saves
+            cold_result.close()
+            report["scenarios"].append("A cold result URL stays an exact inspection and is never converted into a fresh bound attempt")
+            check_deadline("end")
+
         if arguments.case == "review":
             run_review()
         elif arguments.case == "result":
             run_result()
         elif arguments.case == "epic":
             run_epic()
+        elif arguments.case == "final-review":
+            run_final_review()
         else:
             run_specs()
 

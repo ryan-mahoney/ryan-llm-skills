@@ -41,6 +41,11 @@ export type HandoffInput = {
   packageRef: string;
   targets?: PlannedTarget[] | null;
   planningPlan?: PackagePlanningPlan | null;
+  // A cold entry may carry an already-chosen canonical target. It is honored
+  // only when it matches the package's own target inventory, so a route alias
+  // never approves a different repository and several targets keep an
+  // explicit choice instead of guessing.
+  target?: string | null;
   returnRoute?: RouteState;
 };
 
@@ -167,9 +172,12 @@ const prepareBoundSeed = (kind: HandoffKind, input: HandoffInput): PreparedBound
   const choices = plannedTargetChoices(input.targets);
   if (choices.length === 0) return { ok: false, reason: 'No usable package target is available.' };
   const presentation = packageLaunchPresentation(kind, packageRef, input.planningPlan);
+  const requested = typeof input.target === 'string' && input.target
+    ? choices.find(choice => choice.path === input.target || choice.key === input.target)?.path ?? null
+    : null;
   const context: LaunchContext = {
     ws,
-    target: choices.length === 1 ? choices[0].path : null,
+    target: choices.length === 1 ? choices[0].path : requested,
     package: packageRef,
     skill: presentation.skill,
     authority: presentation.authority,
@@ -268,8 +276,10 @@ export async function startPackageHandoff(
 }
 
 // Cold bound URL: derive the presentation from observed package facts and
-// prefill only an absent draft. No POST, no preview and no launch; the brief
-// stage is the seed outcome. An existing draft is returned untouched.
+// prefill only an absent draft. A validated route target is honored for
+// multi-target packages so cold entry keeps the operator's explicit choice.
+// No POST, no preview and no launch; the brief stage is the seed outcome. An
+// existing draft is returned untouched.
 export function seedColdHandoff(kind: HandoffKind, input: HandoffInput): HandoffOutcome {
   const prepared = prepareBoundSeed(kind, input);
   if (!prepared.ok) return prepared;

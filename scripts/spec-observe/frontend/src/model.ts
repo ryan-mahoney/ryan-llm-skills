@@ -60,7 +60,28 @@ function projectStartingRecords(records:WireRecord[],payload:Envelope|null):Wire
   }
   if(!assignments.size)return records;
   const claimed=new Set<string>();
-  const withRuns=new Set(records.filter(r=>!r.planned).map(r=>JSON.stringify([r.workspace,r.package])));
+  // A cancelled run row is history when its receipt belongs to a superseded
+  // assignment: the sentinel marks the newest receipt as the current assignment
+  // even after cancellation, so that flag alone must not suppress the
+  // assignment-backed starting projection for the new blocking owner. A
+  // cancellation carrying the new owning assignment's identity stays
+  // authoritative, as do active obligations, pending workflow, recent
+  // completions and every non-cancelled run.
+  const cancelledHistory=(r:WireRecord):boolean=>{
+    if(r.recent_completion===true||activeRun(r))return false;
+    if(r.workflow_state==='complete'||Boolean(r.completion_basis)||Number.isFinite(Date.parse(r.completed_at||'')))return false;
+    if(r.execution!=='cancelled')return false;
+    // Same canonical identity rule as the projection itself: a row may carry
+    // the canonical path as `package` or `package_ref`.
+    const owner=[r.package,r.package_ref].filter((value:unknown):value is string=>typeof value==='string'&&Boolean(value))
+      .map(value=>assignments.get(JSON.stringify([r.workspace,value]))).find(Boolean);
+    if(!owner)return true;
+    const ownerId=owner.assignment_id;
+    const identities=[r.assignment_id,...(Array.isArray(r.receipts)?r.receipts.map((receipt:WireRecord)=>receipt?.assignment_id):[])]
+      .filter((value:unknown):value is string=>typeof value==='string'&&Boolean(value));
+    return !identities.includes(ownerId);
+  };
+  const withRuns=new Set(records.filter(r=>!r.planned&&!cancelledHistory(r)).map(r=>JSON.stringify([r.workspace,r.package])));
   return records.map(record=>{
     if(!record.planned)return record;
     const identity=JSON.stringify([record.workspace,record.package]);

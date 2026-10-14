@@ -447,9 +447,13 @@ export function EpicDetail(props: {
   };
   // A planning stage past an intact proposal depends on observed critique
   // facts; an unknown recommendation is never coerced into an automatic
-  // spec-write stage.
+  // spec-write stage. An unreadable proposal presence refuses every planning
+  // stage rather than deriving fresh architecture.
   const planStageReason = (facts: PlanningFacts | null): string => {
-    if (facts?.proposal === true && facts.critiqueRecommended === null) {
+    if (!facts || facts.proposal === null) {
+      return 'The proposal presence is not observed; inspect the proposal and package files before resuming planning.';
+    }
+    if (facts.proposal === true && facts.critiqueRecommended === null) {
       return 'The proposal does not record whether critique is recommended; inspect the proposal and package files before resuming planning.';
     }
     if (facts?.critiqueRecommended === true && facts.critique === null) {
@@ -463,8 +467,13 @@ export function EpicDetail(props: {
     // gates below only see an absent record and must not replace it.
     if (row.action.kind === 'plan' && memberIsMissing(member)) return row.action.reason ?? '';
     const record = epicMemberRecord(props.epic, member, props.records);
-    const gate = handoffReason(record) || (row.action.kind === 'plan' ? planStageReason(memberPlanning(member)) : '');
-    return gate || row.action.reason || '';
+    const handoff = handoffReason(record);
+    if (handoff) return handoff;
+    // The row's own readiness reason (prerequisite, coverage, unavailable
+    // preparation) stays the observed explanation; the planning-stage gate
+    // only adds its refusal when the row would otherwise commit.
+    const stage = row.action.kind === 'plan' ? planStageReason(memberPlanning(member)) : '';
+    return row.action.reason || stage || '';
   };
   async function startHandoff(kind: 'plan' | 'implement', member: WireRecord) {
     if (handoffBusy()) return;

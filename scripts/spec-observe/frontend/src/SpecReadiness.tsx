@@ -222,19 +222,32 @@ export default function SpecReadiness(props: SpecReadinessProps) {
   // Planning stages past an intact proposal depend on observed critique facts.
   // An unknown recommendation is never coerced into no-critique and an
   // automatic spec-write: Resume planning stays disabled until the proposal
-  // and package files are inspected.
+  // and package files are inspected. An unreadable proposal presence refuses
+  // every planning stage rather than deriving fresh architecture.
   const planGate = (): string => {
     const baseGate = gate();
     if (baseGate) return baseGate;
     const coverage = coverageStateOf(record());
     if (coverage !== 'complete') return `Assignment coverage ${coverage}; the owner is not confirmed, so this package cannot start.`;
     const value = facts();
+    if (!value || value.proposal === null) {
+      return 'The proposal presence is not observed; inspect the package files before resuming planning.';
+    }
     if (value?.proposal === true && value.critiqueRecommended === null) {
       return 'The proposal does not record whether critique is recommended; inspect the proposal and package files before resuming planning.';
     }
     if (value?.critiqueRecommended === true && value.critique === null) {
       return 'The recommended critique outcome is not observed; inspect the proposal and package files before resuming planning.';
     }
+    // The shared planning readiness owns prerequisite truth: prepared or landed
+    // dependencies may plan before merge, unresolved/unknown dependencies and
+    // a live owner or recorded decision refuse entry.
+    const permission = specReadiness(record(), {
+      action: 'plan',
+      assignments: props.assignments,
+      prerequisites: prerequisitesOf(),
+    });
+    if (!permission.launchable) return permission.reason ?? 'Planning is not confirmed for this package.';
     return '';
   };
   const implementGate = (): string => {

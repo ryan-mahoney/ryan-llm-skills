@@ -14,7 +14,12 @@ import {
   type LaunchContext, type LaunchDraftError, type LaunchPreview,
 } from './launch-state';
 import { CapturedInput, PackageContract, PackageDenied, PackageResult, packageReviewKind } from './launch-package';
-import { publicationAuthorityForSkill } from './launch-handoff';
+import {
+  plannedTargetChoices, publicationAuthorityForSkill, seedColdHandoff,
+  type HandoffInput, type HandoffKind, type PackagePlanningPlan, type PlannedTarget,
+} from './launch-handoff';
+import { observedSpecReadiness } from './readiness';
+import { packagePlanningPlan } from '../../../workspaces/spec-prompt.mjs';
 import type { BriefReference } from './composerTypes';
 import type { WireRecord } from './model';
 import type { RouteState } from './route';
@@ -26,11 +31,15 @@ export type LaunchProps = {
   live: boolean;
   token?: string;
   workspace?: WireRecord;
+  workspaceError?: string;
   workspaceName: string;
   assignments?: WireRecord[];
   // Observed snapshot rows for the bound package review's statuses and links;
   // they never supply execution, authority or model facts.
   records?: WireRecord[];
+  // True once the observation envelope has loaded. An empty record list with a
+  // loaded envelope is a definite absence, not a still-loading placeholder.
+  observationLoaded?: boolean;
   epics?: WireRecord[];
   onNavigate?(next: RouteState): void;
   onReturnToAgents(): void;
@@ -205,11 +214,11 @@ export default function Launch(props: LaunchProps) {
   const threadTarget = () => threadTargetOf(threadRecord());
   const threadTargetKind = () => threadState() === 'bound' ? threadTarget()?.kind ?? 'workspace' : threadState();
   const threadUsable = () => !threadBound() || threadState() === 'bound';
-  const locked = () => Boolean(pending()) || !enabled() || !threadUsable();
+  const locked = () => Boolean(pending()) || !enabled() || !threadUsable() || coldBoundBlocked();
   const stage = () => resolveLaunchStage(draft(), { tab: props.route.tab, id: props.route.id });
   const repositories = () => {
     const list = props.workspace?.repositories;
-    return Array.isArray(list) ? list as Array<{ id?: unknown; status?: unknown }> : [];
+    return Array.isArray(list) ? list as Array<{ id?: unknown; status?: unknown; canonical_path?: unknown }> : [];
   };
   // Suggestions follow the identity that owns the target: thread contexts use
   // the thread endpoint with the exact UUID (the route target has no authority
@@ -289,11 +298,134 @@ export default function Launch(props: LaunchProps) {
     ? 'Live process confirmed'
     : resultKind() === 'failed' ? 'launch_failed · process confirmed gone' : 'Unknown identity · not observed';
 
+  // Cold bound package entry has no retained draft: derive the shared
+  // presentation from observed package/epic planning facts once the
+  // observation exists. An unread snapshot waits instead of seeding a
+  // permanently empty bound brief; an unreadable package, missing targets or a
+  // requested planning skill that disagrees with the derived plan shows an
+  // honest reason and posts nothing. A route target is honored only as a
+  // canonical package primary path/key or as a workspace repository alias whose
+  // stored canonical_path is one of the package's own primary targets, so an
+  // explicit alias selection survives cold entry without approving a different
+  // repository. A cold result URL stays inspection and is never converted into
+  // a fresh attempt.
+  const [coldSeedState, setColdSeedState] = createSignal<'idle' | 'waiting' | 'unavailable'>('idle');
+  const [coldSeedReason, setColdSeedReason] = createSignal('');
+  const coldBoundSeed = createMemo((): { kind: HandoffKind; input: HandoffInput } | 'waiting' | { reason: string } | null => {
+    const routePackage = props.route.package;
+    const kind = routePackage ? packageReviewKind(props.route.skill) : null;
+    if (!routePackage || !kind) return null;
+    // A thread-bound context keeps the existing thread seed flow; its
+    // identity must not be re-seeded under a different context tuple.
+    if (props.route.thread) return null;
+    // A result identity is an inspection, not a fresh bound attempt.
+    if (props.route.tab === 'result' && props.route.id) return null;
+    // A retained draft always owns its context.
+    if (getLaunchDraft(context())) return null;
+    // Not connected or not observed yet: wait rather than seed an empty bound
+    // draft that would look like a prepared brief.
+    if (!ws() || !props.live) return 'waiting';
+    const records = props.records ?? [];
+    if (!records.length && !props.observationLoaded) return 'waiting';
+    const record = records.find(item => str(item.workspace) === ws()
+      && [str(item.package), str(item.package_ref), str(item.package_path)].some(value => value === routePackage));
+    if (!record) return { reason: 'The requested package is not observed in this workspace; inspect the package before preparing this hand-off.' };
+    const choices = plannedTargetChoices(Array.isArray(record.targets) ? record.targets as PlannedTarget[] : []);
+    if (choices.length === 0) {
+      return { reason: 'No usable package target is available; inspect the package before preparing this hand-off.' };
+    }
+    // Direct canonical path/key wins; otherwise only a usable selected workspace
+    // repository alias resolving through its canonical_path to a package primary
+    // is accepted. Wait for that inventory before the first seed: retained drafts
+    // must not be mutated when a later workspace response arrives.
+    const routeTarget = props.route.target;
+    const directTarget = routeTarget && choices.some(choice => choice.path === routeTarget || choice.key === routeTarget)
+      ? routeTarget
+      : undefined;
+    if (routeTarget && !directTarget && (!props.workspace || props.workspace.id !== ws()
+      || !Array.isArray(props.workspace.repositories))) {
+      return props.workspaceError
+        ? { reason: 'Workspace repository inventory could not be loaded; retry workspace details before preparing this hand-off.' }
+        : 'waiting';
+    }
+    const aliasRepository = routeTarget && !directTarget
+      ? repositories().find(repository => repository.id === routeTarget && repository.status === 'ok')
+      : undefined;
+    const aliasTarget = aliasRepository && typeof aliasRepository.canonical_path === 'string'
+      ? choices.find(choice => choice.path === aliasRepository.canonical_path)?.path
+      : undefined;
+    const boundTarget = directTarget ?? aliasTarget;
+    if (routeTarget && !boundTarget) {
+      return { reason: 'The requested target does not resolve to a usable primary target of this package; inspect the package and workspace repositories before preparing this hand-off.' };
+    }
+    const facts = observedSpecReadiness(record, props.epics ?? [], props.assignments ?? []).facts;
+    let plan: PackagePlanningPlan | null = null;
+    if (kind === 'plan') {
+      if (!facts || facts.proposal === null) {
+        return { reason: 'The package proposal presence is not observed; inspect the package files before preparing this planning hand-off.' };
+      }
+      // The same conservative stage rules as normal entry: an unknown critique
+      // recommendation and an unknown recommended-critique outcome refuse
+      // instead of coercing a spec-write or critics stage.
+      if (facts.proposal === true && facts.critiqueRecommended === null) {
+        return { reason: 'The proposal does not record whether critique is recommended; inspect the proposal and package files before preparing this planning hand-off.' };
+      }
+      if (facts.critiqueRecommended === true && facts.critique === null) {
+        return { reason: 'The recommended critique outcome is not observed; inspect the proposal and package files before preparing this planning hand-off.' };
+      }
+      plan = packagePlanningPlan({
+        proposal: facts.proposal === true,
+        critiqueRecommended: facts.critiqueRecommended === true,
+        critique: facts.critique === true,
+      }) as PackagePlanningPlan;
+      if (plan.skill !== props.route.skill) {
+        return { reason: 'The requested planning skill does not match the observed package stage; inspect the package before preparing this hand-off.' };
+      }
+    }
+    return {
+      kind,
+      input: {
+        ws: ws(),
+        // Route identity owns the context tuple; observed facts only derive the
+        // presentation, skill and stage.
+        packageRef: routePackage,
+        targets: Array.isArray(record.targets) ? record.targets as PlannedTarget[] : [],
+        ...(plan ? { planningPlan: plan } : {}),
+        ...(boundTarget ? { target: boundTarget } : {}),
+      },
+    };
+  });
+  const coldBoundBlocked = () => Boolean(props.route.package && packageReviewKind(props.route.skill))
+    && (coldSeedState() === 'waiting' || coldSeedState() === 'unavailable');
+
   // Seed one draft per launch context; retained typed work is never clobbered.
   createEffect(() => {
     const ctx = context();
     if (!ctx.ws) return;
-    if (!getLaunchDraft(ctx)) seedLaunchDraft(ctx, { title: '', content: '' });
+    const cold = coldBoundSeed();
+    if (cold === null) {
+      // Generic, direct, thread or result context (or the memo already found a
+      // retained draft): clear any stale bound refusal and keep the ordinary
+      // empty seed.
+      setColdSeedState('idle');
+      setColdSeedReason('');
+      if (!getLaunchDraft(ctx)) seedLaunchDraft(ctx, { title: '', content: '' });
+      return;
+    }
+    if (getLaunchDraft(ctx)) return;
+    if (cold === 'waiting') {
+      setColdSeedState('waiting');
+      setColdSeedReason('');
+      return;
+    }
+    if ('reason' in cold) {
+      setColdSeedState('unavailable');
+      setColdSeedReason(cold.reason);
+      return;
+    }
+    setColdSeedState('idle');
+    setColdSeedReason('');
+    seedColdHandoff(cold.kind, cold.input);
   });
 
   // Read the exact stored thread record once per requested UUID. The read-only
@@ -521,6 +653,14 @@ export default function Launch(props: LaunchProps) {
             : stage() === 'result' || stage() === 'inspection' ? props.workspaceName : `${props.workspaceName} · New background agent`}</p>
           <Show when={props.live} fallback={<StateNotice tone="info" title="Launch requires the live dashboard">Open the host dashboard to prepare and save an assignment brief. Imported snapshots cannot reach the launch service.</StateNotice>}>
             <Show when={showBrief()}>
+              <Show when={coldBoundBlocked()}>
+                <div id="launch-cold-bound" data-cold-bound={coldSeedState()}>
+                  <StateNotice tone={coldSeedState() === 'unavailable' ? 'warning' : 'info'} announce={false}
+                    title={coldSeedState() === 'unavailable' ? 'Bound package cannot be prepared' : 'Waiting for the observed package'}>
+                    {coldSeedReason() || 'The package observation has not loaded yet, so this bound brief is not seeded. Nothing has been saved or dispatched.'}
+                  </StateNotice>
+                </div>
+              </Show>
               <form id="launch-form" onSubmit={event => { event.preventDefault(); save(); }}>
                 <div class="field">
                   <Show when={threadBound()} fallback={<>

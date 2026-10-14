@@ -21,9 +21,23 @@ const NEXT_DIGEST = 'b'.repeat(64);
 
 type CapturedCall = { url: string; body: any; init: RequestInit };
 type Scope = { after: (callback: () => void) => void };
+type WorkspaceRepositoryFixture = { alias: string; canonicalPath: string };
 
 function jsonResponse(status: number, payload: unknown): Response {
   return new Response(JSON.stringify(payload), { status, headers: { 'content-type': 'application/json' } });
+}
+
+// Production preview and launch both read the workspace inventory before a
+// bound package target is submitted: the stored physical canonical_path maps
+// the planned absolute primary path to its registered repository alias.
+function workspaceInventory(ws: string, repositories: WorkspaceRepositoryFixture[]): Response {
+  return jsonResponse(200, {
+    id: ws,
+    directory: '/workspace',
+    repositories: repositories.map(({ alias, canonicalPath }) => ({
+      id: alias, path: canonicalPath, status: 'ok', canonical_path: canonicalPath,
+    })),
+  });
 }
 
 function scopeFetch(t: Scope, responses: Array<Response | Promise<Response>>): CapturedCall[] {
@@ -80,8 +94,10 @@ function scopeBrowser(t: Scope): FakeBrowser {
 test('package handoff single implement saves once and opens review before any preview or launch', async (t) => {
   const calls = scopeFetch(t, [
     jsonResponse(200, { brief: 'briefs/pkg-one.md' }),
+    workspaceInventory('ws-handoff-one', [{ alias: 'repo-web-primary', canonicalPath: '/workspace/repos/web-primary' }]),
     jsonResponse(200, {}),
-    jsonResponse(200, { record: { assignment_id: ASSIGNMENT_ID, repository_id: '/workspace/repos/web-primary', skill: 'spec-end-to-end', publication_authority: 'draft-pr' }, contractDigest: DIGEST }),
+    jsonResponse(200, { record: { assignment_id: ASSIGNMENT_ID, repository_id: 'repo-web-primary', skill: 'spec-end-to-end', publication_authority: 'draft-pr' }, contractDigest: DIGEST }),
+    workspaceInventory('ws-handoff-one', [{ alias: 'repo-web-primary', canonicalPath: '/workspace/repos/web-primary' }]),
     jsonResponse(200, { assignment: { assignment_id: ASSIGNMENT_ID, state: 'live' }, observation: { assignment_id: ASSIGNMENT_ID } }),
   ]);
   const routes: RouteState[] = [];
@@ -108,27 +124,32 @@ test('package handoff single implement saves once and opens review before any pr
   await launchReviewedDraft(started.context, TOKEN);
   assert.deepEqual(calls.map(call => call.url), [
     '/api/dispatch/save-brief',
+    '/api/workspace?id=ws-handoff-one',
     '/api/dispatch/prepare-spec-target',
     '/api/dispatch/preview',
+    '/api/workspace?id=ws-handoff-one',
     '/api/dispatch/launch',
   ]);
-  assert.deepEqual(calls[1].body, {
+  assert.equal(calls[1].url, '/api/workspace?id=ws-handoff-one', 'the preview reads the workspace inventory before binding');
+  assert.deepEqual(calls[2].body, {
     workspace_id: 'ws-handoff-one',
     spec_package: '/storage/proj/specs/pkg-one',
-    repository_id: '/workspace/repos/web-primary',
+    repository_id: 'repo-web-primary',
   });
-  assert.equal(calls[2].body.repository_id, '/workspace/repos/web-primary');
-  assert.equal(calls[2].body.skill, 'spec-end-to-end');
-  assert.equal(calls[2].body.spec_package, '/storage/proj/specs/pkg-one');
-  assert.equal(calls[2].body.publication_authority, 'draft-pr');
-  assert.equal(calls[3].body.repository_id, '/workspace/repos/web-primary');
+  assert.equal(calls[3].body.repository_id, 'repo-web-primary');
+  assert.equal(calls[3].body.skill, 'spec-end-to-end');
+  assert.equal(calls[3].body.spec_package, '/storage/proj/specs/pkg-one');
   assert.equal(calls[3].body.publication_authority, 'draft-pr');
-  assert.equal(calls[3].body.expectedDigest, DIGEST);
+  assert.equal(calls[4].url, '/api/workspace?id=ws-handoff-one', 'the launch binds through the same inventory');
+  assert.equal(calls[5].body.repository_id, 'repo-web-primary');
+  assert.equal(calls[5].body.publication_authority, 'draft-pr');
+  assert.equal(calls[5].body.expectedDigest, DIGEST);
 });
 
 test('package handoff passed planning plan saves the derived stages before preview with none authority', async (t) => {
   const calls = scopeFetch(t, [
     jsonResponse(200, { brief: 'briefs/pkg-two.md' }),
+    workspaceInventory('ws-handoff-two', [{ alias: 'repo-two', canonicalPath: '/workspace/repos/two' }]),
     jsonResponse(200, {}),
     jsonResponse(200, { record: { assignment_id: ASSIGNMENT_ID }, contractDigest: DIGEST }),
   ]);
@@ -150,9 +171,12 @@ test('package handoff passed planning plan saves the derived stages before previ
   assert.match(started.draft.content, /Publication authority: none\./);
 
   await reviewLaunchDraft(started.context, TOKEN);
-  assert.equal(calls[2].url, '/api/dispatch/preview');
-  assert.equal(calls[2].body.publication_authority, 'none');
-  assert.equal(calls[2].body.skill, 'spec-architect-critics');
+  assert.equal(calls[1].url, '/api/workspace?id=ws-handoff-two');
+  assert.equal(calls[2].url, '/api/dispatch/prepare-spec-target');
+  assert.equal(calls[2].body.repository_id, 'repo-two');
+  assert.equal(calls[3].url, '/api/dispatch/preview');
+  assert.equal(calls[3].body.publication_authority, 'none');
+  assert.equal(calls[3].body.skill, 'spec-architect-critics');
 });
 
 test('package handoff rejects missing workspace, package and zero targets without fetching', async (t) => {
@@ -174,6 +198,7 @@ test('package handoff rejects missing workspace, package and zero targets withou
 test('package handoff multiple targets seed null and stay unsaved until a canonical retarget', async (t) => {
   const calls = scopeFetch(t, [
     jsonResponse(200, { brief: 'briefs/pkg-four.md' }),
+    workspaceInventory('ws-handoff-four', [{ alias: 'repo-alpha', canonicalPath: '/workspace/repos/alpha' }]),
     jsonResponse(200, {}),
     jsonResponse(200, { record: { assignment_id: ASSIGNMENT_ID }, contractDigest: DIGEST }),
   ]);
@@ -202,9 +227,10 @@ test('package handoff multiple targets seed null and stay unsaved until a canoni
 
   await saveLaunchDraft(started.context, TOKEN);
   await reviewLaunchDraft(started.context, TOKEN);
-  assert.deepEqual(calls.map(call => call.url), ['/api/dispatch/save-brief', '/api/dispatch/prepare-spec-target', '/api/dispatch/preview']);
-  assert.equal(calls[1].body.repository_id, '/workspace/repos/alpha');
-  assert.equal(calls[2].body.repository_id, '/workspace/repos/alpha');
+  assert.deepEqual(calls.map(call => call.url), ['/api/dispatch/save-brief', '/api/workspace?id=ws-handoff-four', '/api/dispatch/prepare-spec-target', '/api/dispatch/preview']);
+  assert.equal(calls[1].url, '/api/workspace?id=ws-handoff-four');
+  assert.equal(calls[2].body.repository_id, 'repo-alpha');
+  assert.equal(calls[3].body.repository_id, 'repo-alpha');
 });
 
 test('package handoff canonical target choices sort, dedupe and keep primary paths', () => {
@@ -305,12 +331,16 @@ test('package handoff late save cannot redirect after the caller navigates away'
 test('package handoff repeat entry retains unconfirmed and failed outcomes without new submissions', async (t) => {
   const calls = scopeFetch(t, [
     jsonResponse(200, { brief: 'briefs/pkg-seven.md' }),
+    workspaceInventory('ws-handoff-seven', [{ alias: 'repo-seven', canonicalPath: '/workspace/repos/seven' }]),
     jsonResponse(200, {}),
     jsonResponse(200, { record: { assignment_id: 'assignment-seven' }, contractDigest: DIGEST }),
+    workspaceInventory('ws-handoff-seven', [{ alias: 'repo-seven', canonicalPath: '/workspace/repos/seven' }]),
     jsonResponse(200, { assignment: { assignment_id: 'assignment-seven', state: 'launching' }, observation: {} }),
     jsonResponse(200, { brief: 'briefs/pkg-eight.md' }),
+    workspaceInventory('ws-handoff-eight', [{ alias: 'repo-eight', canonicalPath: '/workspace/repos/eight' }]),
     jsonResponse(200, {}),
     jsonResponse(200, { record: { assignment_id: 'assignment-eight' }, contractDigest: DIGEST }),
+    workspaceInventory('ws-handoff-eight', [{ alias: 'repo-eight', canonicalPath: '/workspace/repos/eight' }]),
     jsonResponse(200, { assignment: { assignment_id: 'assignment-eight', state: 'launch_failed' }, observation: {} }),
   ]);
   const scenarios = [
@@ -363,29 +393,58 @@ test('package handoff cold seed derives the observed resumed brief without posti
   assert.equal(calls.length, 0);
 });
 
+test('package handoff cold seed honors a validated route target only when it matches the package inventory', () => {
+  const first = '/workspace/repos/twelve-a';
+  const second = '/workspace/repos/twelve-b';
+  const targets: PlannedTarget[] = [
+    { id: 'twelve-a', primary: first },
+    { id: 'twelve-b', primary: second },
+  ];
+  const chosen = seedColdHandoff('implement', { ws: 'ws-handoff-twelve', packageRef: '/storage/proj/specs/pkg-twelve', targets, target: second });
+  if (!chosen.ok) assert.fail(chosen.reason);
+  assert.equal(chosen.context.target, second);
+  assert.equal(chosen.draft.target, second);
+  const invalid = seedColdHandoff('implement', { ws: 'ws-handoff-twelve-2', packageRef: '/storage/proj/specs/pkg-twelve', targets, target: '/workspace/repos/elsewhere' });
+  if (!invalid.ok) assert.fail(invalid.reason);
+  assert.equal(invalid.context.target, null);
+  assert.equal(invalid.draft.target, null);
+  const single = seedColdHandoff('implement', { ws: 'ws-handoff-twelve-3', packageRef: '/storage/proj/specs/pkg-twelve', targets: [targets[0]], target: second });
+  if (!single.ok) assert.fail(single.reason);
+  assert.equal(single.context.target, first, 'one canonical target keeps the primary');
+});
+
 test('package handoff fallback returns are workspace scoped', () => {
   assert.deepEqual(handoffReturn('plan', { ws: 'ws-handoff-ten' }), { dest: 'epics', ws: 'ws-handoff-ten' });
   assert.deepEqual(handoffReturn('implement', { ws: 'ws-handoff-ten' }), { dest: 'specs', ws: 'ws-handoff-ten', filter: 'ready' });
 });
 
 test('package handoff retarget after review clears approval and requires a fresh preview digest', async (t) => {
-  const calls = scopeFetch(t, [
-    jsonResponse(200, { brief: 'briefs/pkg-eleven.md' }),
-    jsonResponse(200, {}),
-    jsonResponse(200, { record: { assignment_id: ASSIGNMENT_ID }, contractDigest: DIGEST }),
-    jsonResponse(200, {}),
-    jsonResponse(200, { record: { assignment_id: ASSIGNMENT_ID }, contractDigest: NEXT_DIGEST }),
-    jsonResponse(200, { assignment: { assignment_id: ASSIGNMENT_ID, state: 'live' }, observation: {} }),
-  ]);
   const first = '/workspace/repos/eleven-a';
   const second = '/workspace/repos/eleven-b';
   const targets: PlannedTarget[] = [
     { id: 'eleven-a', primary: first },
     { id: 'eleven-b', primary: second },
   ];
+  const inventory = [
+    { alias: 'repo-eleven-a', canonicalPath: first },
+    { alias: 'repo-eleven-b', canonicalPath: second },
+  ];
+  const calls = scopeFetch(t, [
+    jsonResponse(200, { brief: 'briefs/pkg-eleven.md' }),
+    workspaceInventory('ws-handoff-eleven', inventory),
+    jsonResponse(200, {}),
+    jsonResponse(200, { record: { assignment_id: ASSIGNMENT_ID }, contractDigest: DIGEST }),
+    workspaceInventory('ws-handoff-eleven', inventory),
+    jsonResponse(200, {}),
+    jsonResponse(200, { record: { assignment_id: ASSIGNMENT_ID }, contractDigest: NEXT_DIGEST }),
+    workspaceInventory('ws-handoff-eleven', inventory),
+    jsonResponse(200, { assignment: { assignment_id: ASSIGNMENT_ID, state: 'live' }, observation: {} }),
+  ]);
   const started = await startPackageHandoff('implement', { ws: 'ws-handoff-eleven', packageRef: '/storage/proj/specs/pkg-eleven', targets: [targets[0]] }, TOKEN, () => undefined);
   if (!started.ok) assert.fail(started.reason);
   await reviewLaunchDraft(started.context, TOKEN);
+  assert.equal(calls[1].url, '/api/workspace?id=ws-handoff-eleven');
+  assert.equal(calls[2].body.repository_id, 'repo-eleven-a');
   const reviewed = getLaunchDraft(started.context);
   assert.equal(reviewed?.reviewStatus, 'current');
   assert.equal(reviewed?.preview?.target, first);
@@ -418,13 +477,16 @@ test('package handoff retarget after review clears approval and requires a fresh
   assert.equal(cold.draft.lastReviewed?.contractDigest, DIGEST);
 
   await assert.rejects(launchReviewedDraft(started.context, TOKEN), /Review the current target before launching/);
+  assert.equal(calls.length, 4, 'a refused stale launch reads nothing further');
 
   await reviewLaunchDraft(started.context, TOKEN);
+  assert.equal(calls[4].url, '/api/workspace?id=ws-handoff-eleven', 'the retarget re-reads the inventory before preparing');
+  assert.equal(calls[5].body.repository_id, 'repo-eleven-b');
   assert.equal(getLaunchDraft(started.context)?.preview?.contractDigest, NEXT_DIGEST);
   await launchReviewedDraft(started.context, TOKEN);
-  assert.equal(calls.length, 6);
-  assert.equal(calls[4].body.repository_id, second);
-  assert.equal(calls[5].body.repository_id, second);
-  assert.equal(calls[5].body.expectedDigest, NEXT_DIGEST);
+  assert.equal(calls.length, 9);
+  assert.equal(calls[7].url, '/api/workspace?id=ws-handoff-eleven', 'the launch resolves the retarget alias again');
+  assert.equal(calls[8].body.repository_id, 'repo-eleven-b');
+  assert.equal(calls[8].body.expectedDigest, NEXT_DIGEST);
   assert.equal(getLaunchDraft(started.context)?.result?.kind, 'launched');
 });

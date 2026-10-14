@@ -250,6 +250,93 @@ test('collectRecords projects a live starting assignment without receipts and a 
   assert.equal(packageFilterMatches(withReceipt[0], 'active'), true);
 });
 
+// Run from scripts/spec-observe/frontend: node --import tsx --test --test-name-pattern='cancelled history' src/model.test.ts
+test('cancelled-only history does not suppress a new live starting projection and a real receipt still replaces it', () => {
+  const path = '/store/w/specs/browser';
+  const planned = {
+    workspace: 'w', package_ref: 'w/browser', package: path, planned_at: now,
+    prepared: true, step_count: 3,
+    preparation: { outcome: 'prepared', reported_at: now, source: `${path}/spec-prepare.md`, read: 'ok', bytes: 10 },
+    decision: null, receipts: [{ id: 'old-1', state: 'cancelled' }],
+    targets: [{ id: 'main', primary: '/store/w' }], source_paths: ['spec.md'],
+  };
+  const historical = { workspace: 'w', package: path, package_ref: 'w/browser', assignment_id: 'old-1', execution: 'cancelled', is_current_assignment: false, observed_at: now };
+  const start = { assignment_id: 'new-1', workspace: 'w', spec_package: path, display: 'live', skill: 'spec-end-to-end' };
+  const inventory = (snapshot: Record<string, any> = {}) => observer('inventory', 'w', {
+    planned_packages: [planned], assignments: [start], assignment_coverage: { state: 'complete' }, runs: [historical], ...snapshot,
+  });
+
+  const projected = collectRecords(normalizeEnvelope(envelope(inventory())));
+  const rows = projected.filter(record => record.package === path);
+  const projection = rows.find(record => record.implementation_starting === true);
+  assert.ok(projection);
+  assert.equal(projection!.planned, undefined);
+  assert.equal(projection!.assignment_id, 'new-1');
+  assert.equal(projection!.key, JSON.stringify(['w', path, 'planned-package', null]));
+  assert.deepEqual(projection!.receipts, [{ id: 'old-1', state: 'cancelled' }]);
+  assert.equal(rows.some(record => record.assignment_id === 'old-1'), true, 'the cancelled history row is kept');
+  assert.equal(rows.some(record => record.planned === true), false);
+  assert.equal(packageFilterMatches(projection!, 'active'), true);
+  assert.equal(packageFilterMatches(projection!, 'ready'), false);
+  assert.deepEqual(projected.filter(record => packageFilterMatches(record, 'ready')), []);
+
+  const receipt = { workspace: 'w', package: path, package_ref: 'w/browser', assignment_id: 'new-1', execution: 'running', is_current_assignment: true, observed_at: now };
+  const withReceipt = collectRecords(normalizeEnvelope(envelope(inventory({ runs: [historical, receipt] }))));
+  assert.equal(withReceipt.some(record => record.implementation_starting === true), false);
+  assert.equal(withReceipt.some(record => record.assignment_id === 'old-1'), true);
+  const authoritative = withReceipt.find(record => record.assignment_id === 'new-1');
+  assert.ok(authoritative);
+  assert.equal(authoritative!.implementation_starting, undefined);
+  assert.equal(authoritative!.planned, undefined);
+  assert.equal(packageFilterMatches(authoritative!, 'active'), true);
+  assert.deepEqual(withReceipt.filter(record => packageFilterMatches(record, 'ready')), []);
+});
+
+// Run from scripts/spec-observe/frontend: node --import tsx --test --test-name-pattern='cancelled history' src/model.test.ts
+test('cancelled history is assignment-aware: the current flag never hides a superseded cancellation and the owning receipt stays authoritative', () => {
+  const path = '/store/w/specs/browser';
+  const planned = {
+    workspace: 'w', package_ref: 'w/browser', package: path, planned_at: now,
+    prepared: true, step_count: 3,
+    preparation: { outcome: 'prepared', reported_at: now, source: `${path}/spec-prepare.md`, read: 'ok', bytes: 10 },
+    decision: null, receipts: [{ id: 'old-1', state: 'cancelled' }],
+    targets: [{ id: 'main', primary: '/store/w' }], source_paths: ['spec.md'],
+  };
+  const start = { assignment_id: 'new-1', workspace: 'w', spec_package: path, display: 'live', skill: 'spec-end-to-end' };
+  const inventory = (snapshot: Record<string, any> = {}) => observer('inventory', 'w', {
+    planned_packages: [planned], assignments: [start], assignment_coverage: { state: 'complete' }, ...snapshot,
+  });
+
+  // Sentinel marks the newest receipt as the current assignment even when it
+  // was cancelled: both flag values must stay history for the prior owner and
+  // must not suppress the new blocking assignment's projection.
+  for (const current of [false, true]) {
+    const superseded = { workspace: 'w', package: path, package_ref: 'w/browser', assignment_id: 'old-1', execution: 'cancelled', is_current_assignment: current, observed_at: now };
+    const projected = collectRecords(normalizeEnvelope(envelope(inventory({ runs: [superseded] }))));
+    const rows = projected.filter(record => record.package === path);
+    const projection = rows.find(record => record.implementation_starting === true);
+    assert.ok(projection, `cancelled history with is_current_assignment=${current} must not suppress the new projection`);
+    assert.equal(projection!.assignment_id, 'new-1');
+    assert.equal(projection!.key, JSON.stringify(['w', path, 'planned-package', null]));
+    assert.equal(rows.some(record => record.assignment_id === 'old-1'), true, 'the cancelled history row is kept');
+    assert.equal(rows.some(record => record.planned === true), false);
+    assert.equal(packageFilterMatches(projection!, 'active'), true);
+    assert.deepEqual(projected.filter(record => packageFilterMatches(record, 'ready')), []);
+  }
+
+  // A cancellation carrying the new owning assignment's own identity is not
+  // history: the receipt row stays authoritative and replaces the projection.
+  const owned = { workspace: 'w', package: path, package_ref: 'w/browser', assignment_id: 'new-1', execution: 'cancelled', is_current_assignment: true, observed_at: now };
+  const withOwnerCancellation = collectRecords(normalizeEnvelope(envelope(inventory({ runs: [owned] }))));
+  assert.equal(withOwnerCancellation.some(record => record.implementation_starting === true), false);
+  const authoritative = withOwnerCancellation.find(record => record.assignment_id === 'new-1');
+  assert.ok(authoritative);
+  assert.equal(authoritative!.planned, undefined);
+  assert.equal(activeRun(authoritative!), false);
+  assert.equal(packageFilterMatches(authoritative!, 'active'), false);
+  assert.equal(packageFilterMatches(authoritative!, 'ready'), false);
+});
+
 // Run from scripts/spec-observe/frontend: node --import tsx --test --test-name-pattern='planned alias matches Ready' src/model.test.ts
 test('planned alias matches Ready and absent facts or incomplete coverage offer no launch', () => {
   const legacy = { workspace: 'w', package_ref: 'w/legacy', package: '/store/w/specs/legacy' };
