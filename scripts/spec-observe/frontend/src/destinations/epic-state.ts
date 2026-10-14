@@ -128,8 +128,8 @@ export function epicMemberRecord(epic: WireRecord, member: WireRecord, records: 
 export const memberIsMissing = (member: WireRecord): boolean => member?.status === 'missing' || member?.exists === false;
 
 // Declared prerequisites resolved against sibling planning facts: a landed
-// sibling is landed, positive preparation is available-when-merged, and
-// anything else keeps the declaration visible without authorizing a plan.
+// sibling is landed, positive preparation is prepared-but-not-observed-merged,
+// and anything else keeps the declaration visible without authorizing a plan.
 export function epicMemberPrerequisites(epic: WireRecord, member: WireRecord): PrerequisiteFact[] {
   const names = epicMemberRequires(member).names;
   if (!names.length) return [];
