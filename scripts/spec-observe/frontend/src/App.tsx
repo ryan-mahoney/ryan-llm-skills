@@ -1,5 +1,6 @@
 import { For, Show, Switch, Match, createSignal, createMemo, createEffect, on, onMount, onCleanup } from 'solid-js';
 import { getJson } from './api';
+import { startNextStepsPolling, stopNextStepsPolling } from './next-steps-store';
 import { str, base, time, packageFilterMatches, setClock, tickClock, serverNow, stale, statusMarkdown } from './format';
 import { catalog as modelsCatalog, loadCatalog as loadModelsCatalog } from './models-state';
 import { normalizeEnvelope, authoritativeObservers, collectRecords, packageSummaries, collectAssignments, collectEpics, type Envelope, type WireRecord } from './model';
@@ -364,6 +365,7 @@ export default function App() {
       stateGeneration++;
       catalogGeneration++;
       workspaceGeneration++;
+      stopNextStepsPolling();
       workspaceBusyId = null;
       clearTimeout(catalogTimer);
       clearTimeout(workspaceTimer);
@@ -557,6 +559,13 @@ export default function App() {
     if (id && id !== previous && live()) void loadWorkspace(id);
   }));
 
+  // The scan store owns the single /api/next-steps transport and lifetime;
+  // live transitions start it and import/offline transitions stop it.
+  createEffect(() => {
+    if (live()) startNextStepsPolling();
+    else stopNextStepsPolling();
+  });
+
   onMount(() => {
     const unsubscribe = subscribeRoute(setRoute);
     navigate(parseHash(location.hash), 'replace');
@@ -578,6 +587,7 @@ export default function App() {
       stateGeneration++;
       catalogGeneration++;
       workspaceGeneration++;
+      stopNextStepsPolling();
     });
   });
 
