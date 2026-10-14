@@ -135,11 +135,12 @@ def run(url, page):
         page.wait_for_timeout(100)
         expect(page.locator('.empty-inline')).to_be_visible()
         expect(page.locator('.empty-inline')).to_contain_text('No models match this search.')
+        cap(page, 'no-matches')
         page.locator('.empty-inline button:has-text("Clear search")').click()
         page.wait_for_timeout(100)
         expect(page.locator('#find-model')).to_have_value('')
         assert first_table.locator('tbody tr').count() >= 6
-        cap(page, 'no-matches')
+        cap(page, 'no-matches-cleared')
         passed('no-matches')
 
         # 4. missing pair: preferred but not in catalog
@@ -174,24 +175,28 @@ def run(url, page):
         # 6. failed row: save failure
         page.route('**/api/models/preferred', lambda route: route.fulfill(status=503) if route.request.method == 'POST' else route.continue_())
         reload(page)
-        prov_group = page.locator('details.prov-group').first
-        prov_group.locator('summary').click()
-        page.wait_for_timeout(200)
-        unchecked = prov_group.locator('input.switch:not(:checked)')
-        if unchecked.count() > 0:
-            candidate = unchecked.first
-            label = candidate.get_attribute('aria-label')
-            candidate.click()
-            page.wait_for_timeout(500)
-            expect(page.locator('.row-error').first).to_contain_text('Change reverted')
-            expect(page.locator('.row-error').first.locator('button:has-text("Retry")')).to_be_visible()
-            expect(prov_group.locator(f'input.switch[aria-label="{label}"]')).not_to_be_checked()
-            cap(page, 'failed-row')
-            page.unroute('**/api/models/preferred')
-            page.locator('.row-error').first.locator('button:has-text("Retry")').click()
-            page.wait_for_timeout(500)
-            expect(prov_group.locator(f'input.switch[aria-label="{label}"]')).to_be_checked()
-            expect(page.locator('.row-error')).to_have_count(0)
+        prov_group = None
+        for group in page.locator('details.prov-group').all():
+            if not group.evaluate('(el) => el.open'):
+                group.locator('summary').click()
+                page.wait_for_timeout(200)
+            if group.locator('input.switch:not(:checked)').count() > 0:
+                prov_group = group
+                break
+        assert prov_group is not None, 'failed-row scenario needs a provider group with an unchecked switch'
+        candidate = prov_group.locator('input.switch:not(:checked)').first
+        label = candidate.get_attribute('aria-label')
+        candidate.click()
+        page.wait_for_timeout(500)
+        expect(page.locator('.row-error').first).to_contain_text('Change reverted')
+        expect(page.locator('.row-error').first.locator('button:has-text("Retry")')).to_be_visible()
+        expect(prov_group.locator(f'input.switch[aria-label="{label}"]')).not_to_be_checked()
+        cap(page, 'failed-row')
+        page.unroute('**/api/models/preferred')
+        page.locator('.row-error').first.locator('button:has-text("Retry")').click()
+        page.wait_for_timeout(500)
+        expect(prov_group.locator(f'input.switch[aria-label="{label}"]')).to_be_checked()
+        expect(page.locator('.row-error')).to_have_count(0)
         passed('failed row')
 
         # 7. loading: catalog loading state
@@ -292,6 +297,8 @@ def run(url, page):
 
         # 13. scroll preservation: click doesn't reset scroll
         reload(page)
+        saved_top = None
+        current_top = None
         try:
             # Find a group with unchecked switch by walking backwards from last group
             groups = page.locator('details.prov-group').all()
@@ -326,9 +333,11 @@ def run(url, page):
             }""")
             candidate.scroll_into_view_if_needed()
             page.wait_for_timeout(150)
-            # Record saved scroll position
+            # Record saved scroll position and the operator-visible anchor.
             full_page = page.locator('.full-page').first
+            switch_locator = target_group.locator(f'input.switch[aria-label="{label}"]')
             saved_top = full_page.evaluate('(el) => el.scrollTop')
+            saved_box = switch_locator.bounding_box()
             # Only assert non-zero if there's actual scrollable content
             scroll_info = full_page.evaluate('(el) => ({scrollHeight: el.scrollHeight, clientHeight: el.clientHeight})')
             if scroll_info['scrollHeight'] > scroll_info['clientHeight']:
@@ -337,8 +346,13 @@ def run(url, page):
             candidate.check(timeout=5000)
             page.wait_for_timeout(400)
             current_top = full_page.evaluate('(el) => el.scrollTop')
-            assert abs(current_top - saved_top) <= 2, f'Scroll position changed: saved={saved_top}, current={current_top}'
-            expect(target_group.locator(f'input.switch[aria-label="{label}"]')).to_be_checked()
+            current_box = switch_locator.bounding_box()
+            # Turning the model on inserts a Preferred row above the viewport, which may
+            # adjust scrollTop; the operator's place is the toggled control staying put.
+            assert saved_box and current_box, 'switch missing before/after save for scroll check'
+            visual_shift = abs(current_box['y'] - saved_box['y'])
+            assert visual_shift <= 2, f'Operator scroll place moved: saved_y={saved_box["y"]}, current_y={current_box["y"]}, saved_top={saved_top}, current_top={current_top}'
+            expect(switch_locator).to_be_checked()
             cap(page, 'scrolled')
             passed('scroll preservation')
         except Exception as error:
@@ -348,6 +362,8 @@ def run(url, page):
                 'error': str(error),
                 'rowError': page.locator('.row-error').first.text_content() if page.locator('.row-error').count() else None,
                 'switchDisabled': target_group.locator(f'input.switch[aria-label="{label}"]').is_disabled() if target_group else None,
+                'savedTop': saved_top,
+                'currentTop': current_top,
             })
             cap(page, 'scrolled')
 
@@ -362,11 +378,11 @@ def run(url, page):
         visual_md.write_text(
             '# Models Visual Inspection\n\n'
             '## Captures\n\n'
-            '\n'.join(f'- {c}' for c in report['captures']) + '\n\n'
+            + '\n'.join(f'- {c}' for c in report['captures']) + '\n\n'
             '## Reference Captures\n\n'
-            '\n'.join(f'- {c}' for c in reference_captures) + '\n\n'
+            + '\n'.join(f'- {c}' for c in reference_captures) + '\n\n'
             '## States Covered\n\n'
-            '\n'.join(f'- {s}' for s in report['scenarios']) + '\n'
+            + '\n'.join(f'- {s}' for s in report['scenarios']) + '\n'
         )
 
         assert not report.get('failures'), report.get('failures')
@@ -665,11 +681,11 @@ def run_picker(url, page):
         visual_md.write_text(
             '# Picker Visual Inspection\n\n'
             '## Captures\n\n'
-            '\n'.join(f'- {c}' for c in report['captures']) + '\n\n'
+            + '\n'.join(f'- {c}' for c in report['captures']) + '\n\n'
             '## Reference Captures\n\n'
-            '\n'.join(f'- {c}' for c in reference_captures) + '\n\n'
+            + '\n'.join(f'- {c}' for c in reference_captures) + '\n\n'
             '## States Covered\n\n'
-            '\n'.join(f'- {s}' for s in report['scenarios']) + '\n'
+            + '\n'.join(f'- {s}' for s in report['scenarios']) + '\n'
         )
 
         assert not report.get('failures'), report.get('failures')

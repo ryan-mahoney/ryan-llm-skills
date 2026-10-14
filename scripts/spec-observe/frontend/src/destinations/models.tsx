@@ -71,13 +71,13 @@ export default function ModelsDestination(props: DestinationProps) {
 
   const retryFailed = (row: CatalogRow) => {
     const state = rowState(row.choice);
-    if (props.token && state.requested !== undefined) {
+    if (canMutate() && props.token && state.requested !== undefined) {
       setPreference(row.choice, state.requested, props.token);
     }
   };
 
   const removeMissing = (row: CatalogRow) => {
-    if (props.token) {
+    if (canMutate() && props.token) {
       setPreference(row.choice, false, props.token);
     }
   };
@@ -149,6 +149,13 @@ export default function ModelsDestination(props: DestinationProps) {
     const isPreferredNow = () => isPreferred(row.choice);
     const state = () => rowState(row.choice);
     const isMissing = row.availability === 'missing';
+    // Keep the switch on the attempted value while the write is in flight and
+    // fall back to the confirmed preference on completion, so a failed save
+    // visibly reverts instead of leaving the browser's toggled state.
+    const displayedChecked = () => {
+      const s = state();
+      return s.pending ? s.requested : isPreferredNow();
+    };
 
     return (
       <>
@@ -170,19 +177,20 @@ export default function ModelsDestination(props: DestinationProps) {
             class="ds-btn"
             type="button"
             style="margin-left:8px;font-size:12px"
+            disabled={!canMutate()}
             onClick={() => removeMissing(row)}
           >
             Remove preference
           </button>
         </Show>
-        <Show when={!isMissing && state().outcome !== 'saved'}>
+        <Show when={!isMissing}>
           <label class="switch-wrap">
             <input
               type="checkbox"
               role="switch"
               class="switch"
               aria-label={`Preferred: ${row.choice.model} via ${row.choice.provider}`}
-              checked={isPreferredNow()}
+              checked={displayedChecked()}
               onClick={() => { if (props.token && !state().pending && canMutate()) setPreference(row.choice, !isPreferredNow(), props.token); }}
               disabled={state().pending || !canMutate() || (!isPreferredNow() && row.availability !== 'available')}
             />
@@ -212,6 +220,7 @@ export default function ModelsDestination(props: DestinationProps) {
                 <button
                   class="ds-btn"
                   type="button"
+                  disabled={!canMutate()}
                   onClick={() => retryFailed(row)}
                 >
                   Retry
@@ -410,7 +419,8 @@ export default function ModelsDestination(props: DestinationProps) {
         <Show when={!hasActiveFilter() || preferredRows().length > 0}>
           <section class="ms-section">
             <div class="section-heading">
-              <h2>Preferred · {preferredRows().length}<span class="muted">Offered in thread and assignment pickers, A–Z</span></h2>
+              <h2>Preferred · {preferredRows().length}</h2>
+              <span class="muted">Offered in thread and assignment pickers, A–Z</span>
             </div>
             <Show when={catalog().status === 'loading'}>
               <div class="ds-callout">Availability unknown; catalog not read</div>
@@ -424,7 +434,8 @@ export default function ModelsDestination(props: DestinationProps) {
 
         <section class="ms-section">
           <div class="section-heading">
-            <h2>All providers · {providerCount()}<span class="muted">Alphabetical</span></h2>
+            <h2>All providers · {providerCount()}</h2>
+            <span class="muted">Alphabetical</span>
           </div>
           <Show when={catalog().status === 'loading'}>
             <RegionalSkeleton variant="table" rows={3} />
