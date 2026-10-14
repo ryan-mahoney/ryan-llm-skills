@@ -467,4 +467,3 @@ th.col-action,td.col-action{width:148px;white-space:nowrap}
 .mopt.default .mid{font-family:var(--ds-sans);font-weight:600}
 .mlist .mfoot{border-top:1px solid var(--ds-line-2);margin-top:4px;padding:0 12px}
 .mlist .mnote{padding:10px 12px;font-size:13px;color:var(--ds-muted);border-top:1px solid var(--ds-line-2)}
-.field-error{font-size:13px;color:#fca5a5}

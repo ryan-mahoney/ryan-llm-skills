@@ -576,16 +576,33 @@ def run_picker(url, page):
         cap_picker(page, 'mouse')
         passed('mouse')
 
-        # e. tab-away
+        # e. Tab reaches the footer navigation, then leaves the picker
         pick_close(page)
         page.locator('#thread-new-model').click()
         page.wait_for_selector('#thread-new-model-list')
         page.keyboard.press('Tab')
         page.wait_for_timeout(200)
+        # The open list stays mounted so Tab lands on the footer navigation
+        # element instead of Solid removing it before the browser moves focus.
+        expect(page.locator('#thread-new-model-list')).to_have_count(1)
+        expect(page.locator('#thread-new-model-manage')).to_be_focused()
+        cap_picker(page, 'tab-footer')
+        # Tabbing past the footer leaves the field and closes the list without
+        # stealing the operator's next form control.
+        page.keyboard.press('Tab')
+        page.wait_for_timeout(200)
         expect(page.locator('#thread-new-model-list')).to_have_count(0)
         expect(dialog).to_be_visible()
-        cap_picker(page, 'tab-away')
-        passed('tab-away')
+        # Reopen and activate the footer with the keyboard: it navigates to Models.
+        page.locator('#thread-new-model').click()
+        page.wait_for_selector('#thread-new-model-list')
+        page.keyboard.press('Tab')
+        page.wait_for_timeout(150)
+        expect(page.locator('#thread-new-model-manage')).to_be_focused()
+        page.keyboard.press('Enter')
+        page.wait_for_timeout(300)
+        expect(page.locator('#catalog-meta')).to_be_visible()
+        passed('footer keyboard navigation')
 
         # f. empty
         control('models-preferences-empty', 'true')
@@ -650,25 +667,44 @@ def run_picker(url, page):
         page.reload(wait_until='domcontentloaded')
         goto_conversations_page(page)
 
+        # i. catalog unreadable: the unread reason is named once, not twice
+        control('models-catalog-fail', 'true')
+        page.reload(wait_until='domcontentloaded')
+        goto_conversations_page(page)
+        page.locator('#thread-new-model').click()
+        page.wait_for_selector('#thread-new-model-list')
+        unknown = page.locator('#thread-new-model-list [role="option"]').filter(has_text='claude-haiku-5-5')
+        assert unknown.get_attribute('aria-disabled') == 'true', 'expected preferred option disabled without a catalog'
+        assert unknown.locator('.why').text_content().strip() == 'Availability unknown; catalog not read', 'expected one unread-catalog reason'
+        cap_picker(page, 'catalog-unreadable')
+        passed('catalog unreadable')
+        control('models-catalog-fail', 'false')
+        page.reload(wait_until='domcontentloaded')
+        goto_conversations_page(page)
+
+        # Render the reference screens from their own origin the same way the
+        # models case does, so the receipt carries real reference captures.
         reference_captures = []
+        if reference_dir and (reference_dir / 'vendor' / 'tailwind.js').is_file():
+            reference_server = ThreadingHTTPServer(('127.0.0.1', 0), partial(QuietRequestHandler, directory=str(reference_dir)))
+            port = reference_server.server_address[1]
+            threading.Thread(target=reference_server.serve_forever, daemon=True).start()
+            ref_page = context.new_page()
+            ref_page.on('pageerror', lambda e: report['pageErrors'].append(str(e)))
+            for ref in ['12-thread-model-picker.html', '14-model-picker-empty.html', '15-model-picker-unavailable.html']:
+                if not (reference_dir / 'screens' / ref).is_file():
+                    continue
+                for width in (1280, 1600):
+                    ref_page.set_viewport_size({'width': width, 'height': 900})
+                    ref_page.goto(f'http://127.0.0.1:{port}/screens/{ref}')
+                    ref_page.wait_for_timeout(300)
+                    cap_path = browser_evidence / f'picker-reference-{ref.replace(".html", "")}@{width}.png'
+                    ref_page.screenshot(path=str(cap_path))
+                    reference_captures.append(str(cap_path))
+            ref_page.close()
+            reference_server.shutdown()
         if reference_dir:
-            ref_screens = reference_dir / 'screens'
-            if ref_screens.exists() and (ref_screens / 'vendor').exists() and (ref_screens / 'vendor' / 'tailwind.js').exists():
-                class RefHandler(SimpleHTTPRequestHandler):
-                    def translate_path(self, path):
-                        return str(ref_screens) + path
-                server = ThreadingHTTPServer(('127.0.0.1', 0), RefHandler)
-                threading.Thread(target=server.serve_forever, daemon=True).start()
-                for ref in ['12-thread-model-picker.html', '14-model-picker-empty.html', '15-model-picker-unavailable.html']:
-                    ref_path = ref_screens / ref
-                    if ref_path.exists():
-                        for width in [1280, 1600]:
-                            page.set_viewport_size({'width': width, 'height': 900})
-                            page.wait_for_timeout(200)
-                            cap_path = browser_evidence / f'picker-reference-{ref}@{width}.png'
-                            page.screenshot(path=str(cap_path))
-                            reference_captures.append(str(cap_path))
-                server.shutdown()
+            assert len(reference_captures) == 6, f'expected 6 picker reference captures, got {len(reference_captures)}'
 
         report['visual'] = {
             'route': '#/conversations?ws=fixture&tab=new + #thread-new-model',

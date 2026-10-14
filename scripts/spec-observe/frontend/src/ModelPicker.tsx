@@ -1,6 +1,6 @@
 import { createEffect, createSignal, For, Show } from 'solid-js';
 import type { ModelChoice } from './models-state';
-import { pickerOptions, catalog, loadPreferences, loadCatalog, preferred } from './models-state';
+import { pickerOptions, catalog, loadPreferences, loadCatalog, preferred, availabilityOf } from './models-state';
 
 type Props = {
   id: string;
@@ -24,14 +24,9 @@ export default function ModelPicker(props: Props) {
 
   const selected = () => props.value;
 
-  const selectedOption = () => {
-    const o = opts();
-    return o.find(opt => {
-      if (selected() === null) return opt.choice === null;
-      if (opt.choice === null) return false;
-      return opt.choice.provider === selected()!.provider && opt.choice.model === selected()!.model;
-    });
-  };
+  // pickerOptions already marks the exact selected option, so reuse that
+  // identity instead of re-deriving provider/model equality here.
+  const selectedOption = () => opts().find(opt => opt.selected);
 
   const enabledOptions = () => opts().filter(o => !o.disabled);
   const enabledCount = () => enabledOptions().length;
@@ -132,7 +127,16 @@ export default function ModelPicker(props: Props) {
       const trigger = document.getElementById(props.id);
       trigger?.focus();
     } else if (e.key === 'Tab') {
-      closeList();
+      if (e.shiftKey) {
+        closeList();
+      } else {
+        // Keep the open list mounted and move focus into its footer navigation
+        // element, which would otherwise be removed before the browser's
+        // default Tab reaches it.
+        e.preventDefault();
+        const footer = document.getElementById(props.id + '-manage');
+        footer?.focus();
+      }
     } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
       const buf = typeaheadBuffer() + e.key.toLowerCase();
       setTypeaheadBuffer(buf);
@@ -175,14 +179,9 @@ export default function ModelPicker(props: Props) {
 
   const catalogView = () => catalog();
 
-  const selectedAvailability = () => {
-    if (!props.value) return 'available';
-    const view = catalogView();
-    if (view.status !== 'ready') return 'unknown';
-    const key = JSON.stringify([props.value.provider, props.value.model]);
-    const found = view.models.some(m => JSON.stringify([m.provider, m.model]) === key);
-    return found ? 'available' : 'missing';
-  };
+  // availabilityOf is the shared availability owner used by the Models page;
+  // reusing it keeps picker reasons and the inline error consistent with it.
+  const selectedAvailability = () => props.value ? availabilityOf(props.value, catalog()) : 'available';
 
   const showFieldError = () => {
     if (!props.value || selectedAvailability() === 'available') return false;
@@ -258,7 +257,7 @@ export default function ModelPicker(props: Props) {
                       <Show when={opt.availability === 'unknown' && catalogView().read_at === null}>
                         Availability unknown; catalog not read
                       </Show>
-                      <Show when={opt.availability === 'unknown'}>
+                      <Show when={opt.availability === 'unknown' && catalogView().read_at !== null}>
                         Availability unknown
                       </Show>
                     </span>
@@ -275,6 +274,11 @@ export default function ModelPicker(props: Props) {
               type="button"
               id={props.id + '-manage'}
               class="text-link"
+              onKeyDown={(e) => {
+                // Let the browser move focus to the next form control first,
+                // then unmount the list so the focus move stays intact.
+                if (e.key === 'Tab' && !e.shiftKey) setTimeout(() => closeList(), 0);
+              }}
               onClick={() => {
                 closeList();
                 props.onManage?.();
