@@ -1305,6 +1305,12 @@ try:
             capture("epic-decision")
             capture_scrolled("epic-decision")
             report["scenarios"].append("EpicDecision renders the observed question and recommendation while another eligible member keeps the Plan member primary")
+            # The decision action bar wraps inside the detail pane at the
+            # required 1280px viewport instead of overflowing it.
+            page.set_viewport_size({"width": 1280, "height": 900})
+            bar_overflow = page.locator(".detail-actions").evaluate("(el) => el.scrollWidth - el.clientWidth")
+            assert bar_overflow <= 1, f"decision action bar overflows the detail pane at 1280px by {bar_overflow}px"
+            report["scenarios"].append("Decision action bar fits the 1280px detail pane with no horizontal overflow")
             check_deadline("decision-section")
 
             # Another eligible member still plans through the real hand-off.
@@ -1315,6 +1321,47 @@ try:
             open_epic()
             report["scenarios"].append("Another eligible member still opens the bound planning review with no worker")
             check_deadline("plan-member")
+
+            # An outcome-marked (unreadable) decision artifact on an earlier
+            # member must not hide a later member's usable question, source
+            # links or unsent seed: waiting-browser precedes
+            # incomplete-browser in record order.
+            control("epic-planning-facts", json.dumps({
+                "proposal": True,
+                "critique": False,
+                "critique_recommended": False,
+                "prepared": False,
+                "step_count": 4,
+                "preparation": {"outcome": "decision-required"},
+                "decision": {"outcome": "unreadable", "source": "decision-required.md"},
+                "receipts": [],
+            }), member="waiting-browser")
+            refresh_epic()
+            expect(page.locator("section.epic-decision .section-heading h3")).to_have_text("Decision needed")
+            expect(page.locator("section.epic-decision .ds-callout")).to_contain_text(decision_question)
+            expect(page.locator('[data-action="discuss-decision"]')).to_be_visible()
+            expect(page.locator('[data-action="open-decision"]')).to_be_visible()
+            expect(page.locator('[data-action="open-proposal"]')).to_be_visible()
+            unreadable_creates_before = len(posts("create"))
+            unreadable_sends_before = len(posts("send"))
+            page.locator('[data-action="discuss-decision"]').click()
+            expect(page).to_have_url(re.compile(r"#/conversations\?[^#]*tab=new"))
+            expect(page.locator("#thread-new-fields .thread-new-prepared")).to_contain_text(decision_question)
+            expect(page.locator("#thread-new-target")).to_have_value("fixture-repo")
+            assert len(posts("create")) == unreadable_creates_before
+            assert len(posts("send")) == unreadable_sends_before
+            page.get_by_role("button", name="Return to threads").click()
+            control("epic-planning-facts", json.dumps({
+                "prepared": True,
+                "step_count": 5,
+                "preparation": {"outcome": "prepared", "reported_at": "2026-10-10T12:00:00Z", "source": "spec-prepare.md", "read": "ok", "bytes": 90},
+                "decision": None,
+                "receipts": [],
+            }), member="waiting-browser")
+            open_epic()
+            expect(page.locator("section.epic-decision .ds-callout")).to_contain_text(decision_question)
+            report["scenarios"].append("An unreadable decision on an earlier member keeps the later member's question, source links and unsent seed reachable")
+            check_deadline("unreadable-decision")
 
             # Decision and proposal links open the real workspace package files.
             with page.expect_response(lambda response: "/api/package-file?" in response.url) as decision_response:

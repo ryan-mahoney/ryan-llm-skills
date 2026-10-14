@@ -36,12 +36,20 @@ const recordedFact = (recorded: { label: string; conflict: boolean }): string =>
   return state.charAt(0).toUpperCase() + state.slice(1);
 };
 
-// First member carrying any recorded decision: it owns the decision section
-// and the Discuss hand-off. Readability of the front matter is decided by the
-// shared readiness owner; an outcome-marked record stays an inspection concern
-// for its dependency row rather than a discussion subject.
+// First member carrying a usable recorded decision: it owns the decision
+// section and the Discuss hand-off. Readability of the front matter is decided
+// by the shared readiness owner; an outcome-marked record never shadows a
+// later member's usable question.
 const decisionMemberOf = (epic: WireRecord): WireRecord | undefined =>
-  list(epic.members).find(member => Boolean(memberPlanning(member)?.decision));
+  list(epic.members).find(member => usableDecision(memberPlanning(member)?.decision ?? null));
+
+// First member whose decision artifact exists but is unreadable: it owns the
+// files-inspection fallback only when no member carries a usable decision.
+const unreadableDecisionMemberOf = (epic: WireRecord): WireRecord | undefined =>
+  list(epic.members).find(member => {
+    const raw = memberPlanning(member)?.decision;
+    return Boolean(raw) && !usableDecision(raw ?? null);
+  });
 
 // The recorded decision source opens through the package-files owner: an
 // absolute source inside the package becomes package-relative, a safe
@@ -581,6 +589,7 @@ export function EpicDetail(props: {
 
   const nextMember = () => summary().next;
   const decisionMember = () => decisionMemberOf(props.epic);
+  const unreadableMember = () => decisionMember() ? undefined : unreadableDecisionMemberOf(props.epic);
   const decision = () => usableDecision(memberPlanning(decisionMember())?.decision ?? null);
   const decisionPath = () => decisionSourcePath(props.epic, decisionMember(), props.records);
   const proposalPath = () => decisionProposalPath(decisionMember());
@@ -594,7 +603,7 @@ export function EpicDetail(props: {
   // When only recorded decisions remain, no Plan commitment is rendered: the
   // decision surface (Discuss plus the recorded files) carries the primary and
   // nothing is committed from this screen.
-  const decisionsOnly = () => !nextMember() && Boolean(decisionMember()) && pendingPlans().length === 0;
+  const decisionsOnly = () => !nextMember() && (Boolean(decisionMember()) || Boolean(unreadableMember())) && pendingPlans().length === 0;
   const planPrimaryReason = (): string => {
     const next = nextMember();
     if (!next) {
@@ -620,7 +629,7 @@ export function EpicDetail(props: {
     props.onNavigate(route);
   };
   const decisionRecord = () => {
-    const member = decisionMember();
+    const member = decisionMember() ?? unreadableMember();
     return member ? epicMemberRecord(props.epic, member, props.records) : null;
   };
   const canOpenDecisionFiles = () => Boolean(decisionRecord() && props.canOpenPackageFiles?.(decisionRecord()!));
@@ -772,7 +781,7 @@ export function EpicDetail(props: {
               : `Opens a conversation about ${memberName(decisionMember()!) || 'the recorded decision'}; sends nothing.`}
           </span>
         </Show>
-        <Show when={decisionsOnly() && decisionMember() && !decision()}>
+        <Show when={decisionsOnly() && !decisionMember() && unreadableMember()}>
           <Show when={decisionRecord() && props.canOpenPackageFiles?.(decisionRecord()!)}>
             <button
               type="button"
