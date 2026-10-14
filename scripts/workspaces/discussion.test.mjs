@@ -5141,3 +5141,370 @@ test("direct publication_authority runtime overrides remain refused invalid-hand
     await service.close();
   }
 });
+
+test("direct preview with explicit provider/model records pair and differs from default digest", { timeout: 30000 }, async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const repository = await makeRepo(join(root, "repos", "app"));
+  const workspaceDirectory = await setupWorkspace(storageRoot, "model-ws", [{ id: "app", path: repository }]);
+  await mkdir(join(repository, "docs"), { recursive: true });
+  const sourcePath = join(repository, "docs", "context.md");
+  await writeFile(sourcePath, "# Selected context\nUse this exact source.\n");
+
+  const binDirectory = join(root, "bin");
+  await mkdir(binDirectory, { recursive: true });
+  const piPath = join(binDirectory, "pi");
+  await writeFile(piPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await chmod(piPath, 0o755);
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${binDirectory}${delimiter}${savedPath}`;
+  t.after(() => {
+    if (savedPath === undefined) delete process.env.PATH;
+    else process.env.PATH = savedPath;
+  });
+
+  const dummy = dummyProcess(t);
+  const tmux = tmuxHarness({ dummyPid: dummy.pid });
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    assignmentAdapters: {
+      tmuxRun: tmux.run,
+      observationProbes: { tmuxRun: tmux.run, psRun: () => ({ stdout: "", complete: true }) },
+    },
+  });
+  try {
+    const requestId = randomUUID();
+    const assignmentId = randomUUID();
+    const instructions = "Deliver the direct assignment.";
+    await service.dispatchSaveBrief({
+      workspace_id: "model-ws",
+      request_id: requestId,
+      title: "Model",
+      content: "body\n",
+    });
+
+    const directInput = {
+      workspace_id: "model-ws",
+      request_id: requestId,
+      assignment_id: assignmentId,
+      instructions,
+      repository_id: "app",
+    };
+
+    const providerModelInput = {
+      ...directInput,
+      provider: "deepinfra",
+      model: "ByteDance/Seed-2.0-code",
+    };
+    const providerModelPreview = await service.dispatchPreview(providerModelInput);
+
+    assert.equal(providerModelPreview.record.provider, "deepinfra");
+    assert.equal(providerModelPreview.record.model, "ByteDance/Seed-2.0-code");
+
+    const noPairPreview = await service.dispatchPreview(directInput);
+    assert.equal(noPairPreview.record.provider, null);
+    assert.equal(noPairPreview.record.model, null);
+    assert.notEqual(providerModelPreview.contractDigest, noPairPreview.contractDigest);
+
+    await assert.rejects(lstat(join(workspaceDirectory, "assignments")), { code: "ENOENT" });
+    assert.equal(tmux.calls.length, 0);
+  } finally {
+    await service.close();
+  }
+  assert.equal(tmux.calls.length, 0);
+});
+
+test("changed provider/model after preview rejects stale-preview and starts no tmux session", { timeout: 30000 }, async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const repository = await makeRepo(join(root, "repos", "app"));
+  const workspaceDirectory = await setupWorkspace(storageRoot, "model-stale-ws", [{ id: "app", path: repository }]);
+  await mkdir(join(repository, "docs"), { recursive: true });
+  const sourcePath = join(repository, "docs", "context.md");
+  await writeFile(sourcePath, "# Selected context\nUse this exact source.\n");
+
+  const binDirectory = join(root, "bin");
+  await mkdir(binDirectory, { recursive: true });
+  const piPath = join(binDirectory, "pi");
+  await writeFile(piPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await chmod(piPath, 0o755);
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${binDirectory}${delimiter}${savedPath}`;
+  t.after(() => {
+    if (savedPath === undefined) delete process.env.PATH;
+    else process.env.PATH = savedPath;
+  });
+
+  const dummy = dummyProcess(t);
+  const tmux = tmuxHarness({ dummyPid: dummy.pid });
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    assignmentAdapters: {
+      tmuxRun: tmux.run,
+      observationProbes: { tmuxRun: tmux.run, psRun: () => ({ stdout: "", complete: true }) },
+    },
+  });
+  try {
+    const requestId = randomUUID();
+    const assignmentId = randomUUID();
+    const instructions = "Deliver the direct assignment.";
+    await service.dispatchSaveBrief({
+      workspace_id: "model-stale-ws",
+      request_id: requestId,
+      title: "Model",
+      content: "body\n",
+    });
+
+    const providerModelInput = {
+      workspace_id: "model-stale-ws",
+      request_id: requestId,
+      assignment_id: assignmentId,
+      instructions,
+      repository_id: "app",
+      provider: "deepinfra",
+      model: "ByteDance/Seed-2.0-code",
+    };
+
+    const preview = await service.dispatchPreview(providerModelInput);
+
+    const changedInput = {
+      ...providerModelInput,
+      model: "other/model",
+    };
+
+    await assert.rejects(
+      service.dispatchLaunch({ ...changedInput, expectedDigest: preview.contractDigest }),
+      { code: "stale-preview" }
+    );
+
+    const assignmentPath = join(workspaceDirectory, "assignments", `${assignmentId}.json`);
+    await assert.rejects(lstat(assignmentPath), { code: "ENOENT" });
+
+    assert.equal(tmux.calls.length, 0);
+  } finally {
+    await service.close();
+  }
+  assert.equal(tmux.calls.length, 0);
+});
+
+test("successful launch with matching provider/model produces exact argv and persisted record", { timeout: 30000 }, async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const repository = await makeRepo(join(root, "repos", "app"));
+  const workspaceDirectory = await setupWorkspace(storageRoot, "model-launch-ws", [{ id: "app", path: repository }]);
+  await mkdir(join(repository, "docs"), { recursive: true });
+  const sourcePath = join(repository, "docs", "context.md");
+  await writeFile(sourcePath, "# Selected context\nUse this exact source.\n");
+
+  const binDirectory = join(root, "bin");
+  await mkdir(binDirectory, { recursive: true });
+  const piPath = join(binDirectory, "pi");
+  await writeFile(piPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await chmod(piPath, 0o755);
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${binDirectory}${delimiter}${savedPath}`;
+  t.after(() => {
+    if (savedPath === undefined) delete process.env.PATH;
+    else process.env.PATH = savedPath;
+  });
+
+  const dummy = dummyProcess(t);
+  const tmux = tmuxHarness({ dummyPid: dummy.pid });
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    assignmentAdapters: {
+      tmuxRun: tmux.run,
+      observationProbes: { tmuxRun: tmux.run, psRun: () => ({ stdout: "", complete: true }) },
+    },
+  });
+  try {
+    const requestId = randomUUID();
+    const assignmentId = randomUUID();
+    const instructions = "Deliver the direct assignment.";
+    await service.dispatchSaveBrief({
+      workspace_id: "model-launch-ws",
+      request_id: requestId,
+      title: "Model",
+      content: "body\n",
+    });
+
+    const providerModelInput = {
+      workspace_id: "model-launch-ws",
+      request_id: requestId,
+      assignment_id: assignmentId,
+      instructions,
+      repository_id: "app",
+      provider: "deepinfra",
+      model: "ByteDance/Seed-2.0-code",
+    };
+
+    const preview = await service.dispatchPreview(providerModelInput);
+
+    const launched = await service.dispatchLaunch({ ...providerModelInput, expectedDigest: preview.contractDigest });
+
+    assert.equal(launched.assignment.provider, "deepinfra");
+    assert.equal(launched.assignment.model, "ByteDance/Seed-2.0-code");
+
+    assert.equal(tmux.newSessionCount(), 1);
+    const newSession = tmux.calls.find((call) => call.args.includes("new-session"));
+    assert.ok(newSession, "expected a new-session tmux call");
+    const separator = newSession.args.indexOf("--");
+    const terminator = newSession.args.indexOf(";", separator + 1);
+    const launchedArgv = newSession.args.slice(separator + 1, terminator);
+    assert.equal(launchedArgv[0], piPath);
+    assert.deepEqual(launchedArgv.slice(1), preview.piArgs);
+
+    const providerIndex = launchedArgv.indexOf("--provider");
+    assert.ok(providerIndex >= 0, "expected --provider in argv");
+    assert.equal(launchedArgv[providerIndex + 1], "deepinfra");
+    const modelIndex = launchedArgv.indexOf("--model");
+    assert.ok(modelIndex >= 0, "expected --model in argv");
+    assert.equal(launchedArgv[modelIndex + 1], "ByteDance/Seed-2.0-code");
+
+    const stored = await findAssignment(storageRoot, assignmentId);
+    assert.equal(stored.provider, "deepinfra");
+    assert.equal(stored.model, "ByteDance/Seed-2.0-code");
+  } finally {
+    await service.close();
+  }
+});
+
+test("direct launch provider/model refusal patterns", { timeout: 30000 }, async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const repository = await makeRepo(join(root, "repos", "app"));
+  const workspaceDirectory = await setupWorkspace(storageRoot, "model-refusal-ws", [{ id: "app", path: repository }]);
+  await mkdir(join(repository, "docs"), { recursive: true });
+  const sourcePath = join(repository, "docs", "context.md");
+  await writeFile(sourcePath, "# Selected context\nUse this exact source.\n");
+
+  const binDirectory = join(root, "bin");
+  await mkdir(binDirectory, { recursive: true });
+  const piPath = join(binDirectory, "pi");
+  await writeFile(piPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await chmod(piPath, 0o755);
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${binDirectory}${delimiter}${savedPath}`;
+  t.after(() => {
+    if (savedPath === undefined) delete process.env.PATH;
+    else process.env.PATH = savedPath;
+  });
+
+  const dummy = dummyProcess(t);
+  const tmux = tmuxHarness({ dummyPid: dummy.pid });
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    assignmentAdapters: {
+      tmuxRun: tmux.run,
+      observationProbes: { tmuxRun: tmux.run, psRun: () => ({ stdout: "", complete: true }) },
+    },
+  });
+  try {
+    const requestId = randomUUID();
+    const assignmentId = randomUUID();
+    const instructions = "Deliver the direct assignment.";
+    await service.dispatchSaveBrief({
+      workspace_id: "model-refusal-ws",
+      request_id: requestId,
+      title: "Model",
+      content: "body\n",
+    });
+
+    const baseInput = {
+      workspace_id: "model-refusal-ws",
+      request_id: requestId,
+      assignment_id: assignmentId,
+      instructions,
+      repository_id: "app",
+    };
+
+    await assert.rejects(
+      service.dispatchPreview({ ...baseInput, provider: "some" }),
+      { code: "invalid-handoff" }
+    );
+
+    await assert.rejects(
+      service.dispatchPreview({ ...baseInput, model: "some-model" }),
+      { code: "invalid-handoff" }
+    );
+
+    await assert.rejects(
+      service.dispatchPreview({ ...baseInput, provider: "-bad", model: "good" }),
+      { code: "invalid-handoff" }
+    );
+
+    await assert.rejects(
+      service.dispatchPreview({ ...baseInput, provider: "good", model: "-bad" }),
+      { code: "invalid-handoff" }
+    );
+
+    await assert.rejects(
+      service.dispatchPreview({ ...baseInput, provider: "bad\x00", model: "good" }),
+      { code: "invalid-handoff" }
+    );
+
+    const longProvider = "p".repeat(101);
+    await assert.rejects(
+      service.dispatchPreview({ ...baseInput, provider: longProvider, model: "good" }),
+      { code: "invalid-handoff" }
+    );
+
+    const longModel = "m".repeat(301);
+    await assert.rejects(
+      service.dispatchPreview({ ...baseInput, provider: "good", model: longModel }),
+      { code: "invalid-handoff" }
+    );
+
+    await assert.rejects(
+      service.dispatchPreview({ ...baseInput, provider: 123, model: "good" }),
+      { code: "invalid-handoff" }
+    );
+
+    await assert.rejects(
+      service.dispatchPreview({ ...baseInput, provider: "good", model: 123 }),
+      { code: "invalid-handoff" }
+    );
+
+    await assert.rejects(
+      service.dispatchPreview({ ...baseInput, provider: "good", model: "good", thinking: "yes" }),
+      { code: "invalid-handoff" }
+    );
+    await assert.rejects(
+      service.dispatchPreview({ ...baseInput, provider: "good", model: "good", harness: "other" }),
+      { code: "invalid-handoff" }
+    );
+    await assert.rejects(
+      service.dispatchPreview({ ...baseInput, provider: "good", model: "good", project_trust: "high" }),
+      { code: "invalid-handoff" }
+    );
+    await assert.rejects(
+      service.dispatchPreview({ ...baseInput, provider: "good", model: "good", workflow_id: "wf" }),
+      { code: "invalid-handoff" }
+    );
+    await assert.rejects(
+      service.dispatchPreview({ ...baseInput, provider: "good", model: "good", attempt: "2" }),
+      { code: "invalid-handoff" }
+    );
+    await assert.rejects(
+      service.dispatchPreview({ ...baseInput, provider: "good", model: "good", supersedes: "uuid" }),
+      { code: "invalid-handoff" }
+    );
+    await assert.rejects(
+      service.dispatchPreview({ ...baseInput, provider: "good", model: "good", pi_path: "/usr/bin" }),
+      { code: "invalid-handoff" }
+    );
+
+    assert.equal(tmux.calls.length, 0);
+  } finally {
+    await service.close();
+  }
+  assert.equal(tmux.calls.length, 0);
+});
