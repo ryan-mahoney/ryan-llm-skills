@@ -441,7 +441,7 @@ try:
         def run_review():
             # Bound implementation review through the real route, brief save and
             # automatic resolution. Reviewing must not start a worker.
-            open_review("fixture/browser", "spec-end-to-end", "Implement fixture/browser through draft PR", "/spec-end-to-end Resume prepared implementation for fixture/browser.", delayed_inventory=True)
+            open_review("fixture/browser", "spec-end-to-end", "Implement fixture/browser through draft PR", "/spec-end-to-end Implement fixture/browser from its prepared specs.", delayed_inventory=True)
             expect(page.locator("#launch-heading")).to_have_text("Review implementation assignment")
             expect(page.locator("#launch-review-heading")).to_have_text("Review implementation assignment")
             expect(fact("package")).to_have_text("fixture/browser")
@@ -665,7 +665,7 @@ try:
             # return, and the package leaves Ready for Active before a run
             # receipt exists.
             control("dispatch-launch-outcome", "live")
-            open_review("fixture/browser", "spec-end-to-end", "Implement fixture/browser through draft PR", "/spec-end-to-end Resume prepared implementation for fixture/browser.")
+            open_review("fixture/browser", "spec-end-to-end", "Implement fixture/browser through draft PR", "/spec-end-to-end Implement fixture/browser from its prepared specs.")
             expect(page.locator("#launch-heading")).to_have_text("Review implementation assignment")
             page.locator("#launch-assignment-launch").click()
             expect(page.locator("#launch-result-package")).to_be_visible()

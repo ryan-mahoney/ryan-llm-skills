@@ -166,18 +166,22 @@ unchanged evidence records are preserved through fixes.
 
 #### Default Pi prompt
 
-After `spec-write`, paste this into Pi as a normal prompt. Replace `PACKAGE`
+After `spec-write`, paste this into Pi as a normal prompt; **Implement spec** in Sentinel prefills the same brief. Replace `PACKAGE`
 with the package folder (`package_dir`) or `workspace/slug` that the previous stage printed. Choose a stronger owner or
 remove the `STRONG_OWNER` line to use one owner model throughout. The model assignments
 below are an editable example; the routing policy is provider-independent.
 
 ```text
-/spec-end-to-end Resume after spec-write for PACKAGE.
-Continue through PR publication.
+/spec-end-to-end Implement PACKAGE from its prepared specs.
+Create a new branch/worktree and continue through PR publication.
+
+Use the configured step-owner difficulty routing and retained owner/editor
+pairs through the installed Pi spec runtime. Use bounded editor assignments
+and separate commit assignments. Use REVIEW_AGENT for independent reviews.
 
 DEFAULT_OWNER: deepseek-flash:max from deepseek
 STRONG_OWNER: gpt-5.6-sol:high from openai-codex
-EDITOR_AGENT: deepseek/deepseek-v4.1-flash:high from openrouter
+EDITOR_AGENT: mimo-v2.6-pro-ultraspeed:off from xiaomi
 REVIEW_AGENT: gpt-6.1-sol:medium from openai-codex
 SCOUT_AGENT: gpt-6-luna:low from openai-codex
 PACKAGE: <package folder or workspace/slug>

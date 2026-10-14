@@ -5,8 +5,6 @@ import {
   implementationBriefContent,
   implementationBriefTitle,
   packagePlanningPlan,
-  plannedBriefContent,
-  plannedBriefTitle,
   planningBriefContent,
   planningBriefTitle,
   planningPlanDescription,
@@ -71,33 +69,21 @@ test("an intact proposal with critique selects spec-write and never loops initia
   assert.equal(planningBriefContent(REF, noRecommendation).includes("spec-architect-initial"), false);
 });
 
-test("implementation brief binds the package and draft PR stop without fixed model or merge authority", () => {
-  const title = implementationBriefTitle(REF);
-  assert.ok(title.includes(REF));
-  assert.match(title, /draft PR/);
-  const content = implementationBriefContent(REF);
-  assert.ok(content.includes(REF));
-  assert.ok(content.startsWith("/spec-end-to-end"));
-  assert.match(content, /Stop at a draft pull request/);
-  assert.match(content, /Do not merge or deploy/);
-  assert.match(content, /host default model/i);
-  assert.doesNotMatch(content, /DEFAULT_OWNER|STRONG_OWNER|EDITOR_AGENT|REVIEW_AGENT|SCOUT_AGENT|FINAL_REVIEWER/);
-  assert.doesNotMatch(content, /openrouter|openai-codex|deepseek|muse-spark|gpt-6/);
-});
-
-test("legacy relaunch brief text is byte-for-byte unchanged for its current consumer", async () => {
-  assert.equal(plannedBriefTitle(REF), `Resume ${REF} through PR publication`);
-  assert.equal(plannedBriefContent(REF),
-    `/spec-end-to-end Resume after spec-write for ${REF}.\n` +
-    `Continue through PR publication.\n\n` +
-    `DEFAULT_OWNER: meta/muse-spark-1.3-contributor:xhigh from openrouter\n` +
-    `STRONG_OWNER: gpt-6.1-sol:medium from openai-codex\n` +
-    `EDITOR_AGENT: deepseek-flash:max from deepseek\n` +
+test("implementation brief invokes spec-end-to-end with the standing model assignments", async () => {
+  assert.equal(implementationBriefTitle(REF), `Implement ${REF} through draft PR`);
+  assert.equal(implementationBriefContent(REF),
+    `/spec-end-to-end Implement ${REF} from its prepared specs.\n` +
+    `Create a new branch/worktree and continue through PR publication.\n\n` +
+    `Use the configured step-owner difficulty routing and retained owner/editor\n` +
+    `pairs through the installed Pi spec runtime. Use bounded editor assignments\n` +
+    `and separate commit assignments. Use REVIEW_AGENT for independent reviews.\n\n` +
+    `DEFAULT_OWNER: deepseek-flash:max from deepseek\n` +
+    `STRONG_OWNER: gpt-5.6-sol:high from openai-codex\n` +
+    `EDITOR_AGENT: mimo-v2.6-pro-ultraspeed:off from xiaomi\n` +
     `REVIEW_AGENT: gpt-6.1-sol:medium from openai-codex\n` +
     `SCOUT_AGENT: gpt-6-luna:low from openai-codex\n` +
-    `FINAL_REVIEWER: gpt-6.1-sol:xhigh from openai-codex\n` +
     `PACKAGE: ${REF}`);
   const relaunch = await readFile(new URL("./relaunch.mjs", import.meta.url), "utf8");
-  assert.match(relaunch, /plannedBriefContent\(old\.package_ref\)/);
-  assert.match(relaunch, /plannedBriefTitle\(old\.package_ref\)/);
+  assert.match(relaunch, /implementationBriefContent\(old\.package_ref\)/);
+  assert.match(relaunch, /implementationBriefTitle\(old\.package_ref\)/);
 });
