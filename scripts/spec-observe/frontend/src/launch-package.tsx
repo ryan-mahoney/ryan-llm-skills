@@ -9,7 +9,7 @@
 import { For, Match, Show, Switch } from 'solid-js';
 import { ActionBar, StateNotice, StatusText } from './primitives';
 import { str, time } from './format';
-import { packagePlanningPlan } from '../../../workspaces/spec-prompt.mjs';
+import { CRITIQUE_ONLY_PLAN, packagePlanningPlan } from '../../../workspaces/spec-prompt.mjs';
 import { landedStatus, memberPlanning, nextToPlan, planningFactsFor, specReadiness } from './readiness';
 import type { PackagePlanningPlan } from './launch-handoff';
 import type { LaunchPreview, LaunchResult } from './launch-state';
@@ -80,7 +80,11 @@ export const nextPlannableMember = (
 // critique stop instead of promising Prepared.
 export const planningPlanFor = (record: WireRecord, inputPreview?: { brief?: unknown; instruction?: unknown }): PackagePlanningPlan => {
   const skill = str(record.skill);
-  if (skill === 'spec-architect-critics') return packagePlanningPlan({ proposal: true, critiqueRecommended: true }) as PackagePlanningPlan;
+  if (skill === 'spec-architect-critics') {
+    const briefText = `${str(inputPreview?.brief)}\n${str(inputPreview?.instruction)}`;
+    if (/This launch ends at the critique/i.test(briefText)) return CRITIQUE_ONLY_PLAN as PackagePlanningPlan;
+    return packagePlanningPlan({ proposal: true, critiqueRecommended: true }) as PackagePlanningPlan;
+  }
   if (skill === 'spec-write') return packagePlanningPlan({ proposal: true }) as PackagePlanningPlan;
   if (skill === 'spec-architect-initial') {
     const briefText = `${str(inputPreview?.brief)}\n${str(inputPreview?.instruction)}`;
@@ -104,6 +108,7 @@ export const planningStagesValue = (record: WireRecord, plan: PackagePlanningPla
 };
 
 export const planningStopValue = (record: WireRecord, plan: PackagePlanningPlan): string => {
+  if (plan.stop === 'critique') return 'Critique';
   if (plan.stop === 'proposal') return 'Proposal';
   if (isConditionalInitial(record, plan)) return 'Prepared, or Proposal if critique is recommended';
   return 'Prepared';
@@ -359,6 +364,7 @@ export function PackageResult(props: {
   // the Prepared stop.
   const planningCompletes = () => {
     const bound = planningPlan();
+    if (bound.stop === 'critique') return <>At the critique. Specification waits for a later launch.</>;
     if (bound.stop === 'proposal') return <>At the proposal. Critique and specification wait for a later launch.</>;
     if (isConditionalInitial(record(), bound)) return <>At Prepared, or at Proposal when architecture recommends critique. The member then shows <StatusText tone="info">Ready to implement</StatusText> or <StatusText tone="neutral">Prepared · waiting</StatusText>.</>;
     return <>When the package reports Prepared. The member then shows <StatusText tone="info">Ready to implement</StatusText> or <StatusText tone="neutral">Prepared · waiting</StatusText>.</>;

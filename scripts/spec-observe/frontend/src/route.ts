@@ -24,6 +24,7 @@ export type RouteState = {
   target?: string;
   package?: string;
   skill?: string;
+  stop?: string;
 };
 
 export type RouteMode = 'push' | 'replace';
@@ -41,10 +42,10 @@ export const DESTINATIONS: readonly Destination[] = [
   'models',
 ];
 
-export const SUPPORTED_PARAMS = ['ws', 'id', 'tab', 'source', 'path', 'filter', 'q', 'thread', 'target', 'package', 'skill'] as const;
+export const SUPPORTED_PARAMS = ['ws', 'id', 'tab', 'source', 'path', 'filter', 'q', 'thread', 'target', 'package', 'skill', 'stop'] as const;
 export type SupportedParam = (typeof SUPPORTED_PARAMS)[number];
 
-const HISTORY_FIELDS: readonly (keyof RouteState)[] = ['dest', 'ws', 'id', 'tab', 'source', 'path', 'thread', 'target', 'package', 'skill'];
+const HISTORY_FIELDS: readonly (keyof RouteState)[] = ['dest', 'ws', 'id', 'tab', 'source', 'path', 'thread', 'target', 'package', 'skill', 'stop'];
 
 const isDestination = (value: unknown): value is Destination =>
   typeof value === 'string' && (DESTINATIONS as readonly string[]).includes(value);

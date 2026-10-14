@@ -10,14 +10,16 @@ import {
 } from './launch-state';
 import {
   discussionRepositoryTarget, handoffReturn, packageLaunchPresentation, plannedTargetChoices, retargetPackageHandoff,
-  seedColdHandoff, startPackageHandoff, type HandoffInput, type PlannedTarget,
+  seedColdHandoff, startPackageHandoff, type HandoffInput, type PackagePlanningPlan, type PlannedTarget,
 } from './launch-handoff';
 import { navigate, type RouteState } from './route';
+import { CRITIQUE_ONLY_PLAN, packagePlanningPlan } from '../../../workspaces/spec-prompt.mjs';
 
 const TOKEN = 'test-action-token';
 const ASSIGNMENT_ID = '22222222-2222-4222-8222-222222222222';
 const DIGEST = 'a'.repeat(64);
 const NEXT_DIGEST = 'b'.repeat(64);
+const CRITIQUE_PLAN = CRITIQUE_ONLY_PLAN as PackagePlanningPlan;
 
 type CapturedCall = { url: string; body: any; init: RequestInit };
 type Scope = { after: (callback: () => void) => void };
@@ -177,6 +179,110 @@ test('package handoff passed planning plan saves the derived stages before previ
   assert.equal(calls[3].url, '/api/dispatch/preview');
   assert.equal(calls[3].body.publication_authority, 'none');
   assert.equal(calls[3].body.skill, 'spec-architect-critics');
+});
+
+test('critique-only handoff saves the critics brief and routes the critique stop', async (t) => {
+  const calls = scopeFetch(t, [
+    jsonResponse(200, { brief: 'briefs/pkg-critique.md' }),
+    workspaceInventory('ws-handoff-critique', [{ alias: 'repo-critique', canonicalPath: '/workspace/repos/critique' }]),
+    jsonResponse(200, {}),
+    jsonResponse(200, { record: { assignment_id: ASSIGNMENT_ID, skill: 'spec-architect-critics', publication_authority: 'none' }, contractDigest: DIGEST }),
+  ]);
+  const routes: RouteState[] = [];
+  const input: HandoffInput = {
+    ws: 'ws-handoff-critique',
+    packageRef: '/storage/proj/specs/pkg-critique',
+    targets: [{ id: 'critique', primary: '/workspace/repos/critique' }],
+    planningPlan: CRITIQUE_PLAN,
+  };
+  const presentation = packageLaunchPresentation('plan', input.packageRef, input.planningPlan);
+  assert.equal(presentation.stop, 'critique');
+  assert.equal(presentation.authority, 'none');
+
+  const started = await startPackageHandoff('plan', input, TOKEN, route => { routes.push(route); });
+  if (!started.ok) assert.fail(started.reason);
+  assert.equal(started.stage, 'review');
+  assert.equal(started.context.stop, 'critique');
+  assert.equal(calls.length, 1, 'the hand-off saves once and never previews');
+  assert.equal(calls[0].url, '/api/dispatch/save-brief');
+  assert.deepEqual(routes.map(route => [route.dest, route.tab, route.stop]), [['launch', 'review', 'critique']]);
+
+  const retrieved = getLaunchDraft(started.context);
+  assert.equal(retrieved?.content, started.draft.content);
+  assert.match(retrieved!.content, /Stages: 1 Critique \(spec-architect-critics\)\./);
+  assert.match(retrieved!.content, /Stop at Critique\./);
+  assert.match(retrieved!.content, /This launch ends at the critique; specification waits for a later launch\./);
+  assert.equal(retrieved!.content.includes('spec-write'), false);
+
+  // The reviewed draft proves the bound critics skill and none authority while
+  // no request body carries the local stop.
+  await reviewLaunchDraft(started.context, TOKEN);
+  assert.equal(calls[1].url, '/api/workspace?id=ws-handoff-critique');
+  assert.equal(calls[2].url, '/api/dispatch/prepare-spec-target');
+  assert.equal(calls[2].body.repository_id, 'repo-critique');
+  assert.equal(calls[3].url, '/api/dispatch/preview');
+  assert.equal(calls[3].body.skill, 'spec-architect-critics');
+  assert.equal(calls[3].body.publication_authority, 'none');
+  for (const call of calls) {
+    assert.equal(Object.keys(call.body ?? {}).includes('stop'), false, `no body carries a stop key: ${call.url}`);
+  }
+});
+
+test('epic critics-then-spec and critique-only drafts stay separate identities and repeat entry keeps its stop', async (t) => {
+  const calls = scopeFetch(t, [
+    jsonResponse(200, { brief: 'briefs/pkg-split-epic.md' }),
+    jsonResponse(200, { brief: 'briefs/pkg-split-critique.md' }),
+  ]);
+  const ws = 'ws-handoff-split';
+  const packageRef = '/storage/proj/specs/pkg-split';
+  const targets: PlannedTarget[] = [{ id: 'split', primary: '/workspace/repos/split' }];
+  const epicPlan = packagePlanningPlan({ proposal: true, critiqueRecommended: true }) as PackagePlanningPlan;
+  assert.deepEqual(epicPlan, {
+    skill: 'spec-architect-critics', stages: ['spec-architect-critics', 'spec-write'], stop: 'prepared',
+  });
+
+  const epic = await startPackageHandoff('plan', { ws, packageRef, targets, planningPlan: epicPlan }, TOKEN, () => undefined);
+  if (!epic.ok) assert.fail(epic.reason);
+  assert.equal(epic.context.stop, 'prepared');
+  const critique = await startPackageHandoff('plan', { ws, packageRef, targets, planningPlan: CRITIQUE_PLAN }, TOKEN, () => undefined);
+  if (!critique.ok) assert.fail(critique.reason);
+  assert.equal(critique.context.stop, 'critique');
+  assert.equal(calls.length, 2, 'each identity saves its own brief once');
+  assert.equal(calls[0].body.title, 'Plan /storage/proj/specs/pkg-split through preparation');
+  assert.equal(calls[1].body.title, 'Plan /storage/proj/specs/pkg-split through critique');
+
+  const epicDraft = getLaunchDraft({ ws, package: packageRef, skill: 'spec-architect-critics', stop: 'prepared' });
+  const critiqueDraft = getLaunchDraft({ ws, package: packageRef, skill: 'spec-architect-critics', stop: 'critique' });
+  assert.match(epicDraft!.content, /Stop at Prepared\./);
+  assert.equal(epicDraft!.content.includes('This launch ends at the critique'), false);
+  assert.match(critiqueDraft!.content, /Stop at Critique\./);
+  assert.notEqual(critiqueDraft!.content, epicDraft!.content);
+
+  // Repeat entry routes each retained identity's own stop and leaves the sibling alone.
+  const epicRoutes: RouteState[] = [];
+  const repeatedEpic = await startPackageHandoff('plan', { ws, packageRef, targets, planningPlan: epicPlan }, TOKEN, route => { epicRoutes.push(route); });
+  if (!repeatedEpic.ok) assert.fail(repeatedEpic.reason);
+  assert.equal(repeatedEpic.context.stop, 'prepared');
+  assert.equal(repeatedEpic.draft.content, epicDraft!.content);
+  assert.deepEqual(epicRoutes.map(route => [route.tab, route.stop]), [['review', 'prepared']]);
+  const critiqueRoutes: RouteState[] = [];
+  const repeatedCritique = await startPackageHandoff('plan', { ws, packageRef, targets, planningPlan: CRITIQUE_PLAN }, TOKEN, route => { critiqueRoutes.push(route); });
+  if (!repeatedCritique.ok) assert.fail(repeatedCritique.reason);
+  assert.equal(repeatedCritique.context.stop, 'critique');
+  assert.equal(repeatedCritique.draft.content, critiqueDraft!.content);
+  assert.deepEqual(critiqueRoutes.map(route => [route.tab, route.stop]), [['review', 'critique']]);
+  assert.equal(calls.length, 2, 'repeat entry never posts');
+  assert.equal(getLaunchDraft({ ws, package: packageRef, skill: 'spec-architect-critics', stop: 'prepared' })!.content, epicDraft!.content);
+  assert.equal(getLaunchDraft({ ws, package: packageRef, skill: 'spec-architect-critics', stop: 'critique' })!.content, critiqueDraft!.content);
+
+  // Cold repeat entry keeps the retained stop for each held identity.
+  const coldEpic = seedColdHandoff('plan', { ws, packageRef, targets, planningPlan: epicPlan });
+  if (!coldEpic.ok) assert.fail(coldEpic.reason);
+  assert.equal(coldEpic.context.stop, 'prepared');
+  const coldCritique = seedColdHandoff('plan', { ws, packageRef, targets, planningPlan: CRITIQUE_PLAN });
+  if (!coldCritique.ok) assert.fail(coldCritique.reason);
+  assert.equal(coldCritique.context.stop, 'critique');
+  assert.equal(calls.length, 2);
 });
 
 test('package handoff rejects missing workspace, package and zero targets without fetching', async (t) => {
@@ -446,9 +552,23 @@ test('package handoff cold seed derives the observed resumed brief without posti
   assert.match(first.draft.content, /spec-architect-critics/);
   assert.match(first.draft.content, /Stop at Prepared\./);
 
-  const second = seedColdHandoff('plan', { ...input, planningPlan: { ...plan, stop: 'proposal' } });
+  // Same identity: an existing draft is never reseeded and nothing posts.
+  const second = seedColdHandoff('plan', input);
   if (!second.ok) assert.fail(second.reason);
-  assert.equal(second.draft.content, presentation.content, 'an existing draft is never reseeded');
+  assert.equal(second.draft.content, first.draft.content);
+  assert.equal(second.draft.target, first.draft.target);
+  assert.equal(calls.length, 0, 'same-identity repeat entry is local only');
+
+  // A distinct stop is a distinct identity: the cold seed fills the new entry
+  // and the retained prepared draft is not overwritten.
+  const critique = seedColdHandoff('plan', { ...input, planningPlan: CRITIQUE_PLAN });
+  if (!critique.ok) assert.fail(critique.reason);
+  const critiquePresentation = packageLaunchPresentation('plan', input.packageRef, CRITIQUE_PLAN);
+  assert.equal(critique.draft.content, critiquePresentation.content);
+  assert.match(critique.draft.content, /Stop at Critique\./);
+  assert.equal(critique.draft.content.includes('spec-write'), false);
+  const retained = getLaunchDraft(first.context);
+  assert.match(retained!.content, /Stop at Prepared\./);
   assert.equal(calls.length, 0);
 });
 

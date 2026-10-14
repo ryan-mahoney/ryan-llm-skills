@@ -1,7 +1,7 @@
 // Planning brief stages are skill ids; the brief pairs each with its human label.
 const planningStageLabels={'spec-architect-initial':'Architecture','spec-architect-critics':'Critique','spec-write':'Specification and preparation'};
 const stageSequence=(stages)=>stages.map((skill,index)=>`${index+1} ${planningStageLabels[skill]??skill} (${skill})`).join(' -> ');
-const stopLabel=(stop)=>stop==='proposal'?'Proposal':'Prepared';
+const stopLabel=(stop)=>stop==='proposal'?'Proposal':stop==='critique'?'Critique':'Prepared';
 
 // Select the planning run for a package from its planning facts: a fresh package
 // starts with architecture (stopping at the proposal when a critique is
@@ -16,8 +16,12 @@ export const packagePlanningPlan=({proposal=false,critiqueRecommended=false,crit
   return {skill:'spec-write',stages:['spec-write'],stop:'prepared'};
 };
 
+// The critique-only planning stop: one critics stage whose launch ends at the
+// critique. Frozen so a shared consumer cannot mutate the canonical plan.
+export const CRITIQUE_ONLY_PLAN=Object.freeze({skill:'spec-architect-critics',stages:Object.freeze(['spec-architect-critics']),stop:'critique'});
+
 export const planningBriefTitle=(packageRef,plan)=>
-  `Plan ${packageRef} through ${plan?.stop==='proposal'?'proposal':'preparation'}`.slice(0,200);
+  `Plan ${packageRef} through ${plan?.stop==='proposal'?'proposal':plan?.stop==='critique'?'critique':'preparation'}`.slice(0,200);
 
 // Human-facing stage and stop explanation shared by the epic entry and brief.
 export const planningPlanDescription=(plan)=>{
@@ -30,11 +34,13 @@ export const planningPlanDescription=(plan)=>{
 
 export const planningBriefContent=(packageRef,plan)=>{
   const stopsAtProposal=plan?.stop==='proposal';
+  const stopsAtCritique=plan?.stop==='critique';
   return `/${plan?.skill??'spec-architect-initial'} Plan ${packageRef}.\n` +
     `Stages: ${stageSequence(plan?.stages??[])}.\n` +
     `Stop at ${stopLabel(plan?.stop)}. Planning only: do not implement, commit, push or open a pull request.\n` +
     `Publication authority: none. The launch service may prepare a package branch or worktree; that preparation is not implementation.\n` +
     (stopsAtProposal?`This launch ends at the proposal; critique and specification wait for a later launch.\n`:'') +
+    (stopsAtCritique?`This launch ends at the critique; specification waits for a later launch.\n`:'') +
     `${planningPlanDescription(plan)}\n` +
     `Discuss any known unresolved decision before the next launch.\n\n` +
     `PACKAGE: ${packageRef}`;

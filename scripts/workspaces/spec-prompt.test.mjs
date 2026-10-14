@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import {
+  CRITIQUE_ONLY_PLAN,
   implementationBriefContent,
   implementationBriefTitle,
   packagePlanningPlan,
@@ -58,6 +59,26 @@ test("a recommended proposal without a critique selects critics then spec-write"
   assert.match(content, /do not implement, commit, push or open a pull request/);
   assert.match(content, /launch service may prepare a package branch or worktree/);
   assert.match(content, /Discuss any known unresolved decision before the next launch/);
+});
+
+test("critique-only plan runs one critics stage and stops at the critique", () => {
+  assert.deepEqual(CRITIQUE_ONLY_PLAN, {
+    skill: "spec-architect-critics",
+    stages: ["spec-architect-critics"],
+    stop: "critique",
+  });
+  assert.equal(Object.isFrozen(CRITIQUE_ONLY_PLAN), true);
+  assert.equal(Object.isFrozen(CRITIQUE_ONLY_PLAN.stages), true);
+  const title = planningBriefTitle(REF, CRITIQUE_ONLY_PLAN);
+  assert.ok(title.endsWith("through critique"));
+  const content = planningBriefContent(REF, CRITIQUE_ONLY_PLAN);
+  assert.ok(content.startsWith("/spec-architect-critics"));
+  assert.match(content, /Stages: 1 Critique \(spec-architect-critics\)\./);
+  assert.match(content, /Stop at Critique\./);
+  assert.match(content, /This launch ends at the critique; specification waits for a later launch\./);
+  assert.match(content, /Publication authority: none\./);
+  assert.match(content, /Planning runs Critique and stops at Critique\./);
+  assert.equal(content.includes("spec-write"), false);
 });
 
 test("an intact proposal with critique selects spec-write and never loops initial architecture", () => {

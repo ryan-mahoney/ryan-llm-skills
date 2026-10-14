@@ -9,7 +9,7 @@ import { createSignal } from 'solid-js';
 import { HttpError } from './api';
 import type { BriefReference, InputPreview } from './composerTypes';
 import { previewLaunchAssignment, saveLaunchBrief, submitLaunchAssignment } from './launch-client';
-import type { LaunchContext, LaunchPreview, LaunchReply } from './launch-client';
+import type { LaunchContext, LaunchPreview, LaunchReply, LaunchStop } from './launch-client';
 import type { WireRecord } from './model';
 import type { ModelChoice } from './models-state';
 import { sameChoice } from './models-state';
@@ -85,9 +85,17 @@ export type LaunchStore = {
   beginCorrectedAttempt: (context: LaunchContext) => LaunchResult | undefined;
 };
 
-// The editable target is deliberately not part of the identity tuple.
+// A caller-supplied stop participates in identity only in its recognized
+// form, so an unknown value cannot mint an unbounded entry and shares the
+// absent-stop identity instead.
+export const normalizeLaunchStop = (value: unknown): LaunchStop | undefined =>
+  value === 'critique' || value === 'proposal' || value === 'prepared' ? value : undefined;
+
+// The editable target is deliberately not part of the identity tuple; the
+// normalized planning stop is, so a critique-only draft and an epic
+// critics-then-spec draft for the same package keep separate entries.
 export const contextKey = (context: LaunchContext): string =>
-  JSON.stringify([context.ws, context.thread ?? null, context.package ?? null, context.skill ?? null]);
+  JSON.stringify([context.ws, context.thread ?? null, context.package ?? null, context.skill ?? null, normalizeLaunchStop(context.stop) ?? null]);
 
 const sameReferenceIdentities = (a: readonly BriefReference[], b: readonly BriefReference[]): boolean =>
   a.length === b.length && a.every((reference, index) => reference.kind === b[index].kind && reference.id === b[index].id);

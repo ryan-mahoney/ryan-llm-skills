@@ -14,6 +14,7 @@ import { HttpError } from './api';
 import {
   contextKey,
   createLaunchStore,
+  normalizeLaunchStop,
   resolveLaunchStage,
   type LaunchContext,
   type LaunchDraft,
@@ -371,6 +372,35 @@ test('workspace, thread, package and skill contexts retain separate drafts', asy
   assert.equal(store.getLaunchDraft(packaged)?.target, 'repo-p');
   assert.equal(store.getLaunchDraft(skilled)?.target, 'repo-s');
   assert.equal(scope.calls.length, 0);
+});
+
+test('a normalized planning stop splits critique and prepared identities while unknown values share the absent entry', () => {
+  const store = createLaunchStore();
+  const base: LaunchContext = { ws: 'ws-stop', thread: 'thread-stop', package: 'pkg-stop', skill: 'spec-architect-critics' };
+  const critique: LaunchContext = { ...base, stop: 'critique' };
+  const prepared: LaunchContext = { ...base, stop: 'prepared' };
+  const absent: LaunchContext = { ...base };
+  store.seedLaunchDraft(critique, { title: 'critique', content: 'c' });
+  store.seedLaunchDraft(prepared, { title: 'prepared', content: 'p' });
+  store.seedLaunchDraft(absent, { title: 'absent', content: 'a' });
+  assert.equal(store.getLaunchDraft(critique)?.title, 'critique');
+  assert.equal(store.getLaunchDraft(prepared)?.title, 'prepared');
+  assert.equal(store.getLaunchDraft(absent)?.title, 'absent');
+
+  const unknownStop = { ...base, stop: 'other' } as unknown as LaunchContext;
+  assert.equal(store.getLaunchDraft(unknownStop)?.title, 'absent', 'an unrecognized stop shares the absent-stop identity');
+  store.editLaunchDraft(unknownStop, { content: 'edited through the unknown stop' });
+  assert.equal(store.getLaunchDraft(absent)?.content, 'edited through the unknown stop');
+  assert.equal(store.getLaunchDraft(critique)?.content, 'c');
+  assert.equal(store.getLaunchDraft(prepared)?.content, 'p');
+
+  assert.equal(normalizeLaunchStop('critique'), 'critique');
+  assert.equal(normalizeLaunchStop('proposal'), 'proposal');
+  assert.equal(normalizeLaunchStop('prepared'), 'prepared');
+  assert.equal(normalizeLaunchStop('other'), undefined);
+  assert.equal(normalizeLaunchStop(undefined), undefined);
+  assert.equal(normalizeLaunchStop(null), undefined);
+  assert.equal(normalizeLaunchStop(7), undefined);
 });
 
 // node --import tsx --test --test-name-pattern="unchanged save retries" src/launch-state.test.ts

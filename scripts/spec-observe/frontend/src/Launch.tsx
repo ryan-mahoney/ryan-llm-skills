@@ -9,7 +9,7 @@ import BriefComposer from './BriefComposer';
 import { ActionBar, RegionalSkeleton, StateNotice, StatusText } from './primitives';
 import { str } from './format';
 import {
-  beginCorrectedAttempt, changeLaunchTarget, changeLaunchModel, editLaunchDraft, getLaunchDraft, launchReviewedDraft, resolveLaunchStage,
+  beginCorrectedAttempt, changeLaunchTarget, changeLaunchModel, editLaunchDraft, getLaunchDraft, launchReviewedDraft, normalizeLaunchStop, resolveLaunchStage,
   reviewLaunchDraft, saveLaunchDraft, seedLaunchDraft, seedThreadDraft,
   type LaunchContext, type LaunchDraftError, type LaunchPreview,
 } from './launch-state';
@@ -21,7 +21,7 @@ import {
 import ModelPicker from './ModelPicker';
 import { availabilityMessage, catalog, formatModelChoice, type ModelChoice } from './models-state';
 import { observedSpecReadiness } from './readiness';
-import { packagePlanningPlan } from '../../../workspaces/spec-prompt.mjs';
+import { CRITIQUE_ONLY_PLAN, packagePlanningPlan } from '../../../workspaces/spec-prompt.mjs';
 import type { BriefReference } from './composerTypes';
 import type { WireRecord } from './model';
 import type { RouteState } from './route';
@@ -35,6 +35,9 @@ export type LaunchProps = {
   workspace?: WireRecord;
   workspaceError?: string;
   workspaceName: string;
+  // Observed workspace directory (snapshot rows carry its basename); the route
+  // carries the kit id, and the two can differ.
+  workspaceDirectory?: string;
   assignments?: WireRecord[];
   // Observed snapshot rows for the bound package review's statuses and links;
   // they never supply execution, authority or model facts.
@@ -154,6 +157,10 @@ function PreviousReviewedFacts(props: { preview: LaunchPreview }) {
 
 type ReviewView = 'resolving' | 'dispatching' | 'current' | 'stale' | 'denied' | 'error' | 'result' | 'inspection' | 'saved' | 'unsaved';
 
+// Snapshot rows carry the workspace directory basename while the route carries
+// the kit id; both identify the same workspace for the cold seed lookup.
+const directoryBasename = (value: string | undefined): string => (value ?? '').split('/').filter(Boolean).pop() ?? '';
+
 export default function Launch(props: LaunchProps) {
   let heading: HTMLHeadingElement | undefined;
   let titleInput: HTMLInputElement | undefined;
@@ -172,6 +179,7 @@ export default function Launch(props: LaunchProps) {
     // Bound package authority is derived from the route's hand-off skill by the
     // owning derivation; a generic or absent skill keeps the ordinary body.
     const authority = props.route.package ? publicationAuthorityForSkill(props.route.skill) : undefined;
+    const stop = normalizeLaunchStop(props.route.stop);
     return {
       ws: ws(),
       ...(props.route.thread ? { thread: props.route.thread } : {}),
@@ -179,6 +187,7 @@ export default function Launch(props: LaunchProps) {
       ...(props.route.package ? { package: props.route.package } : {}),
       ...(props.route.skill ? { skill: props.route.skill } : {}),
       ...(authority ? { authority } : {}),
+      ...(stop ? { stop } : {}),
     };
   };
   const draft = createMemo(() => (ws() ? getLaunchDraft(context()) : undefined));
@@ -336,7 +345,8 @@ export default function Launch(props: LaunchProps) {
     if (!ws() || !props.live) return 'waiting';
     const records = props.records ?? [];
     if (!records.length && !props.observationLoaded) return 'waiting';
-    const record = records.find(item => str(item.workspace) === ws()
+    const directory = directoryBasename(props.workspaceDirectory);
+    const record = records.find(item => (str(item.workspace) === ws() || (directory !== '' && str(item.workspace) === directory))
       && [str(item.package), str(item.package_ref), str(item.package_path)].some(value => value === routePackage));
     if (!record) return { reason: 'The requested package is not observed in this workspace; inspect the package before preparing this hand-off.' };
     const choices = plannedTargetChoices(Array.isArray(record.targets) ? record.targets as PlannedTarget[] : []);
@@ -368,27 +378,53 @@ export default function Launch(props: LaunchProps) {
       return { reason: 'The requested target does not resolve to a usable primary target of this package; inspect the package and workspace repositories before preparing this hand-off.' };
     }
     const facts = observedSpecReadiness(record, props.epics ?? [], props.assignments ?? []).facts;
+    const routeStop = normalizeLaunchStop(props.route.stop);
     let plan: PackagePlanningPlan | null = null;
     if (kind === 'plan') {
       if (!facts || facts.proposal === null) {
         return { reason: 'The package proposal presence is not observed; inspect the package files before preparing this planning hand-off.' };
       }
-      // The same conservative stage rules as normal entry: an unknown critique
-      // recommendation and an unknown recommended-critique outcome refuse
-      // instead of coercing a spec-write or critics stage.
-      if (facts.proposal === true && facts.critiqueRecommended === null) {
-        return { reason: 'The proposal does not record whether critique is recommended; inspect the proposal and package files before preparing this planning hand-off.' };
-      }
-      if (facts.critiqueRecommended === true && facts.critique === null) {
-        return { reason: 'The recommended critique outcome is not observed; inspect the proposal and package files before preparing this planning hand-off.' };
-      }
-      plan = packagePlanningPlan({
-        proposal: facts.proposal === true,
-        critiqueRecommended: facts.critiqueRecommended === true,
-        critique: facts.critique === true,
-      }) as PackagePlanningPlan;
-      if (plan.skill !== props.route.skill) {
-        return { reason: 'The requested planning skill does not match the observed package stage; inspect the package before preparing this hand-off.' };
+      if (props.route.skill === 'spec-architect-critics' && routeStop === 'critique') {
+        // Explicit critique-only entry: the route declares the one-stage
+        // critics run; observed facts decide whether that stage is valid.
+        if (facts.critiqueRecommended !== true) {
+          return { reason: 'A critique-only launch requires a recorded critique recommendation; inspect the proposal before preparing this hand-off.' };
+        }
+        if (facts.critique === null) {
+          return { reason: 'The recommended critique outcome is not observed; inspect the proposal and package files before preparing this planning hand-off.' };
+        }
+        if (facts.critique === true) {
+          return { reason: 'A critique is already written for this package; the next planning stage is the specification.' };
+        }
+        plan = CRITIQUE_ONLY_PLAN as PackagePlanningPlan;
+      } else if (props.route.skill === 'spec-write' && routeStop === 'prepared') {
+        // Explicit spec skip: the operator declared the proposal settled, so
+        // only proposal presence gates this path (FH-4).
+        if (facts.proposal !== true) {
+          return { reason: 'The requested specification stage does not match the observed package stage; inspect the package before preparing this hand-off.' };
+        }
+        plan = packagePlanningPlan({ proposal: true }) as PackagePlanningPlan;
+      } else {
+        // The same conservative stage rules as normal entry: an unknown critique
+        // recommendation and an unknown recommended-critique outcome refuse
+        // instead of coercing a spec-write or critics stage.
+        if (facts.proposal === true && facts.critiqueRecommended === null) {
+          return { reason: 'The proposal does not record whether critique is recommended; inspect the proposal and package files before preparing this planning hand-off.' };
+        }
+        if (facts.critiqueRecommended === true && facts.critique === null) {
+          return { reason: 'The recommended critique outcome is not observed; inspect the proposal and package files before preparing this planning hand-off.' };
+        }
+        plan = packagePlanningPlan({
+          proposal: facts.proposal === true,
+          critiqueRecommended: facts.critiqueRecommended === true,
+          critique: facts.critique === true,
+        }) as PackagePlanningPlan;
+        if (plan.skill !== props.route.skill) {
+          return { reason: 'The requested planning skill does not match the observed package stage; inspect the package before preparing this hand-off.' };
+        }
+        if (routeStop !== undefined && routeStop !== plan.stop) {
+          return { reason: 'The requested planning stop does not match the observed package stage; inspect the package before preparing this hand-off.' };
+        }
       }
     }
     return {
@@ -486,6 +522,7 @@ export default function Launch(props: LaunchProps) {
       ...(current.target ? { target: current.target } : {}),
       ...(current.package ? { package: current.package } : {}),
       ...(current.skill ? { skill: current.skill } : {}),
+      ...(current.stop ? { stop: current.stop } : {}),
     });
   }, { defer: true }));
   // A recorded result opens its own result route so the URL carries the
@@ -505,6 +542,7 @@ export default function Launch(props: LaunchProps) {
       ...(current.target ? { target: current.target } : {}),
       ...(current.package ? { package: current.package } : {}),
       ...(current.skill ? { skill: current.skill } : {}),
+      ...(current.stop ? { stop: current.stop } : {}),
     });
   }, { defer: true }));
   createEffect(on(saveFailure, failure => {
@@ -638,6 +676,7 @@ export default function Launch(props: LaunchProps) {
       ...(props.route.target ? { target: props.route.target } : {}),
       ...(props.route.package ? { package: props.route.package } : {}),
       ...(props.route.skill ? { skill: props.route.skill } : {}),
+      ...(props.route.stop ? { stop: props.route.stop } : {}),
     });
   }
 

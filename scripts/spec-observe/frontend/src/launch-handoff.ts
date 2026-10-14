@@ -22,7 +22,7 @@ export type HandoffKind = 'plan' | 'implement';
 export type PackagePlanningPlan = {
   skill: 'spec-architect-initial' | 'spec-architect-critics' | 'spec-write';
   stages: string[];
-  stop: 'proposal' | 'prepared';
+  stop: 'proposal' | 'critique' | 'prepared';
 };
 
 export type PlannedTarget = {
@@ -56,7 +56,7 @@ export type HandoffPresentation = {
   skill: string;
   authority: 'none' | 'draft-pr';
   stages: string[];
-  stop?: 'proposal' | 'prepared' | 'draft-pr';
+  stop?: 'proposal' | 'critique' | 'prepared' | 'draft-pr';
 };
 
 export type HandoffStage = 'brief' | 'review' | 'result';
@@ -218,6 +218,9 @@ const prepareBoundSeed = (kind: HandoffKind, input: HandoffInput): PreparedBound
     skill: presentation.skill,
     authority: presentation.authority,
   };
+  // Only a planning hand-off carries a planning stop; an implementation
+  // context keeps no stop because its publication authority owns the outcome.
+  if (kind === 'plan' && presentation.stop && presentation.stop !== 'draft-pr') context.stop = presentation.stop;
   return { ok: true, context, presentation, choices };
 };
 
@@ -230,6 +233,7 @@ const launchRouteFor = (context: LaunchContext, stage: HandoffStage, resultId?: 
   ...(context.target ? { target: context.target } : {}),
   ...(context.package ? { package: context.package } : {}),
   ...(context.skill ? { skill: context.skill } : {}),
+  ...(context.stop ? { stop: context.stop } : {}),
 });
 
 // A retained draft's own state decides where repeat entry lands: a recorded

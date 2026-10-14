@@ -256,6 +256,28 @@ test('launch destination round-trips its context, step and assignment fields', (
   });
 });
 
+test('launch route carries the planning stop through hash round trip, history pushes and scope clearing', () => {
+  const route: RouteState = {
+    dest: 'launch',
+    ws: 'fixture',
+    tab: 'review',
+    thread: 'thread-1',
+    target: 'repo-a',
+    package: 'fixture/pkg',
+    skill: 'spec-architect-critics',
+    stop: 'critique',
+  };
+  assert.deepEqual(parseHash(formatHash(route)), route);
+  assert.equal(
+    formatHash(route),
+    '#/launch?ws=fixture&tab=review&thread=thread-1&target=repo-a&package=fixture%2Fpkg&skill=spec-architect-critics&stop=critique',
+  );
+  assert.equal(routeHistoryMode(route, { ...route, stop: 'prepared' }), 'push');
+  assert.equal(routeHistoryMode(route, { ...route }), 'replace');
+  assert.deepEqual(clearIncompatibleFields(route), { dest: 'launch', ws: 'fixture', tab: 'brief' });
+  assert.deepEqual(withWorkspace(route, 'other'), { dest: 'launch', ws: 'other', tab: 'brief' });
+});
+
 test('launch requires a workspace and scope changes clear context back to the brief', () => {
   assert.equal(requiresWorkspace('launch'), true);
   assert.equal(needsWorkspacePicker({ dest: 'launch' }), true);
