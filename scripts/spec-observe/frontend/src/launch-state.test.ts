@@ -12,6 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { test, type TestContext } from 'node:test';
 import { HttpError } from './api';
 import {
+  contextKey,
   createLaunchStore,
   resolveLaunchStage,
   type LaunchContext,
@@ -600,7 +601,7 @@ test('the cold stage resolver reads local state without any POST', async t => {
   assert.equal(resolveLaunchStage(undefined, { tab: 'nonsense' }), 'brief');
   assert.equal(resolveLaunchStage(undefined, { tab: 'result' }), 'brief');
   const saved: LaunchDraft = {
-    title: 'T', content: 'C', references: [], target: null, revision: 1, reviewStatus: 'current',
+    title: 'T', content: 'C', references: [], target: null, revision: 1, reviewStatus: 'current', model: null,
     saved: { requestId: randomUUID(), title: 'T', content: 'C', references: [], brief: 'briefs/ws-1/r.md' },
   };
   assert.equal(resolveLaunchStage(saved, { tab: 'review' }), 'review');
@@ -620,7 +621,7 @@ test('the cold stage resolver reads local state without any POST', async t => {
   assert.equal(resolveLaunchStage(unconfirmed, { tab: 'review' }), 'result');
   assert.equal(resolveLaunchStage(saved, { tab: 'brief' }), 'brief');
   assert.equal(resolveLaunchStage(saved, { tab: 'review' }), 'review');
-  const pending: LaunchDraft = { ...saved, pending: { kind: 'save', revision: 1, requestId: 'request-1', target: null, promise: Promise.resolve() } };
+  const pending: LaunchDraft = { ...saved, pending: { kind: 'save', revision: 1, requestId: 'request-1', target: null, model: null, promise: Promise.resolve() } };
   assert.equal(resolveLaunchStage(pending, { tab: 'brief' }), 'brief');
   assert.equal(store.getLaunchDraft(ctx), undefined);
   assert.equal(scope.calls.length, 0);
@@ -759,3 +760,127 @@ test('brief edit clears last reviewed facts with the saved handoff', async t => 
   assert.equal(edited.reviewStatus, 'idle');
   assert.equal(scope.calls.length, 2);
 });
+
+test('seedLaunchDraft retains the copied explicit model and context identity excludes it', async t => {
+  const scope = scopeFetch(t);
+  const store = createLaunchStore();
+
+  // Seed a draft with explicit model
+  const MODEL_A = { provider: 'deepseek', model: 'deepseek-v4-pro' };
+  const ctx: LaunchContext = { ws: 'ws-1', target: 'repo-1', model: MODEL_A } as LaunchContext;
+  store.seedLaunchDraft(ctx, { title: 'Title', content: 'Body' });
+  const draft = store.getLaunchDraft(ctx);
+  assert.deepEqual(draft?.model, { provider: 'deepseek', model: 'deepseek-v4-pro' });
+  assert.notEqual(draft?.model, MODEL_A, 'stored model is a copy of the caller\'s object');
+
+  // Same context identity (model excluded) but different model value
+  const MODEL_B = { provider: 'openai', model: 'gpt-6-sol' };
+  const differentModelCtx: LaunchContext = { ws: 'ws-1', target: 'repo-1', model: MODEL_B } as LaunchContext;
+  assert.equal(contextKey(ctx), contextKey(differentModelCtx), 'model is not part of identity tuple');
+  const sameDraft = store.getLaunchDraft(differentModelCtx);
+  assert.equal(sameDraft?.title, 'Title');
+  assert.deepEqual(sameDraft?.model, { provider: 'deepseek', model: 'deepseek-v4-pro' });
+
+  // Prove one entry by mutating through the other route
+  store.changeLaunchTarget(differentModelCtx, 'repo-9');
+  assert.equal(store.getLaunchDraft(ctx)?.target, 'repo-9');
+
+  // No fetch calls should have been made
+  assert.equal(scope.calls.length, 0);
+});
+
+test('seedLaunchDraft with default (no-model) seed yields model null', async t => {
+  const store = createLaunchStore();
+  const ctx: LaunchContext = { ws: 'ws-1', target: 'repo-1' };
+  store.seedLaunchDraft(ctx, { title: 'Title', content: 'Body' });
+  const draft = store.getLaunchDraft(ctx);
+  assert.equal(draft?.model, null);
+});
+
+test('changeLaunchModel clears the current preview and retains saved bytes and last-reviewed facts', async t => {
+  const scope = scopeFetch(t);
+  const store = createLaunchStore();
+  const MODEL_A = { provider: 'deepseek', model: 'deepseek-v4-pro' };
+  const MODEL_B = { provider: 'openai', model: 'gpt-6-sol' };
+  const ctx: LaunchContext = { ws: 'ws-1', target: 'repo-1', model: MODEL_A } as LaunchContext;
+
+  await saveAndReview(store, scope, ctx, 'Title', 'Body');
+  const draft = store.getLaunchDraft(ctx)!;
+  assert.deepEqual(draft.preview?.model, MODEL_A);
+  const savedCopy = structuredClone(draft.saved);
+  const lastReviewedCopy = structuredClone(draft.lastReviewed);
+
+  const changed = store.changeLaunchModel(ctx, MODEL_B)!;
+  assert.deepEqual(changed.model, { provider: 'openai', model: 'gpt-6-sol' });
+  assert.notEqual(changed.model, MODEL_B, 'stored model is a copy');
+  assert.equal(changed.preview, undefined);
+  assert.equal(changed.reviewStatus, 'stale');
+  assert.deepEqual(changed.saved, savedCopy);
+  assert.deepEqual(changed.lastReviewed, lastReviewedCopy);
+
+  await assert.rejects(store.launchReviewedDraft(ctx, TOKEN), /Review the current target before launching/);
+
+  const review = store.reviewLaunchDraft(ctx, TOKEN);
+  await flush();
+  const scopeCall = scope.calls[scope.calls.length - 1];
+  assert.equal(scopeCall.body.provider, 'openai');
+  assert.equal(scopeCall.body.model, 'gpt-6-sol');
+  assert.ok(scopeCall.body.request_id);
+  scope.reply(scope.calls.length - 1, okPreview(DIGEST_B));
+  await review;
+  assert.equal(store.getLaunchDraft(ctx)?.reviewStatus, 'current');
+  assert.deepEqual(store.getLaunchDraft(ctx)?.preview?.model, MODEL_B);
+});
+
+test('a late preview for a previous model never becomes current', async t => {
+  const scope = scopeFetch(t);
+  const store = createLaunchStore();
+  const MODEL_A = { provider: 'deepseek', model: 'deepseek-v4-pro' };
+  const MODEL_B = { provider: 'openai', model: 'gpt-6-sol' };
+  const ctx: LaunchContext = { ws: 'ws-1', target: 'repo-1', model: MODEL_A } as LaunchContext;
+
+  store.seedLaunchDraft(ctx, { title: 'Title', content: 'Body' });
+  const save = store.saveLaunchDraft(ctx, TOKEN);
+  await flush();
+  scope.reply(0, okBrief());
+  await save;
+
+  const review = store.reviewLaunchDraft(ctx, TOKEN);
+  store.changeLaunchModel(ctx, MODEL_B);
+  await flush();
+  scope.reply(1, okPreview(DIGEST_A));
+  await review;
+  assert.equal(store.getLaunchDraft(ctx)?.preview, undefined);
+  assert.notEqual(store.getLaunchDraft(ctx)?.reviewStatus, 'current');
+  await assert.rejects(store.launchReviewedDraft(ctx, TOKEN), /Review the current target before launching/);
+});
+
+test('changeLaunchModel refuses while a launch is pending and after a recorded result', async t => {
+  const scope = scopeFetch(t);
+  const store = createLaunchStore();
+  const MODEL_A = { provider: 'deepseek', model: 'deepseek-v4-pro' };
+  const MODEL_B = { provider: 'openai', model: 'gpt-6-sol' };
+  const ctx: LaunchContext = { ws: 'ws-1', target: 'repo-1', model: MODEL_A } as LaunchContext;
+
+  await saveAndReview(store, scope, ctx, 'Title', 'Body');
+  const before = store.getLaunchDraft(ctx)!;
+  const beforeModel = before.model;
+  const beforeRevision = before.revision;
+
+  const launch = store.launchReviewedDraft(ctx, TOKEN);
+  const during = store.changeLaunchModel(ctx, MODEL_B);
+  assert.equal(during?.model, beforeModel);
+  assert.equal(during?.revision, beforeRevision);
+
+  await flush();
+  scope.reply(scope.calls.length - 1, okLaunch());
+  await launch;
+
+  const afterResult = store.getLaunchDraft(ctx)!;
+  assert.equal(afterResult.model, beforeModel);
+  assert.equal(afterResult.result?.kind, 'launched');
+  const after = store.changeLaunchModel(ctx, MODEL_B);
+  assert.equal(after?.model, beforeModel);
+});
+
+
