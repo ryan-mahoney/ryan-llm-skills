@@ -23,7 +23,7 @@ import { homedir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { inspectSpecWorktree, prepareSpecWorktree, specWorktreePath } from "../spec-location/worktree.mjs";
-import { checkPackage } from "../spec-location/index.mjs";
+import { checkPackage, materialize } from "../spec-location/index.mjs";
 import { resolveCheckout } from "../repo-search/identity.mjs";
 import { processIdentity, sameProcess } from "../spec-observe/process-identity.mjs";
 import { claimOwner } from "../spec-observe/owner-claim.mjs";
@@ -378,6 +378,12 @@ export async function prepareAssignmentSpecTarget({storageRoot, workspace_id, ta
   const claim = await acquireRootClaim(storageRoot);
   try {
     const workspace = await fetchWorkspace(storageRoot, workspace_id);
+    // A package synced from another machine has no locations.json here. This is
+    // the execution host and preparation already writes, so record its paths now.
+    if (typeof specPackage === 'string' && specPackage !== '') {
+      const checked = await checkPackage(specPackage, {root: storageRoot});
+      if (!checked.ok && checked.code === 'locations-missing') await materialize(specPackage, {root: storageRoot});
+    }
     const primary = await resolveTarget({workspace, target, specPackage});
     if (!primary.spec_package || !primary.repository_id)
       throw typedAssignmentError('spec-worktree-unavailable', 'Choose a spec package and its repository.');

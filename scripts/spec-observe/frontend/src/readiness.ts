@@ -224,16 +224,24 @@ function result(state: ReadinessState, facts: PlanningFacts | null, context: Rea
   };
 }
 
-// Planning accepts positively prepared prerequisites before they land, but
-// still requires a confirmed observation of package ownership.
-function planningPermission(record: WireRecord, context: ReadinessContext): Partial<ReadinessFacts> {
+// Planning accepts positively prepared prerequisites before they land. Assignment
+// coverage is reported as a concern (coverageConcern), never as a refusal: the
+// launch service refuses a duplicate owner itself.
+function planningPermission(_record: WireRecord, context: ReadinessContext): Partial<ReadinessFacts> {
   if (context.action !== 'plan') return {};
   const waiting = (context.prerequisites ?? []).find(fact => fact.state !== 'landed' && fact.state !== 'prepared');
-  const coverage = coverageStateOf(record, context);
-  const reason = waiting ? prerequisiteReason(waiting)
-    : coverage !== 'complete' ? `Assignment coverage ${coverage}; the owner is not confirmed, so this package cannot start.` : null;
+  const reason = waiting ? prerequisiteReason(waiting) : null;
   return { launchable: !reason, reason };
 }
+
+// Partial, stale or absent assignment coverage means an existing owner might
+// not be observed. It is advisory: the operator may still start the package and
+// the launch service refuses a live owner with target-busy.
+export const coverageConcern = (record: WireRecord | null | undefined, context: ReadinessContext = {}): string | null => {
+  const coverage = coverageStateOf(record, context);
+  return coverage === 'complete' ? null
+    : `Assignment coverage is ${coverage}; an existing owner might not be observed. Check Agents before starting, or start and let the launch service refuse a duplicate.`;
+};
 
 // Derive one package's readiness. Live planning/implementation assignments win
 // over stored preparation facts; otherwise a usable decision wins, then the
@@ -303,18 +311,16 @@ export function specReadiness(record: WireRecord | null | undefined, context: Re
     : [...declared.map(name => observedByName.get(name) ?? { name, state: 'unknown' as const }),
        ...observed.filter(fact => !declared.includes(fact.name))];
   const waiting = prerequisites.filter(fact => fact.state !== 'landed');
-  const coverage = coverageStateOf(record, context);
-  const covered = coverage === 'complete';
+  // Prepared work can always be started: an unlanded or unobserved prerequisite
+  // and incomplete assignment coverage are concerns the operator weighs, not
+  // refusals. Only a live owner (planning/starting above) withholds the action.
   if (waiting.length) {
     return result('waiting', facts, context, {
       prerequisites, waitingOn: waiting.map(fact => fact.name),
-      reason: prerequisiteReason(waiting[0]),
+      reason: prerequisiteReason(waiting[0]), launchable: true,
     });
   }
-  return result('ready', facts, context, {
-    prerequisites, launchable: covered,
-    reason: covered ? null : `Assignment coverage ${coverage}; the owner is not confirmed, so this package cannot start.`,
-  });
+  return result('ready', facts, context, { prerequisites, launchable: true, reason: coverageConcern(record, context) });
 }
 
 // Positive preparation or landed lifecycle only: legacy `status: prepared`

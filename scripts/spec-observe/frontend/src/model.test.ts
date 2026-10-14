@@ -373,7 +373,7 @@ test('cancelled history is assignment-aware: the current flag never hides a supe
 });
 
 // Run from scripts/spec-observe/frontend: node --import tsx --test --test-name-pattern='planned alias matches Ready' src/model.test.ts
-test('planned alias matches Ready and absent facts or incomplete coverage offer no launch', () => {
+test('planned alias matches Ready; absent facts offer no launch while incomplete coverage is a concern', () => {
   const legacy = { workspace: 'w', package_ref: 'w/legacy', package: '/store/w/specs/legacy' };
   const records = collectRecords(normalizeEnvelope(envelope(observer('inventory', 'w', { planned_packages: [legacy] }))));
   const record = records.find(item => item.planned);
@@ -388,9 +388,9 @@ test('planned alias matches Ready and absent facts or incomplete coverage offer 
     workspace: 'w', package: '/store/w/specs/prepared', package_ref: 'w/prepared', planned: true,
     step_count: 4, prepared: true, preparation: { outcome: 'prepared' }, decision: null, receipts: [],
   };
-  const gated = specReadiness(prepared, { coverage: { state: 'partial' } });
-  assert.equal(gated.state, 'ready');
-  assert.equal(gated.launchable, false);
-  assert.match(String(gated.reason), /partial/);
-  assert.equal(specReadiness(prepared, { coverage: { state: 'complete' } }).launchable, true);
+  const concern = specReadiness(prepared, { coverage: { state: 'partial' } });
+  assert.equal(concern.state, 'ready');
+  assert.equal(concern.launchable, true);
+  assert.match(String(concern.reason), /coverage is partial/);
+  assert.equal(specReadiness(prepared, { coverage: { state: 'complete' } }).reason, null);
 });

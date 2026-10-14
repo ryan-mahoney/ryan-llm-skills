@@ -368,6 +368,15 @@ export async function checkPackage(input, options = {}) {
   return { ok: true, locations };
 }
 
+/** This machine's locations for a package, computed from scope.json + kit without writing. */
+export async function previewLocations(input, options = {}) {
+  const opened = await open(input, options);
+  if (!opened.ok) return opened;
+  const scope = await readJson(join(opened.packageDir, 'scope.json')).catch(() => null);
+  if (!scope) return refuse('package-not-found', `${opened.packageDir} has no readable scope.json.`, 'Create the package with: spec-location new');
+  return buildLocations(opened.ws, scope, null, options);
+}
+
 /** Rewrite locations.json from scope.json + kit, then refresh the stamps. */
 export async function materialize(input, options = {}) {
   const opened = await open(input, options);

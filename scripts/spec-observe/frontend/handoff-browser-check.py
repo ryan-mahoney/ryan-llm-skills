@@ -839,8 +839,9 @@ try:
             capture("implement-review")
             check_deadline("implement-review")
 
-            # Waiting cannot submit; its single primary is the named
-            # prerequisite and the disabled Implement keeps its reason.
+            # Waiting keeps the named prerequisite as its single primary; Implement
+            # stays available as a secondary action with the prerequisite listed in
+            # the concerns panel instead of a disabled reason.
             page.goto(specs_route(filter="ready"), wait_until="domcontentloaded")
             page.locator(".records button.record").filter(has_text="waiting-browser").click()
             expect(page.locator("#spec-readiness")).to_have_attribute("data-state", "waiting")
@@ -848,9 +849,10 @@ try:
             expect(page.locator(".object-head")).to_contain_text("Prepared · waiting")
             expect(readiness_fact("prerequisites")).to_contain_text("other-browser")
             saves_before_waiting = len(posts("dispatchSaveBrief"))
-            disabled_implement = page.get_by_role("button", name="Implement spec", exact=True)
-            expect(disabled_implement).to_be_disabled()
-            expect(page.locator("#spec-readiness-actions [data-action-note=implement]")).to_contain_text("Waiting on other-browser")
+            secondary_implement = page.get_by_role("button", name="Implement spec", exact=True)
+            expect(secondary_implement).to_be_enabled()
+            expect(page.locator("#readiness-implement-concerns")).to_contain_text("Waiting on other-browser")
+            expect(page.locator("#spec-readiness-actions [data-action-note=implement-concerns]")).to_contain_text("you can still start")
             primary = page.locator("#spec-readiness-actions .ds-btn--primary")
             expect(primary).to_have_count(1)
             expect(primary).to_have_text("Open prerequisite")
@@ -1146,22 +1148,15 @@ try:
             expect(member_row("other-browser").locator('[data-action="plan"]')).to_be_enabled()
             report["scenarios"].append("An unreadable proposal presence refuses planning on an otherwise plannable epic row and explicit absence restores it without a save")
 
-            # Real row and primary entry must refuse unknown ownership/reads,
-            # even with a live token and usable targets; forced clicks cannot POST.
+            # Incomplete assignment coverage is a concern, not a refusal: the row
+            # keeps Implement enabled and names the coverage state in its note.
             control("epic-base-status", "merged")
             for coverage in ("partial", "unknown"):
                 control("specs-assignment-coverage", coverage)
                 refresh_epic()
                 implement = member_row("browser").locator('[data-action="implement"]')
-                expect(implement).to_be_disabled()
-                expect(member_row("browser").locator(".action-note")).to_contain_text(f"Assignment coverage {coverage}")
-                primary = page.locator('[data-action="plan-member"]')
-                expect(primary).to_be_disabled()
-                expect(page.locator('[data-action-note="plan-member"]')).to_contain_text(f"Assignment coverage {coverage}")
-                saves = len(posts("dispatchSaveBrief"))
-                implement.dispatch_event("click")
-                primary.dispatch_event("click")
-                assert len(posts("dispatchSaveBrief")) == saves
+                expect(implement).to_be_enabled()
+                expect(member_row("browser").locator(".action-note")).to_contain_text(f"Assignment coverage is {coverage}")
             control("specs-assignment-coverage", "complete")
             control("epic-planning-facts", json.dumps({
                 "prepared": None, "step_count": 0, "preparation": {"outcome": "unavailable"}, "decision": None,
@@ -1170,7 +1165,7 @@ try:
             expect(member_row("other-browser")).to_contain_text("Readiness unknown")
             expect(member_row("other-browser").locator('[data-action="plan"]')).to_be_disabled()
             expect(member_row("other-browser").locator(".action-note")).to_contain_text("preparation read is unavailable")
-            report["scenarios"].append("Epic row and primary refuse partial/unknown assignment coverage and unavailable preparation without posting")
+            report["scenarios"].append("Epic row keeps Implement available under partial/unknown assignment coverage and refuses unavailable preparation without posting")
             control("epic-base-status", "prepared")
             control("epic-planning-facts", json.dumps({
                 "proposal": False, "prepared": False, "step_count": 0, "preparation": {"outcome": "missing"}, "decision": None,

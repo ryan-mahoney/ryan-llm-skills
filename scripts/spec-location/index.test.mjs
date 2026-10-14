@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  checkPackage, legacySpecs, listEpics, locatePackage, materialize, migrate, newPackage, recordWorktree, resolveWorkspace, setWorktree, stamp, updateScope,
+  checkPackage, legacySpecs, listEpics, locatePackage, materialize, migrate, newPackage, previewLocations, recordWorktree, resolveWorkspace, setWorktree, stamp, updateScope,
 } from './index.mjs';
 import { gitInit, makeFixture, put } from './fixture.mjs';
 
@@ -144,6 +144,20 @@ test('checkPackage: refusal codes and success', () => withFixture(async fx => {
   rmSync(join(dir, 'locations.json'));
   gitInit(fx.alpha);
   assert.equal(code(await checkPackage('demo/p1', options)), 'locations-missing');
+}));
+
+// Run alone: node --test --test-name-pattern='previewLocations' scripts/spec-location/index.test.mjs
+test('previewLocations: derives this machine\'s targets from scope.json without writing locations.json', () => withFixture(async fx => {
+  const { options } = fx;
+  await newPackage({ ...options, workspace: 'demo', slug: 'synced', targets: [{ id: 'alpha' }] });
+  const locations = join(fx.workspaceDir, 'specs', 'synced', 'locations.json');
+  rmSync(locations);
+  const preview = await previewLocations('demo/synced', options);
+  assert.equal(code(preview), 'ok');
+  assert.deepEqual(preview.locations.targets.map(target => [target.id, target.primary, target.worktree]), [['alpha', fx.alpha, null]]);
+  assert.equal(preview.locations.package_ref, 'demo/synced');
+  assert.throws(() => readFileSync(locations), /ENOENT/);
+  assert.equal(code(await previewLocations('demo/missing', options)), 'package-not-found');
 }));
 
 test('authoring off the execution host: uses this machine\'s paths until a worktree is recorded', () => withFixture(async fx => {

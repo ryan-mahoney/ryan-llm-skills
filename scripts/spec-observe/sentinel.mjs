@@ -19,7 +19,7 @@ import { publicHint } from '../../pi/extensions/spec-runtime/monitor.mjs';
 import { discoverManaged } from './core.mjs';
 import { collectAssignments } from './assignments.mjs';
 import { readWorkspaceEpics, collectEpics } from './epics.mjs';
-import { legacySpecs, listPackages, locatePackage } from '../spec-location/index.mjs';
+import { legacySpecs, listPackages, locatePackage, previewLocations } from '../spec-location/index.mjs';
 import { listWorkspaces, resolveRepositoryPath } from '../workspaces/store.mjs';
 
 export const SENTINEL_LIMITS = Object.freeze({
@@ -543,7 +543,20 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
     if (result.outcome === 'ok') {
       for (const target of result.record) fact.targets.push({ ...target, common: target.common ? await realpath(target.common).catch(() => null) : null });
     } else if (result.outcome === 'read-budget') noteUnknown(result.reason);
+    else if (result.outcome === 'missing' && storageRoot && await deriveTargets(found, fact)) { /* targets computed from scope.json + kit */ }
     else note(`locations-unavailable: ${found.ref}`);
+  };
+  // A package synced from another machine arrives without locations.json (sync
+  // drops machine-specific paths). Its targets still follow from scope.json and
+  // the kit, so compute this machine's view read-only instead of hiding the package.
+  const deriveTargets = async (found, fact) => {
+    const built = await previewLocations(found.ref, { root: storageRoot, anyHost: true }).catch(() => null);
+    if (!built?.ok) return false;
+    for (const target of built.locations.targets) {
+      fact.targets.push({ id: target.id, primary: target.primary, worktree: null,
+        common: target.common ? await realpath(target.common).catch(() => null) : null });
+    }
+    return true;
   };
   // Resolve a package reference, directory or file inside one through spec-location.
   const addRequested = async (value, describe) => {
@@ -1050,8 +1063,11 @@ async function collectPackage(fact, budget, report, reportUnknown, afterCurrent 
   if (!await readReceipt(join(fact.packagePath, 'runtime', 'run.json'))) return [...found.values()];
   await afterCurrent(found.size > 0);
   const listed = await listDirectory(runsDir, SENTINEL_LIMITS.receiptFiles,
+    // `<id>-revoked.json` is the runtime's writer-lease revocation marker
+    // ({revoked_at}), not a receipt: reading it as one marks the package incomplete.
     entry => entry.isFile() && entry.name.endsWith('.json')
-      && !entry.name.endsWith('-verification.json') && !entry.name.endsWith('-completion.json'),
+      && !entry.name.endsWith('-verification.json') && !entry.name.endsWith('-completion.json')
+      && !entry.name.endsWith('-revoked.json'),
     SENTINEL_LIMITS.receiptDirectoryEntries);
   if (listed.entries === null) {
     // A package without a runs directory has no receipts to observe.

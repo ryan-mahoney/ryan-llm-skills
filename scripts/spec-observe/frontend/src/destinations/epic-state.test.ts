@@ -261,7 +261,7 @@ test('epic planning readiness uses positive preparation instead of legacy status
   assert.equal(nextToPlan({ workspace: 'w', members: [proposed] })?.name, 'c');
 });
 
-test('epic actions reuse readiness refusals for incomplete coverage and unavailable preparation', () => {
+test('epic actions keep Implement available under incomplete coverage and refuse unavailable preparation', () => {
   const member = {
     name: 'a', workspace: 'w', package: 'a', status: 'prepared', requires: ['base'],
     planning: { prepared: true, step_count: 2, preparation: { outcome: 'prepared' }, decision: null },
@@ -269,11 +269,12 @@ test('epic actions reuse readiness refusals for incomplete coverage and unavaila
   const epic = { workspace: 'w', members: [{ name: 'base', status: 'merged' }, member] };
   const record = { workspace: 'w', package: '/store/specs/a' };
   for (const state of ['partial', 'unknown']) {
+    // Coverage is a concern shown as the note; the launch service owns duplicate refusal.
     const row = epicMemberPlanningRow(epic, member, [{ ...record, assignment_coverage: { state } }]);
     assert.equal(row.status.label, 'Ready to implement');
     assert.equal(row.action.kind, 'implement');
-    assert.equal(row.action.disabled, true);
-    assert.match(row.action.reason!, new RegExp(`Assignment coverage ${state}`));
+    assert.equal(row.action.disabled, false);
+    assert.match(row.action.reason!, new RegExp(`Assignment coverage is ${state}`));
   }
   assert.equal(epicMemberPlanningRow(epic, member, [{ ...record, assignment_coverage: { state: 'complete' } }]).action.disabled, false);
   const unavailable = { ...member, status: 'proposed', planning: {
@@ -286,7 +287,7 @@ test('epic actions reuse readiness refusals for incomplete coverage and unavaila
   assert.equal(nextToPlan({ ...epic, members: [unavailable] }), null);
 });
 
-test('epic planning accepts prepared prerequisites but refuses an unconfirmed owner', () => {
+test('epic planning accepts prepared prerequisites regardless of assignment coverage', () => {
   const member = { name: 'a', workspace: 'w', package: 'a', status: 'proposed', requires: ['base'],
     planning: { prepared: false, step_count: null, preparation: { outcome: 'missing' }, decision: null } };
   const epic = { workspace: 'w', members: [
@@ -297,6 +298,6 @@ test('epic planning accepts prepared prerequisites but refuses an unconfirmed ow
   assert.equal(covered.status.label, 'Not planned');
   assert.equal(covered.action.disabled, false);
   const partial = epicMemberPlanningRow(epic, member, [{ ...record, assignment_coverage: { state: 'partial' } }]);
-  assert.equal(partial.action.disabled, true);
-  assert.match(partial.action.reason!, /owner is not confirmed/);
+  assert.equal(partial.action.disabled, false);
+  assert.equal(partial.action.reason, null);
 });

@@ -10,7 +10,7 @@ import { Portal } from 'solid-js/web';
 import { base, str, time } from './format';
 import { ActionBar, StateNotice, StatusText } from './primitives';
 import {
-  coverageStateOf, observedSpecReadiness, planningFactsFor, specReadiness,
+  coverageConcern, observedSpecReadiness, planningFactsFor, specReadiness,
   type PlanningFacts, type PrerequisiteFact,
 } from './readiness';
 import { plannedTargetChoices, startPackageHandoff, type HandoffInput, type PackagePlanningPlan, type PlannedTarget } from './launch-handoff';
@@ -104,12 +104,8 @@ export default function SpecReadiness(props: SpecReadinessProps) {
   };
   const obligationNote = (): string => {
     const value = readiness();
-    if (value.state === 'ready') {
-      return value.launchable
-        ? 'Merge stays with the operator. Nothing has been dispatched for this package.'
-        : value.reason ?? 'Assignment coverage is incomplete.';
-    }
-    if (value.state === 'waiting') return 'Implementation stays unavailable until every prerequisite has landed.';
+    if (value.state === 'ready') return 'Merge stays with the operator. Nothing has been dispatched for this package.';
+    if (value.state === 'waiting') return 'Implementation can start now; changes from the waiting prerequisite may be missing from this package\'s branch.';
     if (value.state === 'incomplete') return 'Resume planning to complete the preparation report and index.';
     if (value.state === 'not-planned') return 'Start planning to prepare the specification and steps.';
     if (value.state === 'decision') return 'Discuss the recorded decision and review the package files before starting.';
@@ -215,9 +211,28 @@ export default function SpecReadiness(props: SpecReadinessProps) {
     if (!props.live) return 'Connect to the live workspace service to prepare this hand-off.';
     if (!props.token) return 'The workspace action token is unavailable.';
     if (plannedTargetChoices(Array.isArray(record().targets) ? record().targets as PlannedTarget[] : []).length === 0) {
-      return 'No usable package target is available.';
+      return `No usable package target is available. On the execution host run: node ~/.agents/scripts/spec-location/cli.mjs materialize ${str(record().package_ref) || 'WORKSPACE/SLUG'} and refresh.`;
     }
     return '';
+  };
+  // Everything short of a missing target or an unreachable service is a
+  // concern, not a refusal: the operator reads it in the panel and may start
+  // anyway. The launch service still refuses a live owner or an unavailable
+  // package at start time.
+  const concerns = (): string[] => {
+    const value = readiness();
+    const items: string[] = [];
+    if (value.state === 'waiting') {
+      items.push(`${value.reason ?? 'A prerequisite has not landed'}. Its changes may be missing from this package's branch; open the prerequisite to check its state.`);
+    }
+    if (value.state === 'decision') items.push(`A recorded decision is unresolved: ${value.reason ?? 'see the preparation report'}. Resolve it in the package files first, or start and let the agent raise it.`);
+    if (value.state === 'planning' || value.state === 'starting') {
+      items.push(`${value.reason ?? 'An assignment owns this package.'} The launch service refuses a second owner while it is live; open the agent to inspect or end it.`);
+    }
+    if (value.state === 'unknown') items.push(value.reason ?? 'Readiness is not confirmed in this snapshot.');
+    const coverage = coverageConcern(record());
+    if (coverage) items.push(coverage);
+    return items;
   };
   // Planning stages past an intact proposal depend on observed critique facts.
   // An unknown recommendation is never coerced into no-critique and an
@@ -227,8 +242,6 @@ export default function SpecReadiness(props: SpecReadinessProps) {
   const planGate = (): string => {
     const baseGate = gate();
     if (baseGate) return baseGate;
-    const coverage = coverageStateOf(record());
-    if (coverage !== 'complete') return `Assignment coverage ${coverage}; the owner is not confirmed, so this package cannot start.`;
     const value = facts();
     if (!value || value.proposal === null) {
       return 'The proposal presence is not observed; inspect the package files before resuming planning.';
@@ -250,14 +263,8 @@ export default function SpecReadiness(props: SpecReadinessProps) {
     if (!permission.launchable) return permission.reason ?? 'Planning is not confirmed for this package.';
     return '';
   };
-  const implementGate = (): string => {
-    const baseGate = gate();
-    if (baseGate) return baseGate;
-    const value = readiness();
-    if (value.state !== 'ready') return value.reason ?? 'This package is not ready to implement.';
-    if (!value.launchable) return value.reason ?? 'Assignment coverage does not confirm the owner for this package.';
-    return '';
-  };
+  // Only the hard gate disables Implement spec; readiness concerns stay advisory.
+  const implementGate = (): string => gate();
 
   async function startHandoff(kind: 'implement' | 'plan') {
     if (handoffBusy() || !props.live || !props.token) return;
@@ -295,11 +302,14 @@ export default function SpecReadiness(props: SpecReadinessProps) {
         class={secondary ? 'ds-btn' : 'ds-btn ds-btn--primary'}
         data-action="implement"
         disabled={Boolean(implementGate()) || Boolean(handoffBusy())}
-        aria-describedby={implementGate() ? 'readiness-implement-reason' : undefined}
+        aria-describedby={implementGate() ? 'readiness-implement-reason' : concerns().length ? 'readiness-implement-concerns' : undefined}
         onClick={() => void startHandoff('implement')}
       >{handoffBusy() === 'implement' ? 'Preparing review…' : 'Implement spec'}</button>
       <Show when={implementGate()}>
         <span class="action-note" id="readiness-implement-reason" data-action-note="implement">{implementGate()}</span>
+      </Show>
+      <Show when={!implementGate() && concerns().length > 0}>
+        <span class="action-note" data-action-note="implement-concerns">{concerns().length === 1 ? '1 concern' : `${concerns().length} concerns`} noted above; you can still start.</span>
       </Show>
       <Show when={!implementGate() && handoffStatus()}>
         <span class="action-note" data-action-note="handoff-status" role="status">{handoffStatus()}</span>
@@ -415,7 +425,7 @@ export default function SpecReadiness(props: SpecReadinessProps) {
     const value = readiness();
     if (value.state === 'waiting') return <>{prerequisitePrimary()}{implementButton(true)}</>;
     if (value.state === 'incomplete' || value.state === 'not-planned') return resumePlanning();
-    if (value.state === 'planning' || value.state === 'starting') return openAgent();
+    if (value.state === 'planning' || value.state === 'starting') return <>{openAgent()}{implementButton(true)}</>;
     if (value.state === 'decision') return <>{decisionPrimary()}{implementButton(true)}</>;
     return implementButton();
   };
@@ -440,6 +450,13 @@ export default function SpecReadiness(props: SpecReadinessProps) {
         <StateNotice tone="warning" title="Implementation is unavailable until preparation completes">
           {obligationText()}
         </StateNotice>
+      </Show>
+      <Show when={concerns().length > 0}>
+        <details class="readiness-concerns" id="readiness-implement-concerns" data-concerns={concerns().length}>
+          <summary>Why Implement spec might not start ({concerns().length})</summary>
+          <ul><For each={concerns()}>{item => <li>{item}</li>}</For></ul>
+          <p>You can still start it. The launch service checks the package and any live owner at start time and shows a refusal on the review page instead of starting an agent.</p>
+        </details>
       </Show>
       <div class="facts four">
         <div class="fact" data-fact="prepared-steps">

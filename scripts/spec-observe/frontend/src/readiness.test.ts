@@ -1,7 +1,7 @@
 // Run with: node --import tsx --test --test-name-pattern='readiness|starting|Ready|planning' src/readiness.test.ts
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import {
+import { coverageConcern,
   READINESS,
   READINESS_ORDER,
   epicPlanningIncomplete,
@@ -84,7 +84,8 @@ test('readiness separates ready, waiting, incomplete, not-planned, decision and 
   assert.equal(waiting.tone, 'neutral');
   assert.deepEqual(waiting.waitingOn, ['super2']);
   assert.equal(waiting.reason, 'Available when super2 is merged');
-  assert.equal(waiting.launchable, false);
+  // A waiting prerequisite is a concern the operator weighs; the action stays available.
+  assert.equal(waiting.launchable, true);
 
   const incomplete = specReadiness(preparedRow({ prepared: false, preparation: { outcome: 'missing' } }), { coverage: { state: 'complete' } });
   assert.equal(incomplete.state, 'incomplete');
@@ -94,8 +95,8 @@ test('readiness separates ready, waiting, incomplete, not-planned, decision and 
   assert.equal(notPlanned.state, 'not-planned');
 
   // Planning entry shares the observed prerequisite truth: a prepared
-  // dependency may plan before merge, unresolved or unknown dependencies and
-  // incomplete coverage refuse entry.
+  // dependency may plan before merge, unresolved or unknown dependencies refuse
+  // entry, and incomplete coverage is advisory only.
   const notPlannedRow = preparedRow({ step_count: null, prepared: false, preparation: { outcome: 'missing' } });
   const planPrepared = specReadiness(notPlannedRow, { action: 'plan', coverage: { state: 'complete' }, prerequisites: [{ name: 'base', state: 'prepared' }] });
   assert.equal(planPrepared.state, 'not-planned');
@@ -108,8 +109,10 @@ test('readiness separates ready, waiting, incomplete, not-planned, decision and 
   assert.equal(planUnknown.launchable, false);
   assert.equal(planUnknown.reason, 'base is not observed');
   const planUncovered = specReadiness(notPlannedRow, { action: 'plan', coverage: { state: 'partial' }, prerequisites: [{ name: 'base', state: 'prepared' }] });
-  assert.equal(planUncovered.launchable, false);
-  assert.match(String(planUncovered.reason), /coverage partial/);
+  assert.equal(planUncovered.launchable, true);
+  assert.equal(planUncovered.reason, null);
+  assert.match(String(coverageConcern(notPlannedRow, { coverage: { state: 'partial' } })), /coverage is partial/);
+  assert.equal(coverageConcern(notPlannedRow, { coverage: { state: 'complete' } }), null);
 
   const decision = specReadiness(preparedRow({ prepared: false, decision: { stage: 'specification', question: 'Choose the storage shape', recommendation: '', recorded_at: '2026-10-10T12:00:00Z', source: 'decision-required.md' } }), { coverage: { state: 'complete' } });
   assert.equal(decision.state, 'decision');
@@ -128,12 +131,11 @@ test('readiness separates ready, waiting, incomplete, not-planned, decision and 
   const erased = specReadiness(preparedRow({ requires: ['base'] }), { coverage: { state: 'complete' }, prerequisites: [] });
   assert.equal(erased.state, 'waiting');
   assert.deepEqual(erased.waitingOn, ['base']);
-  assert.equal(erased.launchable, false);
+  assert.equal(erased.reason, 'base is not observed');
 
   const partial = specReadiness(preparedRow({ requires: ['a', 'b'] }), { coverage: { state: 'complete' }, prerequisites: [{ name: 'a', state: 'landed' }] });
   assert.equal(partial.state, 'waiting');
   assert.deepEqual(partial.waitingOn, ['b']);
-  assert.equal(partial.launchable, false);
 
   // Prepared work never increases landed evidence.
   assert.equal(landedStatus('prepared'), false);
@@ -144,7 +146,7 @@ test('readiness separates ready, waiting, incomplete, not-planned, decision and 
   assert.equal(positivelyPrepared(memberPlanning({ name: 'a', status: 'prepared' })), false);
 });
 
-test('starting and planning follow live assignments and coverage gates a Ready launch', () => {
+test('starting and planning follow live assignments; coverage is a concern on a Ready launch, not a gate', () => {
   const record = preparedRow();
   assert.equal(planningAssignmentFor(record, [assignment('ended', 'spec-end-to-end'), assignment('launch-failed', 'spec-architect-initial')]), null);
 
@@ -163,13 +165,13 @@ test('starting and planning follow live assignments and coverage gates a Ready l
 
   const partial = specReadiness(record, { coverage: { state: 'partial' } });
   assert.equal(partial.state, 'ready');
-  assert.equal(partial.launchable, false);
-  assert.match(String(partial.reason), /partial/);
+  assert.equal(partial.launchable, true);
+  assert.match(String(partial.reason), /coverage is partial/);
 
   const absent = specReadiness(record);
   assert.equal(absent.state, 'ready');
-  assert.equal(absent.launchable, false);
-  assert.match(String(absent.reason), /unknown/);
+  assert.equal(absent.launchable, true);
+  assert.match(String(absent.reason), /coverage is unknown/);
 
   // Equal basenames under distinct canonical paths never join: the current
   // package keeps its action while the previous-path assignment owns nothing.

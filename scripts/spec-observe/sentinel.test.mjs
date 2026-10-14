@@ -1584,13 +1584,22 @@ test('storage package is observed with each target from locations.json, and unre
   assert.deepEqual(row('assign-solo').targets, [{ id: 'alpha', primary: fx.alpha }]);
   assert.match(renderWorkspace(snapshot).join('\n'), /demo\/both · assign-both · running/);
 
+  // Synced from another machine: no locations.json, but scope.json + kit still
+  // name the targets, so the package stays launchable and coverage stays complete.
   rmSync(join(solo, 'locations.json'));
+  const derived = await collectWorkspace(demoInput(fx));
+  assert.equal(derived.coverage.state, 'complete', JSON.stringify(derived.coverage.reasons));
+  assert.deepEqual(derived.runs.find(run => run.assignment_id === 'assign-solo').targets, [{ id: 'alpha', primary: fx.alpha }]);
+  assert.equal(existsSync(join(solo, 'locations.json')), false, 'observation never writes locations.json');
+
+  writeFileSync(join(solo, 'locations.json'), '{');
   const degraded = await collectWorkspace(demoInput(fx));
   assert.ok(degraded.coverage.reasons.includes('locations-unavailable: demo/solo'), JSON.stringify(degraded.coverage.reasons));
   assert.equal(degraded.coverage.state, 'partial');
   const unlocated = degraded.runs.find(run => run.assignment_id === 'assign-solo');
   assert.ok(unlocated, 'the run is still observed from its runtime files');
   assert.deepEqual(unlocated.targets, []);
+  writeFileSync(join(solo, 'locations.json'), JSON.stringify({ schema_version: 1, package_ref: 'demo/solo', targets: [{ id: 'alpha', primary: fx.alpha, common: join(fx.alpha, '.git'), worktree: null }] }));
 
   // --package scoping: a reference, a folder or a file inside it selects one package.
   writeFileSync(join(both, 'spec.md'), '# spec\n');
@@ -1676,6 +1685,17 @@ test('a running run whose coordinator process is gone is flagged; a live or term
   assert.equal(condition(row('assign-alive'), 'coordinator-gone'), undefined);
   assert.equal(condition(row('assign-ended'), 'coordinator-gone'), undefined);
   assert.equal(condition(row('assign-stale'), 'coordinator-gone'), undefined, 'a stale run is terminal');
+});
+
+// Run alone: node --test --test-name-pattern='revocation marker' scripts/spec-observe/sentinel.test.mjs
+test('a writer-lease revocation marker beside the receipts is not an invalid receipt', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'revoked'), pkg = pack(repo);
+  receipt(pkg, { id: 'done', assignment_id: 'assign-done', state: 'completed', started_at: ago(120000), finished_at: ago(60000) });
+  writeFileSync(join(pkg, 'runtime', 'runs', 'done-revoked.json'), JSON.stringify({ revoked_at: ago(60000) }));
+  const snapshot = await collect({ roots: [repo], indexDir: f.indexDir, now });
+  assert.equal(snapshot.coverage.reasons.some(reason => reason.startsWith('receipt-invalid')), false, JSON.stringify(snapshot.coverage.reasons));
+  assert.equal(snapshot.coverage.state, 'complete');
+  assert.deepEqual(snapshot.runs.map(run => run.assignment_id), ['assign-done']);
 });
 
 test('a receipt names its package by reference, and a foreign reference is stale evidence', async t => {
