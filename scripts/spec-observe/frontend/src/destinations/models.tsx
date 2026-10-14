@@ -30,7 +30,7 @@ export default function ModelsDestination(props: DestinationProps) {
   const [thinking, setThinking] = createSignal(false);
   const [images, setImages] = createSignal(false);
   const [context1m, setContext1m] = createSignal(false);
-  const [expandedProviders, setExpandedProviders] = createSignal<Set<string>>(new Set());
+  const [providerOverrides, setProviderOverrides] = createSignal<Record<string, boolean>>({});
   const [prefsLoaded, setPrefsLoaded] = createSignal(false);
 
   const filter = (): CapabilityFilter => ({
@@ -183,7 +183,7 @@ export default function ModelsDestination(props: DestinationProps) {
               class="switch"
               aria-label={`Preferred: ${row.choice.model} via ${row.choice.provider}`}
               checked={isPreferredNow}
-              onChange={(e) => props.token && setPreference(row.choice, e.currentTarget.checked, props.token)}
+              onClick={() => { if (props.token && !state.pending && canMutate()) setPreference(row.choice, !isPreferredNow, props.token); }}
               disabled={state.pending || !canMutate() || (!isPreferredNow && row.availability !== 'available')}
             />
           </label>
@@ -247,26 +247,16 @@ export default function ModelsDestination(props: DestinationProps) {
 
   const providerDetails = (group: CatalogGroup): JSX.Element => {
     const providerKey = group.provider;
-    const expanded = expandedProviders().has(providerKey);
+    const expanded = () => providerOverrides()[providerKey] ?? projection().expanded.includes(providerKey);
     const preferredCount = preferred().filter(p => p.provider === providerKey).length;
     const ref = (el: HTMLDetailsElement | null) => {
-      if (el && expanded !== el.open) {
-        el.open = expanded;
-      }
+      if (el) { const value = expanded(); if (value !== el.open) el.open = value; }
     };
 
     return (
       <details ref={ref} class="prov-group" onToggle={(e) => {
         const target = e.currentTarget as HTMLDetailsElement;
-        setExpandedProviders(prev => {
-          const next = new Set(prev);
-          if (target.open) {
-            next.add(providerKey);
-          } else {
-            next.delete(providerKey);
-          }
-          return next;
-        });
+        setProviderOverrides(prev => ({ ...prev, [providerKey]: target.open }));
       }}>
         <summary>
           <span class="pname">{group.provider}</span>
@@ -275,7 +265,7 @@ export default function ModelsDestination(props: DestinationProps) {
             <span class="ppref">{preferredCount} preferred</span>
           </Show>
         </summary>
-        <Show when={expanded}>{providerRows(group)}</Show>
+        <Show when={expanded()}>{providerRows(group)}</Show>
       </details>
     );
   };

@@ -29,6 +29,7 @@ const storage=join(root,'storage');await setupStorage(storage);
 // Models fixture (gated by SENTINEL_MODELS=1)
 let modelsReadAt=Date.now();
 let modelsCatalogFail=false;
+let observerMode=false;
 const modelsPreferredSeed=`{"version":1,"preferred":[{"provider":"pi-claude-cli","model":"claude-sonnet-5-5"},{"provider":"pi-claude-cli","model":"claude-haiku-5-5"},{"provider":"zai","model":"glm-5.3"},{"provider":"deepseek","model":"deepseek-v4-pro"},{"provider":"kimi-coding","model":"k3"},{"provider":"openai-codex","model":"gpt-6-sol"},{"provider":"old-provider","model":"retired-model"}],"updated_at":"2026-10-14T14:31:00.000Z"}`;
 if(modelsFixture){
  const prefDir=join(root,'agent','spec-sentinel');await mkdir(prefDir,{recursive:true});
@@ -574,6 +575,7 @@ const server=createServer(async(req,res)=>{
   let controlResult=null;
   if(handoffIntegration&&action==='handoff-complete-planning')try{controlResult=await completeHandoffPlanning(url);}catch(error){controlResult={control:'handoff-complete-planning',error:String(error?.message??error)};}
   if(handoffIntegration&&action==='handoff-write-receipt')try{controlResult=await writeHandoffReceipt(url);}catch(error){controlResult={control:'handoff-write-receipt',error:String(error?.message??error)};}
+  if(action==='observer')observerMode=url.searchParams.get('value')==='true';
   if(action==='session-end-fails')sessionEndFails=url.searchParams.get('value')==='true';
   if(action==='session-identity'){const next=url.searchParams.get('value');sessionIdentity=next?next:'fixture-identity';}
   if(action==='terminal-state')terminalState=url.searchParams.get('value')||'none';
@@ -693,6 +695,15 @@ const server=createServer(async(req,res)=>{
  res.on('close',()=>{if(!res.writableEnded)finishBoundary(boundaryAttemptNumber,'aborted');});
  const originalEnd=res.end.bind(res);
  res.end=(body,encoding,callback)=>{
+  if(readKind==='state'&&observerMode&&(typeof body==='string'||Buffer.isBuffer(body))){
+   const text=Buffer.isBuffer(body)?body.toString('utf8'):body;
+   try{
+    const parsed=JSON.parse(text);
+    delete parsed.action_token;
+    delete parsed.thread_action_token;
+    body=JSON.stringify(parsed);
+   }catch{}
+  }
   if(readKind==='state'&&attempt.offset!==0&&(typeof body==='string'||Buffer.isBuffer(body))){
    const text=Buffer.isBuffer(body)?body.toString('utf8'):body;
    try{

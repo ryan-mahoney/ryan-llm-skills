@@ -1,0 +1,447 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["playwright"]
+# ///
+"""EV-5 browser checker for the Models destination.
+
+SENTINEL_EVIDENCE_DIR=/path/to/evidence timeout 240s uv run --script \
+  scripts/spec-observe/frontend/models-browser-check.py --case models
+SENTINEL_EVIDENCE_DIR=/path/to/evidence timeout 240s uv run --script \
+  scripts/spec-observe/frontend/models-browser-check.py --case models \
+  --reference-dir /path/to/designs/model-selection
+"""
+import argparse
+import json
+import os
+import select
+import shutil
+import subprocess
+import threading
+import time
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+from playwright.sync_api import expect, sync_playwright
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--case', choices=['models'], default='models')
+parser.add_argument('--reference-dir', default=None)
+options = parser.parse_args()
+case = options.case
+reference_dir = Path(options.reference_dir).resolve() if options.reference_dir else None
+
+root = Path(__file__).resolve().parent
+checkout = root.parents[2]
+evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-models-evidence'))
+browser_evidence = evidence / 'browser'
+browser_evidence.mkdir(parents=True, exist_ok=True)
+receipt_path = evidence / 'step-005-models-result.json'
+started = time.monotonic()
+
+report = {
+    'status': 'failed',
+    'case': case,
+    'scenarios': [],
+    'captures': [],
+    'pageErrors': [],
+    'consoleErrors': [],
+    'requestFailures': [],
+    'fixture': {},
+    'observedCommit': None,
+    'dirty': None,
+    'reference': str(reference_dir) if reference_dir else None,
+    'visual': {},
+    'cleanup': {},
+}
+
+fixture = None
+reference_server = None
+browser = None
+context = None
+fixture_info = {}
+held_routes = []
+cleanup = {'fixtureTerminated': False, 'browserClosed': False, 'temporaryFixtureRootRemoved': None, 'errors': []}
+
+
+class QuietRequestHandler(SimpleHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass
+
+
+def write_receipt():
+    temporary = receipt_path.with_name(receipt_path.name + '.tmp')
+    temporary.write_text(json.dumps(report, indent=2) + '\n')
+    os.replace(temporary, receipt_path)
+
+
+def run(url, page):
+    global reference_server
+
+    def control(action, value=''):
+        response = context.request.get(url + '/__fixture/control?action=' + action + '&value=' + value)
+        assert response.ok
+        return response.json()
+
+    def reload(page):
+        page.reload(wait_until='domcontentloaded')
+        page.wait_for_selector('#catalog-meta')
+
+    def goto_models(page):
+        page.goto(url + '/#/models', wait_until='domcontentloaded')
+        page.wait_for_selector('#catalog-meta')
+
+    def cap(page, name, widths=(1280, 1600)):
+        for width in widths:
+            page.set_viewport_size({'width': width, 'height': 900})
+            page.wait_for_timeout(200)
+            path = browser_evidence / f'models-{name}@{width}.png'
+            page.screenshot(path=str(path))
+            report['captures'].append(str(path))
+
+    def passed(label):
+        report['scenarios'].append(label)
+
+    try:
+        # 1. ideal: initial render with catalog meta and preferred rows
+        goto_models(page)
+        expect(page.locator('#catalog-meta')).to_be_visible()
+        meta_text = page.locator('#catalog-meta').text_content()
+        assert 'models' in meta_text.lower() or 'model' in meta_text.lower()
+        assert 'from' in meta_text.lower() or 'providers' in meta_text.lower()
+        assert 'catalog read' in meta_text.lower()
+        expect(page.locator('th.c-pref').first).to_contain_text('Preferred')
+        first_table = page.locator('.mtable').first
+        assert first_table.locator('tbody tr').count() >= 6, first_table.locator('tbody tr').count()
+        assert page.locator('input.switch:checked').count() >= 5
+        cap(page, 'ideal')
+        passed('ideal')
+
+        # 2. search+chips: query and capability filters
+        page.locator('#find-model').fill('claude')
+        page.wait_for_timeout(100)
+        meta_text = page.locator('#catalog-meta').text_content()
+        assert 'matched' in meta_text.lower()
+        assert page.locator('mark').count() >= 1
+        thinking_chip = page.locator('button.chip', has_text='Thinking')
+        thinking_chip.click()
+        expect(thinking_chip).to_have_attribute('aria-pressed', 'true')
+        cap(page, 'search')
+        passed('search+chips')
+
+        # 3. no-matches: empty filter result
+        page.locator('#find-model').fill('zzz-no-such-model')
+        page.wait_for_timeout(100)
+        expect(page.locator('.empty-inline')).to_be_visible()
+        expect(page.locator('.empty-inline')).to_contain_text('No models match this search.')
+        page.locator('.empty-inline button:has-text("Clear search")').click()
+        page.wait_for_timeout(100)
+        expect(page.locator('#find-model')).to_have_value('')
+        assert first_table.locator('tbody tr').count() >= 6
+        cap(page, 'no-matches')
+        passed('no-matches')
+
+        # 4. missing pair: preferred but not in catalog
+        expect(page.locator('.prefcell:has-text("Not in fixture-host catalog")')).to_be_visible()
+        expect(page.locator('.prefcell button:has-text("Remove preference")')).to_be_visible()
+        cap(page, 'missing')
+        passed('missing pair')
+
+        # 5. empty preferred: remove all preferred
+        while True:
+            switches = page.locator('input.switch:checked')
+            if switches.count() == 0:
+                break
+            switches.first.click()
+            page.wait_for_timeout(300)
+        # Remove the missing pair (no switch, needs Remove preference button)
+        if page.locator('.prefcell button:has-text("Remove preference")').count() > 0:
+            page.locator('.prefcell button:has-text("Remove preference")').first.click()
+            page.wait_for_timeout(400)
+        expect(page.locator('.empty h2:has-text("No preferred models yet")')).to_be_visible()
+        expect(page.locator('.empty button:has-text("Find model")')).to_be_visible()
+        page.locator('.empty button:has-text("Find model")').click()
+        page.wait_for_timeout(100)
+        expect(page.locator('#find-model')).to_be_focused()
+        cap(page, 'empty')
+        passed('empty preferred')
+
+        # Restore preferences
+        control('models-preferences-broken', 'false')
+        reload(page)
+
+        # 6. failed row: save failure
+        page.route('**/api/models/preferred', lambda route: route.fulfill(status=503) if route.request.method == 'POST' else route.continue_())
+        reload(page)
+        prov_group = page.locator('details.prov-group').first
+        prov_group.locator('summary').click()
+        page.wait_for_timeout(200)
+        unchecked = prov_group.locator('input.switch:not(:checked)')
+        if unchecked.count() > 0:
+            candidate = unchecked.first
+            label = candidate.get_attribute('aria-label')
+            candidate.click()
+            page.wait_for_timeout(500)
+            expect(page.locator('.row-error').first).to_contain_text('Change reverted')
+            expect(page.locator('.row-error').first.locator('button:has-text("Retry")')).to_be_visible()
+            expect(prov_group.locator(f'input.switch[aria-label="{label}"]')).not_to_be_checked()
+            cap(page, 'failed-row')
+            page.unroute('**/api/models/preferred')
+            page.locator('.row-error').first.locator('button:has-text("Retry")').click()
+            page.wait_for_timeout(500)
+            expect(prov_group.locator(f'input.switch[aria-label="{label}"]')).to_be_checked()
+            expect(page.locator('.row-error')).to_have_count(0)
+        passed('failed row')
+
+        # 7. loading: catalog loading state
+        route_obj = page.route('**/api/models/catalog*', lambda route: held_routes.append(route))
+        reload(page)
+        expect(page.locator('.skeletons-table').first).to_be_visible()
+        expect(page.locator('.ds-callout:has-text("Availability unknown")').first).to_be_visible()
+        cap(page, 'loading')
+        for r in held_routes:
+            try:
+                r.abort()
+            except:
+                pass
+        held_routes.clear()
+        page.unroute('**/api/models/catalog*')
+        passed('loading')
+
+        # 8. catalog error: failed catalog
+        control('models-catalog-fail', 'true')
+        reload(page)
+        expect(page.locator('.ds-callout:has-text("Catalog load failed")').first).to_be_visible()
+        expect(page.locator('.ds-callout button:has-text("Retry catalog")').first).to_be_visible()
+        cap(page, 'catalog-error')
+        control('models-catalog-fail', 'false')
+        passed('catalog error')
+
+        # 9. preference error: broken preference file
+        control('models-preferences-broken', 'true')
+        reload(page)
+        expect(page.locator('.ds-callout:has-text("Preferred models could not be read")').first).to_be_visible()
+        expect(page.locator('.ds-callout button:has-text("Retry preferences")').first).to_be_visible()
+        cap(page, 'preference-error')
+        control('models-preferences-broken', 'false')
+        passed('preference error')
+
+        # 10. read-only: no token
+        control('observer', 'true')
+        reload(page)
+        expect(page.locator('.banner:has-text("viewed but not changed")').first).to_be_visible()
+        assert page.locator('input.switch:disabled').count() >= 1
+        cap(page, 'read-only')
+        control('observer', 'false')
+        passed('read-only')
+
+        # 11. offline: connection failed
+        page.route('**/api/state*', lambda route: route.abort())
+        reload(page)
+        expect(page.locator('.ds-callout:has-text("Connection unavailable")').first).to_be_visible()
+        expect(page.locator('.ds-callout button:has-text("Retry connection")').first).to_be_visible()
+        cap(page, 'offline')
+        page.unroute('**/api/state*')
+        passed('offline')
+
+        # 12. stale: old catalog
+        control('models-stale', 'true')
+        reload(page)
+        expect(page.locator('.banner:has-text("more than 24 hours ago")').first).to_be_visible()
+        expect(page.locator('.banner button:has-text("Refresh catalog")').first).to_be_visible()
+        expect(page.locator('input.switch').first).to_be_enabled()
+        cap(page, 'stale')
+        control('models-stale', 'false')
+        passed('stale')
+
+        # Reference captures if reference_dir provided (before scroll scenario)
+        def capture_references():
+            reference_captures = []
+            if reference_dir:
+                reference_root = reference_dir
+                assert (reference_root / 'vendor' / 'tailwind.js').is_file()
+                global reference_server
+                reference_server = ThreadingHTTPServer(('127.0.0.1', 0), partial(QuietRequestHandler, directory=str(reference_root)))
+                port = reference_server.server_address[1]
+                reference_thread = threading.Thread(target=reference_server.serve_forever, daemon=True)
+                reference_thread.start()
+                files = [
+                    '01-models.html', '02-models-search.html', '03-models-save-error.html',
+                    '04-models-unavailable.html', '05-models-empty.html', '06-models-no-matches.html',
+                    '07-models-loading.html', '08-models-error.html', '09-models-denied.html',
+                    '10-models-offline.html', '11-models-stale.html'
+                ]
+                ref_page = context.new_page()
+                ref_page.on('pageerror', lambda e: report['pageErrors'].append(str(e)))
+                for f in files:
+                    for width in (1280, 1600):
+                        ref_page.goto(f'http://127.0.0.1:{port}/screens/{f}')
+                        ref_page.wait_for_timeout(300)
+                        ref_page.set_viewport_size({'width': width, 'height': 900})
+                        ref_page.wait_for_timeout(150)
+                        path = browser_evidence / f'models-reference-{f.replace(".html", "")}@{width}.png'
+                        ref_page.screenshot(path=str(path))
+                        reference_captures.append(str(path))
+                ref_page.close()
+                reference_server.shutdown()
+                report['reference'] = {'dir': str(reference_dir), 'captures': reference_captures}
+            return reference_captures
+
+        reference_captures = capture_references()
+
+        # 13. scroll preservation: click doesn't reset scroll
+        reload(page)
+        try:
+            # Find a group with unchecked switch by walking backwards from last group
+            groups = page.locator('details.prov-group').all()
+            target_group = None
+            for i in range(max(0, len(groups) - 1), max(0, len(groups) - 4), -1):
+                group = groups[i]
+                if not group.evaluate('(el) => el.open'):
+                    group.locator('summary').click()
+                    page.wait_for_timeout(200)
+                if group.locator('input.switch:not(:checked)').count() > 0:
+                    target_group = group
+                    break
+            if target_group is None:
+                target_group = groups[-1]
+            candidate = target_group.locator('input.switch:not(:checked)').first
+            label = candidate.get_attribute('aria-label')
+            candidate.scroll_into_view_if_needed()
+            page.wait_for_timeout(150)
+            # Record saved scroll position
+            full_page = page.locator('.full-page').first
+            saved_top = full_page.evaluate('(el) => el.scrollTop')
+            # Only assert non-zero if there's actual scrollable content
+            scroll_info = full_page.evaluate('(el) => ({scrollHeight: el.scrollHeight, clientHeight: el.clientHeight})')
+            if scroll_info['scrollHeight'] > scroll_info['clientHeight']:
+                assert saved_top > 0, f'Expected non-zero scroll position, got {saved_top}'
+            # Click the target with firmer interaction (no auto-scroll since we already scrolled into view)
+            candidate.check(timeout=5000)
+            page.wait_for_timeout(400)
+            current_top = full_page.evaluate('(el) => el.scrollTop')
+            assert abs(current_top - saved_top) <= 2, f'Scroll position changed: saved={saved_top}, current={current_top}'
+            expect(target_group.locator(f'input.switch[aria-label="{label}"]')).to_be_checked()
+            cap(page, 'scrolled')
+            passed('scroll preservation')
+        except Exception as error:
+            # Record diagnostics without aborting the run
+            report.setdefault('failures', []).append({
+                'scenario': 'scroll preservation',
+                'error': str(error),
+                'rowError': page.locator('.row-error').first.text_content() if page.locator('.row-error').count() else None,
+                'switchDisabled': target_group.locator(f'input.switch[aria-label="{label}"]').is_disabled() if target_group else None,
+            })
+            cap(page, 'scrolled')
+
+        report['visual'] = {
+            'route': '#/models',
+            'widths': [1280, 1600],
+            'productionCaptures': report['captures'],
+            'referenceCaptures': reference_captures,
+        }
+
+        visual_md = evidence / 'models-visual-inspection.md'
+        visual_md.write_text(
+            '# Models Visual Inspection\n\n'
+            '## Captures\n\n'
+            '\n'.join(f'- {c}' for c in report['captures']) + '\n\n'
+            '## Reference Captures\n\n'
+            '\n'.join(f'- {c}' for c in reference_captures) + '\n\n'
+            '## States Covered\n\n'
+            '\n'.join(f'- {s}' for s in report['scenarios']) + '\n'
+        )
+
+        assert not report.get('failures'), report.get('failures')
+        assert not report['pageErrors']
+        report['status'] = 'passed'
+
+    finally:
+        if held_routes:
+            for r in held_routes:
+                try:
+                    r.abort()
+                except:
+                    pass
+        if reference_server:
+            reference_server.shutdown()
+        if context:
+            context.close()
+        if browser:
+            browser.close()
+        if fixture:
+            try:
+                fixture.terminate()
+                for _ in range(10):
+                    if fixture.poll() is not None:
+                        break
+                    time.sleep(0.5)
+                if fixture.poll() is None:
+                    fixture.kill()
+            except:
+                pass
+        cleanup['fixtureTerminated'] = True
+        cleanup['browserClosed'] = True
+        if fixture_info.get('root'):
+            try:
+                shutil.rmtree(fixture_info['root'])
+                cleanup['temporaryFixtureRootRemoved'] = fixture_info['root']
+            except:
+                pass
+
+
+def main():
+    global fixture, reference_server, browser, context, fixture_info
+    fixture = subprocess.Popen(
+        ['node', str(root / 'browser-fixture.mjs')],
+        env={**os.environ, 'SENTINEL_MODELS': '1'},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+    start = time.monotonic()
+    fixture_url = None
+    while fixture.poll() is None and time.monotonic() - start < 10:
+        ready, _, _ = select.select([fixture.stdout], [], [], 1)
+        if ready:
+            line = fixture.stdout.readline()
+            if line.startswith('{'):
+                fixture_info = json.loads(line)
+                fixture_url = fixture_info.get('url')
+                break
+    if not fixture_url:
+        report['status'] = 'failed'
+        report['fixture'] = {'error': 'fixture did not start'}
+        write_receipt()
+        return
+    report['fixture'] = {'url': fixture_url, 'root': fixture_info.get('root')}
+
+    git_output = subprocess.run(['git', '-C', str(checkout), 'rev-parse', 'HEAD'], capture_output=True, text=True)
+    report['observedCommit'] = git_output.stdout.strip() if git_output.returncode == 0 else None
+    git_dirty = subprocess.run(['git', '-C', str(checkout), 'status', '--porcelain'], capture_output=True, text=True)
+    report['dirty'] = bool(git_dirty.stdout.strip())
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            context = browser.new_context(viewport={'width': 1280, 'height': 900})
+            page = context.new_page()
+            page.on('pageerror', lambda e: report['pageErrors'].append(str(e)))
+            page.on('console', lambda c: report['consoleErrors'].append(c.text) if c.type == 'error' else None)
+            page.on('requestfailed', lambda r: report['requestFailures'].append(r.url))
+            run(fixture_url, page)
+    finally:
+        report['cleanup'] = cleanup
+        write_receipt()
+        print(json.dumps({
+            'status': report['status'],
+            'elapsed_seconds': round(time.monotonic() - started, 3),
+            'scenarios': report['scenarios'],
+            'captures': report['captures'],
+            'receipt_path': str(receipt_path),
+            'dirty': report['dirty'],
+        }, indent=2))
+
+
+if __name__ == '__main__':
+    main()
