@@ -33,7 +33,7 @@ import { ActionBar, EmptyState, MasterDetail, RegionalSkeleton, StateNotice, Sta
 import { scopeLabel } from './scope';
 import type { DestinationProps } from './destinations';
 import ModelPicker from './ModelPicker';
-import type { ModelChoice } from './models-state';
+import { availabilityOf, catalog, formatModelChoice, type ModelChoice } from './models-state';
 
 // launch-state.ts remains the single owner of the one-use result-draft Map;
 // this surface re-exports its seed contract instead of copying the store.
@@ -445,11 +445,11 @@ export default function Conversations(props: Props) {
   // A retained repository choice is validated against the loaded workspace
   // record: an id the workspace no longer contains falls back to Whole
   // workspace without touching the prepared text.
-  function validNewThreadTarget(ws: string, retained: { text: string; target: string | null }): string | null {
+  function validNewThreadTarget(ws: string, retained: { text: string; target: string | null; model: ModelChoice | null }): string | null {
     const record: any = props.workspace;
     const list: Repo[] = record && Array.isArray(record.repositories) ? record.repositories : [];
     if (record && retained.target && !list.some(r => r.id === retained.target)) {
-      setNewThreadDraft(ws, { text: retained.text, target: null });
+      setNewThreadDraft(ws, { text: retained.text, target: null, model: retained.model });
       return null;
     }
     return retained.target;
@@ -462,6 +462,7 @@ export default function Conversations(props: Props) {
     const request = getNewThreadRequest(ws);
     if (!request) { newDialogRequestId = 0; setNewBusy(false); setNewError(''); return; }
     newDialogRequestId = request.id;
+    setNewModel(request.model);
     if (request.status === 'error') { setNewBusy(false); setNewError(request.error || 'Creating the conversation failed.'); return; }
     setNewBusy(true); setNewError('');
     request.promise.then((record: any) => {
@@ -480,16 +481,17 @@ export default function Conversations(props: Props) {
     const epoch = newDialogEpoch;
     newDialogWs = ws; newDialogId = id; newDialogRequestId = 0;
     setNewEnabled(available);
-    if (!ws) { setNewText(''); setNewTarget(''); setNewBusy(false); setNewError(''); return; }
+    if (!ws) { setNewText(''); setNewTarget(''); setNewModel(null); setNewBusy(false); setNewError(''); return; }
     if (!available) {
       const retained = getNewThreadDraft(ws);
-      setNewText(retained.text); setNewTarget(''); setNewBusy(false); setNewError('');
+      setNewText(retained.text); setNewTarget(''); setNewModel(retained.model); setNewBusy(false); setNewError('');
       return;
     }
     const retained = openNewThreadDraft(ws);
     const target = validNewThreadTarget(ws, retained);
     setNewText(retained.text);
     setNewTarget(target ?? '');
+    setNewModel(retained.model);
     observeNewThreadRequest(ws, epoch);
     const pendingCreate = newBusy();
     requestAnimationFrame(() => {
@@ -529,12 +531,17 @@ export default function Conversations(props: Props) {
     // A cold, untouched dialog still publishes a coherent retained draft
     // before the request starts, so acknowledgement owns exactly this object
     // and the captured target/text match what the surface shows.
-    setNewThreadDraft(ws, { text: newText(), target: selected || null });
-    const promise = beginNewThreadRequest<Thread>(ws, newText(), selected || null, () => postJson<Thread>('/api/thread/create', { workspace_id: ws, target: dest }, props.token || ''));
+    const model = newModel();
+    if (model && availabilityOf(model, catalog()) !== 'available') {
+      document.getElementById('thread-new-model')?.focus();
+      return;
+    }
+    setNewThreadDraft(ws, { text: newText(), target: selected || null, model });
+    const promise = beginNewThreadRequest<Thread>(ws, newText(), selected || null, model, () => postJson<Thread>('/api/thread/create', { workspace_id: ws, target: dest, ...(model ? { model: { provider: model.provider, model: model.model } } : {}) }, props.token || ''));
     const request = getNewThreadRequest(ws);
     if (!request || request.status !== 'creating') return;
     newDialogRequestId = request.id;
-    const captured: NewThreadRequestCapture = { id: request.id, text: request.text, target: request.target };
+    const captured: NewThreadRequestCapture = { id: request.id, text: request.text, target: request.target, model: request.model };
     const epoch = newDialogEpoch;
     setNewBusy(true); setNewError('');
     // The submit control becomes disabled with the rest of the fields; move
@@ -749,7 +756,7 @@ export default function Conversations(props: Props) {
     const chosen = newTarget();
     if (chosen && !list.some(r => r.id === chosen)) {
       setNewTarget('');
-      setNewThreadDraft(ws, { text: newText(), target: null });
+      setNewThreadDraft(ws, { text: newText(), target: null, model: newModel() });
     }
   });
 
@@ -868,6 +875,7 @@ export default function Conversations(props: Props) {
           <div class="object-head">
             <div class="object-top detail-title"><h2 tabindex="-1" ref={el => (titleEl = el)}>{thread()?.title || `Thread ${routeId().slice(0, 8)}`}</h2><StatusText tone={statusTone(state())}>{label(state())}</StatusText></div>
             <p class="small muted mono thread-meta">Runs in {targetDescription(thread())} · {workspaceName()} · Thread {routeId()}{thread()?.generation != null ? ` · generation ${thread()?.generation}` : ''}{thread()?.updated_at ? ` · updated ${time(thread()?.updated_at)} ` : ''}</p>
+            <p class="model-line">Model <span class="mid">{formatModelChoice(thread()?.model, 'Pi default')}</span><button type="button" class="text-link" data-thread-new-with-model onClick={() => props.onNavigate({ ...props.route, tab: 'new' })}>New thread with another model</button></p>
           </div>
           <Show when={help()[1]}><StateNotice tone={noticeTone(help()[2])} title={help()[0]}>{help()[1]}</StateNotice></Show>
           <Show when={readView() === 'error'}>
@@ -953,13 +961,13 @@ export default function Conversations(props: Props) {
           }>
             <div class="field thread-new-field">
               <label for="thread-new-target">Runs in</label>
-              <select id="thread-new-target" class="ds-input" ref={element => (newSelectEl = element)} value={newTarget()} disabled={newBusy()} onInput={event => { const value = event.currentTarget.value; setNewTarget(value); setNewThreadDraft(wsId(), { text: newText(), target: value || null }); }}>
+              <select id="thread-new-target" class="ds-input" ref={element => (newSelectEl = element)} value={newTarget()} disabled={newBusy()} onInput={event => { const value = event.currentTarget.value; setNewTarget(value); setNewThreadDraft(wsId(), { text: newText(), target: value || null, model: newModel() }); }}>
                 <For each={repositories()}>{r => <option value={r.id}>{r.id}{r.status && r.status !== 'ok' ? ` (${r.status})` : ''}{r.worktrees?.length ? ` · ${r.worktrees.length} worktree${r.worktrees.length === 1 ? '' : 's'}` : ''}</option>}</For>
                 <option value="">Whole workspace</option>
               </select>
               <small>Workspace: {workspaceName()}</small>
             </div>
-            <ModelPicker id="thread-new-model" value={newModel()} onChange={setNewModel} disabled={newBusy()} live={props.live} onManage={() => props.onNavigate({ dest: 'models' })} />
+            <ModelPicker id="thread-new-model" value={newModel()} onChange={choice => { setNewModel(choice); setNewThreadDraft(wsId(), { text: newText(), target: newTarget() || null, model: choice }); }} disabled={newBusy()} live={props.live} onManage={() => props.onNavigate({ dest: 'models' })} />
             <div id="thread-new-fields" class="thread-new-fields"><Show when={newText()}><div class="thread-new-prepared"><p class="small muted">Prepared message · unsent. It opens in the composer after creation.</p><p class="thread-text">{newText()}</p></div></Show></div>
             <Show when={newError()}><div class="ds-callout error" role="alert"><div><strong>Creation could not be confirmed</strong><p>{newError()}</p><p class="small muted">Check the thread list before creating another thread; retrying could duplicate the conversation.</p></div></div></Show>
             <div class="actions">
@@ -968,6 +976,7 @@ export default function Conversations(props: Props) {
                 <button id="thread-create" type="submit" class="ds-btn ds-btn--primary" data-thread-create disabled={newBusy()}>{newBusy() ? 'Creating thread…' : 'Create thread'}</button>
               </Show>
             </div>
+
           </Show>
         </form>
       </dialog>

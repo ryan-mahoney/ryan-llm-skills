@@ -11,6 +11,8 @@ SENTINEL_EVIDENCE_DIR=/path/to/evidence timeout 240s uv run --script \
   --reference-dir /path/to/designs/model-selection
 """
 import argparse
+import socket
+import re
 import json
 import os
 import select
@@ -27,7 +29,7 @@ from urllib.parse import urlencode
 from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--case', choices=['models', 'picker', 'assignment'], default='models')
+parser.add_argument('--case', choices=['models', 'picker', 'assignment', 'conversation'], default='models')
 parser.add_argument('--reference-dir', default=None)
 options = parser.parse_args()
 case = options.case
@@ -39,7 +41,7 @@ checkout = root.parents[2]
 evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-models-evidence'))
 browser_evidence = evidence / 'browser'
 browser_evidence.mkdir(parents=True, exist_ok=True)
-receipt_path = evidence / 'step-008-models-result.json' if case == 'assignment' else (evidence / 'step-006-models-result.json' if case == 'picker' else evidence / 'step-005-models-result.json')
+receipt_path = evidence / 'step-009-models-result.json' if case == 'conversation' else (evidence / 'step-008-models-result.json' if case == 'assignment' else (evidence / 'step-006-models-result.json' if case == 'picker' else evidence / 'step-005-models-result.json'))
 started = time.monotonic()
 
 report = {
@@ -769,6 +771,207 @@ def run_picker(url, page):
                 pass
 
 
+def run_conversation(url, page):
+    global reference_server
+
+    def control(action, value=''):
+        response = context.request.get(url + '/__fixture/control?action=' + action + '&value=' + value)
+        assert response.ok
+        return response.json()
+
+    def posts_of(name):
+        return [p for p in control('')['posts'] if p['name'] == name]
+
+    def goto_new(page):
+        page.goto(url + '/#/conversations?ws=fixture&tab=new', wait_until='domcontentloaded')
+        page.wait_for_selector('dialog#thread-new-dialog', timeout=5000)
+
+    def cap_conv(name, widths=(1280, 1600)):
+        for width in widths:
+            page.set_viewport_size({'width': width, 'height': 900})
+            page.wait_for_timeout(200)
+            path = browser_evidence / f'conversation-{name}@{width}.png'
+            page.screenshot(path=str(path))
+            report['captures'].append(str(path))
+
+    def choose(model):
+        page.locator('#thread-new-model').click()
+        page.wait_for_selector('#thread-new-model-list')
+        page.locator('#thread-new-model-list [role="option"]').filter(has_text=model).first.click()
+        page.wait_for_timeout(200)
+
+    def open_picker():
+        page.locator('#thread-new-model').click()
+        page.wait_for_selector('#thread-new-model-list')
+
+    def close_picker():
+        if page.locator('#thread-new-model-list').count() > 0:
+            page.keyboard.press('Escape')
+            page.wait_for_selector('#thread-new-model-list', state='hidden', timeout=1000)
+
+    def model_line():
+        line = page.locator('.model-line').first
+        return line.inner_text() if line.count() > 0 else ''
+
+    def passed(label):
+        report['scenarios'].append(label)
+
+    def capture_references():
+        reference_captures = []
+        if not reference_dir:
+            return reference_captures
+        root = reference_dir
+        assert (root / 'vendor' / 'tailwind.js').is_file()
+        global reference_server
+        reference_server = ThreadingHTTPServer(('127.0.0.1', 0), partial(QuietRequestHandler, directory=str(root)))
+        port = reference_server.server_address[1]
+        threading.Thread(target=reference_server.serve_forever, daemon=True).start()
+        ref_page = context.new_page()
+        ref_page.on('pageerror', lambda e: report['pageErrors'].append(str(e)))
+        for ref in ['12-thread-model-picker.html', '16-conversation-model.html']:
+            if not (root / 'screens' / ref).is_file():
+                continue
+            for width in (1280, 1600):
+                ref_page.set_viewport_size({'width': width, 'height': 900})
+                ref_page.goto(f'http://127.0.0.1:{port}/screens/{ref}')
+                ref_page.wait_for_timeout(300)
+                path = browser_evidence / f'conversation-reference-{ref.replace(".html", "")}@{width}.png'
+                ref_page.screenshot(path=str(path))
+                reference_captures.append(str(path))
+        ref_page.close()
+        reference_server.shutdown()
+        return reference_captures
+
+    try:
+        reference_captures = capture_references()
+
+        # a. explicit pair persists and the header matches
+        goto_new(page)
+        choose('glm-5.3')
+        expect(page.locator('#thread-new-model')).to_contain_text('glm-5.3')
+        expect(page.locator('#thread-new-model')).to_contain_text('zai')
+        with page.expect_response('**/api/thread/create') as response:
+            page.locator('#thread-create').click()
+        assert response.value.ok, response.value
+        created = posts_of('create')[-1]
+        assert created['input'].get('model') == {'provider': 'zai', 'model': 'glm-5.3'}, created['input']
+        created_id = created['result']['thread_id']
+        assert control('')['createdThreads'][-1]['model'] == {'provider': 'zai', 'model': 'glm-5.3'}
+        page.wait_for_url(re.compile(r'#/conversations\?ws=fixture&id=' + re.escape(created_id)))
+        page.wait_for_selector('.model-line')
+        assert 'glm-5.3' in model_line() and 'zai' in model_line()
+        cap_conv('created-header')
+        passed('explicit pair persists and the header matches')
+
+        # b. real default body omits model and the header reads Pi default
+        goto_new(page)
+        expect(page.locator('#thread-new-model')).to_contain_text('Pi default')
+        with page.expect_response('**/api/thread/create') as default_response:
+            page.locator('#thread-create').click()
+        assert default_response.value.ok, default_response.value
+        default_created = posts_of('create')[-1]
+        assert 'model' not in default_created['input'], default_created['input']
+        default_id = default_created['result']['thread_id']
+        page.wait_for_url(re.compile(r'#/conversations\?ws=fixture&id=' + re.escape(default_id)))
+        page.wait_for_selector('.model-line')
+        assert 'Pi default' in model_line()
+        cap_conv('default-header')
+        passed('real default body omits model and the header reads Pi default')
+
+        # c. retained pair survives Manage/back and close/reopen
+        goto_new(page)
+        choose('deepseek-v4-pro')
+        expect(page.locator('#thread-new-model')).to_contain_text('deepseek-v4-pro')
+        open_picker()
+        page.locator('#thread-new-model-manage').click()
+        page.wait_for_timeout(300)
+        assert '#/models' in page.url
+        goto_new(page)
+        expect(page.locator('#thread-new-model')).to_contain_text('deepseek-v4-pro')
+        expect(page.locator('#thread-new-model')).to_contain_text('deepseek')
+        page.locator('dialog#thread-new-dialog button', has_text='Return to threads').click()
+        page.wait_for_timeout(200)
+        page.goto(url + '/#/conversations?ws=fixture', wait_until='domcontentloaded')
+        goto_new(page)
+        expect(page.locator('#thread-new-model')).to_contain_text('deepseek-v4-pro')
+        cap_conv('retained')
+        passed('retained pair survives Manage/back and close/reopen')
+
+        # d. catalog removal before create refuses and preserves the draft
+        goto_new(page)
+        choose('glm-5.3')
+        control('models-catalog-drop', 'zai|glm-5.3')
+        open_picker()
+        close_picker()
+        before = len(posts_of('create'))
+        page.locator('#thread-create').click()
+        page.wait_for_selector('.mfield .field-error', state='visible')
+        expect(page.locator('.mfield .field-error')).to_contain_text('not in the fixture-host catalog')
+        expect(page.locator('#thread-new-model')).to_be_focused()
+        assert len(posts_of('create')) == before, 'unavailable create sent a request'
+        expect(page.locator('#thread-new-model')).to_contain_text('glm-5.3')
+        cap_conv('unavailable')
+        control('models-catalog-drop', '')
+        open_picker()
+        page.locator('#thread-new-model-list [role="option"]').filter(has_text='Pi default').first.click()
+        expect(page.locator('.mfield .field-error')).to_have_count(0)
+        passed('catalog removal before create refuses and preserves the draft')
+
+        # e. preference change leaves an existing thread unchanged
+        existing = next(t for t in control('')['threads'] if t.get('title') == 'Discussion one')
+        page.goto(url + '/#/conversations?ws=fixture&id=' + existing['thread_id'], wait_until='domcontentloaded')
+        page.wait_for_selector('.model-line')
+        assert 'Pi default' in model_line()
+        control('models-preferences-empty', 'true')
+        page.goto(url + '/#/conversations?ws=fixture', wait_until='domcontentloaded')
+        page.goto(url + '/#/conversations?ws=fixture&id=' + existing['thread_id'], wait_until='domcontentloaded')
+        page.wait_for_selector('.model-line')
+        assert 'Pi default' in model_line()
+        page.goto(url + '/#/conversations?ws=fixture&id=' + created_id, wait_until='domcontentloaded')
+        page.wait_for_selector('.model-line')
+        assert 'glm-5.3' in model_line() and 'zai' in model_line()
+        cap_conv('preference-independent')
+        control('models-preferences-empty', 'false')
+        passed('preference change leaves an existing thread unchanged')
+
+        # f. New thread with another model opens the existing dialog
+        page.goto(url + '/#/conversations?ws=fixture&id=' + created_id, wait_until='domcontentloaded')
+        page.wait_for_selector('[data-thread-new-with-model]')
+        page.locator('[data-thread-new-with-model]').click()
+        expect(page.locator('dialog#thread-new-dialog')).to_be_visible()
+        expect(page.locator('#thread-new-model')).to_be_visible()
+        if page.locator('#thread-send').count() > 0:
+            assert 'ds-btn--primary' in (page.locator('#thread-send').get_attribute('class') or '')
+        cap_conv('new-with-another-model')
+        passed('New thread with another model opens the existing dialog')
+
+        if reference_dir:
+            assert len(reference_captures) == 4, f'expected 4 conversation reference captures, got {len(reference_captures)}'
+
+        report['visual'] = {
+            'route': '#/conversations?ws=fixture&tab=new + thread header',
+            'widths': [1280, 1600],
+            'productionCaptures': report['captures'],
+            'referenceCaptures': reference_captures,
+        }
+        visual_md = evidence / 'conversation-visual-inspection.md'
+        visual_md.write_text(
+            '# Conversation Model Visual Inspection\n\n'
+            '## Captures\n\n' + '\n'.join(f'- {c}' for c in report['captures']) + '\n\n'
+            '## Reference Captures\n\n' + '\n'.join(f'- {c}' for c in reference_captures) + '\n\n'
+            '## States Covered\n\n' + '\n'.join(f'- {s}' for s in report['scenarios']) + '\n'
+        )
+        assert not report.get('failures'), report.get('failures')
+        assert not report['pageErrors']
+        report['status'] = 'passed'
+    except Exception as error:
+        report.setdefault('failures', []).append({
+            'scenario': 'conversation',
+            'error': str(error),
+            'traceback': traceback.format_exc(),
+        })
+
+
 def run_assignment(url, page):
     global reference_server
 
@@ -1026,7 +1229,7 @@ def main():
             page.on('pageerror', lambda e: report['pageErrors'].append(str(e)))
             page.on('console', lambda c: report['consoleErrors'].append(c.text) if c.type == 'error' else None)
             page.on('requestfailed', lambda r: report['requestFailures'].append(r.url))
-            run_picker(fixture_url, page) if case == 'picker' else (run_assignment(fixture_url, page) if case == 'assignment' else run(fixture_url, page))
+            run_conversation(fixture_url, page) if case == 'conversation' else run_picker(fixture_url, page) if case == 'picker' else run_assignment(fixture_url, page) if case == 'assignment' else run(fixture_url, page)
     finally:
         report['cleanup'] = cleanup
         write_receipt()
