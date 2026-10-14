@@ -93,6 +93,18 @@ const heldRecord = (slug: string, overrides: WireRecord = {}): WireRecord => pac
   ...overrides,
 });
 
+const epicRow = (overrides: Partial<NextStepsFileRow> = {}): NextStepsFileRow => ({
+  key: 'epic-trip', kind: 'epic', workspace_id: ALPHA.id, workspace: ALPHA_WS, workspace_name: 'Alpha checkout',
+  slug: 'trip', stage: 'epic', file: 'epic.json', path: 'epics/trip/epic.json', written_at: WRITTEN,
+  observed_files: [{ name: 'epic.json', stage: 'epic', written_at: WRITTEN }],
+  signal: { state: 'ok' },
+  ...overrides,
+});
+
+const proposedMember = (name: string): WireRecord => ({
+  name, package: `/store/projects/alpha-dir/specs/${name}`, status: 'proposed', planning: { prepared: false },
+});
+
 test('fresh scan requires a valid observation time within two minutes of a finite now', () => {
   const scan = scanOf([]);
   const at = Date.parse(scan.scanned_at);
@@ -170,6 +182,47 @@ test('a conflicting assignment identity stays unmatched and its launches stay he
   assert.equal(rows[0].step.id, 'write-spec');
   assert.equal(rows[0].step.kind, 'held');
   assert.equal(rows[0].step.reason, 'This package has not been observed in a snapshot yet.');
+});
+
+test('an epic member owned by a kit-id assignment is excluded so Plan members selects the next unowned member', () => {
+  const epic = { key: 'epic-key', workspace: ALPHA_WS, epic: 'trip', members: [proposedMember('owned'), proposedMember('later')] };
+  const records = [
+    packageRecord({ key: 'owned-record', package: '/store/projects/alpha-dir/specs/owned' }),
+    packageRecord({ key: 'later-record', package: '/store/projects/alpha-dir/specs/later' }),
+  ];
+  const assignments = [{
+    workspace_id: ALPHA.id, spec_package: '/store/projects/alpha-dir/specs/owned',
+    display: 'running', assignment_id: 'owned-assignment',
+  }];
+  const rows = nextStepRows(scanOf([epicRow()]), { records, epics: [epic], assignments, catalog: [ALPHA, BETA], ...readyContext() });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].running, null);
+  assert.equal(rows[0].step.id, 'plan-members');
+  assert.equal(rows[0].step.kind, 'launch');
+  assert.equal(rows[0].step.filter, 'plan');
+  assert.deepEqual(rows[0].step.planningPlan, { skill: 'spec-architect-initial', stages: ['spec-architect-initial', 'spec-write'], stop: 'prepared' });
+  assert.deepEqual(rows[0].step.route, {
+    dest: 'launch', ws: ALPHA.id, tab: 'brief', package: '/store/projects/alpha-dir/specs/later',
+    skill: 'spec-architect-initial', stop: 'prepared',
+  });
+  assert.equal(rows[0].held, null);
+});
+
+test('an epic whose only eligible member is already owned holds Plan members without a package', () => {
+  const epic = { key: 'epic-key', workspace: ALPHA_WS, epic: 'trip', members: [proposedMember('owned')] };
+  const records = [packageRecord({ key: 'owned-record', package: '/store/projects/alpha-dir/specs/owned' })];
+  const assignments = [{
+    workspace_id: ALPHA.id, spec_package: '/store/projects/alpha-dir/specs/owned',
+    display: 'running', assignment_id: 'owned-assignment',
+  }];
+  const rows = nextStepRows(scanOf([epicRow()]), { records, epics: [epic], assignments, catalog: [ALPHA], ...readyContext() });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].running, null);
+  assert.equal(rows[0].step.id, 'plan-members');
+  assert.equal(rows[0].step.kind, 'held');
+  assert.equal(rows[0].step.route, undefined);
+  assert.equal(rows[0].step.reason, 'No eligible member is observed for planning.');
+  assert.equal(rows[0].held, rows[0].step.reason);
 });
 
 test('an active run offers open agent with no launch anywhere and is excluded from the rail', () => {

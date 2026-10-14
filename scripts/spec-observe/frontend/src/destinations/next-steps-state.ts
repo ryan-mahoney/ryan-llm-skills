@@ -349,7 +349,11 @@ const epicActions = (
   open: NextStepAction,
 ): { primary: NextStepAction; secondary: NextStepAction[] } => {
   const epicRecord = epicRecordFor(context.epics ?? [], row);
-  const member = nextToPlan(epicRecord, context.records ?? [], context.assignments ?? []);
+  // The planning candidate must be selected under the same projected workspace
+  // identity as buildRow: a kit-id-only assignment names the directory
+  // workspace, so raw rows let nextToPlan return an already-owned member.
+  const assignments = projectedAssignments(row, context.assignments ?? [], context.catalog ?? []);
+  const member = nextToPlan(epicRecord, context.records ?? [], assignments);
   const memberRecord = memberRecordFor(context.records ?? [], row, epicRecord, member);
   const memberRef = text(memberRecord?.package) || text(memberRecord?.package_ref) || text(member?.package) || text(member?.name);
   const facts = memberPlanning(member);
