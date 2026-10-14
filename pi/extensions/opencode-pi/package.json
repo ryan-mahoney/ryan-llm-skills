@@ -1,0 +1,17 @@
+{
+  "name": "opencode-pi",
+  "version": "1.4.0",
+  "private": true,
+  "type": "module",
+  "description": "Vendored, Pi 1.2-compatible copy of opencode-pi: bridges OpenCode CLI free models into Pi.",
+  "license": "MIT",
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*"
+  }
+}

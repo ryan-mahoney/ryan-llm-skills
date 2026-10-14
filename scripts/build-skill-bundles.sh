@@ -72,7 +72,7 @@ MODE="copy"
 
 usage() {
   cat <<'USAGE'
-Usage: ./install.sh [--target agents|claude|codex|augment|opencode|cline|all] [--mode copy|link]
+Usage: ./install.sh [--target agents|claude|codex|augment|opencode|cline|pi|all] [--mode copy|link]
 
 Targets:
   agents    Install skills to ~/.agents/skills (default, portable)
@@ -81,6 +81,7 @@ Targets:
   augment   Install skills to ~/.augment/skills and agents to ~/.augment/agents
   opencode  Install skills to ~/.opencode/skills
   cline     Install skills to ~/.cline/skills
+  pi        Install Pi agents to ~/.pi/agent/agents and extensions to ~/.pi/agent/extensions
   all       Install to ~/.agents/skills and any existing harness config dirs
 
 Modes:
@@ -168,6 +169,37 @@ install_augment_agents_to() {
   done
 }
 
+install_pi_agents_to() {
+  local target_dir="$1"
+
+  if [ ! -d "$BUNDLE_DIR/pi/agents" ]; then
+    return 0
+  fi
+
+  mkdir -p "$target_dir"
+  for agent_file in "$BUNDLE_DIR/pi/agents"/*.md; do
+    [ -f "$agent_file" ] || continue
+    install_entry "$agent_file" "$target_dir/$(basename "$agent_file")"
+  done
+}
+
+# Pi reads skills from ~/.agents/skills natively, so only agents and extensions
+# are installed here. Each extensions/<name>/ directory becomes
+# ~/.pi/agent/extensions/<name>, which is where Pi discovers extension packages.
+install_pi_extensions_to() {
+  local target_dir="$1"
+
+  if [ ! -d "$BUNDLE_DIR/pi/extensions" ]; then
+    return 0
+  fi
+
+  mkdir -p "$target_dir"
+  for extension_dir in "$BUNDLE_DIR/pi/extensions"/*/; do
+    [ -d "$extension_dir" ] || continue
+    install_entry "$extension_dir" "$target_dir/$(basename "$extension_dir")"
+  done
+}
+
 install_rules_to() {
   local target_dir="$1"
 
@@ -238,6 +270,10 @@ install_target() {
       install_rules_to "$HOME/.agents/rules"
       install_scripts_to "$HOME/.agents/scripts"
       ;;
+    pi)
+      install_pi_agents_to "$HOME/.pi/agent/agents"
+      install_pi_extensions_to "$HOME/.pi/agent/extensions"
+      ;;
     all)
       install_target agents
       [ -d "$HOME/.claude" ] && install_target claude
@@ -245,6 +281,7 @@ install_target() {
       [ -d "$HOME/.augment" ] && install_target augment
       [ -d "$HOME/.opencode" ] && install_target opencode
       [ -d "$HOME/.cline" ] && install_target cline
+      [ -d "$HOME/.pi" ] && install_target pi
       ;;
     *)
       echo "ERROR: unknown target: $1" >&2
@@ -691,7 +728,7 @@ write_bundle_files() {
     fi
     if [ -d "$bundle_dir/pi/agents" ]; then
       printf '\n## Pi Runtime\n\n'
-      printf 'The portable installer has no Pi target. Merge the bundled skills, rules, scripts, docs and pi directories into `~/.agents/`, copy `pi/agents/*.md` to `~/.pi/agent/agents/`, and link `pi/extensions/spec-runtime` into `~/.pi/agent/extensions/`. Follow `pi/extensions/spec-runtime/README.md` for locked watcher/Jev dependencies, pi-intercom and trusted child extensions. Restart an idle Pi session after setup.\n'
+      printf 'Run `./install.sh --target pi` (or `--target all`) to install `pi/agents/*.md` to `~/.pi/agent/agents/` and each `pi/extensions/<name>` to `~/.pi/agent/extensions/`. Pi reads skills from `~/.agents/skills/` natively, so the `agents` target covers those. Follow `pi/extensions/spec-runtime/README.md` for locked watcher/Jev dependencies, pi-intercom and trusted child extensions. `pi/extensions/opencode-pi` additionally needs the `opencode` CLI on PATH for its `opencode-cli` models to answer (install from https://opencode.ai); without it only that provider fails, and the rest of Pi still works. Do not also `pi install npm:opencode-pi`, or two copies will register the same provider. Restart an idle Pi session after setup.\n'
     fi
     if [ "$name" = "spec-skills" ]; then
       write_spec_workflow_howto
@@ -776,7 +813,7 @@ build_bundle() {
     local resource
     while IFS= read -r resource; do
       copy_file "$bundle_dir" "$resource" "$resource"
-    done < <(cd "$ROOT" && find pi/agents pi/extensions/spec-runtime scripts/spec-facts scripts/spec-location scripts/spec-observe scripts/verification scripts/spec-gym scripts/workspaces scenarios scripts/repo-search/identity.mjs -name node_modules -prune -o -type f -print | sort)
+    done < <(cd "$ROOT" && find pi/agents pi/extensions/spec-runtime pi/extensions/opencode-pi scripts/spec-facts scripts/spec-location scripts/spec-observe scripts/verification scripts/spec-gym scripts/workspaces scenarios scripts/repo-search/identity.mjs -name node_modules -prune -o -type f -print | sort)
     for resource in "$ROOT"/scripts/jev/*.mjs "$ROOT"/scripts/jev/README.md "$ROOT"/scripts/jev/package.json "$ROOT"/scripts/jev/package-lock.json; do
       resource="${resource#"$ROOT"/}"
       copy_file "$bundle_dir" "$resource" "$resource"

@@ -37,12 +37,17 @@ Includes the Augment CLI subagent adapter:
 
 - `augment/agents/spec-step-implementer.md`
 
-The bundle ships the Pi profiles, managed spec runtime and its shared fact,
-observation, verification and Jev helpers. The portable installer has no Pi target.
-Merge the bundled skills, rules, scripts, docs and pi directories into `~/.agents/`,
-copy `pi/agents/*.md` to `~/.pi/agent/agents/`, and link the runtime directory into
-`~/.pi/agent/extensions/`. Follow the bundled runtime README for Jev dependencies,
-pi-intercom and trusted child extension paths. Restart an idle Pi session after setup.
+The bundle ships the Pi profiles, managed spec runtime, the OpenCode free-model
+bridge, and their shared fact, observation, verification and Jev helpers. Run
+`./install.sh --target pi` (or `--target all`) to install `pi/agents/*.md` into
+`~/.pi/agent/agents/` and every `pi/extensions/<name>` into
+`~/.pi/agent/extensions/`. Pi reads skills from `~/.agents/skills/` natively,
+so the `agents` target already covers those. Follow the bundled runtime README for
+Jev dependencies, pi-intercom and trusted child extension paths; the
+`opencode-pi` extension additionally needs the `opencode` CLI on PATH for its
+`opencode-cli` models to answer, and only that provider fails without it. Do not
+also `pi install npm:opencode-pi`, or two copies will register the same provider.
+Restart an idle Pi session after setup.
 Pi retains owner/editor sessions across related steps with one writer, owner-run
 checks, compact handoffs and a generated history index.
 
