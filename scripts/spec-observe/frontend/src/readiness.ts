@@ -199,7 +199,7 @@ export function memberPlanning(member: WireRecord | null | undefined): PlanningF
 export const positivelyPrepared = (facts: PlanningFacts | null | undefined): boolean => facts?.prepared === true;
 
 // A decision record with an explicit read marker is not a usable decision.
-const usableDecision = (decision: WireRecord | null): WireRecord | null =>
+export const usableDecision = (decision: WireRecord | null): WireRecord | null =>
   decision && !('outcome' in decision) ? decision : null;
 
 export const coverageStateOf = (record: WireRecord | null | undefined, context: ReadinessContext = {}): string => {

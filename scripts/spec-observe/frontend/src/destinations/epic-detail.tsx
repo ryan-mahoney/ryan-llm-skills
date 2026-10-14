@@ -4,8 +4,11 @@ import type { WireRecord } from '../model';
 import { epicStats } from '../observation-format';
 import { formatHash, type RouteState } from '../route';
 import type { CatalogEntry } from '../scope';
-import { landedStatus, memberPlanning, planningAssignmentFor, type PlanningFacts } from '../readiness';
+import { landedStatus, memberPlanning, planningAssignmentFor, usableDecision, type PlanningFacts } from '../readiness';
 import { plannedTargetChoices, startPackageHandoff, type PackagePlanningPlan, type PlannedTarget } from '../launch-handoff';
+import { seedNewThreadDraft } from '../conversations-state';
+import { packageRelative } from '../spec-state';
+import { time } from '../format';
 import { packagePlanningPlan, planningPlanDescription } from '../../../../workspaces/spec-prompt.mjs';
 import {
   epicCoverageReasons,
@@ -32,6 +35,29 @@ const recordedFact = (recorded: { label: string; conflict: boolean }): string =>
   const state = recorded.label.replace(/^Recorded /, '');
   return state.charAt(0).toUpperCase() + state.slice(1);
 };
+
+// First member carrying any recorded decision: it owns the decision section
+// and the Discuss hand-off. Readability of the front matter is decided by the
+// shared readiness owner; an outcome-marked record stays an inspection concern
+// for its dependency row rather than a discussion subject.
+const decisionMemberOf = (epic: WireRecord): WireRecord | undefined =>
+  list(epic.members).find(member => Boolean(memberPlanning(member)?.decision));
+
+// The recorded decision source opens through the package-files owner: an
+// absolute source inside the package becomes package-relative, a safe
+// relative source passes through, and anything else stays unroutable.
+const decisionSourcePath = (epic: WireRecord, member: WireRecord | undefined, records: WireRecord[]): string => {
+  const record = member ? epicMemberRecord(epic, member, records) : null;
+  const source = text(usableDecision(memberPlanning(member)?.decision ?? null)?.source);
+  if (!record || !source) return '';
+  if (source.startsWith('/')) return packageRelative(record, source) ?? '';
+  return source.split('/').includes('..') ? '' : source;
+};
+
+// The proposal the recorded decision points at, only when the observation
+// confirms a readable proposal.
+const decisionProposalPath = (member: WireRecord | undefined): string =>
+  memberPlanning(member)?.proposal === true ? 'proposal.md' : '';
 
 export function EpicObjectHead(props: { epic: WireRecord }) {
   const recorded = () => epicRecordedState(props.epic);
@@ -409,6 +435,41 @@ export function EpicNotes(props: { epic: WireRecord }) {
   );
 }
 
+// Decision surface for an epic member whose planning stopped on recorded front
+// matter (stage/question/recommendation/source). The question and
+// recommendation stay observed facts; the options and full reasoning remain in
+// the package files reached from the action bar. No planning is offered here.
+export function EpicDecision(props: { epic: WireRecord; records: WireRecord[] }) {
+  const member = () => decisionMemberOf(props.epic);
+  const decision = () => usableDecision(memberPlanning(member())?.decision ?? null);
+  const stage = () => text(decision()?.stage);
+  const stageLabel = () => stage() === 'architecture'
+    ? 'Architecture'
+    : stage() === 'specification' ? 'Specification' : 'Planning';
+  const name = () => (member() ? memberName(member()!) : '');
+  const question = () => text(decision()?.question);
+  const recommendation = () => text(decision()?.recommendation);
+  const recordedAt = () => text(decision()?.recorded_at);
+  const source = () => decisionSourcePath(props.epic, member(), props.records);
+  return (
+    <Show when={member() && decision()}>
+      <section class="section epic-decision">
+        <div class="section-heading"><h3>Decision needed</h3><span class="muted" /></div>
+        <StateNotice
+          tone="warning"
+          title={`${name() || 'This member'}: ${stageLabel().toLowerCase()} recorded a decision${recordedAt() ? ` at ${time(recordedAt())}` : ''}`}
+        >
+          {`The ${stageLabel().toLowerCase()} stage recorded this question: ${question() || 'the question could not be read from the observation'}.${recommendation() ? ` Recommended: ${recommendation()}.` : ''}`}
+        </StateNotice>
+        <p class="section-note">
+          {`${name() || 'This member'} stays Not planned until planning resumes. Other members can still be planned.`}
+          {source() ? ` The recorded reasoning is in ${source().split('/').pop()}.` : ''}
+        </p>
+      </section>
+    </Show>
+  );
+}
+
 export function EpicDetail(props: {
   epic: WireRecord;
   records: WireRecord[];
@@ -519,7 +580,10 @@ export function EpicDetail(props: {
   }
 
   const nextMember = () => summary().next;
-  const decisionMember = () => members().find(member => Boolean(memberPlanning(member)?.decision));
+  const decisionMember = () => decisionMemberOf(props.epic);
+  const decision = () => usableDecision(memberPlanning(decisionMember())?.decision ?? null);
+  const decisionPath = () => decisionSourcePath(props.epic, decisionMember(), props.records);
+  const proposalPath = () => decisionProposalPath(decisionMember());
   const pendingPlans = () => members().filter(member => {
     if (landedStatus(member.status)) return false;
     const facts = memberPlanning(member);
@@ -528,7 +592,8 @@ export function EpicDetail(props: {
     return !planningAssignmentFor(record ?? member, assignments());
   });
   // When only recorded decisions remain, no Plan commitment is rendered: the
-  // decision surface belongs to a later step, and files stay reachable.
+  // decision surface (Discuss plus the recorded files) carries the primary and
+  // nothing is committed from this screen.
   const decisionsOnly = () => !nextMember() && Boolean(decisionMember()) && pendingPlans().length === 0;
   const planPrimaryReason = (): string => {
     const next = nextMember();
@@ -558,6 +623,35 @@ export function EpicDetail(props: {
     const member = decisionMember();
     return member ? epicMemberRecord(props.epic, member, props.records) : null;
   };
+  const canOpenDecisionFiles = () => Boolean(decisionRecord() && props.canOpenPackageFiles?.(decisionRecord()!));
+  const decisionFilesReason = () => 'Package files are unavailable for this selection.';
+  const openDecisionFile = (path: string) => {
+    const record = decisionRecord();
+    if (!record || !path) return;
+    props.onOpenPackageFiles?.(record, path);
+  };
+  // Discuss hands the observed decision to the real conversations seed owner:
+  // the prepared text (member, question, recommendation) and the unique
+  // observed package target travel in memory only. The route carries no text
+  // and no thread is created or messaged here; the production Start
+  // conversation dialog consumes the seed on open.
+  const discussDecision = () => {
+    const member = decisionMember();
+    const ws = member ? memberWorkspace(props.epic, member) : '';
+    if (!member || !ws) return;
+    const record = decisionRecord();
+    const targets = plannedTargetChoices(record && Array.isArray(record.targets) ? record.targets as PlannedTarget[] : []);
+    const target = targets.length === 1 ? targets[0].id : '';
+    const question = text(decision()?.question);
+    const recommendation = text(decision()?.recommendation);
+    const prepared = [
+      `${memberName(member) || 'This member'} needs a decision.`,
+      question ? `Question: ${question}` : '',
+      recommendation ? `Recommendation: ${recommendation}` : '',
+    ].filter(Boolean).join('\n');
+    seedNewThreadDraft(ws, target ? { text: prepared, target } : { text: prepared });
+    props.onNavigate({ dest: 'conversations', ws, tab: 'new' });
+  };
   const conflictCompact = () => {
     if (!props.transportPrimary || !recorded().conflict) return '';
     return `The epic is recorded as ${recordedFact(recorded())}, but landing is confirmed for ${stats().landed} of ${stats().total} members in this observation. The records have not been rewritten; the conflicting evidence is preserved.`;
@@ -576,6 +670,7 @@ export function EpicDetail(props: {
         <Show when={coverage().length}>
           <p class="section-note">{`Coverage ${text(props.epic.coverage?.state) || 'partial'}: ${coverage().join('; ')}`}</p>
         </Show>
+        <EpicDecision epic={props.epic} records={props.records} />
         <EpicNext epic={props.epic} records={props.records} assignments={assignments()} />
         <EpicMembersTable
           epic={props.epic}
@@ -635,7 +730,49 @@ export function EpicDetail(props: {
               </>
             )}
         </Show>
-        <Show when={decisionsOnly()}>
+        <Show when={decisionMember() && decision()}>
+          <button
+            type="button"
+            class={decisionsOnly() ? 'ds-btn ds-btn--primary' : 'ds-btn'}
+            data-action="discuss-decision"
+            onClick={discussDecision}
+          >
+            Discuss decision
+          </button>
+          <Show when={decisionPath()}>
+            <button
+              type="button"
+              class="ds-btn"
+              data-action="open-decision"
+              disabled={!canOpenDecisionFiles()}
+              aria-describedby={!canOpenDecisionFiles() ? 'epic-decision-files-reason' : undefined}
+              onClick={() => openDecisionFile(decisionPath())}
+            >
+              Open decision
+            </button>
+          </Show>
+          <Show when={proposalPath()}>
+            <button
+              type="button"
+              class="ds-btn"
+              data-action="open-proposal"
+              disabled={!canOpenDecisionFiles()}
+              aria-describedby={!canOpenDecisionFiles() ? 'epic-decision-files-reason' : undefined}
+              onClick={() => openDecisionFile(proposalPath())}
+            >
+              Open proposal
+            </button>
+          </Show>
+          <Show when={!canOpenDecisionFiles()}>
+            <span class="action-note" id="epic-decision-files-reason" data-action-note="decision-files">{decisionFilesReason()}</span>
+          </Show>
+          <span class="action-note" data-action-note="decision">
+            {decisionsOnly()
+              ? 'A recorded decision needs discussion; no planning is committed from this screen.'
+              : `Opens a conversation about ${memberName(decisionMember()!) || 'the recorded decision'}; sends nothing.`}
+          </span>
+        </Show>
+        <Show when={decisionsOnly() && decisionMember() && !decision()}>
           <Show when={decisionRecord() && props.canOpenPackageFiles?.(decisionRecord()!)}>
             <button
               type="button"

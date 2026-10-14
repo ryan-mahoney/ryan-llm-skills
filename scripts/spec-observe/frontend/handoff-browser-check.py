@@ -49,11 +49,11 @@ HOLDING_RUN = "7c2a91d4-3e58-4b06-a1f7-95d0e6b83c12"
 parser = argparse.ArgumentParser()
 parser.add_argument("--case", default="review")
 arguments = parser.parse_args()
-if arguments.case not in ("review", "result", "specs", "epic", "final-review"):
+if arguments.case not in ("review", "result", "specs", "epic", "decision", "final-review"):
     raise SystemExit(f"unsupported case: {arguments.case}")
 
 root = Path(__file__).resolve().parent
-evidence = Path(os.environ.get("SENTINEL_EVIDENCE_DIR", "/tmp/sentinel-handoff-evidence")) / ("08-final-review" if arguments.case == "final-review" else "07-states" if arguments.case == "specs" else "06-states" if arguments.case == "result" else "01-states" if arguments.case == "epic" else "04-states")
+evidence = Path(os.environ.get("SENTINEL_EVIDENCE_DIR", "/tmp/sentinel-handoff-evidence")) / ("08-final-review" if arguments.case == "final-review" else "07-states" if arguments.case == "specs" else "06-states" if arguments.case == "result" else "01-states" if arguments.case == "epic" else "03-states" if arguments.case == "decision" else "04-states")
 evidence.mkdir(parents=True, exist_ok=True)
 started = time.monotonic()
 report = {"status": "failed", "case": arguments.case, "scenarios": [], "pageErrors": [], "captures": []}
@@ -76,6 +76,9 @@ fixture_env["SENTINEL_PLANNED_LAUNCH"] = "1"
 if arguments.case == "specs":
     fixture_env["SENTINEL_SPECS_READINESS"] = "1"
 if arguments.case == "epic":
+    fixture_env["SENTINEL_EPIC_PLANNING"] = "1"
+if arguments.case == "decision":
+    fixture_env["SENTINEL_SPECS_READINESS"] = "1"
     fixture_env["SENTINEL_EPIC_PLANNING"] = "1"
 if arguments.case == "final-review":
     fixture_env["SENTINEL_SPECS_READINESS"] = "1"
@@ -105,7 +108,7 @@ try:
         if screens:
             reference = browser.new_context(viewport={"width": 1280, "height": 900}, device_scale_factor=1)
             reference_page = reference.new_page()
-            reference_screens = ("06-plan-result", "13-implement-result") if arguments.case == "result" else ("07-specs-ready", "08-spec-ready-waiting", "09-spec-ready-unverified", "10-specs-ready-empty") if arguments.case == "specs" else ("01-epic-planning-incomplete", "02-epic-planning-active") if arguments.case == "epic" else ("04-plan-review", "05-plan-review-denied", "11-implement-review", "12-implement-review-denied")
+            reference_screens = ("06-plan-result", "13-implement-result") if arguments.case == "result" else ("07-specs-ready", "08-spec-ready-waiting", "09-spec-ready-unverified", "10-specs-ready-empty") if arguments.case == "specs" else ("01-epic-planning-incomplete", "02-epic-planning-active") if arguments.case == "epic" else ("03-epic-planning-decision",) if arguments.case == "decision" else ("04-plan-review", "05-plan-review-denied", "11-implement-review", "12-implement-review-denied")
             for name in reference_screens:
                 for width in (1280, 1600):
                     reference_page.set_viewport_size({"width": width, "height": 900})
@@ -113,7 +116,7 @@ try:
                     screenshot = evidence / f"reference-{name}-{width}.png"
                     reference_page.screenshot(path=str(screenshot), full_page=True)
                     report["captures"].append(str(screenshot))
-                    if arguments.case in ("result", "specs", "epic"):
+                    if arguments.case in ("result", "specs", "epic", "decision"):
                         # Scrolled lower-pane evidence: full-page captures clip
                         # the lower inner content, so scroll to the populated
                         # lower content and capture the viewport as well.
@@ -1033,6 +1036,195 @@ try:
             report["scenarios"].append("Missing directory disables Plan with its create-package reason and never posts")
             check_deadline("end")
 
+        def run_decision():
+            # Epic decision discuss hand-off through the real route and fixture:
+            # the observed question/recommendation renders in EpicDecision,
+            # Discuss seeds the one-use production draft and opens the real
+            # Start conversation dialog, and the file links open package files.
+            deadline = started + 180
+
+            def check_deadline(label):
+                if time.monotonic() > deadline:
+                    raise RuntimeError(f"decision case exceeded the 180 second deadline at {label}")
+
+            def epic_list_route():
+                return receipt["url"] + "/#/epics?" + urlencode({"ws": "fixture"})
+
+            def open_epic():
+                page.goto(epic_list_route(), wait_until="domcontentloaded")
+                page.locator(".records a.record").filter(has_text="Demo epic").click()
+                expect(page.locator(".object-head h2")).to_have_text("Demo epic")
+
+            def refresh_epic():
+                control("specs-publish-snapshot")
+                # Expire the dashboard's one-second state cache, as in epic.
+                time.sleep(1.05)
+                with page.expect_response(lambda response: "/api/state" in response.url):
+                    page.locator("header").get_by_role("button", name="Refresh state", exact=True).click()
+
+            decision_question = "Should the fixture resume the recorded specification stage?"
+            decision_recommendation = "Resume spec-write without re-running architecture."
+            decision_package = Path(receipt["package"]).parent / "incomplete-browser"
+            decision_source = decision_package / "decision-required.md"
+            # Disposable fixture storage: record the decision front matter the
+            # observer reports so both file links open real package bytes.
+            decision_source.write_text(
+                "---\n"
+                "stage: specification\n"
+                f"question: {json.dumps(decision_question)}\n"
+                f"recommendation: {json.dumps(decision_recommendation)}\n"
+                "recorded_at: 2026-10-14T12:00:00.000Z\n"
+                "---\n\n# Decision required\n\nResume the recorded specification stage.\n"
+            )
+            control("epic-planning-facts", json.dumps({
+                "proposal": True,
+                "critique": False,
+                "critique_recommended": False,
+                "prepared": False,
+                "step_count": 4,
+                "preparation": {"outcome": "decision-required"},
+                "decision": {
+                    "stage": "specification",
+                    "question": decision_question,
+                    "recommendation": decision_recommendation,
+                    "recorded_at": "2026-10-14T12:00:00.000Z",
+                    "source": str(decision_source),
+                },
+                "receipts": [],
+            }), member="incomplete-browser")
+            control("specs-package-facts", json.dumps({
+                "targets": [{"id": "fixture-repo", "primary": receipt["checkout"]}],
+            }), package_ref="fixture/incomplete-browser")
+
+            check_deadline("start")
+            page.goto(epic_list_route(), wait_until="domcontentloaded")
+            refresh_epic()
+            page.locator(".records a.record").filter(has_text="Demo epic").click()
+            expect(page.locator(".object-head h2")).to_have_text("Demo epic")
+            decision_section = page.locator("section.epic-decision")
+            expect(decision_section.locator(".section-heading h3")).to_have_text("Decision needed")
+            expect(decision_section.locator(".ds-callout")).to_contain_text("incomplete-browser")
+            expect(decision_section.locator(".ds-callout")).to_contain_text(decision_question)
+            expect(decision_section.locator(".ds-callout")).to_contain_text(decision_recommendation)
+            expect(decision_section).to_contain_text("stays Not planned")
+            expect(decision_section).to_contain_text("decision-required.md")
+            expect(page.locator("table.epic-members tbody tr").filter(has_text="incomplete-browser")).to_contain_text("Decision needed")
+            discuss = page.locator('[data-action="discuss-decision"]')
+            expect(discuss).to_be_visible()
+            expect(page.locator('[data-action="open-decision"]')).to_be_visible()
+            expect(page.locator('[data-action="open-proposal"]')).to_be_visible()
+            # Another eligible member keeps Plan member primary; Discuss and the
+            # file links stay adjacent and commit nothing.
+            plan_member = page.locator('[data-action="plan-member"]')
+            expect(plan_member).to_be_enabled()
+            expect(plan_member).to_have_class(re.compile(r"ds-btn--primary"))
+            expect(discuss).not_to_have_class(re.compile(r"ds-btn--primary"))
+            expect(page.locator('[data-action-note="decision"]')).to_contain_text("sends nothing")
+            capture("epic-decision")
+            capture_scrolled("epic-decision")
+            report["scenarios"].append("EpicDecision renders the observed question and recommendation while another eligible member keeps the Plan member primary")
+            check_deadline("decision-section")
+
+            # Another eligible member still plans through the real hand-off.
+            plan_member.click()
+            expect(page.locator("#launch-heading")).to_have_text("Review planning assignment")
+            assert posts("dispatchLaunch") == []
+            assert worker_starts() == []
+            open_epic()
+            report["scenarios"].append("Another eligible member still opens the bound planning review with no worker")
+            check_deadline("plan-member")
+
+            # Decision and proposal links open the real workspace package files.
+            with page.expect_response(lambda response: "/api/package-file?" in response.url) as decision_response:
+                page.locator('[data-action="open-decision"]').click()
+            assert decision_response.value.ok
+            assert "file=decision-required.md" in decision_response.value.url
+            expect(page.locator(".files-destination .reader")).to_contain_text(decision_question)
+            open_epic()
+            with page.expect_response(lambda response: "/api/package-file?" in response.url) as proposal_response:
+                page.locator('[data-action="open-proposal"]').click()
+            assert proposal_response.value.ok
+            assert "file=proposal.md" in proposal_response.value.url
+            expect(page.locator(".files-destination .reader")).to_contain_text("Incomplete browser proposal")
+            open_epic()
+            report["scenarios"].append("Open decision and Open proposal open the recorded source and proposal package files")
+            check_deadline("file-links")
+
+            # Discuss seeds the one-use draft and opens the real Start
+            # conversation dialog: text and target are unsent, no create/send.
+            creates_before = len(posts("create"))
+            sends_before = len(posts("send"))
+            page.locator('[data-action="discuss-decision"]').click()
+            expect(page).to_have_url(re.compile(r"#/conversations\?[^#]*tab=new"))
+            assert decision_question not in page.url
+            assert "incomplete-browser" not in page.url
+            dialog = page.locator("#thread-new-dialog")
+            expect(dialog).to_be_visible()
+            expect(page.locator("#thread-new-title")).to_have_text("Start conversation")
+            expect(page.locator("#thread-new-fields .thread-new-prepared")).to_contain_text("Prepared message · unsent")
+            expect(page.locator("#thread-new-fields .thread-new-prepared")).to_contain_text(decision_question)
+            expect(page.locator("#thread-new-fields .thread-new-prepared")).to_contain_text(decision_recommendation)
+            expect(page.locator("#thread-new-target")).to_have_value("fixture-repo")
+            assert len(posts("create")) == creates_before
+            assert len(posts("send")) == sends_before
+            capture("epic-decision-dialog")
+            report["scenarios"].append("Discuss opens the real Start conversation dialog with the observed question and target unsent and no create or send request")
+            check_deadline("discuss")
+
+            # Closing and reopening keeps the retained draft without sending.
+            page.get_by_role("button", name="Return to threads").click()
+            expect(dialog).not_to_be_visible()
+            assert len(posts("create")) == creates_before
+            assert len(posts("send")) == sends_before
+            page.locator("#thread-new-action").click()
+            expect(dialog).to_be_visible()
+            expect(page.locator("#thread-new-fields .thread-new-prepared")).to_contain_text(decision_question)
+            expect(page.locator("#thread-new-fields .thread-new-prepared")).to_contain_text(decision_recommendation)
+            expect(page.locator("#thread-new-target")).to_have_value("fixture-repo")
+            assert len(posts("create")) == creates_before
+            assert len(posts("send")) == sends_before
+            report["scenarios"].append("Closing and returning preserves the producer seed text and target without an accidental send")
+            check_deadline("reopen")
+
+            # Explicit create transfers the prepared text only after the
+            # acknowledgement and still sends nothing.
+            page.locator("#thread-create").click()
+            expect(dialog).not_to_be_visible()
+            expect(page.locator("#thread-draft")).to_have_value(re.compile(re.escape(decision_question)))
+            expect(page.locator("#thread-draft")).to_have_value(re.compile(re.escape(decision_recommendation)))
+            created = posts("create")
+            assert len(created) == creates_before + 1
+            assert decision_question not in json.dumps(created[-1]["input"])
+            assert len(posts("send")) == sends_before
+            report["scenarios"].append("Explicit create transfers the prepared text after acknowledgement and never sends it")
+            capture("epic-decision-created")
+            check_deadline("create")
+
+            # With no eligible member left, Discuss carries the single primary
+            # and no Plan commitment is rendered.
+            open_epic()
+            for slug in ("other-browser", "prepared-prereq-browser", "index-browser", "blocked-browser"):
+                control("epic-planning-facts", json.dumps({
+                    "proposal": True,
+                    "critique": False,
+                    "critique_recommended": False,
+                    "prepared": True,
+                    "step_count": 3,
+                    "preparation": {"outcome": "prepared"},
+                    "decision": None,
+                    "receipts": [],
+                }), member=slug)
+            refresh_epic()
+            expect(page.locator('[data-action="plan-member"]')).to_have_count(0)
+            discuss = page.locator('[data-action="discuss-decision"]')
+            expect(discuss).to_be_visible()
+            expect(discuss).to_have_class(re.compile(r"ds-btn--primary"))
+            expect(page.locator('[data-action-note="decision"]')).to_contain_text("no planning is committed")
+            capture("epic-decision-decisions-only")
+            capture_scrolled("epic-decision-decisions-only")
+            report["scenarios"].append("With no eligible member left, Discuss decision carries the single primary and no Plan commitment is rendered")
+            check_deadline("end")
+
         def run_final_review():
             # Planning entry eligibility with requires only on the epic member
             # (Specs surface), unreadable proposal refusal in both entry
@@ -1349,6 +1541,8 @@ try:
             run_result()
         elif arguments.case == "epic":
             run_epic()
+        elif arguments.case == "decision":
+            run_decision()
         elif arguments.case == "final-review":
             run_final_review()
         else:
