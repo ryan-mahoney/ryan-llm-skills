@@ -1274,8 +1274,12 @@ try:
                 },
                 "receipts": [],
             }), member="incomplete-browser")
+            # The package target id deliberately collides with a different
+            # registered checkout (fixture-docs). The canonical primary still
+            # names the fixture-repo checkout, so the decision discussion must
+            # bind fixture-repo without trusting the package-local id.
             control("specs-package-facts", json.dumps({
-                "targets": [{"id": "fixture-repo", "primary": receipt["checkout"]}],
+                "targets": [{"id": "fixture-docs", "primary": receipt["checkout"]}],
             }), package_ref="fixture/incomplete-browser")
 
             check_deadline("start")
@@ -1347,6 +1351,9 @@ try:
             page.locator('[data-action="discuss-decision"]').click()
             expect(page).to_have_url(re.compile(r"#/conversations\?[^#]*tab=new"))
             expect(page.locator("#thread-new-fields .thread-new-prepared")).to_contain_text(decision_question)
+            # The select value is retention display only; the create input
+            # assertion after the explicit create independently proves the
+            # bound repository.
             expect(page.locator("#thread-new-target")).to_have_value("fixture-repo")
             assert len(posts("create")) == unreadable_creates_before
             assert len(posts("send")) == unreadable_sends_before
@@ -1397,7 +1404,7 @@ try:
             assert len(posts("create")) == creates_before
             assert len(posts("send")) == sends_before
             capture("epic-decision-dialog")
-            report["scenarios"].append("Discuss opens the real Start conversation dialog with the observed question and target unsent and no create or send request")
+            report["scenarios"].append("Discuss opens the real Start conversation dialog with the observed question and the canonical repository alias unsent and no create or send request")
             check_deadline("discuss")
 
             # Closing and reopening keeps the retained draft without sending.
@@ -1423,9 +1430,14 @@ try:
             expect(page.locator("#thread-draft")).to_have_value(re.compile(re.escape(decision_recommendation)))
             created = posts("create")
             assert len(created) == creates_before + 1
+            # The create input is the independent proof of the bound target: the
+            # resolved canonical repository alias, never the colliding package
+            # target id and never the select's displayed state.
+            created_target = created[-1]["input"].get("target")
+            assert created_target == {"kind": "repository", "repository_id": "fixture-repo"}, created[-1]["input"]
             assert decision_question not in json.dumps(created[-1]["input"])
             assert len(posts("send")) == sends_before
-            report["scenarios"].append("Explicit create transfers the prepared text after acknowledgement and never sends it")
+            report["scenarios"].append("Explicit create transfers the prepared text after acknowledgement, binds repository_id=fixture-repo resolved from the canonical package primary instead of the colliding package target id, and never sends it")
             capture("epic-decision-created")
             check_deadline("create")
 
@@ -1452,6 +1464,47 @@ try:
             capture("epic-decision-decisions-only")
             capture_scrolled("epic-decision-decisions-only")
             report["scenarios"].append("With no eligible member left, Discuss decision carries the single primary and no Plan commitment is rendered")
+
+            # An unavailable workspace inventory leaves the single canonical
+            # target unresolvable: Discuss refuses visibly and seeds nothing
+            # instead of falling back to the package target id or guessing. A
+            # same-document hash navigation would keep the healthy detail
+            # already loaded, so force a real reload and observe the fresh
+            # workspace read fail before selecting the epic.
+            control("detail-fail", True)
+            try:
+                with page.expect_response(lambda response: "/api/workspace?" in response.url and "id=fixture" in response.url) as refused_workspace:
+                    page.reload(wait_until="domcontentloaded")
+                assert refused_workspace.value.status == 503, refused_workspace.value
+                assert "fixture-detail-failure" in refused_workspace.value.text()
+                open_epic()
+                discuss = page.locator('[data-action="discuss-decision"]')
+                expect(discuss).to_be_disabled()
+                expect(page.locator('[data-action-note="discuss-reason"]')).to_contain_text("repository inventory")
+                refused_route = page.url
+                refused_counts = (len(posts("create")), len(posts("send")), len(posts("dispatchLaunch")))
+                refused_workers = worker_starts()
+                # Activating the disabled control directly must not navigate or
+                # seed: the refusal guard runs before the seed and route.
+                discuss.dispatch_event("click")
+                time.sleep(0.2)
+                assert page.url == refused_route, page.url
+                assert "#/conversations" not in page.url
+                assert (len(posts("create")), len(posts("send")), len(posts("dispatchLaunch"))) == refused_counts
+                assert worker_starts() == refused_workers
+            finally:
+                control("detail-fail", False)
+            # The refused activation left no one-use seed: the real Start
+            # conversation dialog opens with no prepared message and no bound
+            # repository once the inventory recovers.
+            page.goto(receipt["url"] + "/#/conversations?" + urlencode({"ws": "fixture", "tab": "new"}), wait_until="domcontentloaded")
+            expect(page.locator("#thread-new-dialog")).to_be_visible()
+            expect(page.locator("#thread-new-target")).to_be_visible()
+            expect(page.locator("#thread-new-fields .thread-new-prepared")).to_have_count(0)
+            expect(page.locator("#thread-new-target")).to_have_value("")
+            assert (len(posts("create")), len(posts("send")), len(posts("dispatchLaunch"))) == refused_counts
+            report["scenarios"].append("An unavailable workspace inventory forces a failed workspace read and refuses Discuss visibly with no seed, navigation, create, send or dispatch instead of falling back to the package target id")
+            check_deadline("refusal")
             check_deadline("end")
 
         def run_final_review():

@@ -9,7 +9,7 @@ import {
   editLaunchDraft, getLaunchDraft, launchReviewedDraft, reviewLaunchDraft, saveLaunchDraft,
 } from './launch-state';
 import {
-  handoffReturn, packageLaunchPresentation, plannedTargetChoices, retargetPackageHandoff,
+  discussionRepositoryTarget, handoffReturn, packageLaunchPresentation, plannedTargetChoices, retargetPackageHandoff,
   seedColdHandoff, startPackageHandoff, type HandoffInput, type PlannedTarget,
 } from './launch-handoff';
 import { navigate, type RouteState } from './route';
@@ -244,6 +244,65 @@ test('package handoff canonical target choices sort, dedupe and keep primary pat
     { key: 'alternate\n/home/operator/Documents/docs', id: 'alternate', path: '/home/operator/Documents/docs' },
     { key: 'main\n/home/operator/Documents/app', id: 'main', path: '/home/operator/Documents/app' },
   ]);
+});
+
+test('discussion target maps the canonical package primary and never trusts a colliding package target id', () => {
+  const workspace = {
+    id: 'ws-discuss-one',
+    repositories: [
+      { id: 'fixture-docs', status: 'ok', canonical_path: '/checkout/docs' },
+      { id: 'fixture-repo', status: 'ok', canonical_path: '/checkout/primary' },
+    ],
+  };
+  // The package target id names a different registered checkout: only the
+  // canonical primary path decides, so the discussion binds fixture-repo.
+  assert.deepEqual(
+    discussionRepositoryTarget(workspace, 'ws-discuss-one', [{ id: 'fixture-docs', primary: '/checkout/primary' }]),
+    { ok: true, target: 'fixture-repo' },
+  );
+  assert.deepEqual(
+    discussionRepositoryTarget(workspace, 'ws-discuss-one', [{ id: 'fixture-repo', primary: '/checkout/docs' }]),
+    { ok: true, target: 'fixture-docs' },
+  );
+});
+
+test('discussion target refuses an absent, wrong-workspace, unhealthy, unmatched or ambiguous inventory', () => {
+  const targets: PlannedTarget[] = [{ id: 'fixture-docs', primary: '/checkout/primary' }];
+  assert.deepEqual(discussionRepositoryTarget(undefined, 'ws-discuss-two', targets), {
+    ok: false,
+    reason: 'The workspace repository inventory is unavailable; connect to the live workspace service before discussing this decision.',
+  });
+  const wrongWorkspace = { id: 'ws-other', repositories: [{ id: 'fixture-repo', status: 'ok', canonical_path: '/checkout/primary' }] };
+  assert.equal(discussionRepositoryTarget(wrongWorkspace, 'ws-discuss-two', targets).ok, false);
+  const unhealthy = { id: 'ws-discuss-two', repositories: [{ id: 'fixture-repo', status: 'not_git', canonical_path: '/checkout/primary' }] };
+  assert.equal(discussionRepositoryTarget(unhealthy, 'ws-discuss-two', targets).ok, false);
+  const emptyId = { id: 'ws-discuss-two', repositories: [{ id: '', status: 'ok', canonical_path: '/checkout/primary' }] };
+  assert.equal(discussionRepositoryTarget(emptyId, 'ws-discuss-two', targets).ok, false);
+  const unmatched = { id: 'ws-discuss-two', repositories: [{ id: 'fixture-repo', status: 'ok', canonical_path: '/checkout/other' }] };
+  assert.equal(discussionRepositoryTarget(unmatched, 'ws-discuss-two', targets).ok, false);
+  const ambiguous = { id: 'ws-discuss-two', repositories: [
+    { id: 'fixture-repo', status: 'ok', canonical_path: '/checkout/primary' },
+    { id: 'fixture-alt', status: 'ok', canonical_path: '/checkout/primary' },
+  ] };
+  assert.deepEqual(discussionRepositoryTarget(ambiguous, 'ws-discuss-two', targets), {
+    ok: false,
+    reason: 'The package target /checkout/primary matches more than one repository in this workspace.',
+  });
+});
+
+test('discussion target keeps several distinct package targets unguessed and refuses a package with no usable target', () => {
+  const workspace = { id: 'ws-discuss-three', repositories: [
+    { id: 'fixture-repo', status: 'ok', canonical_path: '/checkout/primary' },
+  ] };
+  assert.deepEqual(
+    discussionRepositoryTarget(workspace, 'ws-discuss-three', [
+      { id: 'fixture-repo', primary: '/checkout/primary' },
+      { id: 'fixture-docs', primary: '/checkout/docs' },
+    ]),
+    { ok: true, target: null },
+  );
+  assert.equal(discussionRepositoryTarget(workspace, 'ws-discuss-three', []).ok, false);
+  assert.equal(discussionRepositoryTarget(workspace, 'ws-discuss-three', undefined).ok, false);
 });
 
 test('package handoff repeat during a deferred save keeps the request, bytes and return origin without a second post', async (t) => {

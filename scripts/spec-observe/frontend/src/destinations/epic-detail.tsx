@@ -5,7 +5,7 @@ import { epicStats } from '../observation-format';
 import { formatHash, type RouteState } from '../route';
 import type { CatalogEntry } from '../scope';
 import { landedStatus, memberPlanning, planningAssignmentFor, usableDecision, type PlanningFacts } from '../readiness';
-import { plannedTargetChoices, startPackageHandoff, type PackagePlanningPlan, type PlannedTarget } from '../launch-handoff';
+import { discussionRepositoryTarget, plannedTargetChoices, startPackageHandoff, type PackagePlanningPlan, type PlannedTarget } from '../launch-handoff';
 import { seedNewThreadDraft } from '../conversations-state';
 import { packageRelative } from '../spec-state';
 import { time } from '../format';
@@ -481,6 +481,7 @@ export function EpicDecision(props: { epic: WireRecord; records: WireRecord[] })
 export function EpicDetail(props: {
   epic: WireRecord;
   records: WireRecord[];
+  workspace?: WireRecord;
   rememberedMember?: string | null;
   onSelectPackage: (workspace: string, slug: string) => void;
   catalog: CatalogEntry[];
@@ -632,6 +633,25 @@ export function EpicDetail(props: {
     const member = decisionMember() ?? unreadableMember();
     return member ? epicMemberRecord(props.epic, member, props.records) : null;
   };
+  // Discuss seeds the conversations draft with the repository the package
+  // actually binds, never the package-local target id: the single canonical
+  // primary is resolved against the loaded workspace inventory. Several
+  // distinct targets keep the accepted no-guess seed (no repository), and an
+  // absent, unhealthy, unmatched or ambiguous inventory refuses with a visible
+  // reason instead of seeding or navigating.
+  const discussTarget = () => {
+    const member = decisionMember();
+    const record = decisionRecord();
+    return discussionRepositoryTarget(
+      props.workspace ?? null,
+      member ? memberWorkspace(props.epic, member) : '',
+      record && Array.isArray(record.targets) ? record.targets as PlannedTarget[] : [],
+    );
+  };
+  const discussReason = () => {
+    const resolution = discussTarget();
+    return resolution.ok ? '' : resolution.reason;
+  };
   const canOpenDecisionFiles = () => Boolean(decisionRecord() && props.canOpenPackageFiles?.(decisionRecord()!));
   const decisionFilesReason = () => 'Package files are unavailable for this selection.';
   const openDecisionFile = (path: string) => {
@@ -640,17 +660,17 @@ export function EpicDetail(props: {
     props.onOpenPackageFiles?.(record, path);
   };
   // Discuss hands the observed decision to the real conversations seed owner:
-  // the prepared text (member, question, recommendation) and the unique
-  // observed package target travel in memory only. The route carries no text
-  // and no thread is created or messaged here; the production Start
-  // conversation dialog consumes the seed on open.
+  // the prepared text (member, question, recommendation) and the resolved
+  // repository alias travel in memory only. The route carries no text and no
+  // thread is created or messaged here; the production Start conversation
+  // dialog consumes the seed on open. An unresolved target refuses without
+  // seeding or navigating.
   const discussDecision = () => {
     const member = decisionMember();
     const ws = member ? memberWorkspace(props.epic, member) : '';
     if (!member || !ws) return;
-    const record = decisionRecord();
-    const targets = plannedTargetChoices(record && Array.isArray(record.targets) ? record.targets as PlannedTarget[] : []);
-    const target = targets.length === 1 ? targets[0].id : '';
+    const resolution = discussTarget();
+    if (!resolution.ok) return;
     const question = text(decision()?.question);
     const recommendation = text(decision()?.recommendation);
     const prepared = [
@@ -658,7 +678,7 @@ export function EpicDetail(props: {
       question ? `Question: ${question}` : '',
       recommendation ? `Recommendation: ${recommendation}` : '',
     ].filter(Boolean).join('\n');
-    seedNewThreadDraft(ws, target ? { text: prepared, target } : { text: prepared });
+    seedNewThreadDraft(ws, resolution.target ? { text: prepared, target: resolution.target } : { text: prepared });
     props.onNavigate({ dest: 'conversations', ws, tab: 'new' });
   };
   const conflictCompact = () => {
@@ -744,10 +764,15 @@ export function EpicDetail(props: {
             type="button"
             class={decisionsOnly() ? 'ds-btn ds-btn--primary' : 'ds-btn'}
             data-action="discuss-decision"
+            disabled={Boolean(discussReason())}
+            aria-describedby={discussReason() ? 'epic-discuss-decision-reason' : undefined}
             onClick={discussDecision}
           >
             Discuss decision
           </button>
+          <Show when={discussReason()}>
+            <span class="action-note" id="epic-discuss-decision-reason" data-action-note="discuss-reason">{discussReason()}</span>
+          </Show>
           <Show when={decisionPath()}>
             <button
               type="button"

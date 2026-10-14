@@ -135,7 +135,13 @@ export default function App() {
   const crumbs = () => [scopeLabel(scopeWs(), catalogEntries(), scopeWs() ? undefined : portfolioTargetId()), title()];
   const packageFilesRoute = () => route().dest === 'files' && route().source === 'package' && Boolean(route().id);
   const pickerRequired = () => needsWorkspacePicker(route()) && !packageFilesRoute();
-  const detailWorkspaceId = createMemo(() => route().dest === 'workspaces' ? route().ws : requiresWorkspace(route().dest) && !packageFilesRoute() ? route().ws : undefined);
+  // Workspaces, the workspace-required destinations and Epics keep the current
+  // workspace detail. Epics resolves a decision's canonical package target to
+  // its repository alias from that record before seeding a conversation; the
+  // record stays optional there and never gates the route or its picker.
+  const detailWorkspaceId = createMemo(() => route().dest === 'workspaces' || route().dest === 'epics'
+    ? route().ws
+    : requiresWorkspace(route().dest) && !packageFilesRoute() ? route().ws : undefined);
 
   function go(next: RouteState, options: { keepExpected?: boolean } = {}) {
     if (!options.keepExpected) { setExpectedCompletionKey(null); setExpectedCompletionRoute(null); expectedSeen = false; }

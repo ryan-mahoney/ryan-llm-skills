@@ -436,6 +436,7 @@ export default function EpicsDestination(props: DestinationProps) {
                 <EpicDetail
                   epic={epic()}
                   records={props.records}
+                  workspace={props.workspace}
                   rememberedMember={rememberedMember()}
                   onSelectPackage={rememberMember}
                   catalog={props.catalog}

@@ -10,6 +10,7 @@ import {
   changeLaunchTarget, contextKey, getLaunchDraft, saveLaunchDraft, seedLaunchDraft,
 } from './launch-state';
 import type { LaunchContext, LaunchDraft, LaunchDraftError } from './launch-state';
+import type { WireRecord } from './model';
 import { subscribeRoute } from './route';
 import type { RouteMode, RouteState } from './route';
 import {
@@ -134,6 +135,41 @@ export function plannedTargetChoices(packageTargets: PlannedTarget[] | null | un
 
 export function plannedTargetLabel(target: PlannedTargetChoice): string {
   return `${target.id} · ${target.path}`;
+}
+
+// Discussion seeding for an observed decision resolves the package's canonical
+// primary to the repository alias the conversation must bind. Package target
+// ids are package-local: they may differ from the workspace repository aliases
+// or collide with a different checkout, so the id is never trusted. Exactly
+// one healthy repository with a nonempty id whose stored canonical_path equals
+// the single target primary, in the matching workspace, is accepted. An
+// absent or wrong-workspace record, an unhealthy, unmatched or ambiguous
+// inventory and a package without a usable target all refuse with a reason so
+// the caller can refuse without seeding or navigating; several distinct
+// targets keep the accepted no-guess behavior (no repository preselection).
+export function discussionRepositoryTarget(
+  workspace: WireRecord | null | undefined,
+  ws: string,
+  packageTargets: PlannedTarget[] | null | undefined,
+): { ok: true; target: string | null } | { ok: false; reason: string } {
+  const choices = plannedTargetChoices(packageTargets);
+  if (choices.length === 0) return { ok: false, reason: 'No usable package target is available.' };
+  if (choices.length > 1) return { ok: true, target: null };
+  if (!workspace || typeof workspace.id !== 'string' || workspace.id !== ws) {
+    return { ok: false, reason: 'The workspace repository inventory is unavailable; connect to the live workspace service before discussing this decision.' };
+  }
+  const path = choices[0].path;
+  const matches = (Array.isArray(workspace.repositories) ? workspace.repositories : [])
+    .filter(repository => repository && repository.status === 'ok'
+      && typeof repository.id === 'string' && repository.id !== ''
+      && repository.canonical_path === path);
+  if (matches.length === 0) {
+    return { ok: false, reason: `The package target ${path} is not a healthy repository in this workspace.` };
+  }
+  if (matches.length > 1) {
+    return { ok: false, reason: `The package target ${path} matches more than one repository in this workspace.` };
+  }
+  return { ok: true, target: matches[0].id as string };
 }
 
 // Return-route memory keyed by the launch context identity, never by route
