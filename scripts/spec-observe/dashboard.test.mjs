@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, rmSync, symlinkSync, existsSync, readdirSync, lstatSync, realpathSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, rmSync, symlinkSync, existsSync, readdirSync, lstatSync, realpathSync, readFileSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -398,7 +398,7 @@ test('workspace HTTP serves identical bodies to accepted public and forwarded ho
   assert.equal(readFileSync(join(workspace, brief.path), 'utf8'), briefBefore);
   const plain = createDashboardServer({ agentDir: f.dir, storageRoot });
   const plainBefore = readFileSync(join(workspace, 'kit.yaml'), 'utf8');
-  for (const path of paths) {
+  for (const [index, path] of paths.entries()) {
     const response = await request(plain, path);
     assert.equal(response.status, 200, path);
     assert.doesNotMatch(response.body, /action_token/, path);
@@ -408,22 +408,240 @@ test('workspace HTTP serves identical bodies to accepted public and forwarded ho
   assert.equal(plainKitAfter, plainBefore);
 });
 
-test('workspace HTTP design routes serve JSON and return 405 for non-GET/HEAD', async t => {
+// Run independently: node --test --test-name-pattern='workspace HTTP serves reads over a real listening' scripts/spec-observe/dashboard.test.mjs
+test('workspace HTTP serves reads over a real listening port-0 server', async t => {
+  const f = fixture(t);
+  const base = realpathSync(f.dir);
+  const storageRoot = join(base, 'storage');
+  await setupStorage(storageRoot);
+  await createWorkspace(storageRoot, { id: 'writer' });
+  const workspace = join(storageRoot, 'projects', 'writer');
+  const repo = join(base, 'repo');
+  mkdirSync(repo, { recursive: true });
+  writeFileSync(join(workspace, 'kit.yaml'), [
+    'version: 1',
+    'id: writer',
+    'name: Writer',
+    'repositories:',
+    '  - id: docs',
+    `    path: ${JSON.stringify(repo)}`,
+    '',
+  ].join('\n'));
+  const brief = await addMaterial(storageRoot, 'writer', { kind: 'brief', title: 'First Brief', content: '# Brief\n' });
+  writeFileSync(join(workspace, '.env.local'), 'SECRET=1');
+  const server = createDashboardServer({ agentDir: f.dir, publicHost: 'dashboard.example', storageRoot });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
+  const port = server.address().port;
+  // node:http (not fetch) so the wire Host header can name the accepted
+  // public host while the TCP connection stays loopback.
+  const { request: httpRequest } = await import('node:http');
+  const httpCall = (path, { host, origin, method = 'GET', headers = {}, body } = {}) => new Promise((resolve, reject) => {
+    const outgoing = httpRequest({ host: '127.0.0.1', port, path, method,
+      headers: { ...(host !== undefined ? { host } : {}), ...(origin !== undefined ? { origin } : {}), ...headers } },
+      incoming => {
+        const chunks = [];
+        incoming.on('data', chunk => chunks.push(chunk));
+        incoming.on('end', () => resolve({ status: incoming.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
+      });
+    outgoing.on('error', reject);
+    if (body !== undefined) outgoing.write(body);
+    outgoing.end();
+  });
+  const detailPath = `/api/workspace?${new URLSearchParams({ id: 'writer' })}`;
+  const listingPath = `/api/workspace-files?${new URLSearchParams({ id: 'writer' })}`;
+  const filePath = `/api/workspace-file?${new URLSearchParams({ id: 'writer', file: brief.path })}`;
+  const paths = ['/api/workspaces', detailPath, listingPath, filePath];
+
+  const loopback = [];
+  for (const path of paths) {
+    const response = await httpCall(path);
+    assert.equal(response.status, 200, path);
+    assert.doesNotMatch(response.body, /action_token/, path);
+    loopback.push(response.body);
+  }
+  assert.equal(JSON.parse(loopback[0]).storage.status, 'ok');
+  assert.equal(JSON.parse(loopback[1]).id, 'writer');
+  assert.equal(loopback[3], '# Brief\n');
+
+  for (const variant of [{ host: 'dashboard.example' }, { host: 'dashboard.example:443', origin: 'https://dashboard.example' }, { headers: { 'x-forwarded-for': '' } }]) {
+    for (const [index, path] of paths.entries()) {
+      const response = await httpCall(path, variant);
+      assert.equal(response.status, 200, `${JSON.stringify(variant)} ${path}`);
+      assert.equal(response.body, loopback[index], `${JSON.stringify(variant)} ${path}`);
+    }
+  }
+
+  for (const path of paths) {
+    const head = await httpCall(path, { method: 'HEAD' });
+    assert.equal(head.status, 200, `HEAD ${path}`);
+    assert.equal(head.body, '', `HEAD ${path}`);
+    for (const host of ['evil-dashboard.example', 'dashboard.example.evil', 'dashboard.example:4319']) {
+      assert.equal((await httpCall(path, { host })).status, 403, `${host} ${path}`);
+    }
+    assert.equal((await httpCall(path, { origin: 'http://dashboard.example' })).status, 403, path);
+  }
+  assert.notEqual((await httpCall(`/api/workspace-file?${new URLSearchParams({ id: 'writer', file: '.env.local' })}`)).status, 200);
+
+  const kitBefore = readFileSync(join(workspace, 'kit.yaml'), 'utf8');
+  const briefBefore = readFileSync(join(workspace, brief.path), 'utf8');
+  const kitMtime = lstatSync(join(workspace, 'kit.yaml')).mtimeMs;
+  const briefMtime = lstatSync(join(workspace, brief.path)).mtimeMs;
+  for (const method of ['POST', 'PUT']) {
+    for (const variant of [{ host: 'dashboard.example' }, { headers: { 'x-forwarded-for': '' } }]) {
+      assert.equal((await httpCall(detailPath, { method, body: '{}', ...variant })).status, 405, `${method} ${JSON.stringify(variant)}`);
+    }
+  }
+  assert.equal(readFileSync(join(workspace, 'kit.yaml'), 'utf8'), kitBefore);
+  assert.equal(readFileSync(join(workspace, brief.path), 'utf8'), briefBefore);
+  assert.equal(lstatSync(join(workspace, 'kit.yaml')).mtimeMs, kitMtime);
+  assert.equal(lstatSync(join(workspace, brief.path)).mtimeMs, briefMtime);
+});
+
+// Run independently: node --test --test-name-pattern='private thread records' scripts/spec-observe/dashboard.test.mjs
+test('generic workspace reads exclude private thread records while dedicated operator routes serve them', async t => {
+  const f = fixture(t);
+  const base = realpathSync(f.dir);
+  const storageRoot = join(base, 'storage');
+  await setupStorage(storageRoot);
+  await createWorkspace(storageRoot, { id: 'writer' });
+  const workspace = join(storageRoot, 'projects', 'writer');
+  const brief = await addMaterial(storageRoot, 'writer', { kind: 'brief', title: 'First Brief', content: '# Brief\n' });
+  const note = await addMaterial(storageRoot, 'writer', { kind: 'note', title: 'First Note', content: '# Note\n' });
+  const spawnCalls = [];
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(base, 'agent'),
+    spawn: (...args) => {
+      spawnCalls.push(args);
+      throw new Error('no discussion child may launch');
+    },
+  });
+  t.after(() => service.close());
+  const created = await service.create({ workspace_id: 'writer', title: 'Private thread', target: { kind: 'workspace' } });
+  // Seed a durable queued prompt into the record the real service reads. The
+  // queue stays paused so the scheduler never dispatches it and no Pi child
+  // can start during the regression.
+  const threadFile = join(workspace, 'threads', `${created.thread_id}.json`);
+  const record = JSON.parse(readFileSync(threadFile, 'utf8'));
+  const queuedText = 'durable queued prompt text';
+  record.queue = [{ id: randomUUID(), text: queuedText, queued_at: new Date().toISOString(), state: 'queued', attempt: 0 }];
+  record.queue_paused = true;
+  record.updated_at = new Date().toISOString();
+  writeFileSync(threadFile, `${JSON.stringify(record)}\n`);
+  const listed = await service.list({ workspace_id: 'writer' });
+  assert.ok(listed.threads.some(thread => thread.thread_id === created.thread_id && thread.queue[0]?.text === queuedText), 'the durable queued prompt is readable through the service');
+
+  const server = createDashboardServer({ agentDir: f.dir, publicHost: 'dashboard.example', storageRoot, discussion: service });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
+  const port = server.address().port;
+  const { request: httpRequest } = await import('node:http');
+  const httpCall = (path, { host, method = 'GET', headers = {} } = {}) => new Promise((resolve, reject) => {
+    const outgoing = httpRequest({ host: '127.0.0.1', port, path, method,
+      headers: { ...(host !== undefined ? { host } : {}), ...headers } },
+      incoming => {
+        const chunks = [];
+        incoming.on('data', chunk => chunks.push(chunk));
+        incoming.on('end', () => resolve({ status: incoming.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
+      });
+    outgoing.on('error', reject);
+    outgoing.end();
+  });
+  const listingPath = `/api/workspace-files?${new URLSearchParams({ id: 'writer' })}`;
+  const threadPath = `/api/workspace-file?${new URLSearchParams({ id: 'writer', file: `threads/${created.thread_id}.json` })}`;
+  const briefPath = `/api/workspace-file?${new URLSearchParams({ id: 'writer', file: brief.path })}`;
+  const notePath = `/api/workspace-file?${new URLSearchParams({ id: 'writer', file: note.path })}`;
+
+  for (const variant of [undefined, { host: 'dashboard.example' }, { headers: { 'x-forwarded-for': '' } }]) {
+    const label = JSON.stringify(variant);
+    const listing = await httpCall(listingPath, variant);
+    assert.equal(listing.status, 200, label);
+    const names = JSON.parse(listing.body).files.map(entry => entry.name);
+    assert.equal(names.some(name => name === `threads/${created.thread_id}.json` || name.startsWith('threads/')), false, `generic listing omits thread records ${label}`);
+    for (const method of ['GET', 'HEAD']) {
+      const denied = await httpCall(threadPath, { ...(variant ?? {}), method });
+      assert.notEqual(denied.status, 200, `generic ${method} cannot read a thread record ${label}`);
+      assert.doesNotMatch(denied.body, new RegExp(queuedText), `generic ${method} cannot disclose queued prompt text ${label}`);
+    }
+    const download = await httpCall(`${threadPath}&download=1`, variant);
+    assert.notEqual(download.status, 200, `download query cannot read a thread record ${label}`);
+    assert.doesNotMatch(download.body, new RegExp(queuedText), `download query cannot disclose queued prompt text ${label}`);
+    assert.equal((await httpCall(briefPath, variant)).body, '# Brief\n', `ordinary brief stays readable ${label}`);
+    assert.equal((await httpCall(notePath, variant)).body, '# Note\n', `ordinary note stays readable ${label}`);
+  }
+
+  // Dedicated routes expose threads to the configured operator host; generic
+  // file routes still exclude private records.
+  const remoteThreads = await httpCall(`/api/threads?${new URLSearchParams({ workspace_id: 'writer' })}`, { host: 'dashboard.example' });
+  assert.equal(remoteThreads.status, 200, 'the configured public host reads threads');
+  assert.ok(JSON.parse(remoteThreads.body).threads.some(thread => thread.thread_id === created.thread_id));
+  const forwardedThreads = await httpCall(`/api/threads?${new URLSearchParams({ workspace_id: 'writer' })}`, { headers: { 'x-forwarded-for': '' } });
+  assert.equal(forwardedThreads.status, 403, 'a forwarded remote request cannot read threads');
+  const localThreads = await httpCall(`/api/threads?${new URLSearchParams({ workspace_id: 'writer' })}`);
+  assert.equal(localThreads.status, 200);
+  assert.ok(JSON.parse(localThreads.body).threads.some(thread => thread.thread_id === created.thread_id && thread.queue[0]?.text === queuedText), 'a loopback caller still reads the durable record');
+  assert.deepEqual(spawnCalls, [], 'no Pi child was started');
+});
+
+// ---- Threads UI (step 9): browsing, transcript, composer and stale-response guards ----
+
+// Direct payload assignment always carries the adj2 server-relative anchor and
+// the performance boundary, matching the production freshness contract.
+
+// ---- Threads UI (step 10): brief editor, assignment preview/launch and explicit result dispatch ----
+
+// ---- Threads UI (step 9 fix): mutation identity guards, selected reconcile, stalled Stop ----
+
+// ---- Step 7 Agents view: read-only assignment supervision projection ----
+
+// Step-007 fix (F1): successive refresh() responses while remaining in Agents
+// refresh the run projection from the same payload as the assignments.
+
+// Step-007 fix (F2): the run join requires exact workflow/package identity,
+// assignment identity when the run supplies it, and the same observer workspace.
+
+// Step-007 fix (F4): replacing the agent list preserves keyboard focus.
+
+// Final-1 fix (F3): Agents shows an explicit loading state before the first
+// observation instead of asserting that no agents exist.
+
+// Run independently: node --test --test-name-pattern='epic badge' scripts/spec-observe/dashboard.test.mjs
+
+// Run independently: node --test --test-name-pattern='workspace designs route' scripts/spec-observe/dashboard.test.mjs
+test('workspace designs route lists valid indexes with derived status, reports invalid ones, and screens get font-src', async t => {
+  const { realpathSync } = await import('node:fs');
   const f = fixture(t);
   const base = realpathSync(f.dir);
   const storageRoot = join(base, 'storage');
   await setupStorage(storageRoot);
   await createWorkspace(storageRoot, { id: 'studio' });
   const workspace = join(storageRoot, 'projects', 'studio');
-  mkdirSync(join(workspace, 'designs', 'demo', 'screens'), { recursive: true });
-  writeFileSync(join(workspace, 'designs', 'demo', 'screens', '01-overview.html'), 'content');
-  writeFileSync(join(workspace, 'designs', 'demo', 'design.json'), '{"screens":[{"id":"01-overview","produced":true,"captured":{"1280":true}}]}');
-  writeFileSync(join(workspace, 'kit.yaml'), 'version: 1\nid: studio\nname: Studio\nrepositories: []\n');
+  const demo = join(workspace, 'designs', 'demo');
+  mkdirSync(join(demo, 'screens'), { recursive: true });
+  mkdirSync(join(demo, 'captures'), { recursive: true });
+  mkdirSync(join(workspace, 'designs', 'broken'), { recursive: true });
+  writeFileSync(join(demo, 'design.json'), JSON.stringify({ schema_version: 1, design: 'demo', title: 'Demo design', viewport: { posture: 'desktop-only', widths: [1280] },
+    screens: [{ step: 1, id: 'overview', title: 'Overview', person: 'Planner', job: 'Pick the worst route', kind: 'decision', state: 'ideal' },
+      { step: 2, id: 'overview-empty', title: 'Overview, empty', person: 'Planner', job: 'Import a feed', kind: 'action', state: 'empty', shell_from: 1 }] }));
+  writeFileSync(join(demo, 'screens', '01-overview.html'), '<!doctype html><html><body><h1>Routes</h1></body></html>');
+  writeFileSync(join(demo, 'captures', '01-overview@1280.png'), 'png');
+  writeFileSync(join(workspace, 'designs', 'broken', 'design.json'), JSON.stringify({ schema_version: 1, design: 'broken', title: 'Broken', viewport: { posture: 'desktop-only', widths: [1280] }, screens: [] }));
+  writeFileSync(join(base, 'outside.txt'), 'OUTSIDE-SECRET');
+  mkdirSync(join(workspace, 'threads'), { recursive: true });
+  writeFileSync(join(workspace, 'threads', 'discussion.txt'), 'THREAD-SECRET');
+  writeFileSync(join(workspace, '.env.local'), 'ENV-SECRET');
+  writeFileSync(join(workspace, 'marker.html'), '<link rel="stylesheet" href="marker.css"><script src="marker.js"></script>');
+  writeFileSync(join(workspace, 'marker.js'), 'document.body.dataset.marker="1"');
+  writeFileSync(join(workspace, 'marker.css'), 'body{color:red}');
+  writeFileSync(join(workspace, 'big.bin'), Buffer.alloc(8 * 1024 * 1024 + 1));
+  symlinkSync(join(base, 'outside.txt'), join(workspace, 'escape.txt'));
   const server = createDashboardServer({ agentDir: f.dir, storageRoot });
-  const path = `/api/workspace-designs?${new URLSearchParams({ id: 'studio' })}`;
-  const response = await request(server, path);
-  assert.equal(response.status, 200);
-  const body = JSON.parse(response.body);
+  const listing = await request(server, `/api/workspace-designs?${new URLSearchParams({ id: 'studio' })}`);
+  assert.equal(listing.status, 200);
+  const body = JSON.parse(listing.body);
+  assert.equal(body.designs.length, 1);
+  assert.equal(body.designs[0].slug, 'demo');
   assert.equal(body.designs[0].path, 'designs/demo');
   assert.equal(body.designs[0].screens[0].produced, true);
   assert.deepEqual(body.designs[0].screens[0].captured, { 1280: true });
@@ -464,6 +682,7 @@ test('workspace HTTP design routes serve JSON and return 405 for non-GET/HEAD', 
     assert.doesNotMatch(refused.body, /OUTSIDE-SECRET|THREAD-SECRET|ENV-SECRET/, refusedPath);
   }
 });
+
 
 async function httpJson(port, path, { method = 'GET', host, origin, token, body } = {}) {
   return new Promise((resolve, reject) => {
@@ -535,6 +754,35 @@ test('model routes: real server persists loopback and public-host writes', async
   assert.equal(listed.status, 200);
   const listedData = JSON.parse(listed.body);
   assert.deepEqual(listedData.preferred, [{ provider: 'deepinfra', model: 'ByteDance/Seed-2.0-code' }, { provider: 'other', model: 'other-model' }]);
+});
+
+test('model routes: write failure returns preferences-unavailable and the queue recovers', async t => {
+  const f = fixture(t);
+  const sentinel = join(f.dir, 'spec-sentinel');
+  const server = createDashboardServer({ agentDir: f.dir });
+  const port = await startModelServer(t, server);
+
+  const state = await httpJson(port, '/api/state');
+  const token = JSON.parse(state.body).action_token;
+  const loopbackHost = '127.0.0.1:' + port;
+
+  // A read-only sentinel directory lets the read succeed (missing file) while the
+  // atomic publish itself fails, so the write path is genuinely exercised.
+  chmodSync(sentinel, 0o500);
+  let failed;
+  try {
+    failed = await httpJson(port, '/api/models/preferred', { method: 'POST', origin: 'http://' + loopbackHost, token, body: { provider: 'a', model: 'm', preferred: true } });
+  } finally {
+    chmodSync(sentinel, 0o700);
+  }
+  assert.equal(failed.status, 503);
+  assert.deepEqual(JSON.parse(failed.body), { error: 'Preferences data unavailable. Retry shortly.', reason: 'preferences-unavailable' });
+
+  const recovered = await httpJson(port, '/api/models/preferred', { method: 'POST', origin: 'http://' + loopbackHost, token, body: { provider: 'a', model: 'm', preferred: true } });
+  assert.equal(recovered.status, 200);
+  assert.deepEqual(JSON.parse(recovered.body).preferred, [{ provider: 'a', model: 'm' }]);
+  const filePath = join(f.dir, 'spec-sentinel', 'preferred-models.json');
+  assert.deepEqual(JSON.parse(readFileSync(filePath, 'utf8')).preferred, [{ provider: 'a', model: 'm' }]);
 });
 
 test('model routes: oversize and method refusals leave the file unchanged', async t => {

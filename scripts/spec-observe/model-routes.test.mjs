@@ -279,9 +279,9 @@ test('createPreferredModels: remove', async t => {
 
 test('createPreferredModels: retry after failed write', async t => {
   const agentDir = mkdtempSync(join(tmpdir(), 'model-routes-test-'));
-  t.after(() => rmSync(agentDir, { recursive: true, force: true }));
-
   const dirPath = join(agentDir, 'spec-sentinel');
+  t.after(() => { if (existsSync(dirPath)) chmodSync(dirPath, 0o700); rmSync(agentDir, { recursive: true, force: true }); });
+
   mkdirSync(dirPath, { mode: 0o700 });
   const filePath = join(dirPath, 'preferred-models.json');
 
@@ -297,6 +297,23 @@ test('createPreferredModels: retry after failed write', async t => {
   const r2 = await prefs.setPreference({ provider: 'a', model: 'm', preferred: true });
   assert.equal(r2.state, 'ready');
   assert.ok(existsSync(filePath));
+
+  // A read-only sentinel directory makes the atomic publish itself fail rather
+  // than the read, proving write-failure reporting and queue recovery.
+  chmodSync(dirPath, 0o500);
+  let r3;
+  try {
+    r3 = await prefs.setPreference({ provider: 'b', model: 'n', preferred: true });
+  } finally {
+    chmodSync(dirPath, 0o700);
+  }
+  assert.equal(r3.state, 'failed');
+  assert.equal(r3.reason, 'preferences-unavailable');
+
+  const r4 = await prefs.setPreference({ provider: 'b', model: 'n', preferred: true });
+  assert.equal(r4.state, 'ready');
+  assert.deepEqual(r4.preferred, [{ provider: 'a', model: 'm' }, { provider: 'b', model: 'n' }]);
+  assert.deepEqual(JSON.parse(readFileSync(filePath, 'utf8')).preferred, [{ provider: 'a', model: 'm' }, { provider: 'b', model: 'n' }]);
 });
 
 test('createPreferredModels: refuse and preserve', async t => {

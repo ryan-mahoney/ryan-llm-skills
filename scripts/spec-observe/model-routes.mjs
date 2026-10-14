@@ -284,9 +284,13 @@ export function createPreferredModels({ agentDir, now } = {}) {
       const newPreferred = current.preferred.slice();
       newPreferred.splice(existingIndex, 1);
       const nowIso = new Date(now()).toISOString();
-      await mkdir(dir, { recursive: true, mode: 0o700 });
-      const content = JSON.stringify({ version: 1, preferred: newPreferred, updated_at: nowIso });
-      await writeFileAtomic(file, content);
+      try {
+        await mkdir(dir, { recursive: true, mode: 0o700 });
+        const content = JSON.stringify({ version: 1, preferred: newPreferred, updated_at: nowIso });
+        await writeFileAtomic(file, content);
+      } catch {
+        return { state: 'failed', reason: 'preferences-unavailable' };
+      }
       return { state: 'ready', preferred: newPreferred, updated_at: nowIso };
     }
     if (existingIndex >= 0) {
@@ -298,9 +302,13 @@ export function createPreferredModels({ agentDir, now } = {}) {
     const newPreferred = current.preferred.slice();
     newPreferred.push(pair);
     const nowIso = new Date(now()).toISOString();
-    await mkdir(dir, { recursive: true, mode: 0o700 });
-    const content = JSON.stringify({ version: 1, preferred: newPreferred, updated_at: nowIso });
-    await writeFileAtomic(file, content);
+    try {
+      await mkdir(dir, { recursive: true, mode: 0o700 });
+      const content = JSON.stringify({ version: 1, preferred: newPreferred, updated_at: nowIso });
+      await writeFileAtomic(file, content);
+    } catch {
+      return { state: 'failed', reason: 'preferences-unavailable' };
+    }
     return { state: 'ready', preferred: newPreferred, updated_at: nowIso };
   };
   const setPreference = input => {
