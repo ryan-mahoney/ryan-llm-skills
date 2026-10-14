@@ -145,24 +145,24 @@ export default function ModelsDestination(props: DestinationProps) {
     </button>
   );
 
-  const renderRowCells = (row: CatalogRow) => {
-    const isPreferredNow = isPreferred(row.choice);
-    const state = rowState(row.choice);
+  const renderRowCells = (row: CatalogRow, providerColumn: boolean) => {
+    const isPreferredNow = () => isPreferred(row.choice);
+    const state = () => rowState(row.choice);
     const isMissing = row.availability === 'missing';
 
     return (
       <>
         <td class="mname">
           {highlightMatch(row.choice.model)}
-          <span class="sub">{highlightMatch(row.choice.provider)}</span>
         </td>
+        {providerColumn && <td class="prov">{row.choice.provider}</td>}
         <td class="numeric">{row.context || '-'}</td>
         <td class="numeric">{row.maxOut || '-'}</td>
         <td class="cap">{row.thinking ? 'Yes' : <span aria-label="No">—</span>}</td>
         <td class="cap">{row.images ? 'Yes' : <span aria-label="No">—</span>}</td>
       <td class="prefcell">
-        <Show when={state.outcome === 'saved'}>
-          <span class="saved">{isPreferredNow ? 'Saved · preferred' : 'Saved · removed'}</span>
+        <Show when={state().outcome === 'saved'}>
+          <span class="saved">{isPreferredNow() ? 'Saved · preferred' : 'Saved · removed'}</span>
         </Show>
         <Show when={isMissing}>
           <span style="font-size:12px;color:var(--ds-muted)">Not in {catalog().host ?? 'this host'} catalog</span>
@@ -175,16 +175,16 @@ export default function ModelsDestination(props: DestinationProps) {
             Remove preference
           </button>
         </Show>
-        <Show when={!isMissing && state.outcome !== 'saved'}>
+        <Show when={!isMissing && state().outcome !== 'saved'}>
           <label class="switch-wrap">
             <input
               type="checkbox"
               role="switch"
               class="switch"
               aria-label={`Preferred: ${row.choice.model} via ${row.choice.provider}`}
-              checked={isPreferredNow}
-              onClick={() => { if (props.token && !state.pending && canMutate()) setPreference(row.choice, !isPreferredNow, props.token); }}
-              disabled={state.pending || !canMutate() || (!isPreferredNow && row.availability !== 'available')}
+              checked={isPreferredNow()}
+              onClick={() => { if (props.token && !state().pending && canMutate()) setPreference(row.choice, !isPreferredNow(), props.token); }}
+              disabled={state().pending || !canMutate() || (!isPreferredNow() && row.availability !== 'available')}
             />
           </label>
         </Show>
@@ -195,14 +195,13 @@ export default function ModelsDestination(props: DestinationProps) {
 
   const renderRow = (row: CatalogRow, providerColumn: boolean): JSX.Element => {
     const key = rowKey(row);
-    const state = rowState(row.choice);
+    const state = () => rowState(row.choice);
     return (
       <>
         <tr data-row-key={key}>
-          {providerColumn && <td class="prov">{row.choice.provider}</td>}
-          {renderRowCells(row)}
+          {renderRowCells(row, providerColumn)}
         </tr>
-        <Show when={state.outcome === 'failed'}>
+        <Show when={state().outcome === 'failed'}>
           <tr class="row-error" data-error-key={key}>
             <td colspan={providerColumn ? 7 : 6}>
               <div class="ds-callout error" role="alert">
@@ -411,7 +410,7 @@ export default function ModelsDestination(props: DestinationProps) {
         <Show when={!hasActiveFilter() || preferredRows().length > 0}>
           <section class="ms-section">
             <div class="section-heading">
-              <h2>Preferred · {preferredRows().length}</h2>
+              <h2>Preferred · {preferredRows().length}<span class="muted">Offered in thread and assignment pickers, A–Z</span></h2>
             </div>
             <Show when={catalog().status === 'loading'}>
               <div class="ds-callout">Availability unknown; catalog not read</div>
@@ -425,7 +424,7 @@ export default function ModelsDestination(props: DestinationProps) {
 
         <section class="ms-section">
           <div class="section-heading">
-            <h2>All providers · {providerCount()}</h2>
+            <h2>All providers · {providerCount()}<span class="muted">Alphabetical</span></h2>
           </div>
           <Show when={catalog().status === 'loading'}>
             <RegionalSkeleton variant="table" rows={3} />

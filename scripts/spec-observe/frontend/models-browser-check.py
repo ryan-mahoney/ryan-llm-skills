@@ -307,6 +307,22 @@ def run(url, page):
                 target_group = groups[-1]
             candidate = target_group.locator('input.switch:not(:checked)').first
             label = candidate.get_attribute('aria-label')
+            # Capture server post count before click
+            before_posts = control('').get('modelsPreferencePosts')
+            # Install fetch counter on the page
+            page.evaluate("""() => {
+                window.__modelsPrefPosts = 0;
+                const f = window.fetch;
+                window.fetch = function(...a) {
+                    try {
+                        const u = String(a[0] && a[0].url ? a[0].url : a[0]);
+                        const m = (a[1] && a[1].method) || 'GET';
+                        if (u.indexOf('/api/models/preferred') !== -1 && String(m).toUpperCase() === 'POST')
+                            window.__modelsPrefPosts++;
+                    } catch(e) {}
+                    return f.apply(this, a);
+                };
+            }""")
             candidate.scroll_into_view_if_needed()
             page.wait_for_timeout(150)
             # Record saved scroll position

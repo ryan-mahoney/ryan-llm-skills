@@ -30,6 +30,7 @@ const storage=join(root,'storage');await setupStorage(storage);
 let modelsReadAt=Date.now();
 let modelsCatalogFail=false;
 let observerMode=false;
+let modelsPreferencePosts=0;
 const modelsPreferredSeed=`{"version":1,"preferred":[{"provider":"pi-claude-cli","model":"claude-sonnet-5-5"},{"provider":"pi-claude-cli","model":"claude-haiku-5-5"},{"provider":"zai","model":"glm-5.3"},{"provider":"deepseek","model":"deepseek-v4-pro"},{"provider":"kimi-coding","model":"k3"},{"provider":"openai-codex","model":"gpt-6-sol"},{"provider":"old-provider","model":"retired-model"}],"updated_at":"2026-10-14T14:31:00.000Z"}`;
 if(modelsFixture){
  const prefDir=join(root,'agent','spec-sentinel');await mkdir(prefDir,{recursive:true});
@@ -681,6 +682,7 @@ const server=createServer(async(req,res)=>{
   const status=threadRead==='threads'?listFailStatus:historyFailStatus;
   if(status){res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify({error:threadRead==='threads'?'Fixture thread list unavailable':'Fixture transcript read unavailable'}));return;}
  }
+ if(url.pathname==='/api/models/preferred'&&req.method==='POST')modelsPreferencePosts+=1;
  if(!readKind){dashboard.emit('request',req,res);return;}
  const id=url.searchParams.get('id')??'';
  const attempt={
