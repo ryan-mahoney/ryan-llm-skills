@@ -16,7 +16,7 @@ import { homedir, hostname, tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { newPackage } from "../spec-location/index.mjs";
-import { launchAssignment, resolveAssignment, resolveTarget } from "./assignments.mjs";
+import { launchAssignment, prepareAssignmentSpecTarget, resolveAssignment, resolveTarget } from "./assignments.mjs";
 import { fetchWorkspace } from "./store.mjs";
 import { createReferenceCatalog } from "./references.mjs";
 
@@ -54,6 +54,8 @@ async function tempRoot(t) {
 async function makeRepo(directory, remote = null) {
   await mkdir(directory, { recursive: true });
   await git(directory, ["init", "--quiet"]);
+  // Spec worktree preparation branches from HEAD, so the fixture needs one commit.
+  await git(directory, ["commit", "--quiet", "--allow-empty", "-m", "init"]);
   if (remote !== null) await git(directory, ["remote", "add", "origin", remote]);
   return realpath(directory);
 }
@@ -345,6 +347,8 @@ test("assignment context names the spec package and its first command, or states
   const packageDirectory = created.locations.package_dir;
 
   const workspacePhysical = (await fetchWorkspace(storageRoot, "context-workspace")).directory;
+  // Resolution reads the prepared package worktree, as the dashboard's preview does.
+  await prepareAssignmentSpecTarget({ storageRoot, workspace_id: "context-workspace", target: "app", specPackage: packageDirectory });
   const base = {
     workspace_id: "context-workspace",
     storageRoot,
@@ -379,7 +383,10 @@ test("assignment context names the spec package and its first command, or states
   assert.ok(bare.includes(`\n- Workflow: wf-1.\n- Retries assignment ${supersededId}.\n\nRequest\n`));
   assert.ok(bare.includes(`- Brief: ${workspacePhysical}/briefs/brief.md.`));
 
-  await assertNoWrites(workspaceDirectory, storageRoot);
+  // Resolution itself publishes nothing; only the explicit preparation above
+  // held the root claim (which creates .sentinel) and the worktree.
+  await assert.rejects(lstat(join(workspaceDirectory, "assignments")), { code: "ENOENT" });
+  await assert.rejects(lstat(join(workspaceDirectory, "sessions")), { code: "ENOENT" });
 });
 
 test("assignment resolution refuses missing not_git invalid UUID and skill escape without writes", async (t) => {
