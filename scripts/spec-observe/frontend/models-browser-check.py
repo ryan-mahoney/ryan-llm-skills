@@ -29,7 +29,7 @@ from urllib.parse import urlencode
 from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--case', choices=['models', 'picker', 'assignment', 'conversation'], default='models')
+parser.add_argument('--case', choices=['models', 'picker', 'assignment', 'conversation', 'integrated', 'host-parser'], default='models')
 parser.add_argument('--reference-dir', default=None)
 options = parser.parse_args()
 case = options.case
@@ -41,7 +41,8 @@ checkout = root.parents[2]
 evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-models-evidence'))
 browser_evidence = evidence / 'browser'
 browser_evidence.mkdir(parents=True, exist_ok=True)
-receipt_path = evidence / 'step-009-models-result.json' if case == 'conversation' else (evidence / 'step-008-models-result.json' if case == 'assignment' else (evidence / 'step-006-models-result.json' if case == 'picker' else evidence / 'step-005-models-result.json'))
+evidence_file = evidence / 'step-010-models-result.json' if case in ('integrated', 'host-parser') else (evidence / 'step-009-models-result.json' if case == 'conversation' else (evidence / 'step-008-models-result.json' if case == 'assignment' else (evidence / 'step-006-models-result.json' if case == 'picker' else evidence / 'step-005-models-result.json')))
+receipt_path = evidence_file
 started = time.monotonic()
 
 report = {
@@ -78,6 +79,30 @@ def write_receipt():
     temporary = receipt_path.with_name(receipt_path.name + '.tmp')
     temporary.write_text(json.dumps(report, indent=2) + '\n')
     os.replace(temporary, receipt_path)
+
+def update_step10_receipt(section, payload):
+    """Read-merge-write the canonical EV-10 receipt under a cases map."""
+    canonical = evidence / 'step-010-models-result.json'
+    if canonical.exists():
+        try:
+            data = json.loads(canonical.read_text())
+        except (json.JSONDecodeError, OSError):
+            data = {}
+    else:
+        data = {}
+    data.setdefault('cases', {})[section] = payload
+
+    git_output = subprocess.run(['git', '-C', str(checkout), 'rev-parse', 'HEAD'], capture_output=True, text=True)
+    data['observedCommit'] = git_output.stdout.strip() if git_output.returncode == 0 else None
+    git_dirty = subprocess.run(['git', '-C', str(checkout), 'status', '--porcelain'], capture_output=True, text=True)
+    data['dirty'] = bool(git_dirty.stdout.strip())
+
+    both = 'integrated' in data.get('cases', {}) and 'hostParser' in data.get('cases', {})
+    data['status'] = 'passed' if (both and all(c.get('status') == 'passed' for c in data.get('cases', {}).values())) else 'failed'
+
+    temporary = canonical.with_name(canonical.name + '.tmp')
+    temporary.write_text(json.dumps(data, indent=2) + '\n')
+    os.replace(temporary, canonical)
 
 
 def run(url, page):
@@ -1245,6 +1270,9 @@ def run_assignment(url, page):
 
 def main():
     global fixture, reference_server, browser, context, fixture_info
+    if case == 'host-parser':
+        run_host_parser()
+        return
     fixture = subprocess.Popen(
         ['node', str(root / 'browser-fixture.mjs')],
         env={**os.environ, 'SENTINEL_MODELS': '1', **planned_env},
@@ -1282,10 +1310,14 @@ def main():
             page.on('pageerror', lambda e: report['pageErrors'].append(str(e)))
             page.on('console', lambda c: report['consoleErrors'].append(c.text) if c.type == 'error' else None)
             page.on('requestfailed', lambda r: report['requestFailures'].append(r.url))
-            run_conversation(fixture_url, page) if case == 'conversation' else run_picker(fixture_url, page) if case == 'picker' else run_assignment(fixture_url, page) if case == 'assignment' else run(fixture_url, page)
+            if case == 'integrated':
+                run_integrated(fixture_url, page)
+            else:
+                run_conversation(fixture_url, page) if case == 'conversation' else run_picker(fixture_url, page) if case == 'picker' else run_assignment(fixture_url, page) if case == 'assignment' else run(fixture_url, page)
     finally:
         report['cleanup'] = cleanup
-        write_receipt()
+        if case in ('models', 'picker', 'assignment', 'conversation'):
+            write_receipt()
         print(json.dumps({
             'status': report['status'],
             'elapsed_seconds': round(time.monotonic() - started, 3),
@@ -1294,6 +1326,427 @@ def main():
             'receipt_path': str(receipt_path),
             'dirty': report['dirty'],
         }, indent=2))
+
+
+def run_host_parser():
+    """Run Node to parse the installed catalog and build the host-parser payload."""
+    checkout_path = str(checkout)
+    routes_path = str(checkout / 'scripts' / 'spec-observe' / 'model-routes.mjs')
+    node_code = r'''
+import { createModelCatalog } from "__ROUTES_PATH__";
+(async () => {
+  const start = Date.now();
+  try {
+    const { state, host, models, read_at, providers } = await createModelCatalog().read();
+    const slashModels = models.filter(m => m.model.includes('/')).length;
+    const samplePairs = models.slice(0, 8).map(m => `${m.provider}/${m.model}`);
+    const distinctPairs = new Set(models.map(m => m.provider + '\u0000' + m.model)).size;
+    const payload = {
+      state,
+      host,
+      read_at,
+      count: models.length,
+      providers,
+      distinctPairs,
+      slashModels,
+      samplePairs,
+      elapsedMs: Date.now() - start,
+      sourceRevision: '',
+      candidateDirty: false,
+      failures: []
+    };
+    if (state !== 'ready') payload.failures.push(`state is '${state}', expected 'ready'`);
+    if (models.length === 0) payload.failures.push('count is 0');
+    if (providers === 0) payload.failures.push('providers is 0');
+    for (const m of models) {
+      if (!m.provider || !m.model) payload.failures.push(`missing provider/model: ${JSON.stringify(m)}`);
+      for (const c of [m.provider, m.model]) {
+        for (const ch of c) { if (ch.charCodeAt(0) <= 32) { payload.failures.push(`invalid char in ${ch}`); break; } }
+      }
+      if (m.provider.startsWith('-')) payload.failures.push(`provider starts with -`);
+      if (m.model.startsWith('-')) payload.failures.push(`model starts with -`);
+      if (!/^\d+(?:\.\d+)?[KM]?$/.test(m.context)) payload.failures.push(`invalid context: ${m.context}`);
+      if (!/^\d+(?:\.\d+)?[KM]?$/.test(m.max_out)) payload.failures.push(`invalid max_out: ${m.max_out}`);
+      if (typeof m.thinking !== 'boolean') payload.failures.push(`thinking is not boolean: ${m.thinking}`);
+      if (typeof m.images !== 'boolean') payload.failures.push(`images is not boolean: ${m.images}`);
+      if (!/^[^/]*$/.test(m.provider)) payload.failures.push(`provider contains /`);
+    }
+    const seen = new Set();
+    for (const m of models) {
+      const key = `${m.provider}\u0000${m.model}`;
+      if (seen.has(key)) payload.failures.push(`duplicate: ${key}`);
+      seen.add(key);
+    }
+    payload.status = payload.failures.length === 0 ? 'passed' : 'failed';
+    console.log(JSON.stringify({ result: payload, elapsedMs: Date.now() - start }));
+  } catch (e) {
+    console.log(JSON.stringify({ result: { state: 'error', host: '', count: 0, failures: [e.message], status: 'failed' }, elapsedMs: Date.now() - start }));
+  }
+})();
+'''.replace('__ROUTES_PATH__', routes_path);
+    result = subprocess.run(['node', '--input-type=module', '--eval', node_code], capture_output=True, text=True, cwd=checkout_path)
+    try:
+        output = json.loads(result.stdout)
+    except (json.JSONDecodeError, ValueError):
+        output = {'result': {'state': 'error', 'host': '', 'count': 0, 'failures': ['failed to parse node output'], 'status': 'failed'}}
+    data = output.get('result', {})
+    data['sourceRevision'] = subprocess.run(['git', '-C', checkout_path, 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+    data['candidateDirty'] = bool(subprocess.run(['git', '-C', checkout_path, 'status', '--porcelain'], capture_output=True, text=True).stdout.strip())
+    payload = {
+        'state': data.get('state', ''),
+        'host': data.get('host', ''),
+        'read_at': data.get('read_at', ''),
+        'count': data.get('count', 0),
+        'providers': data.get('providers', 0),
+        'distinctPairs': data.get('distinctPairs', 0),
+        'slashModels': data.get('slashModels', 0),
+        'samplePairs': data.get('samplePairs', []),
+        'elapsedMs': data.get('elapsedMs', 0),
+        'sourceRevision': data.get('sourceRevision', ''),
+        'candidateDirty': data.get('candidateDirty', False),
+        'failures': data.get('failures', []),
+        'status': data.get('status', 'failed')
+    }
+    update_step10_receipt('hostParser', payload)
+
+
+def run_integrated(url, page):
+    """Run the integrated workflow scenarios."""
+    global reference_server
+
+    def control(action, value=''):
+        response = context.request.get(url + '/__fixture/control?action=' + action + '&value=' + value)
+        assert response.ok
+        return response.json()
+
+    def posts_of(name):
+        return [p for p in control('')['posts'] if p['name'] == name]
+
+    def goto_new():
+        page.goto(url + '/#/conversations?ws=fixture&tab=new', wait_until='domcontentloaded')
+        page.wait_for_selector('dialog#thread-new-dialog', timeout=5000)
+
+    def cap_integrated(name, widths=(1280, 1600)):
+        for width in widths:
+            page.set_viewport_size({'width': width, 'height': 900})
+            page.wait_for_timeout(200)
+            path = browser_evidence / f'integrated-{name}@{width}.png'
+            page.screenshot(path=str(path))
+            report['captures'].append(str(path))
+
+    def choose(model):
+        page.locator('#thread-new-model').click()
+        page.wait_for_selector('#thread-new-model-list')
+        page.locator('#thread-new-model-list [role="option"]').filter(has_text=model).first.click()
+        page.wait_for_timeout(200)
+
+    def choose_launch(model):
+        page.locator('#launch-model').click()
+        page.wait_for_selector('#launch-model-list')
+        page.locator('#launch-model-list [role="option"]').filter(has_text=model).first.click()
+        page.wait_for_timeout(200)
+
+    def open_picker():
+        page.locator('#thread-new-model').click()
+        page.wait_for_selector('#thread-new-model-list')
+
+    def close_picker():
+        if page.locator('#thread-new-model-list').count() > 0:
+            page.keyboard.press('Escape')
+            page.wait_for_selector('#thread-new-model-list', state='hidden', timeout=1000)
+
+    def model_line():
+        line = page.locator('.model-line').first
+        return line.inner_text() if line.count() > 0 else ''
+
+    def brief():
+        page.goto(url + '/#/launch?' + urlencode({'ws': 'fixture', 'target': 'fixture-repo'}), wait_until='domcontentloaded')
+        page.wait_for_selector('#launch-model')
+
+    def review_route():
+        page.goto(url + '/#/launch?' + urlencode({'ws': 'fixture', 'tab': 'review', 'target': 'fixture-repo'}), wait_until='domcontentloaded')
+
+    def model_fact():
+        return page.locator('#launch-review .launch-contract [data-fact=model] dd')
+
+    def cap_assignment(name):
+        for width in (1280, 1600):
+            page.set_viewport_size({'width': width, 'height': 900})
+            page.wait_for_timeout(200)
+            path = browser_evidence / f'assignment-{name}@{width}.png'
+            page.screenshot(path=str(path))
+            report['captures'].append(str(path))
+
+    def fill_and_save(title, content):
+        page.locator('#launch-brief-title').fill(title)
+        page.locator('#launch-brief-content').fill(content)
+        page.locator('#launch-save').click()
+
+    def passed(label):
+        report['scenarios'].append(label)
+
+    def capture_references():
+        reference_captures = []
+        if reference_dir:
+            reference_root = reference_dir
+            assert (reference_root / 'vendor' / 'tailwind.js').is_file()
+            global reference_server
+            reference_server = ThreadingHTTPServer(('127.0.0.1', 0), partial(QuietRequestHandler, directory=str(reference_root)))
+            port = reference_server.server_address[1]
+            reference_thread = threading.Thread(target=reference_server.serve_forever, daemon=True)
+            reference_thread.start()
+            files = [
+                '12-thread-model-picker.html',
+                '13-assignment-model-picker.html',
+                '16-conversation-model.html'
+            ]
+            ref_page = context.new_page()
+            ref_page.on('pageerror', lambda e: report['pageErrors'].append(str(e)))
+            for f in files:
+                for width in (1280, 1600):
+                    if not (reference_root / 'screens' / f).is_file():
+                        continue
+                    ref_page.set_viewport_size({'width': width, 'height': 900})
+                    ref_page.goto(f'http://127.0.0.1:{port}/screens/{f}')
+                    ref_page.wait_for_timeout(300)
+                    path = browser_evidence / f'reference-{f.replace(".html", "")}@{width}.png'
+                    ref_page.screenshot(path=str(path))
+                    reference_captures.append(str(path))
+            ref_page.close()
+            reference_server.shutdown()
+        return reference_captures
+
+    reference_captures = capture_references()
+    scenarios_passed = True
+
+    # Disable stale-launch so the reviewed launch can succeed
+    control('stale-launch', 'false')
+
+    try:
+        # 1. preference-enable
+        page.goto(url + '/#/models', wait_until='domcontentloaded')
+        zai_switch = page.locator('input.switch[aria-label="Preferred: glm-4.7 via zai"]')
+        assert zai_switch.count() > 0
+        assert not zai_switch.is_checked()
+        zai_switch.click()
+        page.wait_for_timeout(300)
+        assert page.locator('input.switch[aria-label="Preferred: glm-4.7 via zai"]:checked').count() >= 1
+        cap_integrated('preference-enabled')
+        passed('preference-enable')
+
+        # 2. picker-includes-without-reload
+        page.goto(url + '/#/conversations?ws=fixture&tab=new', wait_until='domcontentloaded')
+        page.wait_for_selector('dialog#thread-new-dialog')
+        page.locator('#thread-new-model').click()
+        page.wait_for_selector('#thread-new-model-list')
+        opts = page.locator('#thread-new-model-list [role="option"]').filter(has_text='glm-4.7')
+        assert opts.count() > 0
+        first_opt = opts.first
+        assert first_opt.locator('.mprov').text_content().strip() == 'zai'
+        page.keyboard.press('Escape')
+        page.wait_for_timeout(200)
+        page.goto(url + '/#/launch?ws=fixture&target=fixture-repo', wait_until='domcontentloaded')
+        page.locator('#launch-model').click()
+        page.wait_for_selector('#launch-model-list')
+        launch_opts = page.locator('#launch-model-list [role="option"]').filter(has_text='glm-4.7')
+        assert launch_opts.count() > 0
+        launch_opt = launch_opts.first
+        assert launch_opt.locator('.mprov').text_content().strip() == 'zai'
+        page.keyboard.press('Escape')
+        cap_integrated('pickers-shared-list')
+        passed('picker-includes-without-reload')
+
+        # 3. create-explicit
+        goto_new()
+        choose('glm-4.7')
+        with page.expect_response('**/api/thread/create') as response:
+            page.locator('#thread-create').click()
+        assert response.value.ok
+        created = posts_of('create')[-1]
+        assert created['input'].get('model') == {'provider': 'zai', 'model': 'glm-4.7'}
+        assert control('')['createdThreads'][-1]['model'] == {'provider': 'zai', 'model': 'glm-4.7'}
+        created_id = created['result']['thread_id']
+        page.wait_for_url(re.compile(r'#/conversations\?ws=fixture&id=' + re.escape(created_id)))
+        page.wait_for_selector('.model-line')
+        assert 'glm-4.7' in model_line() and 'zai' in model_line()
+        cap_integrated('created-header')
+        passed('create-explicit')
+
+        # 4. create-default
+        goto_new()
+        expect(page.locator('#thread-new-model')).to_contain_text('Pi default')
+        with page.expect_response('**/api/thread/create') as default_response:
+            page.locator('#thread-create').click()
+        assert default_response.value.ok
+        default_created = posts_of('create')[-1]
+        assert 'model' not in default_created['input']
+        page.wait_for_url(re.compile(r'#/conversations\?ws=fixture&id=' + re.escape(default_created['result']['thread_id'])))
+        page.wait_for_selector('.model-line')
+        assert 'Pi default' in model_line()
+        cap_integrated('default-header')
+        passed('create-default')
+
+        # 5. assignment-default
+        brief()
+        expect(page.locator('#launch-model')).to_contain_text('Pi default')
+        fill_and_save('Test', 'Test')
+        page.locator('#launch-review .launch-contract').wait_for(state='visible')
+        assert 'Pi default' in model_fact().text_content()
+        cap_integrated('assignment-default')
+        passed('assignment-default')
+
+        # 6. assignment-explicit-review
+        page.reload(wait_until='domcontentloaded')
+        brief()
+        choose_launch('glm-4.7')
+        fill_and_save('Test', 'Test')
+        page.locator('#launch-review .launch-contract').wait_for(state='visible')
+        assert 'glm-4.7' in model_fact().text_content() and 'zai' in model_fact().text_content()
+        last_preview = posts_of('dispatchPreview')[-1]['input']
+        assert last_preview.get('provider') == 'zai' and last_preview.get('model') == 'glm-4.7'
+        cap_integrated('assignment-review')
+        passed('assignment-explicit-review')
+
+        # 7. approval-expiry
+        page.locator('#launch-assignment-edit').click()
+        page.wait_for_selector('#launch-model')
+        choose_launch('claude-haiku-5-5')
+        page.goto(url + '/#/agents?ws=fixture')
+        review_route()
+        page.locator('#launch-review-error').wait_for(state='visible')
+        assert 'model' in page.locator('#launch-review-error').text_content().lower()
+        assert page.locator('#launch-assignment-launch').count() == 0
+        cap_integrated('approval-expired')
+        passed('approval-expiry')
+
+        # 8. assignment-launch
+        page.reload(wait_until='domcontentloaded')
+        brief()
+        choose_launch('glm-4.7')
+        fill_and_save('Launch with model', 'Test')
+        page.locator('#launch-review .launch-contract').wait_for(state='visible')
+        assert 'glm-4.7' in model_fact().text_content() and 'zai' in model_fact().text_content()
+        before_launch = len(posts_of('dispatchLaunch'))
+        page.locator('#launch-assignment-launch').click()
+        page.locator('#launch-result-facts').wait_for(state='visible')
+        assert len(posts_of('dispatchLaunch')) == before_launch + 1
+        last_launch = posts_of('dispatchLaunch')[-1]
+        assert last_launch['input'].get('provider') == 'zai' and last_launch['input'].get('model') == 'glm-4.7'
+        entry = next((d for d in control('')['resolverDiagnostics'] if d.get('name') == 'dispatchLaunch'), None)
+        assert entry is not None and entry.get('matched') is True
+        cap_integrated('assignment-launched')
+        passed('assignment-launch')
+
+        # 9. preference-remove-thread-stable
+        page.goto(url + '/#/models', wait_until='domcontentloaded')
+        page.locator('input.switch[aria-label="Preferred: glm-4.7 via zai"]').first.click()
+        page.wait_for_timeout(300)
+        assert not page.locator('input.switch[aria-label="Preferred: glm-4.7 via zai"]').first.is_checked()
+        page.goto(url + f'/#/conversations?ws=fixture&id={created_id}', wait_until='domcontentloaded')
+        page.wait_for_selector('.model-line')
+        assert 'glm-4.7' in model_line() and 'zai' in model_line()
+        cap_integrated('preference-removed-thread-stable')
+        passed('preference-remove-thread-stable')
+
+        # 10. manage-return-draft
+        page.goto(url + '/#/conversations?ws=fixture&tab=new', wait_until='domcontentloaded')
+        page.wait_for_selector('dialog#thread-new-dialog')
+        choose('deepseek-v4-pro')
+        open_picker()
+        page.locator('#thread-new-model-manage').click()
+        page.wait_for_timeout(300)
+        assert '/#/models' in page.url
+        page.goto(url + '/#/conversations?ws=fixture&tab=new', wait_until='domcontentloaded')
+        assert 'deepseek-v4-pro' in page.locator('#thread-new-model').text_content()
+        cap_integrated('manage-return-draft')
+        passed('manage-return-draft')
+
+        # 11. selected-missing
+        page.locator('#thread-new-model').click()
+        page.wait_for_selector('#thread-new-model-list')
+        page.locator('#thread-new-model-list [role="option"]').filter(has_text='deepseek-v4-pro').first.click()
+        page.wait_for_timeout(200)
+        control('models-catalog-drop', 'deepseek|deepseek-v4-pro')
+        open_picker()
+        opt = page.locator('#thread-new-model-list [role="option"]').filter(has_text='deepseek-v4-pro').first
+        expect(opt).to_have_attribute('aria-disabled', 'true')
+        expect(opt.locator('.why')).to_contain_text('Not in fixture-host catalog')
+        close_picker()
+        before = len(posts_of('create'))
+        page.locator('#thread-create').click()
+        page.wait_for_selector('.mfield .field-error', state='visible')
+        assert 'is not in the fixture-host catalog' in page.locator('.mfield .field-error').text_content()
+        expect(page.locator('#thread-new-model')).to_be_focused()
+        assert len(posts_of('create')) == before
+        assert 'deepseek-v4-pro' in page.locator('#thread-new-model').text_content()
+        control('models-catalog-drop', '')
+        cap_integrated('selected-missing')
+        passed('selected-missing')
+
+        # 12. observer
+        control('observer', 'true')
+        page.goto(url + '/#/models', wait_until='domcontentloaded')
+        expect(page.locator('.banner:has-text("viewed but not changed")')).to_be_visible()
+        assert page.locator('input.switch:disabled').count() >= 1
+        cap_integrated('observer')
+        control('observer', 'false')
+        passed('observer')
+
+        if reference_dir:
+            assert len(reference_captures) == 6, f'expected 6 reference captures, got {len(reference_captures)}'
+
+        report['visual'] = {
+            'route': '#/models + /conversations + /launch',
+            'widths': [1280, 1600],
+            'productionCaptures': report['captures'],
+            'referenceCaptures': reference_captures,
+        }
+
+        assert not report.get('failures'), report.get('failures')
+        assert not report['pageErrors']
+        report['status'] = 'passed'
+
+    except Exception as error:
+        report.setdefault('failures', []).append({
+            'scenario': 'integrated runtime error',
+            'error': str(error),
+            'traceback': traceback.format_exc(),
+        })
+
+    finally:
+        # Cleanup matching run_conversation
+        for r in held_routes:
+            try:
+                r.abort()
+            except:
+                pass
+        if reference_server:
+            reference_server.shutdown()
+        if context:
+            context.close()
+        if browser:
+            browser.close()
+        if fixture:
+            try:
+                fixture.terminate()
+                for _ in range(10):
+                    if fixture.poll() is not None:
+                        break
+                    time.sleep(0.5)
+                if fixture.poll() is None:
+                    fixture.kill()
+            except:
+                pass
+        cleanup['fixtureTerminated'] = True
+        cleanup['browserClosed'] = True
+        if fixture_info.get('root'):
+            try:
+                shutil.rmtree(fixture_info['root'])
+                cleanup['temporaryFixtureRootRemoved'] = fixture_info['root']
+            except:
+                pass
+        report['cleanup'] = cleanup
+        update_step10_receipt('integrated', report.copy())
 
 
 if __name__ == '__main__':
