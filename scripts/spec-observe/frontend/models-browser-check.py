@@ -970,6 +970,32 @@ def run_conversation(url, page):
             'error': str(error),
             'traceback': traceback.format_exc(),
         })
+    finally:
+        if reference_server:
+            reference_server.shutdown()
+        if context:
+            context.close()
+        if browser:
+            browser.close()
+        if fixture:
+            try:
+                fixture.terminate()
+                for _ in range(10):
+                    if fixture.poll() is not None:
+                        break
+                    time.sleep(0.5)
+                if fixture.poll() is None:
+                    fixture.kill()
+            except:
+                pass
+        cleanup['fixtureTerminated'] = True
+        cleanup['browserClosed'] = True
+        if fixture_info.get('root'):
+            try:
+                shutil.rmtree(fixture_info['root'])
+                cleanup['temporaryFixtureRootRemoved'] = fixture_info['root']
+            except:
+                pass
 
 
 def run_assignment(url, page):

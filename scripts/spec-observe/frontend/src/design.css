@@ -467,7 +467,7 @@ th.col-action,td.col-action{width:148px;white-space:nowrap}
 .mopt.default .mid{font-family:var(--ds-sans);font-weight:600}
 .mlist .mfoot{border-top:1px solid var(--ds-line-2);margin-top:4px;padding:0 12px}
 .mlist .mnote{padding:10px 12px;font-size:13px;color:var(--ds-muted);border-top:1px solid var(--ds-line-2)}
-.model-line{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;font-size:13px;color:var(--ds-muted)}
+.model-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px;font-size:13px;color:var(--ds-muted)}
 .model-line .mid{font-family:var(--ds-mono);color:var(--ds-ink-2)}
 .model-line .text-link{background:none;border:0;border-radius:0;padding:0;color:var(--ds-accent-text)}
 .model-line .text-link:hover{text-decoration:underline}
