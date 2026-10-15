@@ -28,9 +28,10 @@ The landing case drives the built App at empty and unknown hashes to prove
 Next steps is the live All-workspaces landing, that the rail waiting badge
 matches only a trustworthy scoped scan (invariant under filters/queries,
 absent at zero/failure and after import), that import lands Specs with
-polling stopped, and that every rail entry mounts only its own adapter. It
-derives its expected badge count from raw fixture responses only; no worker
-is started and no operator storage is touched.
+polling stopped, and that every rail entry mounts only its own
+adapter-owned region with fixture content. It derives its expected badge
+count from raw fixture responses only; no worker is started and no operator
+storage is touched.
 
 Each case writes SENTINEL_EVIDENCE_DIR/report.json atomically with the
 observed revision/dirty, elapsed seconds, errors, scenarios and capture
@@ -1263,6 +1264,32 @@ def run_landing_case(report: dict, fixture: subprocess.Popen, receipt: dict, evi
             if time.monotonic() > deadline:
                 raise RuntimeError(f"landing case exceeded the {CASE_DEADLINE_SECONDS} second deadline at {label}")
 
+        # Adapter-owned roots and fixture-content probes. The hash, rail entry
+        # and h1 are produced by App/Shell from the route and registry label, so
+        # they stay true even when a registry entry renders the wrong component.
+        # Each root below is rendered only by its own destination adapter, and
+        # each probe uses real fixture content, so a misbound registry entry (a
+        # Specs/Epics render swap, for example) fails these assertions.
+        adapter_roots = {
+            "next-steps": ".next-steps-destination",
+            "specs": ".specs-destination",
+            "epics": ".epics-destination",
+            "agents": ".agents-list",
+            "conversations": ".conversations-destination",
+            "files": ".files-destination",
+            "designs": ".design-canvas",
+            "workspaces": ".workspace-destination",
+        }
+        adapter_probes = {
+            "specs": (".specs-destination .list-caption", "observed specs"),
+            "epics": (".epics-destination .list-caption", "epic record"),
+            "agents": (".agents-list", "11111111-2222-4333-8444-555555555555"),
+            "conversations": (".conversations-destination .thread-row", "Discussion one"),
+            "files": (".files-destination .file-record", "briefs/browser.md"),
+            "designs": (".design-canvas", "Screen 1"),
+            "workspaces": (".workspace-destination .record.selected", "Browser fixture"),
+        }
+
         def control(action=None, value=None, **extra):
             params = {}
             if action is not None:
@@ -1332,7 +1359,11 @@ def run_landing_case(report: dict, fixture: subprocess.Popen, receipt: dict, evi
                 assert actual_zero == 0, (label, actual_zero)
 
         def refresh_files() -> None:
-            button = page.locator(".list-refresh button, .full-page .ds-callout button").filter(has_text="Refresh files")
+            # A settled partial scan keeps its Refresh files action in the
+            # selected row's detail callout, not only in .full-page, so accept
+            # either notice location instead of depending on which scan
+            # generation rendered last.
+            button = page.locator(".list-refresh button, .ds-callout button").filter(has_text="Refresh files")
             expect(button.first).to_be_visible(timeout=20000)
             button.first.click()
 
@@ -1365,8 +1396,9 @@ def run_landing_case(report: dict, fixture: subprocess.Popen, receipt: dict, evi
                 page.goto(receipt["url"] + f"/#/{dest}", wait_until="domcontentloaded")
                 wait_for_hash_prefix(f"#/{dest}", f"{dest} hash visit")
                 expect(page.locator(f'.nav-item[data-area="{dest}"]')).to_have_attribute("aria-current", "page")
+                expect(page.locator(adapter_roots[dest])).to_be_visible(timeout=20000)
                 expect(page.locator("#main h1")).to_have_text(label)
-            report["scenarios"].append("Hash visits to #/specs and #/epics stay on those routes with their own rail entry current and their own adapter h1")
+            report["scenarios"].append("Hash visits to #/specs and #/epics stay on those routes with their own rail entry current, the matching adapter root mounted and the Shell h1 naming the route")
 
             # --- B. Badge truth from raw responses --------------------------- #
             check_deadline("badge-truth")
@@ -1412,7 +1444,9 @@ def run_landing_case(report: dict, fixture: subprocess.Popen, receipt: dict, evi
             assert "ws=fixture" in route_hash(), route_hash()
             expect(page.locator('.nav-item[data-area="specs"]')).to_have_attribute("aria-current", "page")
             assert page.locator("table.queue-table").count() == 0, "next-steps table must be absent on scoped Specs home"
-            report["scenarios"].append("With workspace fixture the brand opens #/specs?ws=fixture, marks Specs current and unmounts the next-steps table")
+            expect(page.locator(adapter_roots["specs"])).to_be_visible(timeout=20000)
+            expect(page.locator(adapter_probes["specs"][0]).first).to_contain_text(adapter_probes["specs"][1])
+            report["scenarios"].append("With workspace fixture the brand opens #/specs?ws=fixture, marks Specs current, mounts the Specs adapter with its observed-spec caption and unmounts the next-steps table")
 
             scope_select().select_option("")
             page.wait_for_timeout(300)
@@ -1481,11 +1515,18 @@ def run_landing_case(report: dict, fixture: subprocess.Popen, receipt: dict, evi
             for dest, label in (("specs", "Specs"), ("epics", "Epics"), ("agents", "Agents"), ("conversations", "Conversations"), ("files", "Files"), ("designs", "Designs"), ("workspaces", "Workspaces")):
                 page.locator(f'.nav-item[data-area="{dest}"]').click()
                 wait_for_hash_prefix(f"#/{dest}", f"rail {dest}")
-                expect(page.locator("#main h1")).to_have_text(label)
                 expect(page.locator(f'.nav-item[data-area="{dest}"]')).to_have_attribute("aria-current", "page")
+                expect(page.locator("#main h1")).to_have_text(label)
+                expect(page.locator(adapter_roots[dest])).to_be_visible(timeout=20000)
+                probe, expected = adapter_probes[dest]
+                expect(page.locator(probe).first).to_contain_text(expected)
+                # The route swaps bodies: no other adapter root may remain mounted.
+                for other, other_root in adapter_roots.items():
+                    if other != dest:
+                        assert page.locator(other_root).count() == 0, (dest, other, f"{other_root} still mounted on #/{dest}")
                 if dest in ("conversations", "files", "designs"):
                     assert "ws=fixture" in route_hash(), (dest, route_hash())
-            report["scenarios"].append("Each primary rail entry mounts only its own adapter: the hash keeps the destination, the current entry moves and the h1 names that destination")
+            report["scenarios"].append("Each rail entry renders its own adapter-owned region with fixture content (Specs observed-spec caption, Epics epic-record caption, Agents retained assignment row, Conversations thread, Files loaded filename, Designs screen canvas, Workspaces selected workspace record), leaves no other adapter body mounted and keeps ws=fixture on the scoped destinations")
 
             # --- H. Production captures -------------------------------------- #
             check_deadline("captures")
