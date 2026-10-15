@@ -5,10 +5,10 @@
 // async operations submit only through injectable final boundaries (defaults
 // wire api.ts postAudio/postJson and request-audio startCapture) and settle
 // captured immutable request snapshots, so an edited transcript, moved scope,
-// changed refs or a new request discards late successes AND late errors while
-// retaining the previous proposal marked stale. Audio clips stay in memory
-// only: nothing is persisted, and only an explicit discard clears clip bytes
-// and text. This module's core (store + derivations) is DOM-free,
+// changed refs, an accepted new recording or a new request discards late
+// successes AND late errors while retaining the previous proposal marked
+// stale. Audio clips stay in memory only: nothing is persisted, and only an
+// explicit discard clears clip bytes and text. This module's core (store + derivations) is DOM-free,
 // transport-free and Node-free.
 import { createSignal } from 'solid-js';
 import { HttpError, postAudio, postJson } from './api';
@@ -59,6 +59,7 @@ export type RequestWork = {
   stale: boolean;
   staleReason: string | null;
   clip: Float32Array | null;
+  clipNeedsTranscription: boolean;
   recording: boolean;
   signature: string | null;
   pending: RequestPending | null;
@@ -115,18 +116,38 @@ const sameContent = (snapshot: RequestSnapshot | null, content: RequestContent):
 const sameSnapshot = (a: RequestSnapshot | null, b: RequestSnapshot | null): boolean =>
   !!a && !!b && a.requestId === b.requestId && sameContent(a, b);
 
+// The owning route shapes: serveTranscribe replies {request_id, text, seconds}
+// and serveInterpret replies {request_id, resolution, candidates, clarification}.
+// Decode those fields explicitly so real speech, a real single-candidate
+// proposal and a real clarification survive; anything unrecognized is plain
+// conversation.
 const transcriptOf = (value: unknown): string =>
-  object(value) && typeof value.transcript === 'string' ? value.transcript : '';
+  object(value) && typeof value.text === 'string' ? value.text : '';
 
 const variantOf = (value: unknown): RequestResultVariant => {
-  const variant = object(value) ? value.variant : undefined;
-  if (variant === 'proposal' || variant === 'alternatives' || variant === 'clarification' || variant === 'conversation') return variant;
   const record = object(value) ? value : {};
-  if (list(record.candidates).length > 1) return 'alternatives';
-  if (typeof record.question === 'string' && record.question) return 'clarification';
-  if (record.proposal) return 'proposal';
-  return 'conversation';
+  const resolution = record.resolution;
+  if (resolution === 'clarification') return 'clarification';
+  if (resolution === 'proposal') return list(record.candidates).length > 1 ? 'alternatives' : 'proposal';
+  return 'conversation'; // 'unsupported' and unrecognized replies
 };
+
+// The shipped HTTP contracts: POST /api/request/transcribe?request_id=<uuid>
+// carries the mono PCM clip as its body, and POST /api/request/interpret
+// carries {request_id, workspace_id, transcript, context, resolved_refs}. The
+// scope's entity page becomes the navigation context and typed refs serialize
+// as their <kind>:<id> route strings.
+const transcribePath = (requestId: string): string => `/api/request/transcribe?request_id=${requestId}`;
+const interpretBodyOf = (snapshot: RequestSnapshot): RequestReply => ({
+  request_id: snapshot.requestId,
+  workspace_id: text(snapshot.scope?.workspace),
+  transcript: snapshot.transcript,
+  context: {
+    ...(snapshot.scope?.design ? { design: snapshot.scope.design } : {}),
+    ...(snapshot.scope?.spec ? { spec: snapshot.scope.spec } : {}),
+  },
+  resolved_refs: snapshot.refs.map(reference => `${reference.kind}:${reference.id}`),
+});
 
 const failureOf = (error: unknown, stage: 'transcribe' | 'interpret'): RequestFailure => {
   const code = (error as { code?: unknown } | null)?.code;
@@ -290,6 +311,7 @@ type RequestEntry = {
   stale: boolean;
   staleReason: string | null;
   clip: Float32Array | null;
+  clipNeedsTranscription: boolean;
   recording: boolean;
   signature: string | null;
   pending: RequestPending | null;
@@ -304,6 +326,20 @@ const primaryActionOf = (entry: RequestEntry): { enabled: boolean; reason: strin
 export function createRequestStore(options: RequestStoreOptions = {}): RequestStore {
   const entries = new Map<string, RequestEntry>();
   const handles = new Map<string, CaptureHandle>();
+  // Capture lifecycle ownership: one monotonic recording generation per entry.
+  // beginRecording mints it for its session; closePanel/discardRequest advance
+  // it to invalidate in-flight acquisitions and stops, so a late handle is
+  // cancelled and a late stop never restores discarded bytes. The acquiring
+  // latch keeps a single acquisition at a time so a second beginRecording
+  // cannot orphan the first handle.
+  const generations = new Map<string, number>();
+  const acquiring = new Map<string, number>();
+  const generationOf = (key: string): number => generations.get(key) ?? 0;
+  const newGeneration = (key: string): number => {
+    const generation = generationOf(key) + 1;
+    generations.set(key, generation);
+    return generation;
+  };
   const now = options.now ?? (() => Date.now());
   const [version, setVersion] = createSignal(0); // mounted readers subscribe to every entry transition
   const notify = (): void => { setVersion(current => current + 1); };
@@ -320,18 +356,19 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
       entry = {
         phase: 'ready', transcript: '', scope: key ? { workspace: key } : null, workspaceSelection: null,
         refs: [], requestId: crypto.randomUUID(), snapshot: null, result: null, failure: null,
-        stale: false, staleReason: null, clip: null, recording: false, signature: null,
-        pending: null, revision: 0,
+        stale: false, staleReason: null, clip: null, clipNeedsTranscription: false, recording: false,
+        signature: null, pending: null, revision: 0,
       };
       entries.set(key, entry);
     }
     return entry;
   };
 
-  // Every transcript/scope/ref change mints a new request identity, clears the
-  // captured snapshot (late replies become inapplicable) and marks a retained
-  // proposal stale with the primary action disabled. Failure state belongs to
-  // the old request and clears; clip and text survive every non-discard path.
+  // Every transcript/scope/ref change and every accepted recording mints a new
+  // request identity, clears the captured snapshot (late replies become
+  // inapplicable) and marks a retained proposal stale with the primary action
+  // disabled. Failure state belongs to the old request and clears; clip and
+  // text survive every non-discard path.
   const contentChanged = (entry: RequestEntry): void => {
     entry.revision += 1;
     entry.requestId = crypto.randomUUID();
@@ -370,7 +407,7 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
     };
     notify(); // mounted observers see the pending operation begin
     const complete = (outcome: PendingOutcome): void => {
-      if (entry.pending?.promise === promise) entry.pending = undefined; // clear only our own latch
+      if (entry.pending?.promise === promise) entry.pending = null; // clear only our own latch
       try {
         if (entries.get(key) === entry) settle(outcome);
       } finally {
@@ -427,14 +464,24 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
 
   const beginRecording = async (workspace: string): Promise<RequestWork> => {
     const entry = ensureEntry(workspace);
-    if (entry.recording) return view(entry);
+    if (entry.recording || acquiring.has(workspace)) return view(entry);
+    const generation = newGeneration(workspace);
+    acquiring.set(workspace, generation);
     const capture = options.capture ?? ((): Promise<CaptureHandle> => startCapture());
     try {
-      handles.set(workspace, await capture());
+      const handle = await capture();
+      if (generationOf(workspace) !== generation) {
+        handle.cancel(); // a later generation owns the entry: drop the late handle
+        return view(entry);
+      }
+      acquiring.delete(workspace);
+      handles.set(workspace, handle);
       entry.recording = true;
       entry.phase = 'recording';
       entry.failure = null;
     } catch (error) {
+      if (generationOf(workspace) !== generation) return view(entry); // stale failure
+      acquiring.delete(workspace);
       const code = (error as { code?: unknown } | null)?.code;
       entry.failure = code === 'mic-denied' ? 'mic-denied' : 'mic-unavailable';
       entry.phase = 'failure';
@@ -449,12 +496,22 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
     if (!handle) return view(entry);
     handles.delete(workspace);
     entry.recording = false;
+    const generation = generationOf(workspace);
     try {
       // stop() resolves and retains the downsampled clip (step-06 contract).
-      entry.clip = await handle.stop();
+      const clip = await handle.stop();
+      if (generationOf(workspace) !== generation) return view(entry); // discarded/closed: never restore
+      entry.clip = clip;
+      // This clip has not been transcribed yet; retained later only for retry.
+      entry.clipNeedsTranscription = true;
+      // Accepting a recording is a new request-content generation: late replies
+      // lose acceptance, a fresh identity is minted and retained results go
+      // stale, while an unchanged retry of this clip keeps the new identity.
+      contentChanged(entry);
       entry.phase = entry.result ? 'result' : 'ready';
     } catch (error) {
       // A cancelled handle drops clip bytes; a later stop() rejects 'cancelled'.
+      if (generationOf(workspace) !== generation) return view(entry);
       const code = (error as { code?: unknown } | null)?.code;
       if (code === 'mic-denied') entry.failure = 'mic-denied';
       else if (code !== 'cancelled') entry.failure = 'mic-unavailable';
@@ -481,19 +538,24 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
     entry.snapshot = accepted;
     entry.failure = null;
     const clip = entry.clip;
-    const transcribe = options.transcribe ?? ((body: Float32Array, _requestId: string, signal?: AbortSignal) =>
-      postAudio('/api/request/transcribe', body, token, signal));
+    const clipNeedsTranscription = entry.clipNeedsTranscription;
+    const transcribe = options.transcribe ?? ((body: Float32Array, requestId: string, signal?: AbortSignal) =>
+      postAudio(transcribePath(requestId), body, token, signal));
     const interpret = options.interpret ?? ((body: RequestSnapshot, signal?: AbortSignal) =>
-      postJson('/api/request/interpret', body, token, signal));
+      postJson('/api/request/interpret', interpretBodyOf(body), token, signal));
     // The captured snapshot alone owns acceptance; edits, scope/refs changes and
     // new requests move entry.snapshot and silently discard late outcomes.
     const isCurrent = (): boolean => entries.get(key) === entry && sameSnapshot(entry.snapshot, accepted);
     let stage: 'transcribe' | 'interpret' = 'interpret';
     const run = async (): Promise<RequestReply> => {
-      if (clip) {
+      if (clip && clipNeedsTranscription) {
         stage = 'transcribe';
         if (isCurrent()) { entry.phase = 'transcribing'; notify(); }
         const transcription = await transcribe(clip, requestId);
+        // The clip has been transcribed once; retained bytes serve explicit
+        // retry after a failed transcription and recovery only. They must not
+        // re-run (and overwrite operator-edited text) on later submissions.
+        if (entry.clip === clip) entry.clipNeedsTranscription = false;
         const spoken = transcriptOf(transcription);
         // The transcribed text joins the same request: identity is unchanged and
         // the snapshot moves together, keeping the interpret reply acceptable.
@@ -535,26 +597,33 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
     return view(entry);
   };
 
-  // Close while recording cancels the capture handle (tracks stop inside the
-  // request-audio cleanup); every other phase retains state and a pending
-  // request continues.
+  // Close while recording cancels the capture session (tracks stop inside the
+  // request-audio cleanup) and invalidates its generation so a late
+  // acquisition or stop cannot install results into the closed entry; every
+  // other phase retains state and a pending request continues.
   const closePanel = (workspace: string): RequestWork | undefined => {
     const entry = entries.get(workspace);
     if (!entry) return undefined;
+    newGeneration(workspace);
+    acquiring.delete(workspace);
     const handle = handles.get(workspace);
     if (handle) {
       handles.delete(workspace);
       handle.cancel();
       entry.recording = false;
-      if (entry.phase === 'recording') entry.phase = entry.result ? 'result' : 'ready';
-      notify();
     }
+    if (entry.phase === 'recording') entry.phase = entry.result ? 'result' : 'ready';
+    notify();
     return view(entry);
   };
 
-  // The only transition that clears audio clip bytes and typed text.
+  // The only transition that clears audio clip bytes and typed text; it also
+  // invalidates the recording generation so a late stop never restores the
+  // explicitly discarded bytes.
   const discardRequest = (workspace: string): RequestWork => {
     const entry = ensureEntry(workspace);
+    newGeneration(workspace);
+    acquiring.delete(workspace);
     const handle = handles.get(workspace);
     if (handle) {
       handles.delete(workspace);
@@ -563,6 +632,7 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
     }
     entry.transcript = '';
     entry.clip = null;
+    entry.clipNeedsTranscription = false;
     entry.result = null;
     entry.failure = null;
     entry.stale = false;

@@ -35,5 +35,8 @@ export async function postJson<T>(url: string, body: unknown, token: string, sig
   return readJson<T>(await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-Sentinel-Token':token},body:JSON.stringify(body),signal:signal ?? AbortSignal.timeout(30000)}));
 }
 export async function postAudio<T>(url: string, body: ArrayBuffer | Float32Array, token: string, signal?: AbortSignal): Promise<T> {
-  return readJson<T>(await fetch(url,{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Sentinel-Token':token},body:body,signal:signal ?? AbortSignal.timeout(70000)}));
+  // The wire body is the exact sample bytes; fetch BodyInit takes an
+  // ArrayBuffer-backed payload, so a typed-array view is copied byte-for-byte.
+  const payload = body instanceof Float32Array ? body.slice().buffer : body;
+  return readJson<T>(await fetch(url,{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Sentinel-Token':token},body:payload,signal:signal ?? AbortSignal.timeout(70000)}));
 }

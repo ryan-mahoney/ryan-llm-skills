@@ -1,8 +1,11 @@
-// Step 7 focused transport-boundary cases for request-state. Every case fakes
-// ONLY the final transport/media boundaries through createRequestStore options
-// (deferred interpret/transcribe promises and a fake capture handle); the real
-// store logic, snapshot acceptance, identity minting and derivations in
-// ./request-state run throughout. Case coverage maps to the three spec cases:
+// Step 7 focused transport-boundary cases for request-state. Cases fake
+// ONLY the final transport/media boundaries: either through createRequestStore
+// options (deferred interpret/transcribe promises and a fake capture handle) or,
+// for the default adapters, by controlling the final fetch boundary so the
+// route-contract serialization itself runs. The real store logic, snapshot
+// acceptance, identity minting and derivations in ./request-state run
+// throughout. Case coverage maps to the spec cases plus the step-007 review
+// fixes:
 // - "Real request store/transport snapshot discards stale successes AND errors
 //   after edit/scope/new request; unchanged retry keeps UUID."
 // - "Exact package owner/prepared coverage derive launchability/Open
@@ -10,6 +13,11 @@
 //   relevant-facts signature."
 // - "Failure and close retain transcript/clip; close recording cancels tracks;
 //   initial idle/typing works without speech setup."
+// - Default adapters translate the route contracts and decode production
+//   replies at the fetch boundary (review F1/F2).
+// - A retained clip transcribes once; corrected text is authoritative (F3).
+// - An accepted recording is a new request-content generation (F4).
+// - Deferred acquisition/stop completions are generation-bound (F5).
 // No case waits on real timers: a microtask flush drives the deferred pipeline.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -22,7 +30,7 @@ import {
   readinessSignature,
   signatureChanged,
 } from './request-state';
-import type { RequestReply, RequestSnapshot, SignatureFacts } from './request-state';
+import type { CaptureHandle, RequestReply, RequestSnapshot, SignatureFacts } from './request-state';
 
 type Deferred<T> = {
   promise: Promise<T>;
@@ -47,6 +55,43 @@ const flush = async (): Promise<void> => {
   await Promise.resolve();
   await Promise.resolve();
 };
+
+// Production-shaped route replies (scripts/spec-observe/request-routes.mjs):
+// serveTranscribe replies {request_id, text, seconds}; serveInterpret replies
+// {request_id, resolution, candidates, unresolved_references, clarification,
+// catalog} with resolution proposal|clarification|unsupported.
+const WIRE_ID = '11111111-1111-4111-8111-111111111111';
+const wireCatalog = { read_at: '2025-01-01T00:00:00Z', omitted: 0, errors: [] };
+const wireCandidate = {
+  action: 'implement_spec', workspace: 'demo', entity: 'spec:alpha',
+  uses: [], resolved_refs: [], research: { code: 'unspecified' },
+  goal: 'Implement alpha', constraints: [],
+};
+const wireProposal = (requestId: string) => ({
+  request_id: requestId,
+  resolution: 'proposal',
+  candidates: [wireCandidate],
+  unresolved_references: [],
+  clarification: null,
+  catalog: wireCatalog,
+});
+const wireClarification = (requestId: string) => ({
+  request_id: requestId,
+  resolution: 'clarification',
+  candidates: [],
+  unresolved_references: [],
+  clarification: { question: 'Which package owns this?', options: ['spec:alpha', 'spec:beta'] },
+  catalog: wireCatalog,
+});
+const wireUnsupported = (requestId: string) => ({
+  request_id: requestId,
+  resolution: 'unsupported',
+  candidates: [],
+  unresolved_references: [],
+  clarification: null,
+  catalog: wireCatalog,
+});
+const wireSpeech = (requestId: string, speech: string) => ({ request_id: requestId, text: speech, seconds: 1.5 });
 
 test('Real request store/transport snapshot discards stale successes AND errors after edit/scope/new request; unchanged retry keeps UUID.', async () => {
   const ws = 'demo';
@@ -84,7 +129,7 @@ test('Real request store/transport snapshot discards stale successes AND errors 
   store.changeScope(ws, { workspace: ws, spec: 'specs/alpha' });
   const scopeId = store.getRequest(ws)!.requestId!;
   assert.notEqual(scopeId, firstId);
-  const firstReply = { variant: 'proposal', action: 'launchable' };
+  const firstReply = wireProposal(firstId);
   deferreds[0].resolve(firstReply);
   assert.equal(await first, firstReply); // the shared promise still resolves
   let state = store.getRequest(ws)!;
@@ -109,7 +154,7 @@ test('Real request store/transport snapshot discards stale successes AND errors 
   // action is disabled with a reason string.
   const third = store.submitRequest(ws, 'token');
   await flush();
-  deferreds[2].resolve({ variant: 'proposal', action: 'launchable' });
+  deferreds[2].resolve(wireProposal('22222222-2222-4222-8222-222222222222'));
   await third;
   state = store.getRequest(ws)!;
   assert.equal(state.result?.variant, 'proposal');
@@ -131,13 +176,13 @@ test('Real request store/transport snapshot discards stale successes AND errors 
   const fourthTap = store.submitRequest(ws, 'token');
   assert.strictEqual(fourthTap, fourth);
   assert.equal(interpretCalls.length, 4); // joined, not re-sent
-  deferreds[3].resolve({ variant: 'conversation' });
+  deferreds[3].resolve(wireUnsupported(WIRE_ID));
   await fourth;
   const fifth = store.submitRequest(ws, 'token'); // unchanged retry after settle
   await flush();
   assert.equal(store.getRequest(ws)!.requestId, fourthId);
   assert.equal(interpretCalls.length, 5);
-  deferreds[4].resolve({ variant: 'conversation' });
+  deferreds[4].resolve(wireUnsupported(WIRE_ID));
   await fifth;
 
   // A refs change mints a fresh request identity.
@@ -148,7 +193,7 @@ test('Real request store/transport snapshot discards stale successes AND errors 
   const sixth = store.submitRequest(ws, 'token');
   await flush();
   store.discardRequest(ws);
-  deferreds[5].resolve({ variant: 'proposal', action: 'launchable' });
+  deferreds[5].resolve(wireProposal(WIRE_ID));
   await sixth;
   state = store.getRequest(ws)!;
   assert.equal(state.result, null);
@@ -294,7 +339,7 @@ test('Failure and close retain transcript/clip; close recording cancels tracks; 
     },
     interpret: async (body) => {
       touched.interpret += 1;
-      return { variant: 'conversation', ...body } as RequestReply;
+      return wireUnsupported(body.requestId);
     },
   });
   const w = 'demo';
@@ -358,10 +403,299 @@ test('Failure and close retain transcript/clip; close recording cancels tracks; 
   await flush();
   pendingStore.closePanel(p);
   assert.equal(pendingStore.getRequest(p)!.pending !== null, true); // not cancelled
-  const reply = { variant: 'proposal', action: 'launchable' };
+  const reply = wireProposal(WIRE_ID);
   pendingReply.resolve(reply);
   assert.equal(await pending, reply);
   state = pendingStore.getRequest(p)!;
   assert.equal(state.result?.variant, 'proposal');
   assert.equal(state.transcript, 'Keep this draft.'); // retained across close
+});
+
+test('Default store adapters translate the route contracts and decode production replies at the fetch boundary.', async () => {
+  const clip = new Float32Array([0.5, -0.25, 0.125]);
+  const requests: { url: string; method: string; headers: Record<string, string>; body: unknown }[] = [];
+  const replies: unknown[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const headers = { ...((init?.headers ?? {}) as Record<string, string>) };
+    requests.push({ url: String(input), method: init?.method ?? 'GET', headers, body: init?.body });
+    const reply = replies.shift() ?? {};
+    return Promise.resolve({ ok: true, status: 200, json: async () => reply } as unknown as Response);
+  }) as unknown as typeof fetch;
+  try {
+    const store = createRequestStore({
+      // Only the media boundary is faked: transcribe/interpret stay the
+      // production defaults so their serialization is what runs.
+      capture: async () => ({ stop: async () => clip, cancel: () => undefined }),
+    });
+    const ws = 'demo';
+    store.changeScope(ws, { workspace: 'demo', design: 'designs/checkout' });
+    store.changeRefs(ws, [{ kind: 'spec', id: 'alpha' }, { kind: 'material', id: 'plans/plan.md' }]);
+    await store.beginRecording(ws);
+    await store.finishRecording(ws);
+    const requestId = store.getRequest(ws)!.requestId!;
+    replies.push(wireSpeech(requestId, 'Build the onboarding screens.'), wireProposal(requestId));
+    await store.submitRequest(ws, 'token');
+
+    // serveTranscribe contract: POST the clip's exact sample bytes with the
+    // request_id query parameter and the action token.
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].url, `/api/request/transcribe?request_id=${requestId}`);
+    assert.equal(requests[0].method, 'POST');
+    assert.equal(requests[0].headers['Content-Type'], 'application/octet-stream');
+    assert.equal(requests[0].headers['X-Sentinel-Token'], 'token');
+    assert.deepEqual(
+      new Uint8Array(requests[0].body as ArrayBuffer),
+      new Uint8Array(clip.buffer, clip.byteOffset, clip.byteLength),
+    );
+
+    // serveInterpret contract: POST {request_id, workspace_id, transcript,
+    // context, resolved_refs} with typed reference serialization — not the
+    // internal snapshot shape (requestId/scope/refs).
+    assert.equal(requests[1].url, '/api/request/interpret');
+    assert.equal(requests[1].method, 'POST');
+    assert.equal(requests[1].headers['Content-Type'], 'application/json');
+    assert.equal(requests[1].headers['X-Sentinel-Token'], 'token');
+    assert.deepEqual(JSON.parse(requests[1].body as string), {
+      request_id: requestId,
+      workspace_id: 'demo',
+      transcript: 'Build the onboarding screens.',
+      context: { design: 'designs/checkout' },
+      resolved_refs: ['spec:alpha', 'material:plans/plan.md'],
+    });
+
+    // The production speech reply decodes into the editable transcript and a
+    // single-candidate proposal decodes as 'proposal'.
+    const state = store.getRequest(ws)!;
+    assert.equal(state.transcript, 'Build the onboarding screens.');
+    assert.equal(state.result?.variant, 'proposal');
+
+    // Production clarification and unsupported replies decode to their
+    // variants at the same boundary.
+    store.editTranscript(ws, 'Build the onboarding screens and the audit trail.');
+    replies.push(wireClarification(store.getRequest(ws)!.requestId!));
+    await store.submitRequest(ws, 'token');
+    assert.equal(store.getRequest(ws)!.result?.variant, 'clarification');
+
+    store.editTranscript(ws, 'Tell me about the weather.');
+    replies.push(wireUnsupported(store.getRequest(ws)!.requestId!));
+    await store.submitRequest(ws, 'token');
+    assert.equal(store.getRequest(ws)!.result?.variant, 'conversation');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('A retained clip transcribes once; corrected text interprets without re-running speech; failed transcription retries explicitly.', async () => {
+  const clip = new Float32Array([0.1, 0.2]);
+  let transcribes = 0;
+  let failTranscriptions = 0;
+  let failInterpretations = 0;
+  const interpreted: string[] = [];
+  const store = createRequestStore({
+    capture: async () => ({ stop: async () => clip, cancel: () => undefined }),
+    transcribe: async () => {
+      transcribes += 1;
+      if (failTranscriptions > 0) {
+        failTranscriptions -= 1;
+        throw new HttpError(502, 'Speech transcription failed.', 'transcription-failed');
+      }
+      return wireSpeech('unused', 'onboarding');
+    },
+    interpret: async (body) => {
+      interpreted.push(body.transcript);
+      if (failInterpretations > 0) {
+        failInterpretations -= 1;
+        throw new HttpError(502, 'Request interpretation failed.', 'interpretation-failed');
+      }
+      return wireProposal(body.requestId);
+    },
+  });
+  const ws = 'demo';
+  await store.beginRecording(ws);
+  await store.finishRecording(ws);
+  await store.submitRequest(ws, 'token');
+  assert.equal(transcribes, 1);
+  assert.deepEqual(interpreted, ['onboarding']);
+
+  // The operator corrects the transcript; the retained clip must not
+  // overwrite it on the next submission.
+  store.editTranscript(ws, 'billing');
+  await store.submitRequest(ws, 'token');
+  assert.equal(transcribes, 1);
+  assert.deepEqual(interpreted, ['onboarding', 'billing']);
+
+  // An interpretation-only retry runs without requiring speech again.
+  failInterpretations = 1;
+  await assert.rejects(store.submitRequest(ws, 'token'));
+  await store.submitRequest(ws, 'token');
+  assert.equal(transcribes, 1);
+  assert.deepEqual(interpreted, ['onboarding', 'billing', 'billing', 'billing']);
+
+  // A failed transcription retries explicitly against the retained clip and
+  // the true retry keeps the clip's request identity.
+  failTranscriptions = 1;
+  store.discardRequest(ws);
+  await store.beginRecording(ws);
+  await store.finishRecording(ws);
+  const clipId = store.getRequest(ws)!.requestId!;
+  await assert.rejects(store.submitRequest(ws, 'token'));
+  assert.equal(store.getRequest(ws)!.failure, 'transcription-failed');
+  assert.strictEqual(store.getRequest(ws)!.clip, clip); // retained for retry
+  assert.equal(transcribes, 2);
+  await store.submitRequest(ws, 'token'); // explicit transcription retry
+  assert.equal(transcribes, 3);
+  assert.equal(store.getRequest(ws)!.transcript, 'onboarding');
+  assert.equal(store.getRequest(ws)!.requestId, clipId);
+});
+
+test('Accepting a new recording is a new request-content generation; a true retry of the same clip keeps its identity.', async () => {
+  const clips = [new Float32Array([1]), new Float32Array([2]), new Float32Array([3])];
+  let clipIndex = 0;
+  const deferreds: Deferred<unknown>[] = [];
+  const transcribed: (Float32Array | undefined)[] = [];
+  const store = createRequestStore({
+    capture: async () => {
+      const clip = clips[clipIndex++];
+      return { stop: async () => clip, cancel: () => undefined };
+    },
+    transcribe: async (clip) => {
+      transcribed.push(clip);
+      return wireSpeech('unused', 'spoken');
+    },
+    interpret: () => {
+      const pending = deferred<unknown>();
+      deferreds.push(pending);
+      return pending.promise;
+    },
+  });
+  const ws = 'demo';
+  store.editTranscript(ws, 'Keep this text.');
+  await store.beginRecording(ws);
+  await store.finishRecording(ws);
+  const first = store.submitRequest(ws, 'token');
+  await flush();
+  const firstId = store.getRequest(ws)!.requestId!;
+
+  // Recording B completing while request A is pending is a new content
+  // generation: A's late reply loses acceptance and B has its own identity.
+  await store.beginRecording(ws);
+  await store.finishRecording(ws);
+  const secondId = store.getRequest(ws)!.requestId!;
+  assert.notEqual(secondId, firstId);
+  deferreds[0].resolve(wireProposal(firstId));
+  await first;
+  assert.equal(store.getRequest(ws)!.result, null); // late success discarded silently
+
+  // Submitting B uses the new identity and the new clip.
+  const second = store.submitRequest(ws, 'token');
+  await flush();
+  assert.equal(store.getRequest(ws)!.requestId, secondId);
+  assert.strictEqual(transcribed[1], clips[1]);
+  deferreds[1].resolve(wireProposal(secondId));
+  await second;
+  assert.equal(store.getRequest(ws)!.result?.variant, 'proposal');
+
+  // An accepted proposal goes stale when new audio is recorded; the primary
+  // action is disabled and the identity is minted again.
+  await store.beginRecording(ws);
+  await store.finishRecording(ws);
+  const state = store.getRequest(ws)!;
+  assert.equal(state.stale, true);
+  assert.equal(state.primaryAction.enabled, false);
+  assert.notEqual(state.requestId, secondId);
+
+  // A true retry of the same clip keeps its identity (double tap joins too).
+  const third = store.submitRequest(ws, 'token');
+  await flush();
+  const thirdId = store.getRequest(ws)!.requestId!;
+  assert.strictEqual(store.submitRequest(ws, 'token'), third);
+  deferreds[2].resolve(wireProposal(thirdId));
+  await third;
+  const fourth = store.submitRequest(ws, 'token'); // unchanged retry after settle
+  await flush();
+  assert.equal(store.getRequest(ws)!.requestId, thirdId);
+  deferreds[3].resolve(wireProposal(thirdId));
+  await fourth;
+});
+
+test('Deferred capture acquisition and stop completions are bound to their recording generation.', async () => {
+  const ws = 'demo';
+  let cancels = 0;
+  let captures = 0;
+  const acquisitions: Deferred<CaptureHandle>[] = [];
+  const handleOf = (stop: () => Promise<Float32Array>): CaptureHandle => ({
+    stop,
+    cancel: () => {
+      cancels += 1;
+    },
+  });
+  const store = createRequestStore({
+    capture: () => {
+      captures += 1;
+      const pending = deferred<CaptureHandle>();
+      acquisitions.push(pending);
+      return pending.promise;
+    },
+    transcribe: async () => wireSpeech('unused', 'spoken'),
+    interpret: async (body) => wireProposal(body.requestId),
+  });
+
+  // One acquisition at a time: a second beginRecording cannot orphan the
+  // first handle.
+  const begun = store.beginRecording(ws);
+  await flush();
+  assert.equal(captures, 1);
+  await store.beginRecording(ws);
+  assert.equal(captures, 1);
+
+  // closePanel invalidates an in-flight acquisition: the late handle is
+  // cancelled, never installed, and the latch frees for a fresh recording.
+  store.closePanel(ws);
+  acquisitions[0].resolve(handleOf(async () => new Float32Array([9])));
+  await begun;
+  assert.equal(cancels, 1);
+  assert.equal(store.getRequest(ws)!.recording, false);
+  assert.equal(store.getRequest(ws)!.phase, 'ready');
+
+  // discardRequest during an acquisition does the same and keeps the cleared
+  // state; the late acquisition cannot install a recording phase.
+  const discarded = store.beginRecording(ws);
+  await flush();
+  store.discardRequest(ws);
+  acquisitions[1].resolve(handleOf(async () => new Float32Array([8])));
+  await discarded;
+  assert.equal(cancels, 2);
+  assert.equal(store.getRequest(ws)!.clip, null);
+  assert.equal(store.getRequest(ws)!.phase, 'ready');
+
+  // A late stop after discardRequest can never restore the discarded bytes.
+  const stop = deferred<Float32Array>();
+  const recording = store.beginRecording(ws);
+  await flush();
+  acquisitions[2].resolve(handleOf(() => stop.promise));
+  await recording;
+  const finishing = store.finishRecording(ws);
+  await flush();
+  store.discardRequest(ws);
+  stop.resolve(new Float32Array([7]));
+  await finishing;
+  assert.equal(store.getRequest(ws)!.clip, null);
+  assert.equal(store.getRequest(ws)!.transcript, '');
+  assert.equal(store.getRequest(ws)!.phase, 'ready');
+
+  // Closing during the stop wait cancels that unsettled recording too (the
+  // close-while-recording contract) and leaves no dangling recording phase.
+  const stopTwo = deferred<Float32Array>();
+  const recordingTwo = store.beginRecording(ws);
+  await flush();
+  acquisitions[3].resolve(handleOf(() => stopTwo.promise));
+  await recordingTwo;
+  const finishingTwo = store.finishRecording(ws);
+  await flush();
+  store.closePanel(ws);
+  assert.equal(store.getRequest(ws)!.phase, 'ready');
+  stopTwo.resolve(new Float32Array([6]));
+  await finishingTwo;
+  assert.equal(store.getRequest(ws)!.clip, null);
 });
