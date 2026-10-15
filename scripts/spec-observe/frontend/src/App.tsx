@@ -18,6 +18,8 @@ import { getLaunchDraft, seedLaunchDraft } from './launch-state';
 import { getConversationReturnId } from './conversations-state';
 import { armLaunchPickerIntent, cancelLaunchPickerIntent, createLaunchPickerIntent, shouldApplyPickerReset, shouldResetAcknowledgedDraft } from './launch-picker-intent';
 import { agentCoverage, effectiveAgentFilter, retainSelectedAgent, visibleAgents } from './agent-state';
+import { pageContext, changeScope } from './request-state';
+import RequestWorkPanel from './RequestWork';
 
 type Filter = 'active' | 'attention' | 'completed' | 'ready';
 type Catalog = WorkspaceCatalog;
@@ -616,6 +618,51 @@ export default function App() {
     });
   });
 
+  // Request work shell (step 9): one controlled dialog mounted beside Shell.
+  // The scope line derives from the current route via request-state's
+  // pageContext; every close path restores focus to the persistent trigger and
+  // never touches launch drafts (INV-1).
+  const [requestWorkOpen, setRequestWorkOpen] = createSignal(false);
+  const requestContext = createMemo(() =>
+    pageContext({
+      workspace: route().ws ?? null,
+      design: route().dest === 'designs' ? route().id ?? null : null,
+      spec: route().dest === 'specs' ? route().id ?? null : null,
+      candidates: catalogEntries().map(entry => String(entry.id)),
+    })
+  );
+  const requestScope = createMemo(() => {
+    const scope = requestContext().scope;
+    if (!scope) return undefined;
+    const entry = catalogEntries().find(item => String(item.id) === scope.workspace);
+    const label = String(entry?.name || entry?.id || scope.workspace);
+    if (scope.design) return { label: scope.design, kind: 'Design' };
+    if (scope.spec) return { label: scope.spec, kind: 'Spec' };
+    return { label, kind: 'Workspace' };
+  });
+  const closeRequestWork = () => {
+    setRequestWorkOpen(false);
+    document.getElementById('request-work-trigger')?.focus({ preventScroll: true });
+  };
+  const removeRequestScope = () => {
+    const workspace = requestContext().scope?.workspace;
+    if (workspace) changeScope(workspace, null);
+  };
+
+  onMount(() => {
+    const onShortcut = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'j') {
+        const openDialog = document.querySelector('dialog[open]');
+        if (openDialog && openDialog.id !== 'request-work-dialog') return;
+        event.preventDefault();
+        if (requestWorkOpen()) closeRequestWork();
+        else setRequestWorkOpen(true);
+      }
+    };
+    window.addEventListener('keydown', onShortcut);
+    onCleanup(() => window.removeEventListener('keydown', onShortcut));
+  });
+
   const outletProps: DestinationProps = {
     get route() { return route(); },
     get payload() { return payload(); },
@@ -695,6 +742,7 @@ export default function App() {
       observedAt={observedAt()}
       onRefresh={manualRefresh}
       onImport={file => void importSnapshot(file)}
+      onRequestWork={() => setRequestWorkOpen(true)}
     >
       <Show when={notes().length}>
         <div id="notice" class="notice" role="status"><For each={notes()}>{note => <p innerHTML={statusMarkdown(note)} />}</For></div>
@@ -719,5 +767,11 @@ export default function App() {
         <WorkspacePicker {...outletProps} />
       </Show>
     </Shell>
+    <RequestWorkPanel
+      open={requestWorkOpen()}
+      onClose={closeRequestWork}
+      scope={requestScope()}
+      onRemoveScope={removeRequestScope}
+    />
   </>;
 }

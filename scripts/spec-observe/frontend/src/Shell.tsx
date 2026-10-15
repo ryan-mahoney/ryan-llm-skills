@@ -22,6 +22,7 @@ export type ShellProps = {
   observedAt?: string;
   onRefresh(): void;
   onImport(file: File | undefined): void;
+  onRequestWork(): void;
   children: JSX.Element;
 };
 
@@ -229,6 +230,7 @@ export default function Shell(props: ShellProps) {
                 {props.title}
               </h1>
             </div>
+            <button id="request-work-trigger" type="button" class="ds-btn" onClick={() => props.onRequestWork()}>Request work</button>
             <Show when={props.headerActions}>
               <div class="head-actions">{props.headerActions}</div>
             </Show>
