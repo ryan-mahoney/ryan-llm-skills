@@ -92,6 +92,17 @@ active in the checkout. Everything below applies, with these differences:
 - Apply fixes directly rather than through a subagent.
 - Skip the merge-evidence reassembly after the commit. `spec-run` assembles merge
   evidence after the last step.
+- **Bounded packet.** When the task carries a packet from
+  [`scripts/fix-packets.mjs`](scripts/fix-packets.mjs), act only on its finding IDs and
+  read only its named ranges and the test helpers they call. Begin editing within your
+  first three tool calls, with at most six bounded reads before the first edit; do not
+  read whole files, other reviews or earlier fix records beyond the current fix file.
+  Write each regression case first and observe it fail. Commit once for the packet. If
+  you cannot finish, `git restore` the files you touched, leave the tree clean and
+  report the failing case name instead of a partial change. Keep the decisions already
+  in `reviews/<name>-fix.md` from earlier packets, add yours, set `commit` to this
+  packet's commit (earlier packets name theirs in their notes) and set `pending` to the
+  packet's remaining IDs. A fix file whose `pending` is nonempty is not complete.
 
 ## Read The Review
 
@@ -236,6 +247,7 @@ fix:
       note: bounded by upstream gateway; risk accepted for this release
   material_change: true   # false when this iteration changed no code (only dismissals) — the loop's stalled signal
   commit: <full SHA or none>
+  pending: []             # step-mode packets only: finding IDs left for later packets
   verification:
     - evidence: <existing result artifact path>
       outcome: passed
@@ -268,6 +280,11 @@ iteration and finding IDs in the fix artifact; use a body for non-obvious ration
 If nothing actionable was fixed (`material_change: false`), there is no code
 change, so a review pass with no code changes produces no commit. Leave the artifacts
 on disk and report their paths.
+
+Commit only when repository files changed. A fix confined to package artifacts, such
+as evidence headers or review records, is a material change with no commit: record
+`commit: none`, name the changed package paths in the fix artifact, and never create
+an empty or `--allow-empty` commit to obtain a SHA.
 
 After a branch fix commit, update the existing `merge-evidence.json` and Markdown for
 the new HEAD with affected gate results, findings, and applicability. Reuse the current
