@@ -39,6 +39,11 @@ explicit Jev verification and review-triage checkpoints. Without CI, broad testi
 operator-managed outside agent evidence and does not block completion. Preserve acceptance
 and known-failure obligations; CI results belong to the operator after publication, and publication needs authority.
 
+## Portable Paths
+When writing skills, templates, specs, documentation, or generated reports, load
+`~/.agents/rules/portable-paths.md`. Keep saved paths relative to a declared base
+and resolve machine-specific absolute paths only where consumers require them.
+
 ## Spec Artifacts
 Spec artifacts live only in the adjacent workspace, at the location the spec-location
 resolver returns (`node ~/.agents/scripts/spec-location/cli.mjs`). Never create or write

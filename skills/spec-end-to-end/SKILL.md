@@ -3,8 +3,6 @@ name: spec-end-to-end
 description: "Run the complete standalone spec-driven workflow from a feature goal or existing spec package through architecture, specification, preparation, branch or worktree setup, implementation and step review/fix cycles, evidence assembly, work tour, and a published pull request. Use when the user says \"do the spec workflow end to end\", \"take this from idea to PR\", \"run the whole spec process\", \"finish this spec and open a PR\", or asks for the full workflow with modifiers such as a named subagent or worktree."
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "25"
 ---
 

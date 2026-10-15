@@ -7,8 +7,6 @@ disable-model-invocation: true
 argument-hint: "[spec=<path/to/spec.md>] [iter=<n>] [review=<reviews/<name>-review.md>]"
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "20"
 ---
 

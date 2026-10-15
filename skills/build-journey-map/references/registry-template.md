@@ -1,8 +1,8 @@
 # Journey registry template
 
-One registry per product. It lives in the repository whose documentation standard governs the corpus — for FirstWho, `app/docs/journey-registry.md`. The registry is an index, not a specification: rows stay thin, and depth belongs in the `JRNY-###` pages written by `document-journey`.
+One registry per product. It lives in the repository whose documentation standard governs the corpus — for example, `app/docs/journey-registry.md`. The registry is an index, not a specification: rows stay thin, and depth belongs in the `JRNY-###` pages written by `document-journey`.
 
-Follow the repository prose standard (FirstWho: `docs/rules/feature-documentation-rules.md` §14): active voice, `must/can/will`, no `should`, condition before command, `None.` for empty sections, stable anchors on every level-2 heading, ISO dates.
+Follow the prose standard found in the current repository. When none exists, use these defaults: active voice, `must/can/will`, no `should`, condition before command, `None.` for empty sections, stable anchors on every level-2 heading, ISO dates.
 
 ---
 
@@ -20,15 +20,16 @@ review_interval_days: 90
 verified_against:
   - app@<commit or version this run read>
   - marketing@<commit or version this run read>
+product_root: ".."  # relative to the repository holding this registry
 repos:
   - name: app
-    path: /Users/ryanmahoney/Documents/firstwho/app
+    path: app  # relative to product_root
     role: product monolith — auth, commerce, hiring admin, public hiring and info pages
-    hosts: [app.firstwho.co, "jobs.*", "info.*"]
+    hosts: [app.example.com, "jobs.*", "info.*"]
   - name: marketing
-    path: /Users/ryanmahoney/Documents/firstwho/marketing
+    path: marketing  # relative to product_root
     role: static marketing site — funnels, kit library rendering, CTAs
-    hosts: [firstwho.co]
+    hosts: [example.com]
 derived_from:                       # upstream documents read, pinned
   - docs/permissions/permission-model.md@<version>
   - docs/screen-inventory.md@<version>
@@ -67,7 +68,7 @@ Directions: `in` (the party calls the product) · `out` (the product calls or em
 <a id="journeys"></a>
 ## 4. Journey table
 
-One row per journey. Keep to six columns (standard DR-125).
+One row per journey. Keep to six columns.
 
 | ID | Goal (actor's words) | Actor | Trigger | Terminal outcome | Status |
 |---|---|---|---|---|---|

@@ -26,6 +26,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from playwright.sync_api import expect, sync_playwright
+from reference_screens import reference_screens
 
 args = argparse.ArgumentParser()
 args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters', 'specs-list', 'specs-overview', 'specs-variants', 'specs-activity', 'specs-relaunch', 'files-workspace', 'files-sources', 'files-continuity', 'files-recovery', 'files-read-refresh'])
@@ -80,7 +81,7 @@ the App, route/scope/registry, files-model and the server file APIs are real.
 - EV-6 selection/revalidation continuity: report `files-continuity.json`; captures `files-62-*`, `files-66-*`, `files-67-*`.
 - EV-7 regional recovery and coverage: report `files-recovery.json`; captures `files-61-*` through `files-68-*`.
 - EV-8 context/artifact links and this QA tour: report `files-context.json`; captures `files-15-*`, `files-16-*`.
-- EV-9 host deployment read is a pending operator-authorized restory-box restart/read; merge verification does not restart a live host.
+- EV-9 host deployment read is a pending operator-authorized execution-host restart/read; merge verification does not restart a live host.
 """
 fixture_env = dict(os.environ)
 if case == 'context':
@@ -1247,11 +1248,7 @@ try:
             report['scenarios'].append('A failed cursor append keeps the prior listing rows and the loaded reader with only the regional list error')
 
             # (12) Bound reference screens: verify card sha256 before render.
-            design_candidates = [
-                Path('/Users/ryanmahoney/Documents/adjacent-storage/projects/agent-tooling/designs/app-ui/screens'),
-                Path('/home/ryanmahoney/Documents/adjacent-storage/projects/agent-tooling/designs/app-ui/screens'),
-            ]
-            design_root = next((candidate for candidate in design_candidates if candidate.is_dir()), None)
+            design_root = reference_screens('app-ui')
             assert design_root is not None, 'Bound app-ui design screens were not found'
             references = {}
             reference_page = context.new_page()
@@ -1823,11 +1820,7 @@ try:
                 recovery['listing']['mode'] = ''
 
             # (6) Bound reference screens: verify card sha256 before render.
-            design_candidates = [
-                Path('/Users/ryanmahoney/Documents/adjacent-storage/projects/agent-tooling/designs/app-ui/screens'),
-                Path('/home/ryanmahoney/Documents/adjacent-storage/projects/agent-tooling/designs/app-ui/screens'),
-            ]
-            design_root = next((candidate for candidate in design_candidates if candidate.is_dir()), None)
+            design_root = reference_screens('app-ui')
             assert design_root is not None, 'Bound app-ui design screens were not found'
             references = {}
             reference_page = context.new_page()

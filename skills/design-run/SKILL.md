@@ -5,12 +5,13 @@ argument-hint: "<workspace-id> <design-slug> [--step N | --from N] [--review-onl
 disable-model-invocation: true
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "1"
 ---
 
 # Design Run — One Screen Per Step
+
+Apply [Portable Paths](../../rules/portable-paths.md) when saving artifact paths.
+Keep resolver-returned absolute paths for local commands; preserve required runtime schemas.
 
 Produce the screens an existing `design.json` names, in step order, each as one
 self-contained HTML file that uses the design system through a vendored Tailwind runtime

@@ -7,8 +7,6 @@ disable-model-invocation: true
 argument-hint: "--source <package_dir> --repo DIR --revision REV --skill NAME --id ID [--step N] [--include PATH]..."
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "1"
 ---
 

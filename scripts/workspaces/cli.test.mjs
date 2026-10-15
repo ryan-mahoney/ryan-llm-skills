@@ -572,7 +572,7 @@ test('workspace CLI restart: kit edit commands preview without writing, apply wi
     [['set-preview', 'team', '--repo', 'docs', '--file', 'dev/compose.yaml'], 'compose_file: \"dev/compose.yaml\"'],
     [['clear-preview', 'team'], 'context:'],
     [['set-preview', 'team', '--repo', 'web', '--file', 'compose.yaml'], 'compose_file: \"compose.yaml\"'],
-    [['set-execution-host', 'team', '--host', 'restory-box'], 'execution_host: "restory-box"'],
+    [['set-execution-host', 'team', '--host', 'execution-host'], 'execution_host: "execution-host"'],
     [['rewrite-paths', 'team', '--from', home, '--to', '~'], 'path: "~/web"'],
     [['remove-context', 'team', '--path', 'context/notes.md'], 'context: []'],
   ];
@@ -590,7 +590,7 @@ test('workspace CLI restart: kit edit commands preview without writing, apply wi
   }
   const kit = kitDocument(kitState(workspace).bytes, 'edited kit');
   assert.equal(kit.name, 'Team Space');
-  assert.equal(kit.execution_host, 'restory-box');
+  assert.equal(kit.execution_host, 'execution-host');
   assert.deepEqual(kit.design_system, { repository: 'docs', paths: ['ds/a.css', 'ds/b.css'], applies_to: 'all' });
   assert.deepEqual(kit.repositories.map((repository) => repository.path), ['~/docs', '~/web']);
   const shown = jsonResult(await run(['show', 'team', '--json']), 'show edited kit');

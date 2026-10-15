@@ -5,8 +5,6 @@ disable-model-invocation: true
 argument-hint: "[target-folder] [refactor-goal]"
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "1"
 ---
 

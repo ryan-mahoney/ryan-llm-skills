@@ -3,8 +3,6 @@ name: repo-search-install
 description: Install or repair the optional repo-search package dependencies and register an existing local model root without indexing. Use for package maintenance; use repo-search-setup for a first checkout index. Never downloads assets or enables spec use.
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "1"
 ---
 

@@ -3,8 +3,6 @@ name: spec-process-improvement
 description: "Analyze a spec-end-to-end or spec-run execution from its canonical package, Git changes, Pi sessions, runtime receipts, and telemetry. Use for a run retrospective, diagnosing process delays or repeated failures, or proposing changes to make spec execution faster, more reliable, and better at satisfying acceptance criteria. Produces evidence-backed recommendations; does not resume the run or apply fixes unless requested."
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "1"
 ---
 

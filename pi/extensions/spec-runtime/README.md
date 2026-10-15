@@ -24,8 +24,8 @@ Call `spec_dispatch` once:
 ```json
 {
   "action": "start",
-  "package": "transitops/feature",
-  "step": "<storage root>/projects/transitops/specs/feature/step-001-subspec.md",
+  "package": "sample-workspace/feature",
+  "step": "<storage root>/projects/sample-workspace/specs/feature/step-001-subspec.md",
   "owner_model": "deepseek/deepseek-flash:max",
   "editor_model": "deepseek/deepseek-flash:max"
 }
@@ -80,7 +80,7 @@ and next action. Return control and await the completion message. `status` is an
 explicit recovery operation, not a polling loop:
 
 ```json
-{"action":"status","package":"transitops/feature","run_id":"<id>"}
+{"action":"status","package":"sample-workspace/feature","run_id":"<id>"}
 ```
 
 Once runtime returns a run, a later checkpoint or monitor bookkeeping failure returns
@@ -99,7 +99,7 @@ Cancellation revokes the run's writer role, signals every tracked process group,
 termination. It returns `cancelled` only after those groups have stopped:
 
 ```json
-{"action":"cancel","package":"transitops/feature","run_id":"<id>"}
+{"action":"cancel","package":"sample-workspace/feature","run_id":"<id>"}
 ```
 
 `completed` means that the owner process produced a final response and its managed

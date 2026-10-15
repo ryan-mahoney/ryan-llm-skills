@@ -3,8 +3,6 @@ name: spec-upgrade
 description: "Upgrade existing, unimplemented standalone specs to the current project-context and proportional-evidence workflow. Use when the user wants to transition older specs, reassess pending specs for over-engineering, or update several prepared specs before implementation. Stops after preparation. Does not migrate application code or SpecOps analysis."
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "5"
 ---
 
@@ -122,7 +120,7 @@ must not be reported as entirely ready. State that ready means ready to implemen
 exact next invocation for each ready package, for example:
 
 ```text
-Use spec-end-to-end for transitops/example-feature. Resume from the prepared package.
+Use spec-end-to-end for sample-workspace/example-feature. Resume from the prepared package.
 ```
 
 Stop at this handoff. The user chooses when to start implementation.

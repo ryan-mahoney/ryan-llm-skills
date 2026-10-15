@@ -24,8 +24,9 @@ A bash launcher in the style of the repository's existing browser-stack scripts.
 It runs from the repository root and, before starting anything, sets
 `MIX_ENV=test`, `MIX_TEST_PARTITION=${MIX_TEST_PARTITION:-_uxqa}` and
 `ELIXIR_ERL_OPTIONS=${ELIXIR_ERL_OPTIONS:-+S 4}`, and unsets
-`GTFS_PLANNER_TEST_DATABASE_URL` and `DATABASE_URL` so an inherited database
-variable can never redirect a run.
+`DATABASE_URL` and every application-specific database URL override discovered
+in the repository's test configuration, so an inherited variable can never
+redirect a run. Do not assume a fixed application-specific variable name.
 
 ```txt
 bin/ux-qa up <JRNY-###/slug> [--headed]

@@ -70,6 +70,10 @@ reads `locations.json`; it does not search for the package.
 
 ## Code and specs stay apart
 
+Apply [Portable Paths](../../../rules/portable-paths.md) to authored content.
+Resolver-owned `locations.json`, runtime dispatch records, and absolute command
+destinations retain their required schemas; do not rewrite them as prose.
+
 - Code, Git, builds, and tests run in one worktree per target repository. `targets[].worktree` is where the runtime
   recorded it; before dispatch it is null and the target's `primary` is the base.
 - Spec files are never inside a checkout. Never create, copy, or symlink a spec folder, `.gitignore` entry, or

@@ -154,7 +154,7 @@ Two existing projects already provide speech implementations:
 | Project | Existing implementation | Useful boundary |
 | --- | --- | --- |
 | Adjacent | Local Whisper through `Adjacent.Transcription` and `Nx.Serving` | Separate model preparation, PCM limits, lazy loading, and bounded errors |
-| Rearrange Writer | Bun ASR daemon with Whisper, Zipformer, hybrid, and Parakeet engine paths | Process isolation, audio transport, transcript events, and dictation states |
+| the existing writer application | Bun ASR daemon with Whisper, Zipformer, hybrid, and Parakeet engine paths | Process isolation, audio transport, transcript events, and dictation states |
 
 Sentinel can reuse one implementation through an adapter. It does not need either complete application architecture.
 An adapter returns transcript text and explicit readiness or failure information.

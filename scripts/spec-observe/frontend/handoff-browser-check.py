@@ -63,6 +63,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from playwright.sync_api import expect, sync_playwright
+from reference_screens import reference_screens
 
 BUSY_ASSIGNMENT = "b42f1903-9508-46c1-a4aa-a0842dbce617"
 HOLDING_RUN = "7c2a91d4-3e58-4b06-a1f7-95d0e6b83c12"
@@ -235,15 +236,7 @@ report = {"status": "failed", "case": arguments.case, "scenarios": [], "pageErro
 
 
 def design_screens() -> Path | None:
-    candidates = [
-        Path(os.environ["SENTINEL_DESIGN_SCREENS"]) if os.environ.get("SENTINEL_DESIGN_SCREENS") else None,
-        Path("/Users/ryanmahoney/Documents/adjacent-storage/projects/agent-tooling/designs/app-ui-plan-screens/screens"),
-        Path("/home/ryanmahoney/Documents/adjacent-storage/projects/agent-tooling/designs/app-ui-plan-screens/screens"),
-    ]
-    for candidate in candidates:
-        if candidate is not None and candidate.is_dir():
-            return candidate
-    return None
+    return reference_screens("app-ui-plan-screens")
 
 
 fixture_env = dict(os.environ)

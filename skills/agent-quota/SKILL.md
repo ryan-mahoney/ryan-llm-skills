@@ -5,8 +5,6 @@ argument-hint: "[--provider claude|codex|deepseek|openrouter|all] [--json]"
 disable-model-invocation: false
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "1"
 ---
 

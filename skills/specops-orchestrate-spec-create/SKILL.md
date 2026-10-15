@@ -5,8 +5,6 @@ disable-model-invocation: true
 argument-hint: "[analysis-file-list-or-directory (optional)]"
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "2"
 ---
 

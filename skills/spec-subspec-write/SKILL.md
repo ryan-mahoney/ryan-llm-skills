@@ -7,8 +7,6 @@ disable-model-invocation: true
 argument-hint: "[step-number] [spec package ref or folder]"
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "28"
 ---
 

@@ -34,7 +34,15 @@ app/test/e2e/journeys/<lane>.e2e.js        <- its implementation
 
 ## Step 1 — Read the repository standard
 
-Find the product-documentation standard (FirstWho: `docs/rules/feature-documentation-rules.md`). Its journey section wins over this skill's template — for FirstWho that is §9 (DR-083 to DR-085): the eight required sections, the eight-stage frame `define → locate → prepare → confirm → execute → monitor → modify → conclude`, and the seam obligations. This skill's template extends that standard with the cross-repo fields downstream evaluation needs; it does not reorder or delete standard sections. If the standard forbids an addition, honor it, put the content in `Open questions`, and propose the amendment.
+Find the current repository's product-documentation standard through its
+`AGENTS.md` and documentation index. Its journey section wins over this skill's
+template, including section order, stage vocabulary, and seam requirements.
+When there is no journey standard, use the supplied template and its eight-stage
+frame: `define → locate → prepare → confirm → execute → monitor → modify → conclude`.
+The template adds cross-repository fields needed by downstream evaluation. If a
+repository standard forbids an addition, honor it, record the gap in `Open questions`,
+and propose the amendment. Do not assume a particular rules file, section number,
+or decision ID exists.
 
 ## Step 2 — Trace the flow in code, in every repository
 
@@ -54,7 +62,7 @@ Quote visible strings exactly from source. Record what you could not establish a
 
 ## Step 3 — Write the stages
 
-One subsection per stage that the journey actually visits; delete the stages that do not apply (DR-084) and say which are absent. Each stage row or subsection carries:
+One subsection per stage that the journey actually visits; delete the stages that do not apply and say which are absent. Each stage row or subsection carries:
 
 - **Surface** — repository, route, `SCRN-###` when one exists. A stage with no registered screen names an inventory gap.
 - **Action and decision** — what the user does and what they must believe to do it.
@@ -70,11 +78,11 @@ Reference `SEAM-###` IDs from the registry; do not restate them. Add a seam here
 
 ## Step 5 — Job stories and intent, labeled
 
-The journey carries one primary job story and any number of secondary ones (DR-106), in the standard's exact form, each `sourced` (named artifact: E2E `intent` fields, personas, funnel docs) or `inferred`. Every `inferred` story gets an open question. Never present inference as fact; downstream design QA will treat the page as truth.
+The journey carries one primary job story and any number of secondary ones, in the standard's exact form, each `sourced` (named artifact: E2E `intent` fields, personas, funnel docs) or `inferred`. Every `inferred` story gets an open question. Never present inference as fact; downstream design QA will treat the page as truth.
 
 ## Step 6 — End-to-end examples
 
-Two or three complete runs in Given/When/Then with realistic seeded data — use the E2E fixtures' demo organizations, never real customer data (DR-114). One normal path, one boundary (a blocked second claim, a budget exhausted), one failure or abandonment. Name the E2E lane that proves each, or write `Test: none — <reason>` (DR-117).
+Two or three complete runs in Given/When/Then with realistic seeded data — use the E2E fixtures' demo organizations, never real customer data. One normal path, one boundary (a blocked second claim, a budget exhausted), one failure or abandonment. Name the E2E lane that proves each, or write `Test: none — <reason>`.
 
 ## Step 6b — Write the test scenario
 
@@ -83,7 +91,7 @@ Only when the repository runs a QA harness — the `journey-qa` skill plus a `bi
 Write §10 of `references/journey-page-template.md`, and let that template define the syntax — this step does not restate it.
 
 - One scenario per distinct terminal outcome. Two journeys that end the same way share a scenario shape; one journey that ends two ways is two scenarios.
-- Take each `Success check` ID from the harness's own checks folder (`assets/qa/checks/<id>.mjs` in gtfs-planner), never from memory. A terminal outcome with no check gets an open question, not an invented name.
+- Take each `Success check` ID from the harness's own checks folder (for example, `assets/qa/checks/<id>.mjs`), never from memory. A terminal outcome with no check gets an open question, not an invented name.
 - Write the `Goal` in the user's language with the values the tester sees, and list each scenario's slug in the front matter.
 - The harness parses this section; how it splits tester-visible keys from harness-only keys, and every other run format, is defined in `../journey-qa/references/harness-contract.md`.
 
@@ -98,7 +106,7 @@ The page is the anchor downstream evaluation reads. Link, do not copy:
 
 ## Step 8 — Write the page
 
-Use `references/journey-page-template.md`. It carries the front matter, the DR-083 section order with the cross-repo extensions, and an authoring note per section. Write durable content first — goal, actor, job stories, stages, seams, rules — and visual notes last.
+Use `references/journey-page-template.md`. It carries the front matter, the default section order with the cross-repo extensions, and an authoring note per section. Write durable content first — goal, actor, job stories, stages, seams, rules — and visual notes last.
 
 File: `docs/journeys/JRNY-###-<slug>.md`, following the standard's directory layout where it exists.
 

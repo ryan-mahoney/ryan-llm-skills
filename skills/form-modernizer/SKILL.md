@@ -5,8 +5,6 @@ argument-hint: "<FormComponentPath> [--skip-screenshots] [--edit-only]"
 disable-model-invocation: true
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "3"
 ---
 

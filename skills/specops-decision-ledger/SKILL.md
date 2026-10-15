@@ -5,8 +5,6 @@ disable-model-invocation: true
 argument-hint: "[repo-root optional] [--since <ref>]"
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "1"
 ---
 

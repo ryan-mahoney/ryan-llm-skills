@@ -5,8 +5,6 @@ argument-hint: "<path-to-analysis-file>"
 disable-model-invocation: true
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "2"
 ---
 

@@ -3,8 +3,6 @@ name: see
 description: Establish whether the running model can actually view images, and relay image analysis to a vision model (Codex CLI + Luna) when it cannot. Use before drawing any conclusion from a screenshot, mockup, cover, page image, or design capture — including inside other skills such as uishot, ux-auditor, and the ux-*-critique skills — and whenever the user says to use codex or Luna as the eyes. Also use when an image-viewing attempt errored or returned nothing.
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "1"
 ---
 

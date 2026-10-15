@@ -5,8 +5,6 @@ disable-model-invocation: true
 argument-hint: "<commit-sha or range> [repo-root optional]"
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "1"
 ---
 

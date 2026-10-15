@@ -9,7 +9,7 @@ metadata:
 
 Produce a journey registry: every distinct journey a user completes across a set of related repositories, with a permanent ID, one actor, one goal, and the seams where the journey crosses a repository boundary.
 
-The failure this skill exists to prevent is the per-repository journey list. Marketing teams map the funnel that ends at "clicked Sign up." Product teams map journeys that begin at a signed-in dashboard. Both lists are locally true and jointly wrong: the prospect who buys a kit crosses `firstwho.co`, `app.firstwho.co`, and Stripe on the way to the library, and no single repository documents that journey end to end. A journey that cannot be completed inside one repository is exactly the unit this registry records.
+The failure this skill exists to prevent is the per-repository journey list. Marketing teams map the funnel that ends at "clicked Sign up." Product teams map journeys that begin at a signed-in dashboard. Both lists are locally true and jointly wrong: the prospect who buys a kit crosses `example.com`, `app.example.com`, and Stripe on the way to the library, and no single repository documents that journey end to end. A journey that cannot be completed inside one repository is exactly the unit this registry records.
 
 **A journey is one actor's one goal, from trigger to terminal outcome, however many repositories it crosses.** A repository is a deploy boundary, not a journey boundary.
 
@@ -34,17 +34,17 @@ The steps read as written; where this section names a step, the adjustment here 
 
 ## Step 0 — Declare the repository set
 
-Before discovery, write down the system this registry covers. For each repository record:
+Before discovery, write down the system this registry covers. Store repository paths relative to an explicitly named product root; resolve local absolute paths only when reading files. For each repository record:
 
-| Field | Example (FirstWho) |
+| Field | Example |
 |---|---|
-| Path | `/Users/ryanmahoney/Documents/firstwho/app` |
+| Path | `app` (relative to the product root) |
 | Role | product monolith / marketing site / content source |
-| Hostnames users see | `app.firstwho.co`, `jobs.*`, `info.*` |
+| Hostnames users see | `app.example.com`, `jobs.*`, `info.*` |
 | What it owns | routes and data / pre-rendered funnels and CTAs / kit content JSON |
 | Instruction file | `AGENTS.md` |
 
-Read each repository's `AGENTS.md` (or README) first. It names the route tables, the build-time content fetches, and the hostname rewrites — the places journeys hide.
+Read each repository's `AGENTS.md` (or README) first. Paths, hostnames, catalog IDs, and domain terms in this skill and its references are illustrative; discover the actual equivalents before using them. It names the route tables, the build-time content fetches, and the hostname rewrites — the places journeys hide.
 
 Include a repository when a user's path touches it, even if the repository holds no app logic: the marketing site owns the first half of every buying journey; a content repository's JSON decides what the job-kit landing pages promise.
 
@@ -72,7 +72,7 @@ When no permission model and no inventory exist, derive actors from auth guards 
 
 A seed is evidence that some actor wants something and a surface exists to give it to them. Harvest, at minimum:
 
-1. **Outbound links with intent.** Every absolute URL in navigation, headers, footers, pricing constants, and CTAs. In a marketing repository these are the funnel's end: `https://app.firstwho.co/register`, `/buy/kit/:shortcode`. Each one names a journey that continues in another repository.
+1. **Outbound links with intent.** Every absolute URL in navigation, headers, footers, pricing constants, and CTAs. In a marketing repository these are the funnel's end: `https://app.example.com/register`, `/buy/kit/:shortcode`. Each one names a journey that continues in another repository.
 2. **Public entry routes.** Registration, checkout, invitation acceptance, application forms, password and email verification — the app routes reachable without a session.
 3. **Actor switches.** Pages one actor publishes and another consumes: a job the org posts that a candidate applies to; an invitation the admin sends that the invitee opens; a confirmation email whose link returns the buyer to the product.
 4. **Existing automations.** The E2E catalog's `persona`, `startState`, `acquisition`, `expectedOutcome`, and step `intent` fields — each journey there is a complete seed with named steps.
@@ -91,13 +91,13 @@ Apply these rules to the seed pile. Record every merge and every split with its 
 - **Actor changes → split, then link.** A recruiter posting a job and a candidate applying to it are two journeys joined by a shared object (the job) and a handoff (the published URL). One actor's goal never spans another actor's intent. Record the handoff in both journeys.
 - **Outcome differs → split.** "Buy one kit" and "subscribe to a plan" share checkout plumbing and end in different promises. Different terminal outcomes are different journeys even when they share every screen.
 - **Same goal, different start state → variant, not twin.** A trial claim and a paid claim of the same kit are one journey with an alternate entry, unless the product treats them as different funnels (different CTAs, different landing pages). Follow the product's own distinction.
-- **Name the journey by the actor's goal.** "Purchase a standalone JobKit", not "Kit checkout journey". Verb phrase, user's words (this matches the repository standard's DR-045 where one exists).
+- **Name the journey by the actor's goal.** "Purchase a standalone JobKit", not "Kit checkout journey". Verb phrase, user's words (follow any naming rule in the current repository standard).
 
 The audience predicates from the permission model keep actors honest: if two candidate journeys can never be pursued by one account, they are not one journey.
 
 ## Step 4 — Assign JRNY-### IDs
 
-Follow the repository documentation standard when one exists (FirstWho: `docs/rules/feature-documentation-rules.md`, `JRNY-` prefix, three digits, IDs permanent, file name carries ID and slug). Otherwise use `JRNY-###`.
+Find the repository documentation standard through its instructions or documentation index. Follow its ID and file-naming conventions when present; otherwise use permanent `JRNY-###` IDs and include the ID and slug in the file name.
 
 - Search the whole corpus — pages, registries, the E2E catalog, prior drafts — for IDs already in use. Assign the next unused number. Never copy an ID from a template example.
 - An assigned ID never changes and never returns, even if the journey retires.
@@ -107,9 +107,9 @@ Follow the repository documentation standard when one exists (FirstWho: `docs/ru
 
 The seam is where journeys break and where evaluation and design QA will later look hardest. For every point where a journey crosses a repository, a host, or a third party, record:
 
-| Seam type | What it means | FirstWho examples |
+| Seam type | What it means | Examples |
 |---|---|---|
-| `handoff` | A link or redirect carries the user, and sometimes parameters, between repositories | marketing `/jobkits` → `app.firstwho.co/register`; `crmSlug` + `jobId` attribution carried into registration; Stripe return URLs |
+| `handoff` | A link or redirect carries the user, and sometimes parameters, between repositories | marketing `/jobkits` → `app.example.com/register`; `crmSlug` + `jobId` attribution carried into registration; Stripe return URLs |
 | `identity` | Session or verification established on one side governs the other | email verification links, magic-link login, invitation acceptance |
 | `content-sync` | Content authored or stored in one system renders in another, with a build or fetch in between | CMS pages and job-kit JSON fetched into the marketing build; the published job rendered on `jobs.*` |
 | `host-rewrite` | One app serves several hostnames whose URLs do not match the registered route | `jobs.*` → `/hiring/…`, `info.*` → `/info/…` |
@@ -130,7 +130,7 @@ Unowned CTAs and unmapped lanes are findings, not rounding errors. List them.
 
 ## Step 7 — Write the registry
 
-Write `docs/journey-registry.md` in the product repository (the one whose corpus the documentation standard governs — for FirstWho, `app`). Use `references/registry-template.md`. It carries the front matter, the journey table, the seam ledger, and the coverage section.
+Write `docs/journey-registry.md` in the product repository (the one whose corpus the documentation standard governs — `app` in this example). Use `references/registry-template.md`. It carries the front matter, the journey table, the seam ledger, and the coverage section.
 
 Keep registry rows thin — ID, goal, actor, trigger, outcome, repositories, entry point, E2E lane, status, document path. Depth belongs in the journey page, written by the sibling `document-journey` skill.
 

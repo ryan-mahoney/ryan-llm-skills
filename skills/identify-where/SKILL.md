@@ -5,8 +5,6 @@ argument-hint: "[plain-language functionality description] [optional search scop
 disable-model-invocation: true
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "2"
 ---
 

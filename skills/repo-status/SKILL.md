@@ -5,8 +5,6 @@ argument-hint: "[root path] [--depth N] [--prs]"
 disable-model-invocation: false
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "1"
 ---
 

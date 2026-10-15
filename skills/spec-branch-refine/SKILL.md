@@ -7,8 +7,6 @@ disable-model-invocation: true
 argument-hint: "[spec=<path/to/spec.md>] [max-iterations=<n>]"
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "18"
 ---
 

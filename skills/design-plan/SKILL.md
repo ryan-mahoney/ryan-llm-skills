@@ -5,12 +5,13 @@ argument-hint: "<workspace-id> <design-slug> [--posture desktop-only|responsive]
 disable-model-invocation: true
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "2"
 ---
 
 # Design Plan — Context In, Brief and Screen Index Out
+
+Apply [Portable Paths](../../rules/portable-paths.md) when saving artifact paths.
+Keep resolver-returned absolute paths for local commands; preserve required runtime schemas.
 
 Turn the user's conversation into a design package plan: who the people are, what each
 decides or does, which screens in which states are needed, through which expert and

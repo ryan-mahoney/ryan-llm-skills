@@ -7,8 +7,6 @@ disable-model-invocation: true
 argument-hint: "list | validate [--write-index] | run --skill NAME --scenario ID --model provider/model[:thinking] [--model ...]"
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "1"
 ---
 

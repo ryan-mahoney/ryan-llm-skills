@@ -3,8 +3,6 @@ name: epic-end-to-end
 description: "Implement an epic across an explicit list of planned spec packages in dependency order, running independent packages in parallel sessions when that is safe and saves time, and resuming each through reviews, evidence, PR publication and authorized merge, then updating downstream plans from feedback. Use for running several related specs without routine handoffs; a single package uses spec-end-to-end."
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "4"
 ---
 
@@ -54,12 +52,12 @@ EDITOR_AGENT: deepseek-flash:max from deepseek
 REVIEW_AGENT: gpt-6.1-sol:medium from openai-codex
 SCOUT_AGENT: gpt-6-luna:low from openai-codex
 FINAL_REVIEWER: gpt-6.1-sol:xhigh from openai-codex
-WORKSPACE: transitops   # optional when run from a repository in exactly one kit
+WORKSPACE: sample-workspace   # optional when run from a repository in exactly one kit
 MAX_PARALLEL: 3         # optional; at most this many launched packages at once; 1 runs serially
 EPIC: adj
 PACKAGES:   # optional when the record exists
-- transitops/adj1-first-feature
-- transitops/adj2-second-feature
+- sample-workspace/adj1-first-feature
+- sample-workspace/adj2-second-feature
 ```
 
 `EPIC: <slug>` (preferred) names an existing record in the workspace's epics (see

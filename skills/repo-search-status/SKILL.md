@@ -3,8 +3,6 @@ name: repo-search-status
 description: Diagnose the optional local repo-search installation and perform explicitly requested recovery, forget, and prune. Use when the operator asks for status, check, forget, prune, or recover.
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "1"
 ---
 

@@ -118,10 +118,10 @@ node --version     # v22.19 or newer
 
 ## 4. Agent tooling
 
-**[Host]** Clone this repository to `~/.agents` and run `sync.sh`:
+**[Host]** Set `AGENT_SKILLS_REPOSITORY_URL` to this repository's clone URL, then clone it to `~/.agents` and run `sync.sh`:
 
 ```bash
-git clone git@github.com:ryan-mahoney/ryan-llm-skills.git ~/.agents
+git clone "${AGENT_SKILLS_REPOSITORY_URL:?Set the repository clone URL first}" "$HOME/.agents"
 ~/.agents/sync.sh
 ```
 

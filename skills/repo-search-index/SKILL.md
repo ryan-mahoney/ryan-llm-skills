@@ -3,8 +3,6 @@ name: repo-search-index
 description: Build, incrementally update, reindex, and opt in or out of an optional local repo-search index using an already available model root. Use for manual index maintenance; use repo-search-setup for first-time end-to-end setup.
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "1"
 ---
 

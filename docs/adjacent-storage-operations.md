@@ -27,7 +27,7 @@ Run `~/.agents/sync.sh` on each machine first so it has the current code, the ig
    ```bash
    for w in $(ls ~/Documents/adjacent-storage/projects); do
      $WS set-execution-host "$w" --host <host> --apply
-     $WS rewrite-paths "$w" --from /Users/ryanmahoney --to '~' --apply
+     $WS rewrite-paths "$w" --from "$HOME" --to '~' --apply
    done
    ```
 
@@ -176,7 +176,7 @@ Do one workspace at a time. Until it is migrated, spec skills refuse in it with 
 
 ## g. Clean up
 
-1. **[Mac, and any machine with a checkout]** After a repository's `.specs/` is migrated, remove its `.specs/` lines from `.gitignore` and commit. Leave repositories that track `.specs/` in git (`firstwho/app`, `rearrange-writer`) until the decision on their tracked copies is made.
+1. **[Mac, and any machine with a checkout]** After a repository's `.specs/` is migrated, remove its `.specs/` lines from `.gitignore` and commit. Leave repositories that track `.specs/` in git (including application and writer repositories) until the decision on their tracked copies is made.
 
    ```bash
    grep -n '\.specs' <repo>/.gitignore
@@ -197,3 +197,10 @@ Do one workspace at a time. Until it is migrated, spec skills refuse in it with 
    done
    rm -rf <reviewed .specs path>
    ```
+
+## Generalize existing authored files
+
+Use `python3 ~/.agents/scripts/generalize-home-paths/cli.py` to preview home-prefix
+replacements under the projects directory. See
+[the cleanup script](../scripts/generalize-home-paths/README.md) for backup/apply
+commands and the limits of text replacement in runtime records.

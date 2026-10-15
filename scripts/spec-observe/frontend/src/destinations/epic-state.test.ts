@@ -147,7 +147,7 @@ test('freshness follows observation time and imported or file reads avoid live n
 test('epic filter matches trimmed fields in input order and empty precedence holds', () => {
   const epics: WireRecord[] = [
     { key: 'one', title: 'Supervision', epic: 'adj', workspace: 'agents', members: [{ name: 'super1' }] },
-    { key: 'two', title: 'Journey documentation', epic: 'trip', workspace: 'transitops', members: [] },
+    { key: 'two', title: 'Journey documentation', epic: 'trip', workspace: 'sample-workspace', members: [] },
   ];
   assert.deepEqual(visibleEpics(epics, '  SUPERVISION ').map(epic => epic.key), ['one']);
   assert.deepEqual(visibleEpics(epics, 'adj').map(epic => epic.key), ['one']);
@@ -170,7 +170,7 @@ test('catalog and path helpers keep the kit boundary and reject escapes', () => 
   const catalog: CatalogEntry[] = [
     { id: 'alpha', directory: '/store/projects/physical', name: 'Physical kit' },
     { id: 'beta', directory: '/store/projects/other/physical' },
-    { id: 'gamma', directory: '/store/projects/transitops' },
+    { id: 'gamma', directory: '/store/projects/sample-workspace' },
   ];
   const sole: CatalogEntry[] = [catalog[0]];
   const record = { workspace: 'physical', epic: 'newui' };

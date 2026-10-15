@@ -399,7 +399,7 @@ file route to an installed host is a separate, operator-authorized step: after
 installing the merged checkout and module set, the operator restarts the host (for
 example `systemctl --user restart spec-sentinel`) and reads
 `/api/repository-files?id=<workspace>&repository=<repository>` on loopback. The
-pending restory-box restart/read procedure is not run by merge verification and
+pending execution-host restart/read procedure is not run by merge verification and
 never restarts a live host without explicit operator authority.
 
 ### Next steps

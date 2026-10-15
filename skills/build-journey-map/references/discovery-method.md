@@ -1,102 +1,92 @@
 # Journey discovery method
 
-How to find journey evidence in a repository you do not own the mental model of. Every source below yields seeds; the merge rules live in the SKILL.md.
+Find evidence in the current repositories before naming journeys. The paths and
+routes below are examples, not files that every application must contain. Read
+each repository's instructions and locate its actual equivalents.
 
 ## Sources by repository archetype
 
-### Static marketing site (Next.js App Router, pre-rendered, e.g. `marketing`)
+### Marketing site
 
-The site holds the first half of every buying and sign-up journey and no session state. Look for promises made and users launched.
+The site often owns the beginning of a buying or sign-up journey. Look for the
+promise made to a visitor and the destination of each call to action.
 
-| Evidence | Where (FirstWho paths) | What it yields |
+| Evidence | Where to look | What it yields |
 |---|---|---|
-| Outbound CTAs | `app/components/header/` (DesktopHeader, MobileSidebar), `app/components/footer/`, `app/constants/pricing.js` | Absolute app URLs: `/register`, `/buy/kit`, `/jobkit`. Each is a journey seam plus a goal claim. |
-| Route inventory | `app/app/` directories: `jobkits`, `pricing`, `request-meeting`, `survey`, `events`, `partners`, `product-demo`, `your-resources` | Candidate journey entries: what a visitor can want here. |
-| Form endpoints | page components and `constants/appRouts.js` — where forms post, including to app API hosts | The back-office journey that opens the response. |
-| Content promises | `app/content/` JSON fetched by `fetch-content.sh`; `app/jobkit-content/`; `app/job-kits/` cloned by `fetch-jobkits.sh` | What the user was told before clicking — the expected side of every later seam. |
-| Playwright specs | `app/e2e/` | Visited-state assertions; sometimes journey fragments. |
+| Outbound CTAs | Headers, footers, pricing components, navigation constants | App URLs such as `/register` or `/checkout`; each can be a journey seam. |
+| Route inventory | Framework route directories or route configuration | Visitor goals and public entry points. |
+| Form endpoints | Form actions, request helpers, API configuration | The receiving workflow and the actor who handles the response. |
+| Content promises | CMS adapters, content files, build-time fetch scripts | What users were told before crossing into the application. |
+| Browser tests | The configured E2E test directory | Existing journey fragments and assertions. |
 
-Hunt commands (run from the marketing project root `app/`):
+Search from the repository root, restricting to source directories discovered
+above when available:
 
 ```bash
-# every external absolute link, with its file
-rg -o "https?://[a-zA-Z0-9._/?=&%-]+" app components constants helpers | rg -v "w3.org|schema.org|fonts.|localhost" | sort -u
-# form actions and API endpoints
-rg -i "action=|fetch\(|axios|api/" components app --glob '!node_modules' -l
+rg -n 'https?://' --glob '*.{js,jsx,ts,tsx,html,md}' --glob '!**/node_modules/**'
+rg -n 'action=|fetch\(|axios|api/' --glob '*.{js,jsx,ts,tsx,html}' --glob '!**/node_modules/**'
 ```
 
-### Application monolith (Express + React route tables, e.g. `app`)
+### Application
 
-| Evidence | Where (FirstWho paths) | What it yields |
+| Evidence | Where to look | What it yields |
 |---|---|---|
-| Server routes | `app/routes/backend-routes.js` | Every URL, its guard, and which actor reaches it. |
-| Client route tables | `app/routes/admin-react-routes.js`, `hiring-react-routes.js`, `info-react-routes.js` | Public vs admin surfaces; the `/hiring` and `/info` trees. |
-| Host rewrites | `app/app.js` | Which browser URL maps to which registered route (`jobs.*`, `info.*`). |
-| E2E journey catalog | `app/test/e2e/fixtures/journey-catalog.js` + `fixtures/personas.js` | Complete sourced journeys: persona, startState, acquisition, expectedOutcome, steps with `intent` and `expected`. |
-| E2E implementations | `app/test/e2e/journeys/*.e2e.js` | How each step actually reaches its state. |
-| Context findings | `docs/journey-context-findings.md`, `docs/journey-context-audit-plan.md` | Known seam failures; the rubric downstream evaluation uses. |
-| Screen inventories | `docs/screen-inventory.md`, `docs/inventories/*` | Journey names already referenced per inventory; screens excluded from scope (public careers, info) are journey territory. |
-| Product and funnel docs | `docs/relaunch-funnel.md`, `docs/multi-tenant-multi-app-marketing.md`, `docs/marketing-api-landscape.md`, repo-root `marketing-homepage-checklist.md` | Named funnels, lead conversion, attribution params. |
-| Email templates | `app/email_templates/`, `py_email/` | Links that return users to the product: verification, invitations, purchase confirmation. Each is an entry point and an `identity` seam. |
-| Registration path | `registerApi` in `app/controllers/authentication-controller.js` | The prospect→customer conversion, including `crmSlug`/`jobId` lead attribution. |
+| Server routes and guards | Router modules, controllers, middleware | URLs, access checks, and actors. |
+| Client routes | Framework pages and route tables | Public and authenticated surfaces. |
+| Host routing | Server entry point, proxy and tenant configuration | Browser hostnames that map to different internal routes. |
+| E2E catalog and tests | Test configuration, persona fixtures, journey specs | Actor, starting state, goal, steps, and expected outcome. |
+| Product documentation | Documentation index, permission model, screen inventories, funnel plans | Named journeys and known gaps. |
+| Email templates | Mailers and notification templates | Verification, invitation, purchase, and other return entry points. |
+| Registration and checkout | Route handlers and their callers | Conversion, attribution, payment, and return seams. |
+| Background jobs | Job modules and their enqueueing code | Work that continues after the user leaves the request. |
+| Export and integration endpoints | Controllers, jobs, API clients | Artifact handoffs and external service boundaries. |
 
-### Single application with Playwright specs (e.g. a Phoenix or Rails application with Playwright journey specs)
+When no journey catalog exists, use individual browser spec files as candidate
+lanes. Test titles can establish an actor and goal; a spec covering infrastructure
+alone is an internal lane rather than a user journey.
 
-One application holds every journey surface, and the automation that already walks them is a directory of Playwright spec files rather than a journey catalog. Look for what the product drives, and for the parties it leaves the building for.
+### Public tenant surfaces
 
-| Evidence | Where (example paths) | What it yields |
-|---|---|---|
-| Router file | `assets/router.ex` or `config/routes.rb` or `app/routes/` | Every URL the product serves, and the pipeline each one runs. |
-| LiveView or page modules | `lib/*_web/live/`, `app/pages/`, `app/views/` | The screens a journey passes through and the tasks each one offers. |
-| Playwright spec files | `assets/e2e/*.spec.js` | The lanes that already run end to end; each spec path is one lane when no journey catalog exists, and the actor plus goal in its test titles seed the registry. |
-| Job stories | `docs/requirements/*.md` | What an actor is trying to accomplish, written before the code. |
-| Manual test plan | `docs/manual-test-plan.md` | The testers' own paths through the product, including the awkward ones. |
-| Information architecture | `docs/information-architecture.md` | The navigation destinations and settings sections a journey starts from. |
-| Email templates | `lib/*_web/*mailer*`, `app/mailers/` | Links that return a user to the product: verification, invitations, export notifications. |
-| Background jobs | `lib/*/jobs/`, `app/jobs/` | Work the product starts and finishes outside the request the actor can watch. |
-| Export and download endpoints | the export controller, its job, and its download route | Where a journey hands an artifact to someone outside the product's control. |
-| Companion API controllers | `lib/*_web/controllers/*_api*`, `app/controllers/api/` | Integrations the product serves or calls; when one is out of page scope, record the reason. |
+Discover tenant hostnames and public routes from routing code and configuration.
+Trace each published object from the operator who creates it to the person who
+consumes it. Inspect tenant-configured forms and CTAs rather than assuming a
+particular product's microsite names or route layout.
 
-Hunt commands (run from the project root):
+### Content and companion repositories
 
-```bash
-# one lane per spec file
-ls assets/e2e/*.spec.js
-# the actor and the goal, from the test titles
-rg -n "test\(|test\.describe\(" assets/e2e --glob '*.spec.js'
-```
-
-### Public microsites served by the app (`jobs.*`, `info.*`)
-
-These are candidate- and reader-facing journeys owned by customer tenants. Sources: `app/routes/hiring-react-routes.js`, `app/components/hiring/`, `app/components/pub/`, and the marketing forms configured per org (`/marketing/forms`, feeding the public CTA form — see inventory finding OQ-403).
-
-### Content and side repositories (e.g. `job-kits`, `ryan-mahoney-net`)
-
-A content repository authors the object several journeys display. It adds no journey of its own but supplies the `content-sync` seam: identify what the app serves, what the marketing build fetches, and where slugs or shortcodes must match across both.
+A content repository can supply a `content-sync` seam without adding a journey of
+its own. Identify what it authors, what the application serves, what the marketing
+build fetches, and which identifiers must match across systems.
 
 ## Seed record shape
 
-Write each seed exactly this way before merging:
+Use actual repository IDs, routes, and evidence paths in each seed. This example
+illustrates the shape; it is not evidence for the current product.
 
 ```yaml
 - seed: S-14
-  actor: anonymous prospect with a job to fill
-  wants: a ready-made hiring kit for a role
-  starts: marketing /jobkits/<theme>/<shortcode>/ (kit detail, CTA "Buy")
-  ends: app /my-kits/:shortcode with an owned kit
+  actor: anonymous visitor
+  wants: a downloadable resource
+  starts: marketing /resources/<slug> (CTA "Buy")
+  ends: app /library/<slug> with access to the purchased resource
   crosses_repos: [marketing, app, stripe]
   evidence:
-    - marketing:app/constants/pricing.js  # CTA URLs
-    - app:app/test/e2e/fixtures/journey-catalog.js#GP-1
+    - marketing:src/components/resource-card.tsx
+    - app:tests/e2e/resource-purchase.spec.ts
   confidence: sourced
 ```
 
-`confidence` is `sourced` when a written artifact (E2E catalog, funnel doc, CTA constant) names the goal, and `inferred` when it is your reading. Every `inferred` seed must produce an open question in the registry.
+`confidence` is `sourced` when a written artifact names the goal, and `inferred`
+when it comes from your reading. Every inferred seed produces an open question
+in the registry.
 
 ## Merge decisions leave a trail
 
-When you merge seeds or split one journey in two, write one line in the run notes: what you did, on which rule, with the seed IDs. The registry's `Ambiguous boundaries` section carries forward every decision where the two readings were both defensible. Rationale: an unrecorded merge becomes folklore, and the next run undoes it.
+Record each merge or split in the run notes with its reason and seed IDs. Carry
+ambiguous boundaries into the registry so the next run can inspect the decision.
 
 ## The one-screen test
 
-A candidate journey that consists of one screen is not a journey — it is a feature or a screen page. Send it to `document-screen-behavior`. A journey has at least two decision points, and in this corpus it usually has at least one repository or host crossing.
+A single-screen action is usually a feature to document with
+`document-screen-behavior`. Look for the user's broader goal and decision points
+before calling it a journey; do not invent a repository crossing.

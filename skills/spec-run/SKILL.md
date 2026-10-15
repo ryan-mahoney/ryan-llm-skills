@@ -7,8 +7,6 @@ disable-model-invocation: true
 argument-hint: "[workspace/slug or spec package folder]"
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "37"
 ---
 

@@ -50,9 +50,9 @@ test("parser subset: reads BOM, CRLF, marker, comments, quoted hashes and escape
     "id: demo\r\n" +
     'name: "A \\"quoted\\" #hash"\r\n' +
     "repositories:\r\n" +
-    "  - id: transitops-co\r\n" +
-    "    path: /srv/transitops-co # trailing comment\r\n" +
-    "    remote: git@example.com:transitops/co.git\r\n" +
+    "  - id: sample-workspace-co\r\n" +
+    "    path: /srv/sample-workspace-co # trailing comment\r\n" +
+    "    remote: git@example.com:sample-workspace/co.git\r\n" +
     "context:\r\n" +
     "  - 'two''s'\r\n";
   const result = parseKit(text);
@@ -63,9 +63,9 @@ test("parser subset: reads BOM, CRLF, marker, comments, quoted hashes and escape
     name: 'A "quoted" #hash',
     repositories: [
       {
-        id: "transitops-co",
-        path: "/srv/transitops-co",
-        remote: "git@example.com:transitops/co.git",
+        id: "sample-workspace-co",
+        path: "/srv/sample-workspace-co",
+        remote: "git@example.com:sample-workspace/co.git",
         role: null,
       },
     ],
@@ -83,16 +83,16 @@ test("parser subset: reads BOM, CRLF, marker, comments, quoted hashes and escape
   );
 });
 
-test("parser subset: preserves unknown transitops-shaped mappings and lists", () => {
+test("parser subset: preserves unknown sample-workspace-shaped mappings and lists", () => {
   const text = [
     "version: 1",
-    "id: transitops",
-    "name: TransitOps",
+    "id: sample-workspace",
+    "name: Sample Workspace",
     "# retained comment",
     "repositories:",
-    "  - id: transitops-co",
-    "    path: /srv/transitops-co",
-    "    remote: git@example.com:transitops/co.git",
+    "  - id: sample-workspace-co",
+    "    path: /srv/sample-workspace-co",
+    "    remote: git@example.com:sample-workspace/co.git",
     "    # unknown repository metadata",
     "    labels:",
     "      - web",
@@ -114,9 +114,9 @@ test("parser subset: preserves unknown transitops-shaped mappings and lists", ()
   assert.equal(result.ok, true);
   assert.deepEqual(result.kit.repositories, [
     {
-      id: "transitops-co",
-      path: "/srv/transitops-co",
-      remote: "git@example.com:transitops/co.git",
+      id: "sample-workspace-co",
+      path: "/srv/sample-workspace-co",
+      remote: "git@example.com:sample-workspace/co.git",
       role: null,
     },
   ]);
@@ -999,7 +999,7 @@ test("kit edit planner: each operation changes only its lines and previews them"
     ["set-remote replaces", { kind: "set-remote", repository_id: "a", remote: "git@x:c.git" }, ["    remote: git@x:a.git"], ['    remote: "git@x:c.git"']],
     ["clear-role", { kind: "clear-role", repository_id: "a" }, ["    role: app"], []],
     ["set-name", { kind: "set-name", name: "Operations" }, ["name: Ops"], ['name: "Operations"']],
-    ["set-execution-host", { kind: "set-execution-host", host: "restory-box" }, ["  - two.md"], ["  - two.md", 'execution_host: "restory-box"']],
+    ["set-execution-host", { kind: "set-execution-host", host: "execution-host" }, ["  - two.md"], ["  - two.md", 'execution_host: "execution-host"']],
     ["add-context", { kind: "add-context", entry: "three.md" }, ["  - two.md"], ["  - two.md", '  - "three.md"']],
     ["remove-context", { kind: "remove-context", entry: "one.md" }, ["  - one.md"], []],
     [
@@ -1052,10 +1052,10 @@ test("kit edit planner: refuses edits that match nothing or break the schema", (
 });
 
 test("kit schema: design_system and execution_host validate and normalize", () => {
-  const parsed = parseKit(OPS_KIT + 'execution_host: restory-box\n');
+  const parsed = parseKit(OPS_KIT + 'execution_host: execution-host\n');
   assert.equal(parsed.ok, true, parsed.errors.join("; "));
   assert.deepEqual(parsed.kit.design_system, { repository: "a", paths: ["ds/README.md"], applies_to: "all" });
-  assert.equal(parsed.kit.execution_host, "restory-box");
+  assert.equal(parsed.kit.execution_host, "execution-host");
   assert.match(
     parseKit(OPS_KIT.replace("repository: a\n", "repository: nope\n")).errors.join(),
     /design_system\.repository: unknown repository id "nope"/,

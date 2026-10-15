@@ -3,12 +3,13 @@ name: spec-work-tour
 description: "Build or refresh the final machine-readable evidence verdict and practitioner-facing HTML work tour for an implemented standalone spec. Use as the explicit stage after step review/fix completion and before spec-pr (or after explicitly requested branch refinement), or when asked for an implementation walkthrough, deploy-safety case, executable-evidence report, proof review, or QA handoff. The tour surfaces blocking evidence, residual risk, claim-to-gate traceability, rerunnable proof, QA scenarios, and deployment recovery without presenting the manifest as a wall of cards or tables."
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "13"
 ---
 
 # Spec Work Tour
+
+Apply [Portable Paths](../../rules/portable-paths.md) when saving artifact paths.
+Keep resolver-returned absolute paths for local commands; preserve required runtime schemas.
 
 Assemble the implemented spec's evidence into two commit-bound artifacts with separate merge,
 deployment-readiness, authorization and post-deployment states:

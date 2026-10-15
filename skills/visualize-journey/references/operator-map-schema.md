@@ -97,7 +97,7 @@ List repositories and external systems in visit order:
 {
   "id": "marketing",
   "label": "Marketing",
-  "host": "firstwho.co",
+  "host": "example.com",
   "color": "#2f6f5e"
 }
 ```
@@ -136,7 +136,7 @@ Every step requires this core:
   "stage": "locate",
   "title": "Search for a role",
   "repo": "marketing",
-  "host": "firstwho.co",
+  "host": "example.com",
   "route": "/",
   "screen": null,
   "userSees": "A role search field, sector filters, and matching JobKits.",

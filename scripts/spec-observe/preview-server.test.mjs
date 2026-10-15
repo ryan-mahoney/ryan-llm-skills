@@ -8,9 +8,9 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createPreviewServer, parsePreviewUrl } from './preview-server.mjs';
 
-const PREVIEW_URL = 'https://restory-box.tail57a257.ts.net:18042';
-const PREVIEW_ORIGIN = 'https://restory-box.tail57a257.ts.net:18042';
-const PREVIEW_HOST = 'restory-box.tail57a257.ts.net:18042';
+const PREVIEW_URL = 'https://execution-host.example.com:18042';
+const PREVIEW_ORIGIN = 'https://execution-host.example.com:18042';
+const PREVIEW_HOST = 'execution-host.example.com:18042';
 
 async function start(server, t) {
   server.listen(0, '127.0.0.1');
@@ -41,11 +41,11 @@ test('preview URL must be the allocated public HTTPS origin', () => {
     origin: PREVIEW_ORIGIN,
     host: PREVIEW_HOST,
     port: '18042',
-    canonicalOrigin: 'https://restory-box.tail57a257.ts.net',
-    canonicalHost: 'restory-box.tail57a257.ts.net',
+    canonicalOrigin: 'https://execution-host.example.com',
+    canonicalHost: 'execution-host.example.com',
   });
-  for (const value of ['http://restory-box.test:18042', 'https://restory-box.test',
-    'https://restory-box.test:18042/path', 'https://user@restory-box.test:18042']) {
+  for (const value of ['http://execution-host.test:18042', 'https://execution-host.test',
+    'https://execution-host.test:18042/path', 'https://user@execution-host.test:18042']) {
     assert.throws(() => parsePreviewUrl(value), /PREVIEW_URL/);
   }
 });
@@ -53,7 +53,7 @@ test('preview URL must be the allocated public HTTPS origin', () => {
 test('preview gates host and origin while allowing only root health probes', async t => {
   const app = createPreviewServer({ previewUrl: PREVIEW_URL, upstreamBase: 'http://127.0.0.1:9', html: '<h1>worktree</h1>' });
   const base = await start(app, t);
-  const hostMismatch = await request(base, '/api/state', { headers: { host: 'restory-box.tail57a257.ts.net:18043' } });
+  const hostMismatch = await request(base, '/api/state', { headers: { host: 'execution-host.example.com:18043' } });
   assert.equal(hostMismatch.status, 403);
   const originMismatch = await request(base, '/api/state', {
     headers: { host: PREVIEW_HOST, origin: 'https://attacker.example' },
@@ -135,8 +135,8 @@ test('mutation proxy rewrites to canonical public origin and preserves action to
   assert.deepEqual(observed, {
     method: 'POST',
     url: '/api/package-preview?x=1',
-    host: 'restory-box.tail57a257.ts.net',
-    origin: 'https://restory-box.tail57a257.ts.net',
+    host: 'execution-host.example.com',
+    origin: 'https://execution-host.example.com',
     token: 'live-token',
     body: '{"action":"start"}',
   });
@@ -147,7 +147,7 @@ test('mutation proxy rewrites to canonical public origin and preserves action to
   assert.equal(forwarded.headers['content-security-policy'], "sandbox allow-scripts; default-src 'none'");
   assert.equal(forwarded.body, '<h1>workspace view</h1>');
   assert.equal(observed.url, view);
-  assert.equal(observed.host, 'restory-box.tail57a257.ts.net');
+  assert.equal(observed.host, 'execution-host.example.com');
   const forwardedHead = await request(base, view, { method: 'HEAD', headers: { host: PREVIEW_HOST, origin: PREVIEW_ORIGIN } });
   assert.equal(forwardedHead.status, 200);
   assert.equal(forwardedHead.body, '');

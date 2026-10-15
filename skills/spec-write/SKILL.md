@@ -7,8 +7,6 @@ disable-model-invocation: true
 argument-hint: "[feature-slug (optional)]"
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "28"
 ---
 
@@ -435,7 +433,7 @@ The index is a JSON object with a `steps` array — one entry per Implementation
   "steps": [
     {
       "step": 1,
-      "repository": "warbler_ux",
+      "repository": "sample-ui",
       "name": "Define the FooConfig type",
       "description": "Add the FooConfig interface and its defaults to src/config.ts.",
       "difficulty": "easy",

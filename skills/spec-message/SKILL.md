@@ -3,8 +3,6 @@ name: spec-message
 description: "Send a one-way direction, information update, or hold request to an existing spec-end-to-end run during implementation or review through its feature inbox. Use when asked to message a spec orchestrator, steer a running spec, or send an overseer instruction."
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "2"
 ---
 
@@ -91,6 +89,6 @@ mailbox checkpoint.
 Example invocation:
 
 ```text
-$spec-message transitops/export-format — Tell the reviewer to check that empty input
+$spec-message sample-workspace/export-format — Tell the reviewer to check that empty input
 preserves the documented CSV header order.
 ```

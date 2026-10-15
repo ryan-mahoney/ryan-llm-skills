@@ -75,8 +75,8 @@ The individual skills remain valid entry points. No separate context skill is re
 
 ```text
 /spec-architect-initial describe the feature
-/spec-architect-critics transitops/results-export
-/spec-write transitops/results-export
+/spec-architect-critics sample-workspace/results-export
+/spec-write sample-workspace/results-export
 ```
 
 The critique is optional. `spec-architect-initial` establishes project context before architecture.
@@ -98,7 +98,7 @@ evidence records are ignored; re-plan for real gaps, not solely to migrate a for
 After preparation, start implementation with this request:
 
 ```text
-Use spec-end-to-end for transitops/results-export. Planning and preparation are complete;
+Use spec-end-to-end for sample-workspace/results-export. Planning and preparation are complete;
 resume from implementation through PR publication.
 ```
 
@@ -117,7 +117,7 @@ EDITOR_MODEL as its dedicated editor, REVIEW_AGENT for independent step reviews,
 and FINAL_REVIEWER for a fresh final red-flag review and quick improvements.
 Reuse the implementation owner/editor across steps.
 
-PACKAGE: transitops/feature
+PACKAGE: sample-workspace/feature
 IMPLEMENT_AGENT: <provider/model:thinking>
 EDITOR_MODEL: deepseek/deepseek-flash:max
 REVIEW_AGENT: <provider/model:thinking>
@@ -269,8 +269,8 @@ Use `spec-upgrade` when you have specs written under an older workflow and want 
 before starting implementation. Select one, several, or all pending specs explicitly:
 
 ```text
-/spec-upgrade transitops/results-export
-/spec-upgrade transitops/results-export transitops/saved-searches
+/spec-upgrade sample-workspace/results-export
+/spec-upgrade sample-workspace/results-export sample-workspace/saved-searches
 /spec-upgrade all pending specs in this repository
 ```
 
@@ -287,7 +287,7 @@ an optional transition skill; new specs use the ordinary sequence above.
 ## Resume And Completion
 
 ```text
-/spec-end-to-end resume transitops/results-export through PR publication
+/spec-end-to-end resume sample-workspace/results-export through PR publication
 ```
 
 The agent resumes at the earliest incomplete, stale, or invalid stage. A current artifact is reused;
@@ -342,7 +342,7 @@ pending work without replaying completed stages.
 Delegation follows user directives and the owning skill's policy. To request a stage coordinator:
 
 ```text
-Use spec-end-to-end for transitops/results-export through PR publication. Delegate
+Use spec-end-to-end for sample-workspace/results-export through PR publication. Delegate
 spec-run to deepseek-flash and have it dispatch each prepared step sequentially
 to a dedicated deepseek-flash worker. Keep work in the selected checkout.
 ```

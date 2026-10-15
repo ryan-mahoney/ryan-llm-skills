@@ -28,7 +28,7 @@ The repository must belong to the kit. The Compose file must stay inside the pac
 
 ### Sentinel dashboard preview
 
-This repository includes `compose.preview.yaml` for previewing the dashboard UI from the package worktree. The image rebuilds the Solid frontend from its committed lockfile, then serves the generated dashboard with a small Node proxy. The proxy sends API and package-file requests to the existing Sentinel dashboard at `https://restory-box.tail57a257.ts.net`; it does not start another Sentinel process or mount host state, credentials, or the Docker socket. The preview and canonical dashboard share the same live data and operator actions.
+This repository includes `compose.preview.yaml` for previewing the dashboard UI from the package worktree. The image rebuilds the Solid frontend from its committed lockfile, then serves the generated dashboard with a small Node proxy. The proxy sends API and package-file requests to the canonical Sentinel dashboard origin derived from `PREVIEW_URL` (the same hostname over HTTPS, without the preview port); it does not start another Sentinel process or mount host state, credentials, or the Docker socket. The preview and canonical dashboard share the same live data and operator actions.
 
 Configure the `agent-tooling` workspace to use this repository's Compose file:
 

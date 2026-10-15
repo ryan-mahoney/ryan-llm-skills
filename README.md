@@ -39,7 +39,7 @@ adapter. This is a local integration patch, not an upstream Warden release.
 
 ```text
 /spec-end-to-end add CSV export for the filtered results, using a worktree
-/spec-end-to-end resume transitops/results-export through PR publication
+/spec-end-to-end resume sample-workspace/results-export through PR publication
 /spec-upgrade all pending specs in this repository
 ```
 

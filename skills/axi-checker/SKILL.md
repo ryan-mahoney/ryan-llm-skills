@@ -5,8 +5,6 @@ argument-hint: "[path to a prompt, SKILL.md, or AGENTS.md — or pasted instruct
 disable-model-invocation: true
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "1"
   framework: AXI 10 principles — axi.md, github.com/kunchenguid/axi
 ---

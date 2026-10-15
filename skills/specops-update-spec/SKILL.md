@@ -5,8 +5,6 @@ disable-model-invocation: true
 argument-hint: "[target manifest entry + branch/diff context]"
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "1"
 ---
 

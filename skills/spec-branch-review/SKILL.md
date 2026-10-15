@@ -7,8 +7,6 @@ disable-model-invocation: true
 argument-hint: "[spec=<path/to/spec.md>] [iter=<n>] [scope=committed|working-tree|step] [step=<NNN|label>] [base=<ref>] [since=<commit>] [head=<commit>]"
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "26"
 ---
 

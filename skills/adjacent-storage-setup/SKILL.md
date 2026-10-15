@@ -5,8 +5,6 @@ argument-hint: "[--root PATH]"
 disable-model-invocation: false
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "1"
 ---
 

@@ -1,5 +1,8 @@
 # Data audit: agent tooling, spec workflow, Sentinel, and workspace storage
 
+Project names and private hostnames in this historical audit have been anonymized.
+The recorded counts and dates remain historical observations.
+
 Audit date: 2026-10-11. Repository: `~/.agents`, branch `design-packages` (`dcc2c0c`). The audit was read-only. Credential files were inspected only by key names and value classification; this document reproduces no secret values.
 
 The audit covers every persisted data structure that this repository defines, writes, or reads. That includes structures stored outside the repository: per-repository `.specs/` trees, `~/.pi/agent`, workspace storage in `~/Documents/adjacent-storage`, caches, and harness mirrors. For each structure it records:
@@ -30,7 +33,7 @@ The data sits in five storage zones. Only the first is under version control.
 | Tracked source | `~/.agents` (git) | small | Yes | Rules, 84 skills, scripts, the Pi `spec-runtime` extension, Pi agent profiles, docs, scenario fixtures |
 | Spec packages | `<repo>/.specs/` in every repository the spec skills touch | 2.3 GB in `~/.agents`; about 19.5 GB of `runtime/` across 68 packages in all repos | No (gitignored everywhere) | Intent and plan files, step cards, learnings, reviews, evidence, runtime receipts and transcripts, PR and merge records, epics (`_epics/`), plans (`_plans/`) |
 | Pi home | `~/.pi/agent/` | 5.5 GB (4.9 GB sessions) | No | Pi sessions, subagent artifacts, run history, missions, settings, provider config and credentials, the cross-package run index (`spec-runtime/`), Sentinel state (`spec-sentinel/`), third-party Pi package state |
-| Workspace storage | `~/Documents/adjacent-storage` (or `$ADJACENT_STORAGE_ROOT`) | about 2.2 GB (`transitops` 1.8 GB) | No; manual backup at `~/adjacent-storage-backup-2026-10-11` | Workspaces (`kit.yaml`), briefs, notes, artifact references, discussion threads and their Pi sessions, assignments, design packages, Phoenix-era legacy data |
+| Workspace storage | `~/Documents/adjacent-storage` (or `$ADJACENT_STORAGE_ROOT`) | about 2.2 GB (`sample-workspace` 1.8 GB) | No; manual backup at `~/adjacent-storage-backup-2026-10-11` | Workspaces (`kit.yaml`), briefs, notes, artifact references, discussion threads and their Pi sessions, assignments, design packages, Phoenix-era legacy data |
 | Caches and mirrors | `~/.claude/`, `~/.codex/`, other harness skill dirs, `~/.cache/agent-repo-search`, `dist/`, `tmp/`, `.uishot/` | `tmp/` 21 MB, `.uishot/` 6.4 MB | No | Copied or symlinked policy and skills, auto-memory, repo-search state (unbuilt), generated skill bundles, scratch files, screenshots |
 
 ## How the data flows
@@ -111,7 +114,7 @@ These are ordered by consequence. Each one cites the section that has the eviden
    - Sentinel observer files are never deleted. Because the dashboard includes them, `/api/state` returns 8.5 MB on every 5-second poll, about 15 files below the 12 MiB cap (§4).
    - `tmp/` and `.uishot/` have no cleanup (§7).
 3. **Secrets are duplicated in plain files.**
-   - The `restory` provider's literal API key is stored in `models.json` and in all 10 `.bak*` copies (§5).
+   - The `sample-provider` provider's literal API key is stored in `models.json` and in all 10 `.bak*` copies (§5).
    - `auth.json.bak` duplicates the live login store (§5).
    - `tmp/jev-config-backup-*` is a full copy of the global Claude config (§5, §7).
    - Pi sessions and `pi-warden` SQLite hold unredacted tool output (§5).
@@ -153,7 +156,7 @@ These are ordered by consequence. Each one cites the section that has the eviden
 
 ## Suggested next steps
 
-1. Move the `restory` key to a command reference like the `atria` provider uses, then delete the `models.json.bak*` files, `auth.json.bak`, and `tmp/jev-config-backup-*`, or rotate the key.
+1. Move the `sample-provider` key to a command reference like the `atria` provider uses, then delete the `models.json.bak*` files, `auth.json.bak`, and `tmp/jev-config-backup-*`, or rotate the key.
 2. Add retention:
    - an age or size cap for `runtime/runs/*-owner-*.jsonl`
    - deletion of closed Sentinel observer files
@@ -177,9 +180,9 @@ The sections were checked against each other and against the filesystem. These c
 
 ## Spec packages
 
-Scope: the per-feature `.specs/<feature>/` directories and the shared `.specs/project-context.md`, in `/Users/ryanmahoney/.agents` and in other repositories the `spec-*` skills operate on. `_epics`, `_plans`, and design packages belong to another audit; links to them are noted only. Read-only audit; no credential contents were opened (credential shapes are not relevant to this area, and `runtime/` transcripts were treated as opaque).
+Scope: the per-feature `.specs/<feature>/` directories and the shared `.specs/project-context.md`, in `~/.agents` and in other repositories the `spec-*` skills operate on. `_epics`, `_plans`, and design packages belong to another audit; links to them are noted only. Read-only audit; no credential contents were opened (credential shapes are not relevant to this area, and `runtime/` transcripts were treated as opaque).
 
-Method: inspected all 17 package directories under `/Users/ryanmahoney/.agents/.specs` (adj1..adj7, spec-sentinel, super1..3, repo-status, repo-search-index, sentinel-background-indexing, browser-capture-workspace, prototype-component-library, 3-agent-docs-automation), then compared with the authoritative definitions in `skills/spec-*/SKILL.md` + `references/`, `skills/spec-work-tour/scripts/validate-evidence-plan.mjs`, `skills/spec-run/scripts/build-history-index.mjs`, `pi/extensions/spec-runtime/{runtime,completion,startup,sentinel}.mjs`, `scripts/spec-observe/{sentinel,package-files,manual-completion,merge-reconciliation,overseer-inbox}.mjs`, `docs/spec-epics.md`, `docs/spec-runtime-observation.md`. Frequency evidence is file mtimes, `git log` on the skill paths, and census scripts over all packages.
+Method: inspected all 17 package directories under `~/.agents/.specs` (adj1..adj7, spec-sentinel, super1..3, repo-status, repo-search-index, sentinel-background-indexing, browser-capture-workspace, prototype-component-library, 3-agent-docs-automation), then compared with the authoritative definitions in `skills/spec-*/SKILL.md` + `references/`, `skills/spec-work-tour/scripts/validate-evidence-plan.mjs`, `skills/spec-run/scripts/build-history-index.mjs`, `pi/extensions/spec-runtime/{runtime,completion,startup,sentinel}.mjs`, `scripts/spec-observe/{sentinel,package-files,manual-completion,merge-reconciliation,overseer-inbox}.mjs`, `docs/spec-epics.md`, `docs/spec-runtime-observation.md`. Frequency evidence is file mtimes, `git log` on the skill paths, and census scripts over all packages.
 
 ### Overview
 
@@ -410,7 +413,7 @@ Scale in this checkout (2026-10-11): 17 package directories, 2.3 GB (`du`), of w
 - **Writers**: runtime `spec_complete` tool (owner judgments + receipts); outside Pi, the owner by hand. **Readers**: next step workers (via history index), reviewers (`step` mapped via `learning` YAML `commit`), `build-history-index`, `spec-watcher` (triggers index refresh), work-tour/merge-evidence assembly, process-improvement.
 - **Relationships**: `commit` <-> git SHA in the worktree; `evidence[].id` <-> EV gates; `verification.commands[].receipt` <-> `runtime/runs/<id>-verification.json` receipt ids; `artifact` -> `runtime/runs/<id>-verification-<receipt>.md`.
 - **Retention**: forever.
-- **Observations**: The learning embeds absolute paths into `runtime/` (e.g. `/Users/ryanmahoney/.agents/.specs/adj1-foundational-contracts/runtime/runs/…md`), so deleting/pruning `runtime/` breaks learning artifact links. `observedCommit` (camelCase) in learnings vs `observed_commit` (snake) in fix records vs `observedCommit` in merge-evidence/tour: three casings for the same concept.
+- **Observations**: The learning embeds absolute paths into `runtime/` (e.g. `~/.agents/.specs/adj1-foundational-contracts/runtime/runs/…md`), so deleting/pruning `runtime/` breaks learning artifact links. `observedCommit` (camelCase) in learnings vs `observed_commit` (snake) in fix records vs `observedCommit` in merge-evidence/tour: three casings for the same concept.
 
 ---
 
@@ -581,7 +584,7 @@ All under `.specs/<f>/runtime/` (`docs/spec-runtime-observation.md:5-18`, `pi/ex
 - **`implementation-record.md`** (repo-status): execution record kept by the coordinator (dispatches, deadlines); also pre-runtime.
 - **`preparation.json`** (repo-status): version 3 hash manifest `{version: 3, preparedAt, specSha256, contextSha256, stepIndexSha256, evidencePlanSha256, reportSha256, criteriaSha256, invariantsSha256, steps[{step, subspec{file, sha256}}]}`. Removed from the workflow Oct 5 (`6be6bfe`); discard on re-preparation; only 1 instance remains. `merge-evidence.json.preparation.sha256` in adj1-4 is the same idea surviving in another file.
 - **`conversation-notes.md`** (adj7): free-form operator notes ("not part of the package's specification, acceptance criteria, or evidence plan") - findings that adj7's blocking prerequisites are stale. No skill defines it; acts as a de facto operator annotation.
-- **Follow-up briefs** (`repo-search-index/{automatic-refresh,missing-source,model-acquisition,restory-adoption,warm-query-session}.md`): produced from `standalone-engineering-decisions.md` "Deferred work" ("a local follow-up brief ... with an outcome and completion criteria"): `# Follow-up: <title>`, Source, Current limitation, Revisit condition, Actionable scope, Authority and preservation. `missing-source.md` is a "Source clarification resolved" note. Filename and location are unspecified, they sit at package root next to canonical files and are never referenced by the sentinel or any skill.
+- **Follow-up briefs** (`repo-search-index/{automatic-refresh,missing-source,model-acquisition,sample-provider-adoption,warm-query-session}.md`): produced from `standalone-engineering-decisions.md` "Deferred work" ("a local follow-up brief ... with an outcome and completion criteria"): `# Follow-up: <title>`, Source, Current limitation, Revisit condition, Actionable scope, Authority and preservation. `missing-source.md` is a "Source clarification resolved" note. Filename and location are unspecified, they sit at package root next to canonical files and are never referenced by the sentinel or any skill.
 - **`3-agent-docs-automation/`** (June 21): the pre-pipeline layout: `proposal.md`, `critique.md`, `spec.md`, `spec-steps.json` (no `evidence`), and `subspecs/<N>-spec.md` + `subspecs/route-ladders/`. No context, no evidence plan, no `step-NNN-subspec.md`: such a package cannot be dispatched (`startup.mjs` would throw `Prepared input missing`).
 - **Observations**: `warden-evidence.mjs:64-68` maintains a hardcoded allowlist of package artifact names (including legacy `learning.md`, `ledger.md`, `steps/step-N-…` layouts, and `reviews/(step|branch)-N-(review|fix).md` - but **not** `final-N-*`, `final-review.md`, `refinement-completion.md`, `pr-url.json`'s siblings) - a third place besides docs and the sentinel where "what files does a package have" is encoded.
 
@@ -641,7 +644,7 @@ Nothing in the repo deletes, archives, compresses, or garbage-collects a package
 
 ## Epics, plans, and designs
 
-Audit date 2026-10-11, repo `/Users/ryanmahoney/.agents`, branch `design-packages` (HEAD `dcc2c0c`, equal to `origin/design-packages`, one commit ahead of `main`). Read-only. Paths below are relative to the repo root unless absolute.
+Audit date 2026-10-11, repo `~/.agents`, branch `design-packages` (HEAD `dcc2c0c`, equal to `origin/design-packages`, one commit ahead of `main`). Read-only. Paths below are relative to the repo root unless absolute.
 
 ### Overview
 
@@ -770,7 +773,7 @@ Everything under `.specs/` is git-ignored (`.gitignore` lists `.specs/`; `git ls
 
 **Observations.**
 - Stale status line. `design-studio-plan.md:3` says "implemented 2026-10-11 on branch `design-packages` (uncommitted at time of writing)". The work was committed in `dcc2c0c` the same day.
-- Unfinished items in that plan. Its "Suggested order of work" step 3 ("one real design against transitops") has not happened, since no `designs/` directory exists in storage. Step 5 (remove old skills) is done, and `skills/` has no `design-spec-*` or `design-align`. The plan's open "Decisions to confirm" list (item 6, epic tracking on branch) was settled by the merge of PR #23.
+- Unfinished items in that plan. Its "Suggested order of work" step 3 ("one real design against sample-workspace") has not happened, since no `designs/` directory exists in storage. Step 5 (remove old skills) is done, and `skills/` has no `design-spec-*` or `design-align`. The plan's open "Decisions to confirm" list (item 6, epic tracking on branch) was settled by the merge of PR #23.
 - The adjacent plan's "Follow-on specification packages" and phase list predate the epic record. It has no `Status:` update to reflect that adj7 was dropped. That fact lives only in `epic.json` and `closeout.md`.
 - Plans are invisible to the Sentinel except as a path, so a plan with no epic record is undiscoverable apart from the directory listing.
 
@@ -778,7 +781,7 @@ Everything under `.specs/` is git-ignored (`.gitignore` lists `.specs/`; `git ls
 
 ### 4. Design package: index (`design.json`)
 
-**Location / naming.** `<ADJACENT_STORAGE_ROOT>/projects/<workspace>/designs/<slug>/design.json`. The root resolves as `--root`, then `ADJACENT_STORAGE_ROOT`, then `~/Documents/adjacent-storage` (`docs/design-packages.md:26-29`). It is not git-tracked. Current state: workspaces `adjacent`, `firstwho`, `transitops` exist under `projects/` and none has a `designs/` directory (checked). So there are zero real instances. Only the committed unit tests exercise the format.
+**Location / naming.** `<ADJACENT_STORAGE_ROOT>/projects/<workspace>/designs/<slug>/design.json`. The root resolves as `--root`, then `ADJACENT_STORAGE_ROOT`, then `~/Documents/adjacent-storage` (`docs/design-packages.md:26-29`). It is not git-tracked. Current state: workspaces `adjacent`, `sample-product`, `sample-workspace` exist under `projects/` and none has a `designs/` directory (checked). So there are zero real instances. Only the committed unit tests exercise the format.
 
 **Format and schema.** JSON. The authoritative validator is `parseDesign` in `scripts/design/schema.mjs:21-85`. Limits (`:7`): 100 screens, 4 widths, 64 KiB record, 200 KiB per screen, 50 designs per workspace.
 - `schema_version: 1`, `design` (slug `^[a-z][a-z0-9-]{0,47}$`, equal to the directory name), `title` (required).
@@ -804,7 +807,7 @@ Everything under `.specs/` is git-ignored (`.gitignore` lists `.specs/`; `git ls
 
 **Relationships.**
 - Identity is `workspace/design`: the workspace is the directory two levels above the design (`referenceLine` takes `basename(dirname(dirname(directory)))`).
-- The workspace's `kit.yaml` supplies the design system under a supplemental `design_system` key (`repository`, `applies_to`, `paths[]`). `transitops/kit.yaml:25-32` carries it; `adjacent` and `firstwho` do not.
+- The workspace's `kit.yaml` supplies the design system under a supplemental `design_system` key (`repository`, `applies_to`, `paths[]`). `sample-workspace/kit.yaml:25-32` carries it; `adjacent` and `sample-product` do not.
 - `epic.json` `designs[]` points at it, and the design never names epics. A `spec-steps.json` entry may carry a `design` object, `{workspace, design, step, path, sha256}`.
 - `context[]` names workspace-relative inputs (`context/`, `sources/`).
 
@@ -891,7 +894,7 @@ Everything under `.specs/` is git-ignored (`.gitignore` lists `.specs/`; `git ls
 
 **Writers / readers.** Written by spec-architect. Read only by humans and by the design-studio plan reference.
 
-**Relationships.** It is a standalone package (no epic membership). Its example (`route-ladders`) matches the design-package example slug `ladder-overview` in the transitops workspace.
+**Relationships.** It is a standalone package (no epic membership). Its example (`route-ladders`) matches the design-package example slug `ladder-overview` in the sample-workspace workspace.
 
 **Retention.** It is dormant. Because no epic lists it, the Sentinel treats it as an ordinary `proposed` package with no activity.
 
@@ -901,7 +904,7 @@ Everything under `.specs/` is git-ignored (`.gitignore` lists `.specs/`; `git ls
 
 ### 8. UI screenshots (`.uishot/`)
 
-**Location / naming.** `<repo>/.uishot/<slug>-<HHMMSS>.png` (for example `file-users-ryanmahoney-agents-specs-adj3-211041.png`, `sentinel-desktop-final.png`). Git-ignored (`.gitignore:7`). Nine PNGs, 6.4 MB in total, dated 2026-10-07 to 2026-10-10.
+**Location / naming.** `<repo>/.uishot/<slug>-<HHMMSS>.png` (for example `file-home-user-agents-specs-adj3-211041.png`, `sentinel-desktop-final.png`). Git-ignored (`.gitignore:7`). Nine PNGs, 6.4 MB in total, dated 2026-10-07 to 2026-10-10.
 
 **Format and schema.** PNG only. The uishot launcher prints `file:` and `console_errors:` as key-value text on stdout, and that output is not persisted.
 
@@ -933,11 +936,11 @@ Everything under `.specs/` is git-ignored (`.gitignore` lists `.specs/`; `git ls
 
 ## Workspace storage: workspaces, kits, threads, assignments
 
-Scope: the "adjacent" storage outside repositories. Code in `/Users/ryanmahoney/.agents/scripts/workspaces/*`, consumers in `scripts/spec-observe/{dashboard,assignments}.mjs` and `pi/extensions/spec-runtime/sentinel-host.mjs`. Contracts in `docs/adjacent-architecture.md` (C-1..C-10) and `.specs/adj1..adj7`. Real store inspected read-only on 2026-10-11. Paths are relative to `/Users/ryanmahoney/.agents` unless absolute. All line numbers refer to the working tree as of the audit.
+Scope: the "adjacent" storage outside repositories. Code in `~/.agents/scripts/workspaces/*`, consumers in `scripts/spec-observe/{dashboard,assignments}.mjs` and `pi/extensions/spec-runtime/sentinel-host.mjs`. Contracts in `docs/adjacent-architecture.md` (C-1..C-10) and `.specs/adj1..adj7`. Real store inspected read-only on 2026-10-11. Paths are relative to `~/.agents` unless absolute. All line numbers refer to the working tree as of the audit.
 
 ### 0. Overview
 
-**Where it lives.** One storage root, resolved by `resolveStorageRoot` (`scripts/workspaces/store.mjs:251-260`): `--root` flag (CLI only), else `ADJACENT_STORAGE_ROOT` (must be absolute, else throws), else `~/Documents/adjacent-storage`. `ADJACENT_STORAGE_ROOT` is not set in this shell, so the live root is `/Users/ryanmahoney/Documents/adjacent-storage` (about 2.2 GB on disk per `du`: transitops 1.8 GB / 18,442 files, firstwho 49 MB / 386 files, adjacent 484 KB / 9 files). The Sentinel host (`sentinel-host.mjs:128,135`) and dashboard (`dashboard.mjs:128`) resolve the same way; a launchd-installed host must put the variable in its plist (`scripts/spec-observe/README.md:274-276`). The root is a Phoenix "Adjacent" app's former data directory reused in place (C-2/C-3), so it mixes Phoenix-era data with new-system data. A byte-for-byte backup exists at `/Users/ryanmahoney/adjacent-storage-backup-2026-10-11` (18,840 files, excludes `.adjacent/asr-cache`); `diff -rq` shows the live root differs from it only by `projects/transitops/{threads,sessions}` (the first new-system thread), i.e. nothing else has been written since the backup.
+**Where it lives.** One storage root, resolved by `resolveStorageRoot` (`scripts/workspaces/store.mjs:251-260`): `--root` flag (CLI only), else `ADJACENT_STORAGE_ROOT` (must be absolute, else throws), else `~/Documents/adjacent-storage`. `ADJACENT_STORAGE_ROOT` is not set in this shell, so the live root is `~/Documents/adjacent-storage` (about 2.2 GB on disk per `du`: sample-workspace 1.8 GB / 18,442 files, sample-product 49 MB / 386 files, adjacent 484 KB / 9 files). The Sentinel host (`sentinel-host.mjs:128,135`) and dashboard (`dashboard.mjs:128`) resolve the same way; a launchd-installed host must put the variable in its plist (`scripts/spec-observe/README.md:274-276`). The root is a Phoenix "Adjacent" app's former data directory reused in place (C-2/C-3), so it mixes Phoenix-era data with new-system data. A byte-for-byte backup exists at `~/adjacent-storage-backup-2026-10-11` (18,840 files, excludes `.adjacent/asr-cache`); `diff -rq` shows the live root differs from it only by `projects/sample-workspace/{threads,sessions}` (the first new-system thread), i.e. nothing else has been written since the backup.
 
 **Layout.**
 
@@ -1016,7 +1019,7 @@ Thread side: `thread_id == session_id` (a UUID), `execution_dir` and `session_di
 
 ### 1. Storage root and root-level coordination
 
-**Location / naming.** `<root>` = `/Users/ryanmahoney/Documents/adjacent-storage` (see overview). `projects/` is the only directory code requires. `.sentinel/` is derived: `coordinationPaths(physicalRoot)` returns `{sentinel, database: .sentinel/coordination.sqlite, socket: .sentinel/adjacent.sock}` (assignments.mjs:619-625). The `.sentinel` directory is created mode 0700 non-recursively on first launch (assignments.mjs:630-660).
+**Location / naming.** `<root>` = `~/Documents/adjacent-storage` (see overview). `projects/` is the only directory code requires. `.sentinel/` is derived: `coordinationPaths(physicalRoot)` returns `{sentinel, database: .sentinel/coordination.sqlite, socket: .sentinel/adjacent.sock}` (assignments.mjs:619-625). The `.sentinel` directory is created mode 0700 non-recursively on first launch (assignments.mjs:630-660).
 
 **Format & schema.** `storageStatus(root)` returns `{root, status, errors}` with status in `ok | missing_root | missing_projects | invalid_root | invalid_projects | unreadable` (store.mjs:269-355; README table says `invalid_*`). Never creates anything. `setupStorage` (store.mjs:1178) creates root and `projects/` one component at a time, refusing symlinks and wrong types. Catalog scans are bounded by `CATALOG_READ_HARD_LIMITS` = 400 entries, 100 rows, 64 KiB per file, 4 MiB total (store.mjs:359-364), enforced through a shared `budget` object that records `omissions: "none"|"unknown"` and `reasons[]`.
 
@@ -1039,7 +1042,7 @@ Thread side: `thread_id == session_id` (a UUID), `execution_dir` and `session_di
 
 ### 2. Workspace (project directory) and kit manifest
 
-**Location / naming.** `<root>/projects/<workspace-id>/kit.yaml`. Real workspaces: `adjacent`, `firstwho`, `transitops` (all directory name == kit id). Id regex `^[a-z0-9][a-z0-9-]*$` (kit.mjs:41; store.mjs:1154; discussion.mjs:32). Directory/id mismatch yields attention `directory_mismatch` instead of rename (store.mjs readWorkspaceEntry end; C-4).
+**Location / naming.** `<root>/projects/<workspace-id>/kit.yaml`. Real workspaces: `adjacent`, `sample-product`, `sample-workspace` (all directory name == kit id). Id regex `^[a-z0-9][a-z0-9-]*$` (kit.mjs:41; store.mjs:1154; discussion.mjs:32). Directory/id mismatch yields attention `directory_mismatch` instead of rename (store.mjs readWorkspaceEntry end; C-4).
 
 **Format & schema.** YAML *subset* parsed by a hand-written bounded parser (`parseKit`, kit.mjs:584; supported subset in header comment kit.mjs:1-60, max depth 64). `validateKit` (kit.mjs:664-740) normalizes to:
 
@@ -1051,13 +1054,13 @@ repositories: [ {id (unique in kit), path (string), remote? (string), role? (str
 context: [ string ... ]         (optional list of workspace-relative paths; mappings with `path:` also tolerated by contextPath, store.mjs:814)
 ```
 
-Unknown top-level keys are ignored by the validator but retained byte-for-byte by edits (transitops has a supplemental `design_system:` block with a comment "the current catalog ignores unknown keys"; `docs/design-packages.md` now relies on it as a de-facto schema extension). Real examples: `adjacent` 1 repo (`main`), `firstwho` 6 repos + 3 context entries, `transitops` 4 repos + 10 context entries + `design_system`. Repo `path` values are absolute (`/Users/ryanmahoney/Documents/<repo>`), relative paths are tolerated on read (resolved against the workspace dir, store.mjs:745-760) but `add-repo` refuses non-absolute paths (README).
+Unknown top-level keys are ignored by the validator but retained byte-for-byte by edits (sample-workspace has a supplemental `design_system:` block with a comment "the current catalog ignores unknown keys"; `docs/design-packages.md` now relies on it as a de-facto schema extension). Real examples: `adjacent` 1 repo (`main`), `sample-product` 6 repos + 3 context entries, `sample-workspace` 4 repos + 10 context entries + `design_system`. Repo `path` values are absolute (`~/Documents/<repo>`), relative paths are tolerated on read (resolved against the workspace dir, store.mjs:745-760) but `add-repo` refuses non-absolute paths (README).
 
 **Resolved (computed, not stored) views.** `fetchWorkspace` (store.mjs:1098-1150) returns `{id, name, directory, kit, repositories[], context[], briefs[], notes[], artifacts[], has_workspace_specs, attention[]}`. Repository record `status` in `ok | missing | not_git | unreadable` plus attention `remote_mismatch | unreadable` (store.mjs:745-812); uses `resolveCheckout` and a 5 s git timeout. Context record status `ok | missing | outside_root | unreadable` (store.mjs:875-911), symlinks refused.
 
 **Purpose.** A workspace is the home of research, notes, briefs, threads, and assignments that span repositories; the kit declares the repos and shared context (C-2). One workspace to one kit.
 
-**Lifecycle & frequency.** Created once per project; edited rarely. mtimes: `adjacent/kit.yaml` Oct 5 02:59 (Phoenix), `firstwho/kit.yaml` Oct 5 19:14, `transitops/kit.yaml` Oct 6 13:43. No new-system edit has been applied: there are no `kit.yaml.prev-*` files. Code history: 15 commits on Oct 10 (`95e9b50` parser through `c3f40a2`); store logic is stable since.
+**Lifecycle & frequency.** Created once per project; edited rarely. mtimes: `adjacent/kit.yaml` Oct 5 02:59 (Phoenix), `sample-product/kit.yaml` Oct 5 19:14, `sample-workspace/kit.yaml` Oct 6 13:43. No new-system edit has been applied: there are no `kit.yaml.prev-*` files. Code history: 15 commits on Oct 10 (`95e9b50` parser through `c3f40a2`); store logic is stable since.
 
 **Writers.** Operator via CLI only: `create ID [--name]` (`createWorkspace`, store.mjs:1212: mkdir then exclusive kit publish), `add-repo`/`set-role` (preview by default, `--apply` runs `applyKitEdit`, store.mjs:1550-1649). No dashboard writer. No agent writer. Phoenix wrote the three existing kits.
 
@@ -1071,23 +1074,23 @@ Unknown top-level keys are ignored by the validator but retained byte-for-byte b
 - **Kit edit protocol has a leftover-lock failure mode** (store.mjs:1620-1649): `kit.yaml.lock` is created `wx`; if the process dies mid-apply the lock persists and every later apply refuses until a human removes it (documented in README). No staleness detection (unlike the SQLite claim used for assignments).
 - Backups accumulate unboundedly (`kit.yaml.prev-<ISO>-<UUID>`, ISO contains `:` characters; acceptable on macOS, unusual on other filesystems).
 - Kit edit is serialized only by operator discipline ("keep the exclusion window", README). Thread/assignment code never edits the kit, so there is no cross-writer risk, but the Phoenix app (if run) is another potential writer.
-- `docs/design-packages.md` and `transitops/kit.yaml` use `design_system:` as supplemental metadata that `kit.mjs` neither validates nor documents. A typo there is invisible.
+- `docs/design-packages.md` and `sample-workspace/kit.yaml` use `design_system:` as supplemental metadata that `kit.mjs` neither validates nor documents. A typo there is invisible.
 - C-5 text says status "is `ok`, `missing`, or `not_git`"; the code adds `unreadable` (store.mjs:745+). Doc is behind.
 
 ---
 
 ### 3. Kit `context:` entries, `sources/`, `context/`, migration manifests ("context files adjacent to projects")
 
-**Location / naming.** `projects/<id>/context/project.txt` (plain text, 2.4 KB for transitops), `projects/<id>/sources/<repo-dir>/...` (copies of untracked, repo-local files like `.specs/`, `tmp/`, `.pi/`, `priv/static/images`), `projects/<id>/migration/<YYYY-MM-DD>[-name]-untracked.json`.
+**Location / naming.** `projects/<id>/context/project.txt` (plain text, 2.4 KB for sample-workspace), `projects/<id>/sources/<repo-dir>/...` (copies of untracked, repo-local files like `.specs/`, `tmp/`, `.pi/`, `priv/static/images`), `projects/<id>/migration/<YYYY-MM-DD>[-name]-untracked.json`.
 
 **Format & schema.**
 - Context entries in `kit.yaml` are plain relative path strings; resolved lexically then lstat-by-component to refuse symlinks and `..` (`inspectContainedReference`, store.mjs:827-873).
-- Migration manifest (un-versioned JSON, produced by an external one-off script, not in this repo): `started_at, status ("complete"), [source_root], units[] ({repo, relative_path}), files[] ({repo, source, destination, type, size, sha256, mode}), excluded[], completed_units[], finished_at, verification{...}`. Real counts: transitops 2026-10-05: 29 units; 2026-10-06: 7 units / 6,884 files / 3.4 MB; firstwho: 151 units / 379 files / 171 KB. `verification` keys differ per file (e.g. `all_destination_hashes_verified`, `tracked_files_unchanged`, `adjacent_catalog{valid, repository_statuses, resolved_context_paths}`, free-text `jev` note).
+- Migration manifest (un-versioned JSON, produced by an external one-off script, not in this repo): `started_at, status ("complete"), [source_root], units[] ({repo, relative_path}), files[] ({repo, source, destination, type, size, sha256, mode}), excluded[], completed_units[], finished_at, verification{...}`. Real counts: sample-workspace 2026-10-05: 29 units; 2026-10-06: 7 units / 6,884 files / 3.4 MB; sample-product: 151 units / 379 files / 171 KB. `verification` keys differ per file (e.g. `all_destination_hashes_verified`, `tracked_files_unchanged`, `adjacent_catalog{valid, repository_statuses, resolved_context_paths}`, free-text `jev` note).
 - Workspace-local spec packages: `projects/adjacent/.specs/ci/{context.md,proposal.md}` (an ordinary spec package created in Phoenix), detected by `hasWorkspaceSpecs` (store.mjs:1076).
 
 **Purpose.** Phoenix "Adjacent" made agents work with research and untracked repo material outside git. The migration manifests record the one-time move of those files from repo working trees to `sources/`, so repos stay clean. Kit `context:` tells a launcher/agent which of them to read.
 
-**Lifecycle & frequency.** Data-only, frozen: migration manifests Oct 5 19:08, Oct 5 19:14, Oct 6 13:43; `context/project.txt` Oct 6 13:43; `sources/transitops/warbler_ux` last touched Oct 7 18:30. Nothing in new code writes these. New material goes to `briefs/`, `notes/`, `artifacts/`, not `sources/`.
+**Lifecycle & frequency.** Data-only, frozen: migration manifests Oct 5 19:08, Oct 5 19:14, Oct 6 13:43; `context/project.txt` Oct 6 13:43; `sources/sample-workspace/sample-ui` last touched Oct 7 18:30. Nothing in new code writes these. New material goes to `briefs/`, `notes/`, `artifacts/`, not `sources/`.
 
 **Writers.** One-off external script (not in repo) + operator hand edits. **Readers.** `fetchWorkspace` (existence/status only, content not read except a readable-test), dashboard file viewer (`listPackageFiles` / `readPackageFile`, excludes `.adjacent, sessions, threads, .git, .env*, node_modules, _build, deps`: dashboard.mjs:118), design skills (`designs/` references `context/...` in `design.json`).
 
@@ -1095,11 +1098,11 @@ Unknown top-level keys are ignored by the validator but retained byte-for-byte b
 
 **Import / adj7 status ("adjacent-import-pilot").** Per `.specs/adj7-adjacent-import-pilot/proposal.md` (verdict COMPATIBLE_WITH_CAVEATS), because adj1 C-2/C-3 reuse the Phoenix tree in place, projects/kits/context/sources/migration need *no* import. What remains is Phoenix's SQLite thread coordination state. Planned design (not implemented): a stdlib CLI reading `.adjacent/state.sqlite3` with `sqlite3 -readonly`, previewing by default, then on `--apply` writing (a) new ThreadV1 records `projects/<project_id>/threads/<thread_id>.json` with `import: {source, digest, imported_at, adjacent:{authority:"none", ...}}`, (b) byte-identical copies of Pi session files under `sessions/<thread_id>/`, (c) a manifest `migration/<UTC date>-adjacent-threads.json`. Rows with `desired_state='active'` import as `history_only:true` (validated by `validateThread`, discussion.mjs:198-206). Item outcomes: `create | unchanged | missing_session | session_ambiguous | missing_execution_root | unknown_repository | missing_workspace | source_changed | diverged | foreign_destination`. **Status: spec only.** `grep` finds no importer, no `adjacent-threads` or `foreign_destination` symbol in `scripts/`, `pi/`, or `docs/`. `.specs/adj7-*` has `spec.md` and 7 step subspecs but no `pr-url.json`, whereas adj1..adj6 each have one. The consumer half exists: `validateImport` (discussion.mjs:153-166) and `history_only` already ship in ThreadV1.
 
-**Retention / privacy.** `sources/` holds raw copies of untracked repo files, including `tmp/` logs, env-sandbox logs, Stripe verification JSON, Fly deploy logs (e.g. `firstwho/sources/shared/tmp/*`). I did not read contents. Treat the whole workspace tree as sensitive; the dashboard viewer can serve any non-excluded file under it (CSP sandboxed).
+**Retention / privacy.** `sources/` holds raw copies of untracked repo files, including `tmp/` logs, env-sandbox logs, Stripe verification JSON, Fly deploy logs (e.g. `sample-product/sources/shared/tmp/*`). I did not read contents. Treat the whole workspace tree as sensitive; the dashboard viewer can serve any non-excluded file under it (CSP sandboxed).
 
 **Observations.**
 - Manifests are the only machine record of what was copied from where; there is no schema/version, so any importer must key on shape.
-- Absolute paths in `files[].destination` embed `/Users/ryanmahoney/Documents/adjacent-storage/...`.
+- Absolute paths in `files[].destination` embed `~/Documents/adjacent-storage/...`.
 - The `migration/` directory is exposed through the dashboard workspace file routes (not in `WORKSPACE_EXCLUDED`), including 3-4 MB path inventories of the operator's repos.
 - No new-system structure records provenance for files that *do* come from repos after migration; `artifacts/*.json` is the only reference mechanism and none exist yet.
 
@@ -1160,7 +1163,7 @@ Derived read-only `status` per record: `ok | missing | outside_root | repository
 
 ### 6. Thread record (ThreadV1)
 
-**Location / naming.** `projects/<ws>/threads/<thread_id>.json`, mode 0600 (verified on the real file), `<thread_id>` = UUID v4 from `randomUUID` (discussion.mjs:1081). Real store: one record, `projects/transitops/threads/2afa199b-665e-4fbc-a167-bb530eadc292.json` (896 bytes). The directory `threads/` is created 0755.
+**Location / naming.** `projects/<ws>/threads/<thread_id>.json`, mode 0600 (verified on the real file), `<thread_id>` = UUID v4 from `randomUUID` (discussion.mjs:1081). Real store: one record, `projects/sample-workspace/threads/2afa199b-665e-4fbc-a167-bb530eadc292.json` (896 bytes). The directory `threads/` is created 0755.
 
 **Format & schema.** Single-line JSON + `\n`. Validator `validateThread` (discussion.mjs:177-225) is lexical; unknown keys are preserved (lines 168-176), malformed required fields throw `invalid-thread` and are never repaired:
 
@@ -1229,7 +1232,7 @@ The real record additionally has a legacy `"context": []` key (preserved as an u
 
 **Observations.**
 - `thread.session_file` stays `null` until discovered; the record and the file can disagree transiently (create-on-open hazard documented in the doc).
-- Phoenix thread sessions (3 files under `projects/{adjacent,firstwho}/.adjacent/sessions/`) are v3 JSONL too (C-8 compatibility evidence) but are *not* in `sessions/<thread-id>/`; the shape difference (flat dir, two threads sharing one directory) is why adj7 copies rather than moves.
+- Phoenix thread sessions (3 files under `projects/{adjacent,sample-product}/.adjacent/sessions/`) are v3 JSONL too (C-8 compatibility evidence) but are *not* in `sessions/<thread-id>/`; the shape difference (flat dir, two threads sharing one directory) is why adj7 copies rather than moves.
 
 ---
 
@@ -1316,9 +1319,9 @@ State machine (`classify`, reconcile.mjs:154+): `launching -> live` only on exac
 
 ### 11. Phoenix legacy state (`.adjacent/`)
 
-**Location / naming.** `<root>/.adjacent/state.sqlite3` (49 KB; `-wal` 297 KB Oct 8 07:03; `-shm`), `<root>/.adjacent/asr-cache/` (Whisper model, excluded from backup), and per-project `projects/{adjacent,firstwho}/.adjacent/{threads/<uuid>/context.json, sessions/<ts>_<uuid>.jsonl, subagents/{async-subagent-runs,async-subagent-results,supervisor-channels,async-retention-maintenance.jsonl,.async-retention-cursor.json}}`. `transitops` has no `.adjacent/`.
+**Location / naming.** `<root>/.adjacent/state.sqlite3` (49 KB; `-wal` 297 KB Oct 8 07:03; `-shm`), `<root>/.adjacent/asr-cache/` (Whisper model, excluded from backup), and per-project `projects/{adjacent,sample-product}/.adjacent/{threads/<uuid>/context.json, sessions/<ts>_<uuid>.jsonl, subagents/{async-subagent-runs,async-subagent-results,supervisor-channels,async-retention-maintenance.jsonl,.async-retention-cursor.json}}`. `sample-workspace` has no `.adjacent/`.
 
-**Format & schema.** SQLite tables (read-only inspection): `schema_migrations` (2 rows), `threads` (3 rows; columns id, project_id, repository_id, skill, title, spec_package, execution_root, session_dir, bundle_fingerprint, desired_state, attention, pi_os_pid, pi_started_at, live_runs JSON, recovery_attempts, inserted_at, updated_at, provider, model_id, thinking_level, model_attention; triggers enforce provider/model/thinking validity), `commands` (7 rows; per-thread seq queue with body, body_sha256, state, disposition, leaf_before, entry_id), `thread_resources` (4 rows; path claims with `released_at`), `app_owner` (1 row, pid + process_started_at), `pi_model_default` (1 row, all null). Thread rows: `adjacent` finished (Oct 5), `firstwho` active (Oct 7), `adjacent` active (Oct 8). Per-thread `context.json` stores resolved context paths, `executionRoot`, `skill`, `rulesRoot`, `skillRoot` (pointing into the Phoenix `_build/dev/...` tree).
+**Format & schema.** SQLite tables (read-only inspection): `schema_migrations` (2 rows), `threads` (3 rows; columns id, project_id, repository_id, skill, title, spec_package, execution_root, session_dir, bundle_fingerprint, desired_state, attention, pi_os_pid, pi_started_at, live_runs JSON, recovery_attempts, inserted_at, updated_at, provider, model_id, thinking_level, model_attention; triggers enforce provider/model/thinking validity), `commands` (7 rows; per-thread seq queue with body, body_sha256, state, disposition, leaf_before, entry_id), `thread_resources` (4 rows; path claims with `released_at`), `app_owner` (1 row, pid + process_started_at), `pi_model_default` (1 row, all null). Thread rows: `adjacent` finished (Oct 5), `sample-product` active (Oct 7), `adjacent` active (Oct 8). Per-thread `context.json` stores resolved context paths, `executionRoot`, `skill`, `rulesRoot`, `skillRoot` (pointing into the Phoenix `_build/dev/...` tree).
 
 **Purpose.** State of the retired Phoenix app. The architecture doc says it "will not run again" and its three threads "migrated by hand"; adj7 would import them.
 
@@ -1581,7 +1584,7 @@ Audit date: 2026-10-11 (UTC ~17:15). Read-only. Credential files were not opened
 - **Location / naming:** `<pkg>/inbox/<id>.md` and `<pkg>/processed/<id>.md`; id = `<UTC compact timestamp>-<suffix>` (skill examples `20260928T150000Z-a71c`; code-generated `YYYYMMDDTHHMMSSmmmZ-<uuid>`, `overseer-inbox.mjs:32-41`).
 - **Format & schema:** UTF-8 Markdown with exactly five unquoted frontmatter keys `id, run, sender, audience, kind` then body (`serialize` `:50-52`). `kind ∈ hold|direction|information` in the protocol; the module accepts only `hold|direction` (`KINDS` `:16`). `audience ∈ coordinator|implementation|step-NNN|review|fix` in the protocol; the module hardcodes `coordinator` and `sender === 'operator'` (`:91-92`). Body ≤ `INBOX_FILE_BYTES` (64 KiB), no NUL/unsafe controls. Run id `^[A-Za-z0-9_-]{1,128}$`.
 - **Purpose:** one-way operator→coordinator direction/hold channel. The protocol is in `skills/spec-end-to-end/references/overseer-inbox.md` and the sender skill in `skills/spec-message/SKILL.md`.
-- **Lifecycle & frequency:** operator-driven; 3 originals still in `inbox/` (gtfs-planner: 2 for `04-timetable-paste-import` dated 2026-09-28, 1 for `28-stop-add-edit` dated 2026-10-01 18:46) and 9 in `processed/` across all roots. The coordinator moves originals to `processed/` and records intake receipts in its stage ledger; nothing moves them automatically. Hold release requires a later `direction` that names the hold id plus matching `applied` outcomes and hashes in the checkpoint (`readInboxGuard` projection retained in `checkpoint.inbox_guard`).
+- **Lifecycle & frequency:** operator-driven; 3 originals still in `inbox/` (sample-planner: 2 for `04-timetable-paste-import` dated 2026-09-28, 1 for `28-stop-add-edit` dated 2026-10-01 18:46) and 9 in `processed/` across all roots. The coordinator moves originals to `processed/` and records intake receipts in its stage ledger; nothing moves them automatically. Hold release requires a later `direction` that names the hold id plus matching `applied` outcomes and hashes in the checkpoint (`readInboxGuard` projection retained in `checkpoint.inbox_guard`).
 - **Writers:** (a) `deliverOverseerMessage` (exclusive `createFileExclusive`, one publication, one guard verification; returns `delivered|unconfirmed`), called from `scripts/workspaces/cli.mjs:34`; (b) the `spec-message` skill via filesystem tools; (c) the coordinator (archive move). **Readers:** `readInboxGuard` (bounded: 200 files, 1 MiB total), coordinator, `verifyPublished`.
 - **Relationships:** `run` ↔ coordinator workflow id (run id recorded in the stage ledger, also the checkpoint `workflow_id`); lives in the primary-checkout package; guard sources are recorded in `checkpoint.inbox`.
 - **Retention:** originals are never deleted by design.
@@ -1656,7 +1659,7 @@ Server: `createDashboardServer` (`dashboard.mjs:123-242`), bound to 127.0.0.1, d
 
 ### 19. Epic records (read-only input, derived output)
 
-- **Location / schema:** `<primary>/.specs/_epics/<slug>/epic.json` ≤64 KiB, ≤50 epics per `.specs`, ≤100 packages per epic. `{schema_version:1, epic(slug), title, state: planned|active|complete|abandoned, plan?, created_at?, note?, designs[≤20 {workspace,design,path?}], packages[{package, repository?, requires[], note?}]}` (`parseEpic` `epics.mjs:17-64`). 7 records on disk (adj, super, workspace in `~/.agents` and `adjacent`; home, data, pages in `warbler_ux`; ai in `gtfs-planner`).
+- **Location / schema:** `<primary>/.specs/_epics/<slug>/epic.json` ≤64 KiB, ≤50 epics per `.specs`, ≤100 packages per epic. `{schema_version:1, epic(slug), title, state: planned|active|complete|abandoned, plan?, created_at?, note?, designs[≤20 {workspace,design,path?}], packages[{package, repository?, requires[], note?}]}` (`parseEpic` `epics.mjs:17-64`). 7 records on disk (adj, super, workspace in `~/.agents` and `adjacent`; home, data, pages in `sample-ui`; ai in `sample-planner`).
 - **Derived:** member status `unobserved|missing|merged|complete|published|unknown|in-progress|prepared|proposed` computed from package facts at read time (`deriveMemberStatus`), plus `next`, `waiting_on`, `summary`, per-epic `coverage`; emitted as `snapshot.epics` (32 KB live) and `run.epic`.
 - **Writers:** operator and the epic-end-to-end skill; the sentinel never writes. **Readers:** sentinel, dashboard Epics view, `cli` text output.
 - **Observations:** the stored `state` is hand-maintained and disagrees with derived status: epic `ai` has `state:"complete"` while all 11 members are `prepared` (0 landed); epic `super` is `active` with 3/3 members `merged`; `home` is `complete` with 3 merged + 1 manual-complete. Because member status never lands from `epic.state`, dashboards that surface `state` next to the derived counts will show contradictory pairs. The `_`-prefixed folder convention (`_epics`, `_plans`) is enforced in two places (`sentinel.mjs:573` and `epics.mjs`).
@@ -1690,7 +1693,7 @@ Server: `createDashboardServer` (`dashboard.mjs:123-242`), bound to 127.0.0.1, d
 - `SKILL.md` command list incomplete (`enable|disable|root|add` omitted); `enable <policy-file>` documented as the arming path but unused in practice (§10).
 - README documents only `sentinel status`; CLI also has `inspect` and `--all` (§18).
 - README: discovery "cached five minutes" is true only while the reader child survives; it is killed on every timeout (§4.2).
-- `docs/spec-runtime-observation.md` lists `runtime/progress.json`, `runtime/stages/`, `runs/<id>-editor-configuration.json`; they exist in `warbler_ux` packages (31 each) but not in the older `.agents` packages, and `docs` does not mention `runtime/assignments/` (11 files in `spec-sentinel`) or `runs/<id>-processes/`.
+- `docs/spec-runtime-observation.md` lists `runtime/progress.json`, `runtime/stages/`, `runs/<id>-editor-configuration.json`; they exist in `sample-ui` packages (31 each) but not in the older `.agents` packages, and `docs` does not mention `runtime/assignments/` (11 files in `spec-sentinel`) or `runs/<id>-processes/`.
 - Overseer-inbox protocol (kinds/audiences/senders) is broader than the only code that writes it (§11).
 
 **Retention / cleanup summary:** no cleanup exists for observer envelopes (8.4 MB, 21 files), run index pointers (823; 46 dangling), grant/activation receipts (54/120), shadow observations (98), checkpoints, completed packages' `runtime/` trees, or enrollment records. Estimated growth: ~3–4 observer files/day (≈0.8 MB each) plus ~100–200 index pointers/day; the dashboard server's 12 MiB state ceiling will start dropping envelopes first (about 15 live-observer files), and the 1000-pointer index cap is about 1–2 days away at the current dispatch rate.
@@ -1763,7 +1766,7 @@ Spec-gym scenarios are scaffolding only. Both scenario indexes are empty tables 
 
 ### 1. Pi agent profiles
 
-**Location**: `/Users/ryanmahoney/.agents/pi/agents/{spec-clerk,spec-final-editor,spec-final-reviewer,spec-sentinel-diagnostician,spec-stage-reviewer,spec-step-editor,spec-step-fixer,spec-step-owner}.md`, git-tracked. `sync.sh:92` creates per-file symlinks in `~/.pi/agent/agents/`.
+**Location**: `~/.agents/pi/agents/{spec-clerk,spec-final-editor,spec-final-reviewer,spec-sentinel-diagnostician,spec-stage-reviewer,spec-step-editor,spec-step-fixer,spec-step-owner}.md`, git-tracked. `sync.sh:92` creates per-file symlinks in `~/.pi/agent/agents/`.
 
 **Format and schema**: Markdown with a YAML frontmatter block, then the system-prompt body. Observed frontmatter keys: `name`, `description`, `model` (only `spec-clerk` and `spec-step-editor`, both `openrouter/inception/mercury-2.5:high`), `systemPromptMode: append`, `inheritProjectContext`, `inheritSkills` (false everywhere), `allowNestedSubagents` (clerk, diagnostician false; final-reviewer and stage-reviewer true), `allowedAgents` (final-reviewer: `spec-final-editor`; stage-reviewer: `scout`), `tools` (comma list; owner gets `spec_editor, spec_answer, spec_verify, spec_scout, spec_advice`; editor gets `spec_question`; diagnostician has an empty `tools:`), and `subagentOnlyExtensions` (only `spec-final-editor`, one absolute path). There is no schema file or validator in the repo; `scripts/lint-skills.sh` covers skills, not these profiles.
 
@@ -1779,7 +1782,7 @@ Spec-gym scenarios are scaffolding only. Both scenario indexes are empty tables 
 
 **Observations**:
 - Drift: `run-history.jsonl` and session artifacts show agents with no profile here: `spec-step-implementer` (211 runs, 36 artifact sets), `delegate` (140), `worker` (375), `provisioning-review` (18), `spec-step-run` (14). `git log` finds no history for `spec-step-implementer.md`. These are either pi-subagents built-ins or removed profiles; the repo does not say which.
-- The absolute `subagentOnlyExtensions` path in `spec-final-editor.md` pins the profile to one machine's `~/.pi/agent/npm/node_modules` layout (`/Users/ryanmahoney/...`).
+- The absolute `subagentOnlyExtensions` path in `spec-final-editor.md` pins the profile to one machine's `~/.pi/agent/npm/node_modules` layout (`~/...`).
 - Profiles hold no machine-readable role contract (tools, extension needs) beyond free-form frontmatter; runtime.mjs hardcodes the owner/editor tool lists separately (`index.ts:123-183` registers tools by role), so the two can drift.
 
 ---
@@ -1806,7 +1809,7 @@ Spec-gym scenarios are scaffolding only. Both scenario indexes are empty tables 
 
 ### 3. Cross-package run index: `~/.pi/agent/spec-runtime/<run-uuid>.json`
 
-**Location**: `/Users/ryanmahoney/.pi/agent/spec-runtime/`, 823 files, 3.2 MB, mode 0600, untracked.
+**Location**: `~/.pi/agent/spec-runtime/`, 823 files, 3.2 MB, mode 0600, untracked.
 
 **Format and schema** (`runtime.mjs:316-317`): `{run_id, package, manifest, parent_session}`. `parent_session` is absent from 47 of 823 files (older runs). Written with `atomic()` (`runtime.mjs:19-24`: temp file plus rename, mode 0600).
 
@@ -1850,7 +1853,7 @@ Outside `runtime/` the extension also writes into the package: `learnings/step-N
 
 **Relationships**: `package` ties to `.specs/<feature>/spec-steps.json` and `step-NNN-subspec.md`; `workflow_id` ties to sentinel checkpoints; `parent_session` ties to `~/.pi/agent/sessions`; `assignment_id` ties to the gym cell id (`runner.mjs:~320`).
 
-**Retention / cleanup**: None implemented. README: runtime never deletes records; stale lock directories require manual reconciliation. Measured footprint (68 packages with a `runtime/` directory): about 19.5 GB; top five: `warbler_ux/p09-operator-reports` 1.1 GB, `p08-speed-map` 874 MB, `p03-playback` 857 MB, `warbler/performance-query-layer` 782 MB, `warbler_ux/p07-run-times` 668 MB. In `p09`, 1.06 GB of 1.06 GB is `runs/`, where single owner stream files reach 52, 66 and 100 MB.
+**Retention / cleanup**: None implemented. README: runtime never deletes records; stale lock directories require manual reconciliation. Measured footprint (68 packages with a `runtime/` directory): about 19.5 GB; top five: `sample-ui/p09-operator-reports` 1.1 GB, `p08-speed-map` 874 MB, `p03-playback` 857 MB, `sample-api/performance-query-layer` 782 MB, `sample-ui/p07-run-times` 668 MB. In `p09`, 1.06 GB of 1.06 GB is `runs/`, where single owner stream files reach 52, 66 and 100 MB.
 
 **Observations**:
 - The raw owner streams are the dominant cost and are only needed "for concrete failures" (README). A size cap, compression, or age-based pruning of `runs/*-owner-*.jsonl` would remove most of the 19.5 GB without affecting receipts.
@@ -1906,7 +1909,7 @@ Outside `runtime/` the extension also writes into the package: `learnings/step-N
 
 ### 7. Sentinel observer snapshots: `~/.pi/agent/spec-sentinel/<workspace-key>/observers/<observer-id>.json`
 
-**Location**: `/Users/ryanmahoney/.pi/agent/spec-sentinel/183e59be.../observers/`, 22 files, 8.4 MB, mode 0600. `workspace-key` is a sha256 of agent dir plus intercom scope.
+**Location**: `~/.pi/agent/spec-sentinel/183e59be.../observers/`, 22 files, 8.4 MB, mode 0600. `workspace-key` is a sha256 of agent dir plus intercom scope.
 
 **Format and schema** (`sentinel-snapshot.mjs:10-31`): envelope `{schema_version:1, observer_id, pid, published_at, sequence, refresh_interval_ms, state (observing|off|closed), mode (observe|shadow|recover), note, snapshot}`. `snapshot` keys: `version, workspace, roots, discovery, spec_roots, coverage, assignment_coverage, assignments, runs, epics, activity_filter, completion_history, recently_completed, reader`. The latest file is 813 KB and sequence 84; individual files range from 8 KB to 813 KB.
 
@@ -1948,9 +1951,9 @@ Outside `runtime/` the extension also writes into the package: `learnings/step-N
 
 **Purpose**: Pi's own conversation store; also the source for `/spec-metrics`, `spec-process-improvement`, and workspace discussion routes.
 
-**Lifecycle and change frequency**: One file per Pi session plus nested trees for subagents. Measured: 7,927 files; 4,873 `.jsonl` of which 708 are top-level session files, 3,153 are nested `<session>/<child-uuid>/run-N/session.jsonl` subagent sessions, and 1,012 are `*_transcript.jsonl` artifacts. 2,034 `.md` and 1,009 `.json` are subagent artifacts. 5,142 files modified in the last 7 days. 179 of the 708 top-level sessions started since 2026-10-04. Top-level files run up to 13 MB (`gtfs-planner`, 2026-09-28 and 09-30).
+**Lifecycle and change frequency**: One file per Pi session plus nested trees for subagents. Measured: 7,927 files; 4,873 `.jsonl` of which 708 are top-level session files, 3,153 are nested `<session>/<child-uuid>/run-N/session.jsonl` subagent sessions, and 1,012 are `*_transcript.jsonl` artifacts. 2,034 `.md` and 1,009 `.json` are subagent artifacts. 5,142 files modified in the last 7 days. 179 of the 708 top-level sessions started since 2026-10-04. Top-level files run up to 13 MB (`sample-planner`, 2026-09-28 and 09-30).
 
-Size by project: `gtfs-planner` 2.7 GB, `warbler_ux` 1.1 GB, `adjacent` 393 MB, `.agents` 268 MB, `warbler` 190 MB, `rearrange-writer` 115 MB.
+Size by project: `sample-planner` 2.7 GB, `sample-ui` 1.1 GB, `adjacent` 393 MB, `.agents` 268 MB, `sample-api` 190 MB, `sample-writer` 115 MB.
 
 **Writers**: Pi core and child Pi processes. **Readers**: Pi (resume), `scripts/spec-observe` metrics, `scripts/workspaces/pi-rpc.mjs` (uncommitted changes), spec-runtime `parent_session` consumers, spec-process-improvement.
 
@@ -2013,7 +2016,7 @@ Size by project: `gtfs-planner` 2.7 GB, `warbler_ux` 1.1 GB, `adjacent` 393 MB, 
 
 **`settings.json`** (724 B, 644, untracked): keys `defaultProvider, defaultModel, lastChangelogVersion, packages[7 npm specs], retry.provider{maxRetries:3,maxRetryDelayMs:60000}, subagents.agentOverrides.scout{model,thinking,tools,output}, theme`. Writer: Pi core (changelog, theme) and operator edits. Reader: Pi. Last changed 2026-10-07 (goal-x removal). Two backups: `settings.json.bak-20261004-200741-before-codex-compat` and `settings.json.bak-20261007-232334-before-goal-x-removal`. Observations: `packages` pins are mixed (some exact, `pi-typesafe`, `pi-warden`, `pi-subagents` floating), so the installed set in `npm/package.json` can drift from this list. The scout override is the only persisted definition of the `scout` profile referenced by `pi/agents`.
 
-**`models.json`** (15 KB, 0600): `{providers: {<name>: {api, baseUrl, compat, models[], apiKey?}}}`. 13 custom providers, including `gmicloud` (83 models) and `deepinfra` (61). Writers: operator and ad hoc scripts. Reader: Pi. Ten backups named inconsistently: `.bak`, `.bak-1790743005`, `.bak-20260926-153544`, `.bak-20260926-231031`, `.bak-20260926-gemini-fix`, `.bak-20260927-021526-pixel-canary`, `.bak-20261002-151514-kimi-reasoning-sync`, `.bak-20261004-142752-dots3-maxtokens`, `.bak-20261004-deepseek-together`, plus the live file. Eleven edits between 2026-09-26 and 2026-10-04. **Observations (secrets)**: the `atria` provider's `apiKey` is a command reference (safe pattern), but the `restory` provider holds a 64-character literal key in `models.json` and in all 10 backup copies, so one credential is stored 11 times. Backups are 0600, outside git, and not rotated. There is no schema or validator, and backups are not time-ordered by name.
+**`models.json`** (15 KB, 0600): `{providers: {<name>: {api, baseUrl, compat, models[], apiKey?}}}`. 13 custom providers, including `gmicloud` (83 models) and `deepinfra` (61). Writers: operator and ad hoc scripts. Reader: Pi. Ten backups named inconsistently: `.bak`, `.bak-1790743005`, `.bak-20260926-153544`, `.bak-20260926-231031`, `.bak-20260926-gemini-fix`, `.bak-20260927-021526-pixel-canary`, `.bak-20261002-151514-kimi-reasoning-sync`, `.bak-20261004-142752-dots3-maxtokens`, `.bak-20261004-deepseek-together`, plus the live file. Eleven edits between 2026-09-26 and 2026-10-04. **Observations (secrets)**: the `atria` provider's `apiKey` is a command reference (safe pattern), but the `sample-provider` provider holds a 64-character literal key in `models.json` and in all 10 backup copies, so one credential is stored 11 times. Backups are 0600, outside git, and not rotated. There is no schema or validator, and backups are not time-ordered by name.
 
 **`models-store.json`** (747 KB, 0600): `{<provider>: {models[], checkedAt, etag, lastModified}}` for 12 providers; each model has `api, baseUrl, compat, contextWindow, cost, id, input, maxTokens, name, provider, reasoning, type`. Writer: Pi core (`models-store.js` in `@earendil-works/pi-coding-agent`). Reader: Pi. Refreshed repeatedly (mtime 2026-10-11 11:56); it is a cache and safe to delete.
 
@@ -2026,10 +2029,10 @@ Described by purpose only.
 - `auth.json` (4.3 KB, 0600) and `auth.json.bak` (4.2 KB): Pi's per-provider login store (OAuth and API-key logins). Writer: Pi `/login`. Readers: Pi, and Jev indirectly when pi-typesafe resolves "the existing owner-only Pi login store". The `.bak` is a second copy of live credentials with an older mtime (2026-09-27).
 - `ifm-api-key.txt` (71 B, 0600): API key for the custom `ifm` provider; read by `extensions/ifm-provider.ts:26` from a hardcoded absolute path. Writer: operator.
 - `pi-typesafe/auth.json` (126 B, 0600): the pi-typesafe login; `pi-typesafe/auth-state.json` records verification time. Writer: pi-typesafe. Reader: Jev through the library.
-- `trust.json` (109 B): JSON array of two project directories (`CodexBar`, `rearrange-writer`) that Pi has been told to trust. Writer: Pi. Static since 2026-09-23.
+- `trust.json` (109 B): JSON array of two project directories (`CodexBar`, `sample-writer`) that Pi has been told to trust. Writer: Pi. Static since 2026-09-23.
 - `openai-codex-compat-installation-id`: a UUID generated by `pi-openai-codex-compat`.
 
-**Observations**: The hardcoded key path and the literal `restory` key in `models.json` are the two places a secret escapes a purpose-built store. Neither is covered by `sync.sh`, `.gitignore` in this repo, or any rotation.
+**Observations**: The hardcoded key path and the literal `sample-provider` key in `models.json` are the two places a secret escapes a purpose-built store. Neither is covered by `sync.sh`, `.gitignore` in this repo, or any rotation.
 
 ---
 
@@ -2050,7 +2053,7 @@ Described by purpose only.
 - `intercom/` (4 KB): `broker.pid`, `broker.sock` (UNIX socket, 0700 dir), `pending-asks/` and `extension-state/` (both empty). Writer: pi-intercom. Reader: spec-runtime communication (`communication.mjs`) and sentinel control. Broker started 2026-10-07; stale pid risk on reboot.
 - `pi-subagents/last-seen-version.json` `{"version":"0.77.0"}`: update-notice marker.
 - `extensions/subagent/config.json`: `{timeoutMs:7200000, modelResponseAliases:{...}}`; `extensions/ifm-provider.ts` (3.4 KB, operator-authored provider extension). Neither is in this repo, so they are unversioned.
-- `npm/` (95 MB): Pi's package install root (`package.json` lists `@kmiyh/pi-full-text-paste, @saccolabs/pi-claude-cli, pi-intercom, pi-openai-codex-compat, pi-subagents, pi-typesafe, pi-warden`). It also holds three stray generated scripts, `wf-01a.js`, `wf-01b.js`, `wf-01c.js` (8 to 12 KB, 2026-10-05), which hardcode `/Users/ryanmahoney/Documents/adjacent-01-workspace-shell` and model names. They are leftovers of the "generated workflow script" approach the README says is no longer part of startup, and nothing references them.
+- `npm/` (95 MB): Pi's package install root (`package.json` lists `@kmiyh/pi-full-text-paste, @saccolabs/pi-claude-cli, pi-intercom, pi-openai-codex-compat, pi-subagents, pi-typesafe, pi-warden`). It also holds three stray generated scripts, `wf-01a.js`, `wf-01b.js`, `wf-01c.js` (8 to 12 KB, 2026-10-05), which hardcode `~/Documents/adjacent-01-workspace-shell` and model names. They are leftovers of the "generated workflow script" approach the README says is no longer part of startup, and nothing references them.
 - `bin/fd` (2.8 MB): bundled `fd` binary.
 - `agents/`: eight symlinks into this repo.
 - `pi-goal-x-removed-20261007-234755/` (1.8 MB, 114 files): renamed state of the removed `pi-goal-x` extension, `*-goals/` directories (including `archived/` and `goal_events.jsonl`) and `*-snapshot.json` `{dirMtimeMs, goals, version}` per repository. Frozen since 2026-10-07 23:47, no reader. Safe to archive or delete after a last look.
@@ -2062,7 +2065,7 @@ Described by purpose only.
 
 ### 17. Jev: decision ledger `scripts/jev/state/decisions.jsonl`
 
-**Location/naming**: `/Users/ryanmahoney/.agents/scripts/jev/state/decisions.jsonl` (+ `decisions.jsonl.previous` on rotation, `decisions.lock/` directory lock). `JEV_STATE_DIR` overrides. Git-ignored (`scripts/jev/.gitignore: state/`). Mode 0600.
+**Location/naming**: `~/.agents/scripts/jev/state/decisions.jsonl` (+ `decisions.jsonl.previous` on rotation, `decisions.lock/` directory lock). `JEV_STATE_DIR` overrides. Git-ignored (`scripts/jev/.gitignore: state/`). Mode 0600.
 
 **Format and schema** (`core.mjs:363-382`, rotation constant `core.mjs:14` `MAX_LOG_BYTES = 1048576`): JSONL, `schema_version: 1`, fields `decision_id, time, repository_hash (sha256 of exact repo path), revision, working_tree_digest, task (verification|review-triage|step-difficulty), status (recommendation|uncertain|unavailable), latency_ms, outcome (pending|accepted|overridden), local, broad_suite, finding_counts{must_fix,investigate,follow_up}, focused_check_hashes, mandatory_gate_count, difficulty_counts{easy,medium,hard} (step-difficulty only), uncertainty[]`. No diff, command text or finding text is stored (README "Bounds, privacy and persistence").
 
@@ -2087,7 +2090,7 @@ Described by purpose only.
 
 ### 18. Jev: usage ledger `scripts/jev/state/usage.json`
 
-**Location**: `/Users/ryanmahoney/.agents/scripts/jev/state/usage.json`, 1.9 KB, 0600, git-ignored.
+**Location**: `~/.agents/scripts/jev/state/usage.json`, 1.9 KB, 0600, git-ignored.
 
 **Format**: `{version:1, days:{"YYYY-MM-DD":{requestsStarted, requestsSucceeded, requestsFailed, inputTokens, outputTokens, costUsd, costedInputTokens}}}`. Opened with `lib.openUsageLedger({path: join(directory,'usage.json')})` (`core.mjs:269, 325`), a pi-typesafe library API. Jev's ledger is deliberately separate from `~/.pi/agent/pi-typesafe/usage.json` (README).
 
@@ -2135,7 +2138,7 @@ Described by purpose only.
 
 ### 21. Spec-gym and scenario data
 
-**Location**: `/Users/ryanmahoney/.agents/scenarios/{spec-architect-initial,spec-step-run}/scenarios.md` (both git-tracked, 8 KB total), `scripts/spec-gym/{cli,core,extract,runner,fake-pi}.mjs` + tests (3,889 lines), `skills/spec-gym/{SKILL.md,references/scenario-contract.md}`, `skills/spec-gym-extract/SKILL.md`. All created 2026-10-10 (15 commits in `scripts/spec-gym`, 3 in `skills/spec-gym`, 2 in `skills/spec-gym-extract`, 1 for `scenarios/`).
+**Location**: `~/.agents/scenarios/{spec-architect-initial,spec-step-run}/scenarios.md` (both git-tracked, 8 KB total), `scripts/spec-gym/{cli,core,extract,runner,fake-pi}.mjs` + tests (3,889 lines), `skills/spec-gym/{SKILL.md,references/scenario-contract.md}`, `skills/spec-gym-extract/SKILL.md`. All created 2026-10-10 (15 commits in `scripts/spec-gym`, 3 in `skills/spec-gym`, 2 in `skills/spec-gym-extract`, 1 for `scenarios/`).
 
 **Format and schema**:
 - Index file `scenarios.md`: generated table `| id | status | version | driver | purpose | folder |` plus the fixed sentence "Scenarios in this index exercise only the listed purposes; behaviors absent from this table are not covered." Both tables are currently empty.
@@ -2171,7 +2174,7 @@ Described by purpose only.
 
 ## Git, ledgers, search indexes, and verification facts
 
-Scope: read-only audit of Git-derived data and the stores that tooling writes from it, in `/Users/ryanmahoney/.agents` as of 2026-10-11 (branch `design-packages`, HEAD `dcc2c0c`). No indexes were built and nothing was modified.
+Scope: read-only audit of Git-derived data and the stores that tooling writes from it, in `~/.agents` as of 2026-10-11 (branch `design-packages`, HEAD `dcc2c0c`). No indexes were built and nothing was modified.
 
 ### Overview
 
@@ -2391,7 +2394,7 @@ Not built. Structure read from source only.
 
 ### 8. roborev review data (`~/.roborev/reviews.db`) and `roborev-*` skills
 
-- `~/.roborev/` does not exist on this machine (`ls: /Users/ryanmahoney/.roborev/: No such file or directory`). `sqlite3` is at `/usr/bin/sqlite3`, but there is no database to inspect, so `.schema` and row counts were not obtained.
+- `~/.roborev/` does not exist on this machine (`ls: ~/.roborev/: No such file or directory`). `sqlite3` is at `/usr/bin/sqlite3`, but there is no database to inspect, so `.schema` and row counts were not obtained.
 - `roborev` is not on PATH (`which roborev` returned "roborev not found").
 - The `roborev-*` skills named in the skill listing (`roborev-review`, `roborev-review-branch`, `roborev-design-review`, `roborev-design-review-branch`, `roborev-fix`, `roborev-refine`, `roborev-respond`) have no source in `skills/` or `claude/skills/` in this repository. They are provided by the harness, not by files here.
 - The user's auto-memory references roborev internals (`~/.roborev/reviews.db`, per-commit reviews aggregated into range reviews). That information cannot be checked against the live database in this environment.
@@ -2404,10 +2407,10 @@ Not built. Structure read from source only.
 
 **`lint-skills.sh` (102 lines, 3 commits).**
 - Reads `skills/*/SKILL.md`: staged additions and modifications by default (`git diff --cached --name-only --diff-filter=ACM`, `:27`), or every skill with `--all` (`:20`).
-- Checks: frontmatter opens and closes with `---`; `name:` equals the directory name; non-empty `description:`; `version:` present under metadata; spec and design skills (`spec-*`, `design-*`) contain no Restory-specific terms (regex at `:70`, list in header).
+- Checks: frontmatter opens and closes with `---`; `name:` equals the directory name; non-empty `description:`; `version:` present under metadata; spec and design skills (`spec-*`, `design-*`) contain no upstream-product-specific terms (regex at `:70`, list in header).
 - Warnings only for missing `disable-model-invocation:` and `argument-hint:`.
 - Writes nothing; output is text on stdout with a summary line and a non-zero exit on error.
-- Observation: the Restory-term check is a single case-insensitive regex; it cannot see terms split across lines.
+- Observation: the upstream-product-term check is a single case-insensitive regex; it cannot see terms split across lines.
 
 **`build-skill-bundles.sh` (875 lines, 34 commits, most recent 2026-10-11).**
 - Output root `DIST="${DIST:-$ROOT/dist/skill-bundles}"` (`:5`); `mkdir -p` at `:8`. `dist/` is gitignored, and the directory exists in this checkout.
@@ -2451,7 +2454,7 @@ Not built. Structure read from source only.
 
 ## Rules, skills, configuration, and documentation
 
-Read-only audit of `/Users/ryanmahoney/.agents` as of 2026-10-11. Git facts come from `git log` on the `design-packages` checkout. File mtimes are from the local filesystem. Credential-bearing files were listed by name and size only; none were read.
+Read-only audit of `~/.agents` as of 2026-10-11. Git facts come from `git log` on the `design-packages` checkout. File mtimes are from the local filesystem. Credential-bearing files were listed by name and size only; none were read.
 
 ### Overview
 
@@ -2473,7 +2476,7 @@ The static corpus has four layers: policy text that agents load at session start
 | Essay | `content/context-and-harness.md` | Markdown | Operator | Humans | Mtime 2026-07-12 |
 | Prose docs | `README.md`, `docs/*.md` (11 files) | Markdown | Operator | Humans and agents | README has 62 commits; `docs/spec-workflow.md` has 16 |
 | Research notes | `research/test-value/`, `docs/research/` | Markdown | Operator and research sessions | Humans | Gitignored; untracked |
-| Auto-memory | `~/.claude/projects/-Users-ryanmahoney--agents/memory/` (outside repo) | Markdown with `name`, `description` frontmatter plus index `MEMORY.md` | Claude Code (agent-written) | Claude Code at session start | 8 files plus index; mtimes 2026-06-21 to 2026-10-11 |
+| Auto-memory | `~/.claude/projects/-home-user--agents/memory/` (outside repo) | Markdown with `name`, `description` frontmatter plus index `MEMORY.md` | Claude Code (agent-written) | Claude Code at session start | 8 files plus index; mtimes 2026-06-21 to 2026-10-11 |
 | Scratch | `tmp/` (gitignored, 21 MB) | Logs, text, cloned repos, backups | Spec runs, review sessions, manual clones | Nobody routinely | No cleanup script found |
 | Screenshots | `.uishot/` (gitignored, 6.4 MB) | PNG | `uishot` skill, sentinel captures | Humans, agents via `see` | 9 files, 2026-10-07 to 2026-10-10 |
 | Finder metadata | `.DS_Store` (5 files) | Binary | macOS Finder | Nobody | Gitignored, none tracked |
@@ -2511,7 +2514,7 @@ The static corpus has four layers: policy text that agents load at session start
 
 ### 2. `~/.claude/rules/` mirror (outside the repo)
 
-- **Location.** `/Users/ryanmahoney/.claude/rules/`, 13 directory entries.
+- **Location.** `~/.claude/rules/`, 13 directory entries.
 - **Format.** Symbolic links, `ln -sfn` to `~/.agents/rules/<file>` (`sync.sh`, Claude Code block).
 - **Purpose.** Makes the rule set visible to Claude Code as user-level memory.
 - **Lifecycle.** Links created by `sync.sh`, which only adds and replaces links. It does not prune stale rule links.
@@ -2523,7 +2526,7 @@ The static corpus has four layers: policy text that agents load at session start
 
 ### 3. `claude/CLAUDE.md` and `~/.claude/CLAUDE.md`
 
-- **Location.** Source `claude/CLAUDE.md` (tracked, 4130 bytes). Target `/Users/ryanmahoney/.claude/CLAUDE.md`, copied by `sync.sh`. The two files are byte-identical at audit time (`cmp` succeeds).
+- **Location.** Source `claude/CLAUDE.md` (tracked, 4130 bytes). Target `~/.claude/CLAUDE.md`, copied by `sync.sh`. The two files are byte-identical at audit time (`cmp` succeeds).
 - **Format.** Markdown with H2 sections: "External Rules Source", "Design Rule Application Policy", "Verification and Review", "Spec Artifacts and Worktrees", "Engineering Writing", "PR and Ticket Writing", "Symlinked Rules Mirror", "Sync Command", "Attribution Policy" (`claude/CLAUDE.md`, section headers).
 - **Purpose.** Session-start policy: tells Claude where the rules live, the precedence order (system, repository, then `~/.agents/rules`), when to load each guide, and the attribution rule for commits and PRs.
 - **Lifecycle.** 1 commit per change; last modified 2026-10-08.
@@ -2557,7 +2560,7 @@ The static corpus has four layers: policy text that agents load at session start
 
 ### 6. `sync.sh` (distribution)
 
-- **Location.** `/Users/ryanmahoney/.agents/sync.sh`, tracked, executable.
+- **Location.** `~/.agents/sync.sh`, tracked, executable.
 - **Format.** Bash with two helper functions: `sync_dir_symlinks` (skills; prunes dangling symlinks that point into the source tree) and `sync_file_symlinks` (rules and agents; prunes dangling links the same way). Each harness has a block gated on its home directory existing.
 - **Purpose.** Installs one set of skills, rules, instructions, and subagents into Claude Code, Codex, Cline, Pi, Augment, and OpenCode.
 - **Targets by harness.**
@@ -2649,7 +2652,7 @@ Counts from the directory listing (84 skills):
 
 ### 12. `.claude/` (repo-local)
 
-- **Location.** `/Users/ryanmahoney/.agents/.claude/`, directory exists, empty (0 entries, mtime 2026-10-10).
+- **Location.** `~/.agents/.claude/`, directory exists, empty (0 entries, mtime 2026-10-10).
 - **Purpose.** Repo-local Claude Code config directory.
 - **Observations.** Empty. Not tracked (git does not track empty directories). It is a leftover from the `.claude/` path that the CLAUDE.md sync would otherwise create; nothing reads it.
 
@@ -2701,7 +2704,7 @@ Counts from the directory listing (84 skills):
 
 ### 16. `README.md`
 
-- **Location.** `/Users/ryanmahoney/.agents/README.md` (tracked, 26673 bytes, 62 commits, last 2026-10-11).
+- **Location.** `~/.agents/README.md` (tracked, 26673 bytes, 62 commits, last 2026-10-11).
 - **Format.** Markdown, H1 "Spec-Driven Agent Skills", tables for principles, file trees (`skills/`, `bundles/`), and workflow sections.
 - **Purpose.** Entry point for humans: principles, skill list, install instructions, directory map.
 - **Writers.** Operator.
@@ -2711,7 +2714,7 @@ Counts from the directory listing (84 skills):
 
 ### 17. Auto-memory (outside the repo)
 
-- **Location.** `/Users/ryanmahoney/.claude/projects/-Users-ryanmahoney--agents/memory/`. Not under git. Nine markdown files: `MEMORY.md` (index, 8 lines) plus eight topic files.
+- **Location.** `~/.claude/projects/-home-user--agents/memory/`. Not under git. Nine markdown files: `MEMORY.md` (index, 8 lines) plus eight topic files.
 - **Format.** Topic files open with frontmatter `name` and `description` (checked on all eight). No `type` key appeared in the first five lines. `MEMORY.md` is a bullet list of `[Title](file.md) - summary` entries.
 - **Purpose.** Persistent operator preferences and project facts: deterministic vs LLM balance, roborev internals, spec-branch skill rules, PR messages, test strategy, epic tracking, design packages.
 - **Lifecycle.** Mtimes from 2026-06-21 to 2026-10-11. Newest are `design-packages.md` and `epic-tracking-branch.md` (2026-10-11). `MEMORY.md` mtime 2026-10-11 12:06.
@@ -2723,7 +2726,7 @@ Counts from the directory listing (84 skills):
 
 ### 18. `tmp/` (gitignored, 21 MB)
 
-- **Location.** `/Users/ryanmahoney/.agents/tmp/`, mtime 2026-10-10. Gitignored by `tmp/`.
+- **Location.** `~/.agents/tmp/`, mtime 2026-10-10. Gitignored by `tmp/`.
 - **Contents (names and size only).**
   - `.specs/328-workspace-root-resolution` (a spec-folder remnant from a run, gitignored `.specs/` mirror).
   - `orchestrator-start.log` (805 KB, 2026-10-05), `step-owner.log` (940 KB, 2026-10-05), `step-editor.log` (244 KB, 2026-10-05): spec-run orchestrator logs. Contents not read.
@@ -2743,9 +2746,9 @@ Counts from the directory listing (84 skills):
 
 ### 19. `.uishot/` (gitignored, 6.4 MB)
 
-- **Location.** `/Users/ryanmahoney/.agents/.uishot/`, gitignored. `skills/uishot/SKILL.md:30` says to add `.uishot/` to a project's `.gitignore`; this repo's `.gitignore` covers it.
+- **Location.** `~/.agents/.uishot/`, gitignored. `skills/uishot/SKILL.md:30` says to add `.uishot/` to a project's `.gitignore`; this repo's `.gitignore` covers it.
 - **Format.** PNG screenshots, 9 files, sizes 227 KB to 2.3 MB.
-- **Naming.** Auto-named by the uishot skill (`SKILL.md:121`, `:139`): a URL-derived name (`127-0-0-1-4319-233032.png`), a file-path-derived name (`file-users-ryanmahoney-agents-specs-adj3-211041.png`), or a manual name (`sentinel-desktop-final.png`, `sentinel-mobile.png`). The trailing six digits are HHMMSS.
+- **Naming.** Auto-named by the uishot skill (`SKILL.md:121`, `:139`): a URL-derived name (`127-0-0-1-4319-233032.png`), a file-path-derived name (`file-home-user-agents-specs-adj3-211041.png`), or a manual name (`sentinel-desktop-final.png`, `sentinel-mobile.png`). The trailing six digits are HHMMSS.
 - **Writers.** The `uishot` skill (the 2026-10-07 and 2026-10-10 captures). The `sentinel-*` captures (2026-10-08) are not named by the skill and were probably taken by hand.
 - **Readers.** Humans; `see` skill when an agent needs to view one.
 - **Retention.** No cleanup script found.

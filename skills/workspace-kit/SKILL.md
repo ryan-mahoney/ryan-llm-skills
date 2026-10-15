@@ -5,8 +5,6 @@ argument-hint: "<workspace-id> <request>"
 disable-model-invocation: false
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "1"
 ---
 
@@ -51,7 +49,7 @@ Replace `ID` with the workspace id, `RID` with the repository id from the kit.
 | Remove context file | `remove-context ID --path REL` |
 | Set design system | `set-design-system ID --repo RID --path REL [--path REL...] [--applies-to all]` |
 | Set execution host | `set-execution-host ID --host HOSTNAME` |
-| Rewrite paths for another machine | `rewrite-paths ID --from /Users/me --to '~'` |
+| Rewrite paths for another machine | `rewrite-paths ID --from "$HOME" --to '~'` |
 | List kit backups | `kit-backups ID` |
 | Restore a backup | `restore-kit ID BACKUP` (preview, then `--apply`) |
 
@@ -64,14 +62,14 @@ Add `--apply` only after the preview is confirmed, for example
   Absolute paths tie the kit to one machine.
 - `add-repo` and `set-path` require the expanded path to exist and be a Git top level.
 - To move an existing kit off absolute paths, use `rewrite-paths` with the machine's home
-  prefix, for example `--from /Users/me --to '~'`. The CLI tolerates missing checkouts in
+  prefix, for example `--from "$HOME" --to '~'`. The CLI tolerates missing checkouts in
   that rewrite, so a kit can be fixed on a machine that lacks some repositories.
 
 ## Execution host
 
 `set-execution-host ID --host HOSTNAME` sets the machine that runs this workspace's live
 work. Spec work for the workspace runs only on that host; spec skills refuse elsewhere with
-`wrong-host`. Pass the machine's short hostname, the first label of its name, such as `restory-box`. The CLI normalizes a full name such as `Box.local` to its first label, `box`. Set it before running spec
+`wrong-host`. Pass the machine's short hostname, the first label of its name, such as `execution-host`. The CLI normalizes a full name such as `Box.local` to its first label, `box`. Set it before running spec
 work, or those skills refuse with `execution-host-unset`.
 
 ## Refusals this skill fixes

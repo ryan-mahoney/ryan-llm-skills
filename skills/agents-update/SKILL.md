@@ -4,8 +4,6 @@ description: "Analyze a code repository's architecture and produce (or update) a
 disable-model-invocation: true
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "4"
 ---
 

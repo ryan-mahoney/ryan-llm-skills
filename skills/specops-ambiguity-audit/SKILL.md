@@ -4,8 +4,6 @@ description: "Audit a SpecOps analysis spec for ambiguities that would force an 
 disable-model-invocation: true
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "2"
 ---
 

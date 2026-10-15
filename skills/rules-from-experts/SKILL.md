@@ -4,8 +4,6 @@ description: Turn any craft or work-performance topic into two deliverables — 
 disable-model-invocation: true
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "1"
 ---
 

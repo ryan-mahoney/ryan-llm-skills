@@ -46,7 +46,7 @@ a skill nor a reader builds these paths itself.
     { "package": "adj2-remote-observation", "requires": ["adj1-foundational-contracts"] },
     { "package": "performance-query-layer",
       "requires": [],
-      "note": "Targets the warbler repository; UX consumes it through the dependency pin." }
+      "note": "Targets the sample-api repository; UX consumes it through the dependency pin." }
   ]
 }
 ```

@@ -5,6 +5,8 @@ critiques, and specs. Read the section for the artifact being written. For PRs a
 tickets, also apply [PR and Ticket Writing](pr-and-ticket-writing.md). Preserve
 required repository templates and machine-readable contracts.
 
+Apply [Portable Paths](portable-paths.md) to paths saved in authored artifacts.
+
 ## Audience and substance
 
 Write for an experienced software engineer who knows the language and tools but

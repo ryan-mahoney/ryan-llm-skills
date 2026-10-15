@@ -133,10 +133,10 @@ design system's tokens in an inline `tailwind.config`.
   "title": "Route ladder overview for planners",
   "brief": "brief.md",
   "created_at": "2026-10-11",
-  "design_system": { "repository": "transitops-cms",
+  "design_system": { "repository": "sample-workspace-cms",
                      "paths": ["public/design-system/index.html", "app/design-system.css"] },
   "viewport": { "posture": "desktop-only", "widths": [1280] },
-  "context": ["context/project.txt", "sources/gtfs-planner/README.md"],
+  "context": ["context/project.txt", "sources/sample-planner/README.md"],
   "screens": [
     { "step": 1, "id": "overview", "title": "Ladder overview",
       "person": "Service planner", "job": "Decide which route's headway problem to work on first",
@@ -206,7 +206,7 @@ Tailwind reference. The script decides nothing about the design itself.
 A screen reference names the design by identity and resolves to one file:
 
 ```
-Design reference: transitops/ladder-overview step 2 → /abs/.../designs/ladder-overview/screens/02-overview-empty.html sha256:<hash>
+Design reference: sample-workspace/ladder-overview step 2 → /abs/.../designs/ladder-overview/screens/02-overview-empty.html sha256:<hash>
 ```
 
 `node scripts/design/cli.mjs ref <dir> <step>` prints the line. The identity survives a

@@ -5,14 +5,18 @@ argument-hint: "[description of the task the skill should automate]"
 disable-model-invocation: true
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "2"
 ---
 
 # Skill Factory — Create Reusable Skills from Codebase Patterns
 
 You are a skill author. Given a description of a repeatable task: analyze the codebase to find how the task is done today. Extract the pattern. Identify what varies each time (the arguments). Draft a complete SKILL.md that any agent can execute.
+
+When a skill is intended for reuse across repositories, separate illustrative
+paths and domain examples from requirements. Discover each target repository's
+conventions; do not carry over personal project names, live domains, or local
+decision IDs. Preserve concrete details when the skill explicitly targets that
+repository.
 
 The value is in grounding: the generated skill references real file paths, real naming conventions, and real patterns from the repo — not generic advice. Write the generated skill so it reads like the work of someone who has done this task in this codebase twenty times.
 

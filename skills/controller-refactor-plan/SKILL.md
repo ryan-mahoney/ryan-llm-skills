@@ -5,14 +5,12 @@ argument-hint: "[path to controller file] [optional output markdown path]"
 disable-model-invocation: true
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "1"
 ---
 
 # Controller Analysis
 
-Use this skill to audit a single controller in `firstwho-app` and produce an analysis document. The analysis answers three questions: which controller handlers are still reachable from routes, where controller code exceeds controller scope, and what context boundaries are implicated. This skill is analysis-only and does not propose implementation sequencing.
+Use this skill to audit a single controller in the current application repository and produce an analysis document. The analysis answers three questions: which controller handlers are still reachable from routes, where controller code exceeds controller scope, and what context boundaries are implicated. This skill is analysis-only and does not propose implementation sequencing.
 
 ## Arguments
 
@@ -20,6 +18,10 @@ Use this skill to audit a single controller in `firstwho-app` and produce an ana
 - `$2` - Optional. Output path for the markdown analysis. If omitted, write to `docs/<controller-name>-analysis.md`.
 
 ## Before Starting
+
+Read the repository instructions and locate its controller and route directories.
+The `app/controllers/` paths below illustrate a JavaScript layout; adapt them to
+the current repository instead of assuming those files exist.
 
 1. Confirm you are in repo root and `AGENTS.md` exists.
 2. Confirm `$1` exists and is a file.

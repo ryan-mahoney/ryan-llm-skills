@@ -1210,9 +1210,10 @@ test("workspace create: sets up storage and creates exclusive empty workspace ki
   assert.equal(keyword.kit.name, 'a"b\\c');
 
   // The generated empty kit is accepted by the installed Adjacent loader.
-  const oraclePath = process.env.ADJ3_KIT_ORACLE
-    ?? "/Users/ryanmahoney/.agents/.specs/adj3-workspace-storage/evidence/kit-oracle.mjs";
-  const adjacentPath = process.env.ADJ3_ADJACENT ?? "/Users/ryanmahoney/Documents/adjacent";
+  const oraclePath = process.env.ADJ3_KIT_ORACLE;
+  assert.ok(oraclePath, "Set ADJ3_KIT_ORACLE to the external kit loader oracle");
+  const adjacentPath = process.env.ADJ3_ADJACENT;
+  assert.ok(adjacentPath, "Set ADJ3_ADJACENT to the Adjacent checkout for the external oracle");
   const fixtures = join(tmp, "oracle-fixtures");
   const oracleOut = join(tmp, "oracle-result.json");
   await mkdir(fixtures);

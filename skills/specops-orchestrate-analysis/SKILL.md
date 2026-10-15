@@ -5,8 +5,6 @@ disable-model-invocation: true
 argument-hint: "[manifest-path-or-repo-root]"
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "5"
 ---
 

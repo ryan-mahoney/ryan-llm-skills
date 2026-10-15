@@ -53,6 +53,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 
 from playwright.sync_api import expect, sync_playwright
+from reference_screens import reference_screens
 
 CASES = ("list", "landing", "launch")
 QA_ROUTES = ("#/next-steps", "#/launch", "#/conversations", "#/specs", "#/agents", "#/epics", "#/files")
@@ -101,17 +102,7 @@ SCRIPT = Path(__file__).resolve()
 
 
 def design_screens() -> Path | None:
-    """Resolve the reference screens from package locations (designs/new-files),
-    never the stale /Users capture path."""
-    candidates = [
-        Path(os.environ["SENTINEL_DESIGN_SCREENS"]) if os.environ.get("SENTINEL_DESIGN_SCREENS") else None,
-        Path.home() / "Documents/adjacent-storage/projects/agent-tooling/designs/new-files/screens",
-        Path("/home/ryanmahoney/Documents/adjacent-storage/projects/agent-tooling/designs/new-files/screens"),
-    ]
-    for candidate in candidates:
-        if candidate is not None and candidate.is_dir():
-            return candidate
-    return None
+    return reference_screens("new-files")
 
 
 def spawn_fixture(env_extra: dict | None = None) -> subprocess.Popen:

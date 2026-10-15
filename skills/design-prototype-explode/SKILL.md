@@ -3,8 +3,6 @@ name: design-prototype-explode
 description: "Split a compound HTML prototype with screen or state switchers into a workspace design package: one offline HTML file and granular Markdown interaction/context guide per reachable screen-state. Use when the user says 'explode this prototype', 'split this prototype into screens', or 'extract the states'. Preserves the source design rather than redesigning it."
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "1"
 ---
 

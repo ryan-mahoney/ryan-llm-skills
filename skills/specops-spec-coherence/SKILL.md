@@ -4,8 +4,6 @@ description: "Audit a set of SpecOps analysis specs for cross-spec coherence: es
 disable-model-invocation: true
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "2"
 ---
 

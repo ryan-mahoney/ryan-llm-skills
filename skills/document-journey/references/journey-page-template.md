@@ -1,8 +1,13 @@
 # Journey page template
 
-The section order below is the repository standard's journey standard (FirstWho: `docs/rules/feature-documentation-rules.md` §9, DR-083) as a subsequence. Sections 1–3, 7, and 8 are the standard's. Sections 4, 5, and 6 are this skill's extensions to the standard's seams and stage requirements. Where a repository standard defines its own order, keep its order and insert the extensions.
+Use this section order when the repository has no journey documentation standard.
+Sections 4, 5, and 6 record the cross-repository seams and context that downstream
+evaluation needs. If the repository defines a section order, preserve it and place
+these fields in the appropriate sections.
 
-Every level-2 heading carries a stable anchor. Every empty section reads `None.` with a reason. Prose follows the standard's §14.
+Give each level-2 heading a stable anchor. For an empty section, write `None.` with
+a reason. Follow the current repository's prose rules; do not copy decision IDs or
+section references from another project's standard.
 
 ---
 
@@ -11,7 +16,7 @@ Every level-2 heading carries a stable anchor. Every empty section reads `None.`
 ```yaml
 ---
 id: JRNY-001
-title: Purchase a standalone JobKit          # the actor's goal, verb phrase (DR-045)
+title: Purchase a downloadable resource          # the actor's goal, verb phrase
 type: journey
 status: draft                                 # draft | in-review | active | deprecated | retired
 owner: growth
@@ -23,12 +28,12 @@ verified_against:
 repos: [marketing, app, stripe]               # in visit order, with third parties
 actor: anonymous-prospect                     # one actor; see personas.js
 roles: []                                     # ROLE-## when authenticated; empty for anonymous
-jobs: [JOB-0041]                              # primary story first (DR-106)
+jobs: [JOB-0041]                              # primary story first
 screens: [SCRN-030, SCRN-031]                 # registered screens the journey visits
 captures: []                                 # capture IDs this page cites, never image paths
 scenarios: []                               # §10 scenario slugs, empty when the repository runs no QA harness
 features: []                                  # FEAT-## when a feature registry exists
-rules: [BR-0101]                              # BR- IDs, referenced never restated (DR-092)
+rules: [BR-0101]                              # BR- IDs, referenced never restated
 seams: [SEAM-004, SEAM-007]                   # registry seam IDs
 e2e_lanes: [GP-1]                             # catalog IDs that run this journey
 context_keys: [kitName, quotedPrice]          # ledger facts the journey establishes
@@ -93,7 +98,7 @@ Authoring notes:
 
 **Entries.** Every way the journey starts: marketing CTA, email link, campaign landing, direct URL, in-app cross-sell. One row each, with its source file.
 
-**Exits and abandonment.** Every way the journey ends without the goal — payment failure, budget exhausted, verification email never opened, user closes the tab between repos — and what state the product leaves behind. Most abandonment lives in `prepare` and `confirm` (DR-084 rationale); those stages get named exit rows, not prose.
+**Exits and abandonment.** Every way the journey ends without the goal — payment failure, budget exhausted, verification email never opened, user closes the tab between repos — and what state the product leaves behind. Most abandonment lives in `prepare` and `confirm`; those stages get named exit rows, not prose.
 
 <a id="6-seams"></a>
 ## 6. Seams
@@ -110,7 +115,7 @@ A crossing the registry lacks is written here, marked `provisional`, and raised 
 | Stage | Feature | Rule | Audience |
 |---|---|---|---|
 
-`FEAT-##` and `BR-##` IDs with the point of application. Never a rule's number — the registry holds values (DR-092). `None.` until a feature registry exists.
+`FEAT-##` and `BR-##` IDs with the point of application. Never a rule's number — the registry holds values. `None.` until a feature registry exists.
 
 <a id="8-end-to-end-examples"></a>
 ## 8. End-to-end examples
@@ -129,7 +134,7 @@ Rules: BR-0101
 Test: app/test/e2e/journeys/GP-001-anonymous-standalone-purchase.e2e.js:settles
 ```
 
-The negative statement (`And no org exists...`) is required wherever a reader might assume extra side effects (DR-119).
+The negative statement (`And no org exists...`) is required wherever a reader might assume extra side effects.
 
 <a id="9-visual-and-evidence-links"></a>
 ## 9. Visual and evidence links

@@ -4,8 +4,6 @@ description: Prepare local repository search for a Git checkout in one invocatio
 argument-hint: "[checkout] [--models-from PATH] [--spec-use on]"
 license: MIT
 metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
   version: "1"
 ---
 

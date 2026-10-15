@@ -197,9 +197,9 @@ test('step-010 F4: execution host prefers a recorded fact and never presents the
   const fallback = hostValueFor({}, { kind: 'launched', assignmentId: 'abc' });
   assert.equal(fallback, 'Host not recorded for this assignment');
   assert.doesNotMatch(fallback, /Host default/);
-  assert.equal(hostValueFor({ host: 'restory-box' }), 'restory-box');
+  assert.equal(hostValueFor({ host: 'execution-host' }), 'execution-host');
   assert.equal(
-    hostValueFor({}, { kind: 'launched', assignmentId: 'abc', assignment: { execution_host: 'restory-box' } }),
-    'restory-box',
+    hostValueFor({}, { kind: 'launched', assignmentId: 'abc', assignment: { execution_host: 'execution-host' } }),
+    'execution-host',
   );
 });

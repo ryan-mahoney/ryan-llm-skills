@@ -142,9 +142,9 @@ It does not implement a third recognition stack as a prerequisite.
 | Candidate | Existing components | Integration considerations |
 | --- | --- | --- |
 | Adjacent | `lib/adjacent/transcription.ex`, local Whisper, and PCM capture | Existing model preparation and Elixir dependencies must be available |
-| Rearrange Writer | `server/asr/asrDaemonWorker.ts`, daemon protocol, and dictation state handling | Existing Bun process, shared modules, dependencies, and assets must be available |
+| the existing writer application | `server/asr/asrDaemonWorker.ts`, daemon protocol, and dictation state handling | Existing Bun process, shared modules, dependencies, and assets must be available |
 
-The preferred first adapter wraps Rearrange Writer's separate daemon using one already provisioned engine.
+The preferred first adapter wraps the existing writer application's separate daemon using one already provisioned engine.
 Its NDJSON boundary can isolate inference from Sentinel's Node host.
 The initial implementation can use a configured development checkout for that process.
 It must document the local dependency rather than claim a standalone installation.
