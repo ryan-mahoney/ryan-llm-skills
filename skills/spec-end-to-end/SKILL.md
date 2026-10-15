@@ -10,12 +10,24 @@ metadata:
 
 # Spec End To End
 
+## Context budget
+
+Use [context management](../../pi/extensions/context-budget/README.md). Keep the
+coordinator on progress, decisions, review outcomes and artifact pointers; leave source
+investigation and implementation history in the assigned worker. Read references only
+for the current stage. Give each fresh worker its relevant contracts, current decisions,
+source paths, preservation constraints and stop rule; never copy the whole parent chat.
+Use bounded searches and source ranges; keep full logs and reports in artifacts. Native
+compaction is a backstop and must preserve pending obligations and evidence revisions.
+An oversized-request stop is not permission to retry the same payload: recover from
+canonical artifacts in a fresh session, preserving checkout changes and writer locks.
+
 ## Standing Run Defaults
 
 For a prepared Pi run, reuse each target's recorded branch/worktree (`targets[]` in `locations.json`) and completed work; create
 an isolated branch/worktree only when none is assigned. Resume the first unfinished
 obligation from current receipts and the ledger, including outstanding review or fixes.
-Use configured difficulty routing and retained owner/editor pairs through the managed
+Use configured difficulty routing and retained owners and fresh editors per assignment through the managed
 Pi runtime. `REVIEW_AGENT` selects independent step reviews; `FINAL_REVIEWER` selects
 the optional fresh final red-flag review and delegated improvements; `SCOUT_AGENT` selects
 optional bounded source discovery for owners and reviewers. Reuse deterministic fact,

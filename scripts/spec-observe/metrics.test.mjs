@@ -183,3 +183,21 @@ test('completion reports separate subsequent checks', async t => {
   assert.equal(publicationOnly.process.completion, 'not_inferred_from_agent_exit');
   assert.equal(publicationOnly.process.milestones[0].kind, 'pr_submitted');
 });
+
+test('every fresh editor session contributes once to the run metrics', async t => {
+  const dir = await fixture(t), root = path.join(dir, 'pi/root.jsonl');
+  const owner = path.join(dir, 'pi/owner.jsonl');
+  const editors = [path.join(dir, 'pi/editors/a.jsonl'), path.join(dir, 'pi/editors/b.jsonl')];
+  await log(root, [header('root'), assistant(1, 0)]);
+  await log(owner, [header('owner'), assistant(3, 2)]);
+  for (const [i, file] of editors.entries()) await log(file, [header(`editor-${i}`), assistant(5 + i, 4 + i)]);
+  await mkdir(path.join(dir, 'runtime/sessions'), { recursive: true });
+  await mkdir(path.join(dir, 'runtime/runs'), { recursive: true });
+  await writeFile(path.join(dir, 'runtime/runs/run.json'), JSON.stringify({ id: 'run', parent_session: root, owner_session: owner,
+    editor_session: path.join(dir, 'unused-anchor.jsonl'), started_at: time(0), finished_at: time(10), state: 'completed' }));
+  await writeFile(path.join(dir, 'runtime/runs/run-editor-sessions.json'), JSON.stringify(editors));
+  const data = await metrics(dir, { now: Date.parse(time(15)) });
+  assert.equal(data.totals.model_calls, 4);
+  assert.equal(data.agents.filter(a => a.role === 'editor').reduce((n, a) => n + a.model_calls, 0), 2);
+  assert.deepEqual(data.discovery_errors, []);
+});

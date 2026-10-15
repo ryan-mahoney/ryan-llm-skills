@@ -4,6 +4,7 @@ description: Assesses a completed branch for red flags and owns delegated final 
 systemPromptMode: append
 inheritProjectContext: true
 inheritSkills: false
+subagentOnlyExtensions: ~/.agents/pi/extensions/context-budget/index.ts
 allowNestedSubagents: true
 allowedAgents: spec-final-editor
 tools: read, grep, find, ls, bash, edit, write, exec_command, write_stdin, apply_patch, subagent

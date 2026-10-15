@@ -4,6 +4,7 @@ description: Applies one step review findings set with exclusive write ownership
 systemPromptMode: append
 inheritProjectContext: true
 inheritSkills: false
+subagentOnlyExtensions: ~/.agents/pi/extensions/context-budget/index.ts
 tools: read, grep, find, ls, bash, edit, write, exec_command, write_stdin, apply_patch
 ---
 

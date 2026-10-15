@@ -2,8 +2,8 @@
 
 Use the repo-owned `spec-runtime` extension for assigned Pi implementation pairs.
 The coordinator starts an asynchronous owner with `spec_dispatch`; the owner invokes
-`spec_editor` synchronously. Native `pi --print --mode json` processes reuse explicit
-disk sessions. Do not use nested `pi-subagents` launches or resume IDs for implementation/editing.
+`spec_editor` synchronously. Native `pi --print --mode json` processes retain the owner
+session and record a fresh disk session for every editor packet. Do not use nested `pi-subagents` launches or resume IDs for implementation/editing.
 Use `spec_dispatch(action: start)` with `package` (`package_dir`), `step`
 (absolute subspec), `owner_model` and `editor_model` (`provider/id[:thinking]`). Optional
 `checkout`, `branch`, `base`, `assignment_id` and `instructions` carry existing directives.
@@ -27,9 +27,9 @@ editor defaults to `deepseek/deepseek-flash:max`. Preserve exact selectors and
 explicit overrides. Diagnose actual launch failures on this route; do not silently
 substitute models or providers. Non-Pi harnesses retain the direct worker route.
 
-New dispatches default to `session_scope: step`: retain the owner/editor pair within
-one canonical step and its retries, and start separate sessions for other steps.
-Explicit `session_scope: package` retains reuse across steps. Existing assignment IDs
+New dispatches default to `session_scope: step`: retain the owner within one canonical
+step and its retries. Each editor call starts fresh, including correction and commit packets. Explicit `session_scope: package`
+retains only the owner across steps. Existing assignment IDs
 resume their recorded scope and sessions when scope is omitted; a new retry ID on
 the same step inherits its latest recorded scope. New steps default to step scope.
 The runtime does not rewrite active runs.
@@ -82,8 +82,9 @@ Return: Changed hunks and unresolved gaps. Stop; no verification, commit or unre
 ```
 
 Use real inspected symbols in a live packet. The owner retains the verification plan.
-Reuse session context and canonical references; do not prepend the entire history or
-repeat stable policy. Put current preservation and stop constraints at the end.
+Each editor packet is self-contained: include current decisions, affected paths and
+preservation constraints; link stable card contracts instead of copying whole documents.
+Do not prepend prior chat, logs or the entire history. Put current preservation and stop constraints at the end.
 Include relevant source/scout pointers so the editor starts at the affected region.
 Reference settled card contracts instead of restating their full implementation. A
 dependency question that needs many reads is a bounded scout assignment: request its
@@ -92,7 +93,7 @@ transformations or collecting full-file context before the first coherent edit.
 Carry settled reuse decisions in `Edits`/`Preserve`: exact helper, shared-value, or
 component owners and the reuse/extend action. Resolve missing ownership for this
 transformation only; let the editor choose details within those boundaries.
-Within a retained step, reuse known policy and exact source plus successful replacements;
+Within one editor assignment, reuse exact source plus successful replacements;
 refresh only changed or uncertain text. Do not require post-edit file inventories,
 line counts or repeated status/diff calls just to populate a return. Broad mechanical
 edits may warrant a focused readback; preserve that judgment rather than imposing a
@@ -162,8 +163,8 @@ For unresolved escalation, it returns a `checkpoint` and concrete question to th
 coordinator; missing authority returns `decision-required`. Managed Pi children have
 no supervisor messaging tool. A necessary fact missing at step startup is returned the
 same way before the first editor dispatch; the coordinator redispatches the step with
-the answer in instructions under a new attempt ID, and the retained sessions are reused
-(Clarification: lines in the new prompt). It does not duplicate discovery, baseline tests or
+the answer in instructions under a new attempt ID. The owner session is reused and the
+next editor starts fresh (Clarification: lines in the new prompt). It does not duplicate discovery, baseline tests or
 successful verification. The editor
 uses contextual patches for existing files and coherent writes for small new files.
 An anchor mismatch calls for a scoped reread; repeated edit failure without a new
@@ -182,8 +183,9 @@ The runtime sends the coordinator a native completion event. Wait for that event
 do not poll status, tail transcripts, or infer completion from quiet output. Use `spec_dispatch(action: status, package: <package_dir>, run_id: <known ID>)`
 only to recover after interruption or diagnose an actual failure.
 
-Owner and editor disk sessions stay attached to their exact model assignments within
-the recorded session scope. Refresh affected source after intervening commits; reuse valid evidence
+The owner session follows the recorded scope; each editor packet has its own durable
+session, recorded in `runtime/runs/<run-id>-editor-sessions.json`. Exact model assignments
+remain unchanged. Refresh affected source after intervening commits; reuse valid evidence
 with its original revision. A changed model uses a distinct session. Context compaction
 must preserve requirements and unresolved work; it never authorizes a Git reset.
 

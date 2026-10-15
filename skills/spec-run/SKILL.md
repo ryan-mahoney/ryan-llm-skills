@@ -14,6 +14,18 @@ metadata:
 
 # Spec Run
 
+## Context budget
+
+Use [context management](../../pi/extensions/context-budget/README.md). Keep the
+coordinator on progress, decisions, review outcomes and artifact pointers; leave source
+investigation and implementation history in the assigned worker. Read references only
+for the current stage. Give each fresh worker its relevant contracts, current decisions,
+source paths, preservation constraints and stop rule; never copy the whole parent chat.
+Use bounded searches and source ranges; keep full logs and reports in artifacts. Native
+compaction is a backstop and must preserve pending obligations and evidence revisions.
+An oversized-request stop is not permission to retry the same payload: recover from
+canonical artifacts in a fresh session, preserving checkout changes and writer locks.
+
 ## Prepared Pi startup
 
 Use the [prepared Pi entry](../spec-end-to-end/SKILL.md#prepared-pi-entry):

@@ -4,6 +4,7 @@ description: Owns an independent spec review and writes its canonical review art
 systemPromptMode: append
 inheritProjectContext: true
 inheritSkills: false
+subagentOnlyExtensions: ~/.agents/pi/extensions/context-budget/index.ts
 allowNestedSubagents: true
 allowedAgents: scout
 tools: read, grep, find, ls, bash, edit, write, exec_command, write_stdin, apply_patch, subagent

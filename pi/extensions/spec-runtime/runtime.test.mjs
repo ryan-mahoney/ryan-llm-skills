@@ -887,3 +887,49 @@ test('launch passes exact nested model and thinking separately and captures sele
     assertLease(record);
   } finally { await runtime.cancel(f.packagePath); }
 });
+
+test('editor packets use separate durable sessions while preserving checkout changes', async t => {
+  const f = await fixture(t, `setInterval(()=>{},1000)`);
+  const runtime = new Runtime(f.options); await runtime.start(f.input);
+  const record = loadRun(f.packagePath), sessions = [];
+  const source = join(record.checkout, 'pending.txt'); writeFileSync(source, 'accepted change');
+  const launchEditor = (run, role, prompt) => {
+    assert.equal(role, 'editor'); assert.match(prompt, /FRESH EDITOR/);
+    assert.equal(readFileSync(source, 'utf8'), 'accepted change');
+    sessions.push(run.editor_session);
+    return { child: {}, done: Promise.resolve({ result: 'done' }) };
+  };
+  for (const packet of ['First edit', 'Second edit']) {
+    const result = await runEditor(record, packet, undefined, launchEditor);
+    assert.equal(result.editor_session, sessions.at(-1));
+  }
+  assert.notEqual(sessions[0], sessions[1]);
+  assert.deepEqual(JSON.parse(readFileSync(join(f.packagePath, 'runtime/runs', `${record.id}-editor-sessions.json`), 'utf8')), sessions);
+  await runtime.cancel(f.packagePath, undefined, 1000);
+});
+
+
+for (const content of [[], [{ type: 'text', text: 'Partially implemented; pending evidence.' }]]) {
+  test(`length-limited final response is incomplete even with ${content.length ? 'partial text' : 'no text'} and exit zero`, async t => {
+    const f = await fixture(t, `console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'length',content:${JSON.stringify(content)}}}));`);
+    await new Runtime(f.options).start(f.input);
+    const outcome = await f.finished;
+    assert.equal(outcome.state, 'failed');
+    assert.match(outcome.error, /length limit; packet is incomplete/);
+    assert.equal(outcome.stop_reason, 'length');
+    assert.match(outcome.next, /partial work.*bounded continuation/);
+    assert.equal(readFileSync(outcome.full_result_path, 'utf8'), content[0]?.text || '');
+  });
+}
+
+test('native recovery after a length stop can finish without inheriting the earlier failure', async t => {
+  const f = await fixture(t, `
+    console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'length',content:[{type:'text',text:'Partial'}]}}));
+    console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'Recovered'}]}}));
+  `);
+  await new Runtime(f.options).start(f.input);
+  const outcome = await f.finished;
+  assert.equal(outcome.state, 'completed');
+  assert.equal(outcome.error, undefined);
+  assert.equal(outcome.result, 'Recovered');
+});

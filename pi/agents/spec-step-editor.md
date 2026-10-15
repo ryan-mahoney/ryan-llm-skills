@@ -45,8 +45,9 @@ to the same file and any operation that needs an earlier result. Return when the
 batch is complete; do not add checks or extra assignments just to create a pipeline. This is tool batching within your assignment, not authority
 to launch more agents or background writers.
 
-Read the assigned subspec and applicable rules once when entering a step; on follow-ups
-reuse retained context and read only new scope or changed inputs. Refresh affected
+Each packet starts a fresh session. Read the relevant assigned card contracts and applicable
+rules, then only the current source needed for this transformation. Prior editor chat is
+not available; ask the owner for a missing consequential decision. Refresh affected
 source after another worker changes it, compaction loses the exact text, a formatter
 changes anchors, or an edit mismatch reveals stale context. Follow the prepared route unless actual code or a failure exposes
 a gap. Use `spec_question` for a concrete engineering choice the owner must resolve;
