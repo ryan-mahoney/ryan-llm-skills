@@ -9,6 +9,7 @@ import { createRepositoryDiscovery } from './discovery.mjs';
 import { changedMembers, epicWaitState, epicWaves, parseEpic } from './epics.mjs';
 import { checkPackage, listEpics } from '../spec-location/index.mjs';
 import { validateStepIndex } from './steps.mjs';
+import { runtimeHostCommand } from '../../pi/extensions/spec-runtime/linux-resources.mjs';
 import { resolveStorageRoot } from '../workspaces/store.mjs';
 import { publicHint } from '../../pi/extensions/spec-runtime/monitor.mjs';
 
@@ -18,13 +19,16 @@ const options = {};
 // Resolve after the write has been handed to the OS; process.exit can otherwise
 // truncate a snapshot larger than the pipe buffer.
 const print = text => new Promise(resolve => process.stdout.write(`${text}\n`, resolve));
-const usage = `Usage: node scripts/spec-observe/cli.mjs list|runs|report|metrics|sentinel|epic|steps [options]
+const usage = `Usage: node scripts/spec-observe/cli.mjs list|runs|report|metrics|sentinel|epic|steps|runtime-host [options]
   epic lint --workspace W --epic SLUG [--root PATH]  Validate one epic record; print its dependency waves (exit 1 when invalid)
   epic wait --workspace W --epic SLUG [--minutes N] [--interval-seconds N] [--root PATH]
                          Block until a member's status, attention or launched session changes, or N minutes
                          pass (default 10, at most 60; checks every 60 seconds); print members and what changed
   steps lint PACKAGE [--root PATH]
                          Validate the package step index against its targets and evidence plan (exit 1 when invalid); --root resolves PACKAGE against an alternate storage root
+  runtime-host setup|check [--lifecycle-memory-mib N] [--lifecycle-tasks N] [--aggregate-tasks N] [--probe]
+                         setup verifies the user manager and installs the owned host policy and slice (it always runs the isolated probe);
+                         check is read-only unless --probe is requested (exit 1 on refusal)
   metrics --package PATH  Calls, role/model response time, steps, test submissions and cost
   --format text|json     Metrics output (default json)
   --all-sessions         Metrics across all recorded coordinator sessions, including pauses
@@ -113,6 +117,26 @@ try {
     const result = validateStepIndex(index, { targets: checked.locations.targets.map(target => target.id), evidencePlan });
     await print(JSON.stringify(result, null, 2));
     process.exit(result.ok ? 0 : 1);
+  }
+  if (command === 'runtime-host') {
+    const [action, ...rest] = args;
+    const flags = {};
+    const valueFlags = new Set(['--lifecycle-memory-mib', '--lifecycle-tasks', '--aggregate-tasks']);
+    const keyFor = { '--lifecycle-memory-mib': 'lifecycleMemoryMib', '--lifecycle-tasks': 'lifecycleTasks', '--aggregate-tasks': 'aggregateTasks' };
+    for (let i = 0; i < rest.length; i += 1) {
+      const token = rest[i];
+      if (token === '--probe') {
+        if (flags.probe !== undefined) { console.error(usage); process.exit(2); }
+        flags.probe = true;
+        continue;
+      }
+      if (!valueFlags.has(token) || rest[i + 1] === undefined || !/^[0-9]+$/.test(rest[i + 1])) { console.error(usage); process.exit(2); }
+      flags[keyFor[token]] = Number(rest[i + 1]);
+      i += 1;
+    }
+    const handled = await runtimeHostCommand(action, flags);
+    await print(JSON.stringify(handled.result, null, 2));
+    process.exit(handled.exitCode);
   }
   if (!['list', 'runs', 'report', 'metrics', 'sentinel'].includes(command)) throw new Error(usage);
   const sentinelAction = command === 'sentinel' ? args.shift() : null;

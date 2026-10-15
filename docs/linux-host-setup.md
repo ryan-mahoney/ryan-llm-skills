@@ -150,6 +150,84 @@ attach to the assignment's tmux session and answer it there.
 
 Run it again after every `git pull`.
 
+## Native resources and bubblewrap support
+
+Contained Linux waves need cgroup v2 controllers delegated to the user systemd
+manager and the unit properties this repository's systemd adapter uses. The runtime
+host command checks both, installs the owned policy and slice, and reports the
+admitted width:
+
+```bash
+node ~/.agents/scripts/spec-observe/cli.mjs runtime-host check
+node ~/.agents/scripts/spec-observe/cli.mjs runtime-host setup
+```
+
+`check` is read-only unless `--probe` is passed, and it exits nonzero on refusal.
+`setup` always runs the isolated user-service probe, verifies the user manager and
+refuses when a property is unsupported; re-running it with unchanged inputs
+rewrites nothing. The three advanced policy inputs
+(`--lifecycle-memory-mib`, `--lifecycle-tasks`, `--aggregate-tasks`) are optional.
+Defaults, the automatic pool and the sizing examples are in
+[agent-resource-limits.md](agent-resource-limits.md).
+
+### Bubblewrap and overlay isolation
+
+Waves use an unprivileged bubblewrap overlay instead of writing to the project
+checkout directly. The host needs:
+
+- bubblewrap 0.11 or newer from the distribution package, built without setuid.
+  Earlier releases lack the overlay options, and a setuid binary changes the
+  privilege model.
+- Kernel OverlayFS usable from an unprivileged user namespace, with the retained
+  upper and work directories on one local filesystem.
+- On distributions that restrict user namespaces (for example Ubuntu 24.04 with
+  its AppArmor profile), the OS-provided unprivileged user-namespace profile. Do
+  not copy a binary from another machine, install a custom privileged helper, or
+  disable the global restriction; the remedy belongs to the distribution package
+  or profile.
+
+The probe runs on `setup` and on `check --probe`: it launches the fixed
+namespace-local overlay twice (copy-up and whiteout through the merged view, then a
+remount proving both survived phase exit) and reports the observed bubblewrap
+version and options, backing filesystem and kernel result. `check` without
+`--probe` stays read-only and leaves the capability explicitly unverified.
+
+Overlay mounts are namespace-local: the host mount table is unchanged and the
+merged view exists only inside the launch. A rename that crosses mounts can fail
+with EXDEV when lower and upper layers live on different mounts, so layers belong
+on one local filesystem. Builds and native tests that introspect the mount table,
+probe for writable layers or rename across mounts are capability-sensitive, and no
+universal support is claimed for them.
+
+A resource-policy refusal never falls back: the launch refuses. The only fallback
+is the explicitly reported bounded worktree route, and only when the isolated
+probe observes an enumerated overlay capability failure (absent bubblewrap, absent
+overlay options, denied user namespace, denied mount, failed kernel semantics,
+unsupported layer filesystem). Corruption, exhaustion, unknown kernel effects and
+indeterminate probe execution stay blocked.
+
+### Required native rehearsal before activation
+
+Before activation, the operator runs the real native rehearsal on the target host.
+It is required and is not evidence already passed. This guide does not run it. The
+rehearsal records actual observations:
+
+1. Run `runtime-host setup` and record its check output: user manager version,
+   utilities, delegated controllers, required unit properties, bubblewrap
+   version/options and the isolated probe result.
+2. Launch a real wave service and record the cgroup evidence: the unit's
+   `ControlGroup` and `InvocationID`, the memory, task, CPU and `RuntimeMaxSec`
+   properties it inherits from `spec-runtime.slice`, and the separate systemd-run
+   launcher versus `MainPID`.
+3. Prove the registration gate: the worker starts only after the unit and
+   `InvocationID` are registered, and a launch without registration cannot
+   proceed.
+4. Cancel a populated unit and show the cgroup drains; trigger an OOM kill and a
+   deadline timeout, and show each result is retained with its distinct reason
+   until a positive drain is observed.
+5. Clean up the rehearsal's units, gates and transient files, and record the
+   observed revision with the evidence artifact.
+
 ## 5. Repositories
 
 **[Host]** Clone each repository a workspace kit lists into `~/Documents/<repository>`. Kits
