@@ -3342,11 +3342,29 @@ try:
             assert physical_inventory['directory'].rstrip('/').rsplit('/', 1)[-1] == 'alpha', physical_inventory
             report['scenarios'].append('Real inventory confirms basename physical is kit id alpha and basename alpha is kit id physical')
 
-            # Cold scoped Specs: the route ws names the catalog id while the
-            # selected run carries the directory basename, so the request must
-            # use the route's mapped catalog id.
+            # Cold scoped Specs, distinct from selection: scope the route to a
+            # valid catalog id whose directory basename matches no observed run.
+            # A full document reload picks up a snapshot with zero rows in scope,
+            # so no row can be auto-selected; only the route catalog id can
+            # drive the workspace request, proving the cold route-catalog path.
             detail_requests.clear()
             open_route('specs', ws='alpha')
+            state['value'] = fixture_snapshot([alpha_dir_run, unmapped_run])
+            page.reload(wait_until='domcontentloaded')
+            expect(rows).to_have_count(0)
+            page.wait_for_timeout(500)
+            assert 'ws' in params(), params()
+            assert 'id' not in params(), params()
+            assert any('id=alpha' in url for url in detail_requests), detail_requests
+            report['scenarios'].append('Cold scoped Specs entry with no matching record loads the route catalog id')
+
+            # Scoped Specs with an observed run in scope: the run's own
+            # directory basename maps to the same route catalog entry, so the
+            # request id matches the route id.
+            detail_requests.clear()
+            open_route('specs', ws='alpha')
+            state['value'] = fixture_snapshot([physical_dir_run, alpha_dir_run, unmapped_run])
+            page.reload(wait_until='domcontentloaded')
             expect(rows).to_have_count(1)
             expect(rows.first.locator('.run-title')).to_have_text('alpha-run')
             page.wait_for_timeout(500)

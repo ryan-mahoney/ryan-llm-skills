@@ -7,7 +7,7 @@ import { normalizeEnvelope, authoritativeObservers, collectRecords, packageSumma
 import Shell, { type ShellNavEntry } from './Shell';
 import type { StatusTone } from './primitives';
 import { parseHash, subscribeRoute, navigate, routeHistoryMode, type Destination, type RouteState } from './route';
-import { catalogEntryForRecord, clearIncompatibleFields, firstUnmatchedTargetId, inWorkspaceScope, needsWorkspacePicker, requiresWorkspace, scopeLabel, withWorkspace, type CatalogEntry } from './scope';
+import { catalogEntryForRecord, clearIncompatibleFields, firstUnmatchedTargetId, inWorkspaceScope, needsWorkspacePicker, requiresWorkspace, resolveCatalogEntry, scopeLabel, withWorkspace, type CatalogEntry } from './scope';
 import { visibleSpecs } from './spec-state';
 import { destinationEntries, type DestinationProps } from './destinations';
 import { nextStepRows, railCount } from './destinations/next-steps-state';
@@ -177,10 +177,13 @@ export default function App() {
   // workspace detail. Epics resolves a decision's canonical package target to
   // its repository alias from that record before seeding a conversation; the
   // record stays optional there and never gates the route or its picker.
-  const detailWorkspaceId = createMemo(() => route().dest === 'workspaces' || route().dest === 'epics'
-    ? route().ws
-    : route().dest === 'specs' ? catalogEntryForRecord(record() ?? {}, 'run', catalogEntries(), route().ws)?.id
-    : requiresWorkspace(route().dest) && !packageFilesRoute() ? route().ws : undefined);
+  const detailWorkspaceId = createMemo(() => {
+    const ws = route().ws;
+    if (route().dest === 'workspaces' || route().dest === 'epics') return ws;
+    if (route().dest === 'specs') return (ws === undefined ? undefined : resolveCatalogEntry(catalogEntries(), ws)?.id)
+      ?? catalogEntryForRecord(record() ?? {}, 'run', catalogEntries(), ws)?.id;
+    return requiresWorkspace(route().dest) && !packageFilesRoute() ? ws : undefined;
+  });
 
   function go(next: RouteState, options: { keepExpected?: boolean } = {}) {
     if (!options.keepExpected) { setExpectedCompletionKey(null); setExpectedCompletionRoute(null); expectedSeen = false; }
