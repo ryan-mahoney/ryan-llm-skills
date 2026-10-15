@@ -68,8 +68,10 @@ const bullets = (items) => (items.length ? items.map((item) => `- ${item}`).join
 // A canonical identifier is the catalog's own relative identity for a
 // workspace, entity or use reference: non-empty and bounded, never a path form
 // (no absolute paths, no '..', no backslash, no '~' expansion) and no control
-// characters. Anything else is refused with a static typed reason.
-function canonicalIdentifier(value, label) {
+// characters. Anything else is refused with a static typed reason. This is
+// the single owner of that acceptance policy; scripts/spec-observe/
+// request-interpret.mjs reuses it rather than carrying its own copy.
+export function canonicalIdentifier(value, label) {
   if (typeof value !== "string" || value.trim() === "") throw invalid(`A canonical ${label} is required.`);
   if (value.length > 200) throw invalid(`A canonical ${label} is too long.`);
   if (/[\u0000-\u001f\u007f\u2028\u2029]/.test(value)) throw invalid(`A canonical ${label} must not contain control characters.`);

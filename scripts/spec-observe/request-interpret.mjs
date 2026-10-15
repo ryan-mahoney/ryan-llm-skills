@@ -30,7 +30,7 @@ import { join } from "node:path";
 
 import { listPackages } from "../spec-location/index.mjs";
 import { printReply } from "../workspaces/naming.mjs";
-import { RESEARCH_INTENTS, REQUEST_ACTIONS, REQUEST_LIMITS } from "../workspaces/request-actions.mjs";
+import { canonicalIdentifier, RESEARCH_INTENTS, REQUEST_ACTIONS, REQUEST_LIMITS } from "../workspaces/request-actions.mjs";
 import { listWorkspaceDesigns } from "./designs.mjs";
 import { readWorkspaceEpics } from "./epics.mjs";
 
@@ -78,15 +78,10 @@ export function isTypedRef(value) {
 const refType = (value) => (typeof value === "string" ? value.slice(0, value.indexOf(":")) : "");
 
 // Input validation, in request-actions.mjs refusal style: static reasons, no
-// echo of the offending value, and always before any spawn.
-export function canonicalIdentifier(value, label) {
-  if (typeof value !== "string" || value.trim() === "") throw invalid(`A canonical ${label} is required.`);
-  if (value.length > 200) throw invalid(`A canonical ${label} is too long.`);
-  if (CONTROL.test(value)) throw invalid(`A canonical ${label} must not contain control characters.`);
-  if (value.startsWith("/") || value.startsWith("~") || /^[a-zA-Z]:/.test(value)) throw invalid(`A canonical ${label} must not be a path.`);
-  if (value.includes("\\") || value.includes("..")) throw invalid(`A canonical ${label} must not be a path.`);
-  return value;
-}
+// echo of the offending value, and always before any spawn. The canonical
+// identifier policy has exactly one owner (request-actions.mjs); it is
+// re-exported here so request-routes.mjs keeps its existing import surface.
+export { canonicalIdentifier };
 
 function requiredTranscript(value) {
   if (typeof value !== "string" || value.trim() === "") throw invalid("A request transcript is required.");

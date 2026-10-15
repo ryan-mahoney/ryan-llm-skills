@@ -18,10 +18,11 @@ import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { makeFixture, put } from "../spec-location/fixture.mjs";
-import { REQUEST_LIMITS } from "../workspaces/request-actions.mjs";
+import { canonicalIdentifier as domainCanonicalIdentifier, REQUEST_LIMITS } from "../workspaces/request-actions.mjs";
 import { printReply } from "../workspaces/naming.mjs";
 import {
   buildCatalog,
+  canonicalIdentifier,
   createInterpreter,
   parseReply,
   validateReply,
@@ -419,6 +420,17 @@ test("an over-limit transcript is refused before any spawn and never truncated",
     assert.equal(refused.code, "invalid-request", JSON.stringify(input));
   }
   assert.equal(fake.record.spawns, 0, "invalid input must never spawn");
+});
+
+test("canonical identifier validation is single-sourced from the request domain module", () => {
+  // One acceptance policy for workspace identifiers: the interpreter reuses
+  // request-actions.mjs's validator (re-exported for request-routes.mjs), so a
+  // copy cannot drift and accept what brief composition later refuses.
+  assert.equal(canonicalIdentifier, domainCanonicalIdentifier, "no second acceptance policy");
+  assert.equal(canonicalIdentifier("demo", "workspace"), "demo");
+  for (const bad of ["", "bad..id", "~demo", "/abs/demo", "a\u0000b", "x".repeat(201)]) {
+    assert.throws(() => canonicalIdentifier(bad, "workspace"), { code: "invalid-request" }, JSON.stringify(bad));
+  }
 });
 
 test("parseReply extracts the first balanced object and fails without one", () => {
