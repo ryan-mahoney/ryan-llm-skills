@@ -47,6 +47,9 @@ The working model is a session-local copy. Smaller native limits stay smaller; p
 model identity, registry capabilities, credentials, rates, selected thinking effort
 and output allowance are unchanged. There is no blanket output cap: reasoning and
 visible output share budgets on some providers and have different controls on others.
+Without a cap, one very long response can push the next projected context past the
+summarizer's own 90k estimate, so the compaction preflight refuses and the run stops
+instead of compacting. This is rare but possible; recover with a bounded handoff.
 The managed owner/editor launcher classifies a final `length` response as a failed,
 incomplete packet even if it contains text and the process exits zero. It retains the
 partial result and stop reason. Inspect current changes and assign a bounded continuation;
