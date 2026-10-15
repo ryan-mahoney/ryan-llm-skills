@@ -67,7 +67,7 @@ test('background profiles load the policy with and without ambient extension dis
       const child = await factory.create({ ...launch, ambientExtensions, noContextFiles: true,
         hooks: [...launch.hooks, { name: 'fixture-provider', factory: pi => pi.registerProvider('budget-fixture', provider) }] });
       try {
-        assert.equal(child.contextWindow, 76000);
+        assert.equal(child.contextWindow, 88000);
         await child.prompt('Return the fixture completion without tools.');
         const entries = readFileSync(child.sessionFile, 'utf8').trim().split('\n').map(JSON.parse);
         assert.equal(entries.filter(e => e.customType === 'context-budget' && e.data.event === 'request').length, 1);

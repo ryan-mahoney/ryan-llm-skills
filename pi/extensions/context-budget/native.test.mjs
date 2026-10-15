@@ -11,7 +11,7 @@ const root = process.env.SPEC_PI_SDK;
 const sdk = root ? await import(pathToFileURL(join(root, 'dist/index.js'))) : null;
 const skip = sdk ? false : 'Set SPEC_PI_SDK to the installed Pi package for native boundary checks';
 
-async function fixture(t, { compaction = true, seed, toolTurn = false, toolInput = 70000, toolOutput = 30, thinking = '', toolText = 'Pending: retain the source change and evidence.', providerName = 'budget-fixture', summaryStop = 'stop' } = {}) {
+async function fixture(t, { compaction = true, seed, toolTurn = false, toolInput = 80000, toolOutput = 30, thinking = '', toolText = 'Pending: retain the source change and evidence.', providerName = 'budget-fixture', summaryStop = 'stop', emptyResponses = 0 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'context-native-'));
   const requests = [];
   const server = createServer(async (req, res) => {
@@ -21,7 +21,8 @@ async function fixture(t, { compaction = true, seed, toolTurn = false, toolInput
     const text = 'Goal: preserve input. Constraints: no publication. Pending: implement the assigned fixture; retain existing evidence.';
     const toolCall = toolTurn && requests.length === 1;
     const isSummary = JSON.stringify(payload.messages[0]).includes('context summarization assistant');
-    const chunk = { id: 'fixture', object: 'chat.completion.chunk', created: 1, model: 'large', choices: [{ index: 0, delta: toolCall ? { ...(thinking ? { reasoning_content: thinking } : {}), tool_calls: [{ index: 0, id: 'call_fixture', type: 'function', function: { name: 'fixture_read', arguments: '{}' } }] } : { content: text }, finish_reason: null }] };
+    const empty = !isSummary && requests.length <= emptyResponses;
+    const chunk = { id: 'fixture', object: 'chat.completion.chunk', created: 1, model: 'large', choices: [{ index: 0, delta: empty ? { reasoning_content: 'Planning the next action.' } : toolCall ? { ...(thinking ? { reasoning_content: thinking } : {}), tool_calls: [{ index: 0, id: 'call_fixture', type: 'function', function: { name: 'fixture_read', arguments: '{}' } }] } : { content: text }, finish_reason: null }] };
     res.write(`data: ${JSON.stringify(chunk)}\n\n`);
     res.write(`data: ${JSON.stringify({ ...chunk, choices: [{ index: 0, delta: {}, finish_reason: toolCall ? 'tool_calls' : isSummary ? summaryStop : 'stop' }], usage: { prompt_tokens: toolCall ? toolInput : 100, completion_tokens: toolCall ? toolOutput : 30, total_tokens: toolCall ? toolInput + toolOutput : 130 } })}\n\n`);
     res.end('data: [DONE]\n\n');
@@ -54,10 +55,10 @@ test('native Pi compacts retained history before the next response without chang
     for (let i = 0; i < 12; i++) {
       manager.appendMessage({ role: 'user', content: [{ type: 'text', text: `Completed investigation ${i}: ` + 'old source '.repeat(1800) }], timestamp: Date.now() });
       manager.appendMessage({ role: 'assistant', content: [{ type: 'text', text: 'Recorded in artifact.' }], api: 'openai-completions', provider: 'budget-fixture', model: 'large',
-        stopReason: 'stop', usage: { input: 70000, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 70005, cost: {} }, timestamp: Date.now() });
+        stopReason: 'stop', usage: { input: 80000, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 80005, cost: {} }, timestamp: Date.now() });
     }
   } });
-  assert.equal(f.session.model.contextWindow, 76000);
+  assert.equal(f.session.model.contextWindow, 88000);
   assert.equal(f.session.model.maxTokens, 65536, 'provider output allowance is preserved');
   assert.equal(f.runtime.getModel('budget-fixture', 'large').contextWindow, 1048576);
   await f.session.prompt('Continue. Preserve input; no publication; implement the assigned fixture.');
@@ -106,8 +107,8 @@ test('native Pi compacts between tool calls and retains the pending obligation',
 });
 
 
-test('55k input plus a reasoning and tool burst compacts before the request guard', { skip, timeout: 15000 }, async t => {
-  const f = await fixture(t, { toolTurn: true, toolInput: 55000, toolOutput: 12000,
+test('62k input plus a reasoning and tool burst compacts before the request guard', { skip, timeout: 15000 }, async t => {
+  const f = await fixture(t, { toolTurn: true, toolInput: 62000, toolOutput: 12000,
     thinking: 'thinking '.repeat(6000), toolText: 'source '.repeat(1700), seed: manager => {
       for (let i = 0; i < 12; i++) {
         manager.appendMessage({ role: 'user', content: 'source '.repeat(2600), timestamp: Date.now() });
@@ -139,7 +140,7 @@ function summaryHistory(manager) {
   }
 }
 
-test('DeepSeek summary keeps obligations and selected reasoning through native persistence and continuation', { skip, timeout: 15000 }, async t => {
+test('DeepSeek summary keeps obligations with thinking disabled and restores selected reasoning for continuation', { skip, timeout: 15000 }, async t => {
   const f = await fixture(t, { providerName: 'deepseek', seed: summaryHistory });
   f.session.setThinkingLevel('high');
   await f.session.compact('Preserve the unresolved security review.');
@@ -150,8 +151,8 @@ test('DeepSeek summary keeps obligations and selected reasoning through native p
   assert.ok(f.requests.length >= 1);
   for (const request of f.requests) {
     assert.match(JSON.stringify(request.messages[0]), /Replace completed investigation/);
-    assert.equal(request.reasoning_effort, 'high');
-    assert.equal(request.thinking.type, 'enabled');
+    assert.equal(request.reasoning_effort, undefined, 'summary reasoning cannot consume its output cap');
+    assert.equal(request.thinking.type, 'disabled');
   }
   assert.match(JSON.stringify(f.requests[0]), /unresolved security review/);
   assert.equal(f.session.thinkingLevel, 'high');
@@ -161,6 +162,17 @@ test('DeepSeek summary keeps obligations and selected reasoning through native p
   assert.doesNotMatch(JSON.stringify(f.requests.at(-1).messages[0]), /Replace completed investigation/);
   const usage = f.manager.getEntries().find(e => e.customType === 'context-budget' && e.data.event === 'summary_usage');
   assert.equal(usage.data.stop_reason, 'stop');
+});
+
+// Run alone: node --test --test-name-pattern='reasoning-only' pi/extensions/context-budget/native.test.mjs
+test('native Pi sends one more request after a reasoning-only response and stops after two', { skip, timeout: 15000 }, async t => {
+  const f = await fixture(t, { providerName: 'deepseek', emptyResponses: 1 });
+  await f.session.prompt('Continue the assigned fixture.');
+  assert.equal(f.requests.length, 2, 'the empty response is followed by exactly one continuation');
+  assert.match(JSON.stringify(f.requests[1].messages), /contained only reasoning/);
+  const g = await fixture(t, { providerName: 'deepseek', emptyResponses: 10 });
+  await g.session.prompt('Continue the assigned fixture.');
+  assert.equal(g.requests.length, 3, 'two continuations, then the run settles');
 });
 
 test('DeepSeek summary truncation preserves history and does not retry the default summarizer', { skip, timeout: 15000 }, async t => {

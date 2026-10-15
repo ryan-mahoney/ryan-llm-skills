@@ -109,7 +109,7 @@ test('native outage retries 5/10/20s then switches exact provider without replay
   assert.deepEqual(f.requests.map(r => r.model), [...Array(5).fill('primalabs-ai/MiMo-V2.6-Pro'), 'deepseek-flash']);
   assert.equal(f.mutations(), 1);
   assert.equal(f.session.model.provider, 'deepseek');
-  assert.equal(f.session.model.contextWindow, 76000, 'fallback retains the context guard');
+  assert.equal(f.session.model.contextWindow, 88000, 'fallback retains the context guard');
   assert.equal(f.session.thinkingLevel, 'high');
   assert.match(JSON.stringify(f.requests.at(-1)), /Durable change already applied/);
   assert.doesNotMatch(JSON.stringify(f.requests.at(-1)), /no healthy deployments/);

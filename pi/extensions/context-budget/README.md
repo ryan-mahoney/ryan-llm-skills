@@ -36,11 +36,11 @@ duplicate installation. This uses Pi 1.2.0 and pi-subagents 0.78.0 APIs.
 
 | Control | Value | Purpose |
 | --- | ---: | --- |
-| Session working context window | 76,000 tokens maximum | Trigger native compaction early |
+| Session working context window | 88,000 tokens maximum | Trigger native compaction early |
 | Response and thinking allowance | Selected model/settings | Preserve provider-specific generation semantics |
-| Native default compaction reserve | 16,384 tokens | Starts compaction around 59,616 with the working window |
+| Native default compaction reserve | 16,384 tokens | Starts compaction around 71,616 reported tokens with the working window |
 | Native default recent context | 20,000 tokens | Keep recent exact messages alongside the summary |
-| Request estimate stop | 90,000 tokens | Leave headroom below the desired 100k input ceiling |
+| Request estimate stop | 90,000 projected tokens | Leave headroom below the desired 100k input ceiling |
 | Tool text threshold | 12,000 characters | Archive large outputs and return head/tail excerpts |
 
 The working model is a session-local copy. Smaller native limits stay smaller; provider,
@@ -67,8 +67,13 @@ an added working-handoff instruction. It aims for 8,000 characters, replacing co
 investigation narratives with outcomes and artifact references while preserving active
 constraints, authority, revisions, known failures and pending obligations. This is a
 prompt target, not truncation or an acceptance waiver. Both history and split-turn
-summaries receive it. The provider, selected reasoning level, native output budgets
-and configured transient retry policy remain unchanged.
+summaries receive it. The summary request runs with thinking disabled; the provider,
+native output budgets and configured transient retry policy remain unchanged, and the
+session's selected reasoning level applies again to the next response. Pi caps a history
+summary at 13,107 output tokens and a split-turn summary at 8,192, and reasoning shares
+that cap. On 2026-10-15 a `deepseek-flash:max` editor spent 6-13k reasoning tokens per
+summary; three of five hit `length` with no text and aborted the editor. The summary is a
+fresh single-prompt request, so this does not affect reasoning replay in the session.
 
 This intervention addresses an observed run whose saved summaries grew from 7,502 to
 40,992 characters before repeated summary truncations. It is scoped to DeepSeek;
@@ -83,6 +88,15 @@ instructions and cached/replayed conversation. It uses UTF-8 bytes / 3 plus 1,02
 and 4,096 per recognized image; this is **not an exact tokenizer or a guaranteed 100k
 provider ceiling**. Content, image detail and provider serialization can change error.
 Validate estimates against actual reported input on real runs before tightening limits.
+
+The request guard and compaction preflight compare a projected value with the 90k stop:
+the estimate times the latest reported/estimated input ratio, clamped to 0.5-2. The raw
+estimate applies until a response reports usage. Native compaction triggers on reported
+input, so an uncalibrated guard can fire first. On 2026-10-15 the estimate ran 1.3x high
+for DeepSeek and 1.6x for Codex; a Codex reviewer reached a 93k estimate at about 57k
+real input and was stopped before compaction could start at 59.6k. `request` entries
+record the raw estimate, projected value and calibration. The ratio comes from the
+previous request, so one unusually dense tool burst can still be underestimated.
 Native virtual-model routing is not covered by the working-window guarantee; the final
 payload guard still applies. External extensions making their own API calls are outside
 this policy. Do not combine competing memory/compaction extensions without testing.
@@ -99,6 +113,16 @@ characters, the full-output path and an explicit omission notice. Nontext blocks
 Read missing ranges before editing; never infer omitted source. If no durable session
 file exists, the output is preserved and the request guard remains the backstop.
 Archives follow transcript retention and are not automatically deleted by this policy.
+
+## Reasoning-only responses
+
+A response with no text and no tool call ends Pi's agent loop without a result. On
+2026-10-15 MiMo fixers ended this way with `stop` and zero output, or with `length` inside
+reasoning. At `agent_before_settle` the policy appends one instruction to continue and
+requests another turn, at most twice in a row; a response with text or a tool call resets
+the allowance. Each continuation records `empty_response_continue`. Managed owners and
+editors also load `spec-runtime/provider-recovery.mjs`, which retries and falls back on
+these responses first; this policy covers reviewers, fixers and other sessions without it.
 
 ## Measurement and activation
 
@@ -120,7 +144,7 @@ separately. Fresh editors may lower retained input but increase rereading; total
 rise or fall. A fresh session does not necessarily invalidate a provider's identical-prefix
 cache. Compare actual billed usage by provider/model; do not import another endpoint's rates.
 
-The native boundary fixture reports 55k input and 12k output with reasoning replay plus
+The native boundary fixture reports 62k input and 12k output with reasoning replay plus
 a near-12k-character tool result. The next uncompressed payload would exceed the 90k
 estimate guard; native compaction completes and the continuation stays below it. This
 covers that transition, not every tokenizer, image or tool burst. Keep the conservative
