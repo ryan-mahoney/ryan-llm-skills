@@ -16,7 +16,7 @@ import { homedir, hostname, tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { newPackage } from "../spec-location/index.mjs";
-import { launchAssignment, prepareAssignmentSpecTarget, resolveAssignment, resolveTarget } from "./assignments.mjs";
+import { findAssignment, launchAssignment, listAssignments, prepareAssignmentSpecTarget, resolveAssignment, resolveTarget } from "./assignments.mjs";
 import { fetchWorkspace } from "./store.mjs";
 import { createReferenceCatalog } from "./references.mjs";
 
@@ -1285,4 +1285,181 @@ test("assignment resolution harness resolves clauded and codexd wrappers with ha
   }
 
   await assertNoWrites(workspaceDirectory, storageRoot);
+});
+
+// Test-first origin coverage: these cases persist disposable records under
+// their own temp roots and never touch production owners.
+
+test("assignment resolution accepts absent null and UUID thread_id outside the canonical digest", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  const workspaceDirectory = join(storageRoot, "projects", "origin-workspace");
+  await mkdir(workspaceDirectory, { recursive: true });
+  const appPath = await makeRepo(join(root, "repos", "app"));
+  const home = join(root, "home");
+  await mkdir(home, { recursive: true });
+  const piPath = await fakePi(join(root, "bin"));
+  await briefFixture(workspaceDirectory, "Origin brief bytes.\n");
+  await writeFile(join(workspaceDirectory, "kit.yaml"), kitYaml({
+    id: "origin-workspace",
+    name: "Origin Workspace",
+    repositories: [{ id: "app", path: appPath }],
+  }));
+
+  const input = {
+    assignment_id: randomUUID(),
+    workspace_id: "origin-workspace",
+    storageRoot,
+    home,
+    brief: "briefs/brief.md",
+    skill: "general",
+    instructions: "Record the originating thread.",
+    target: "app",
+    pi_path: piPath,
+  };
+
+  const absent = await resolveAssignment(input);
+  const explicitNull = await resolveAssignment({ ...input, thread_id: null });
+  const threadId = randomUUID();
+  const withThread = await resolveAssignment({ ...input, thread_id: threadId });
+
+  assert.equal(absent.record.thread_id, null);
+  assert.equal(explicitNull.record.thread_id, null);
+  assert.equal(withThread.record.thread_id, threadId);
+  assert.equal(absent.contractDigest, explicitNull.contractDigest);
+  assert.equal(absent.contractDigest, withThread.contractDigest);
+  await assert.rejects(
+    resolveAssignment({ ...input, thread_id: "not-a-uuid" }),
+    /thread_id/,
+  );
+
+  await assertNoWrites(workspaceDirectory, storageRoot);
+});
+
+test("assignment launch same-id repeat treats missing and null thread_id alike and refuses a differing thread_id", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  const workspaceDirectory = join(storageRoot, "projects", "repeat-workspace");
+  await mkdir(workspaceDirectory, { recursive: true });
+  const appPath = await makeRepo(join(root, "repos", "app"));
+  const home = join(root, "home");
+  await mkdir(home, { recursive: true });
+  const piPath = await fakePi(join(root, "bin"));
+  await briefFixture(workspaceDirectory, "Repeat brief bytes.\n");
+  await writeFile(join(workspaceDirectory, "kit.yaml"), kitYaml({
+    id: "repeat-workspace",
+    name: "Repeat Workspace",
+    repositories: [{ id: "app", path: appPath }],
+  }));
+
+  const id = randomUUID();
+  const baseInput = {
+    assignment_id: id,
+    workspace_id: "repeat-workspace",
+    storageRoot,
+    home,
+    brief: "briefs/brief.md",
+    skill: "general",
+    instructions: "Deliver the repeated assignment.",
+    target: "app",
+    pi_path: piPath,
+  };
+
+  // Retained record from before thread_id existed: the field is absent.
+  const legacy = await resolveAssignment(baseInput);
+  const retained = { ...legacy.record };
+  delete retained.thread_id;
+  const assignmentsDir = join(workspaceDirectory, "assignments");
+  await mkdir(assignmentsDir, { recursive: true });
+  await writeFile(join(assignmentsDir, `${id}.json`), JSON.stringify({ ...retained, state: "ended" }));
+
+  let spawnAttempts = 0;
+  const adapters = {
+    tmuxRun: async () => {
+      spawnAttempts += 1;
+      return { ok: false, code: 1, stdout: "", stderr: "no server" };
+    },
+  };
+
+  // Approved null normalizes to the retained missing field, so the same-id
+  // repeat returns the existing record without spawning a process.
+  const nullInput = { ...baseInput, thread_id: null };
+  const approvedNull = await resolveAssignment(nullInput);
+  assert.equal(approvedNull.record.thread_id, null);
+  const repeat = await launchAssignment(nullInput, {
+    resolved: approvedNull,
+    expectedDigest: approvedNull.contractDigest,
+    adapters,
+  });
+  assert.equal(repeat.assignment_id, id);
+  assert.equal(spawnAttempts, 0);
+
+  // A different valid UUID is a different immutable contract although it
+  // stays outside the digest; the repeat refuses without another process.
+  const differentInput = { ...baseInput, thread_id: randomUUID() };
+  const different = await resolveAssignment(differentInput);
+  assert.equal(different.contractDigest, legacy.contractDigest);
+  await assert.rejects(
+    launchAssignment(differentInput, {
+      resolved: different,
+      expectedDigest: different.contractDigest,
+      adapters,
+    }),
+    /different effective contract/,
+  );
+  assert.equal(spawnAttempts, 0);
+});
+
+test("assignment listing keeps legacy records without thread_id and refuses an invalid persisted thread_id", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  const workspaceDirectory = join(storageRoot, "projects", "legacy-workspace");
+  await mkdir(workspaceDirectory, { recursive: true });
+  const appPath = await makeRepo(join(root, "repos", "app"));
+  const home = join(root, "home");
+  await mkdir(home, { recursive: true });
+  const piPath = await fakePi(join(root, "bin"));
+  await briefFixture(workspaceDirectory, "Legacy brief bytes.\n");
+  await writeFile(join(workspaceDirectory, "kit.yaml"), kitYaml({
+    id: "legacy-workspace",
+    name: "Legacy Workspace",
+    repositories: [{ id: "app", path: appPath }],
+  }));
+
+  const baseInput = {
+    workspace_id: "legacy-workspace",
+    storageRoot,
+    home,
+    brief: "briefs/brief.md",
+    skill: "general",
+    instructions: "List the persisted assignment.",
+    target: "app",
+    pi_path: piPath,
+  };
+  const assignmentsDir = join(workspaceDirectory, "assignments");
+  await mkdir(assignmentsDir, { recursive: true });
+
+  // A record persisted before thread_id existed still lists and resolves.
+  const legacyId = randomUUID();
+  const legacy = await resolveAssignment({ ...baseInput, assignment_id: legacyId });
+  const legacyRecord = { ...legacy.record };
+  delete legacyRecord.thread_id;
+  await writeFile(
+    join(assignmentsDir, `${legacyId}.json`),
+    JSON.stringify({ ...legacyRecord, state: "ended" }),
+  );
+  const listed = await listAssignments(storageRoot, "legacy-workspace");
+  assert.deepEqual(listed.map((record) => record.assignment_id), [legacyId]);
+  assert.equal((await findAssignment(storageRoot, legacyId)).assignment_id, legacyId);
+
+  // An explicitly invalid persisted thread_id refuses findAssignment and
+  // listAssignments instead of surfacing the malformed record.
+  const invalidId = randomUUID();
+  const invalid = await resolveAssignment({ ...baseInput, assignment_id: invalidId });
+  await writeFile(
+    join(assignmentsDir, `${invalidId}.json`),
+    JSON.stringify({ ...invalid.record, state: "ended", thread_id: "not-a-uuid" }),
+  );
+  await assert.rejects(findAssignment(storageRoot, invalidId));
+  await assert.rejects(listAssignments(storageRoot));
 });

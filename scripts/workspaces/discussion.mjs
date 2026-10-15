@@ -2526,6 +2526,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
     return {
       assignment_id: input.assignment_id,
       workspace_id: record.workspace_id,
+      thread_id: record.thread_id,
       storageRoot: configuredRoot,
       brief: handoff.brief,
       instructions: input.instructions,
