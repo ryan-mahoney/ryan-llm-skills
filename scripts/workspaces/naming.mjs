@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 
 export const TITLE_MODEL = "deepseek/deepseek-flash";
 const TITLE_TIMEOUT_MS = 15000;
+const KILL_GRACE_MS = 1000;
 const MAX_INPUT_CHARS = 2000;
 const MAX_TITLE_CHARS = 80;
 const MAX_OUTPUT_BYTES = 4096;
@@ -39,16 +40,20 @@ export function cleanTitle(reply) {
 }
 
 // The shared tool-free one-shot Pi print runner. Resolves the RAW stdout on a
-// clean bounded exit (code 0, output within maxOutputBytes) — reply cleanup
-// stays in cleanTitle. Exactly one settle: the first terminal event wins, and
-// timeout or abort kills the child (SIGTERM); stdout/close listeners stay
-// attached so a late exit is drained without throwing or flipping the result.
+// clean bounded exit (code 0, raw stdout within maxOutputBytes) — reply cleanup
+// stays in cleanTitle. Exactly one settle: the first terminal result wins.
+// Cancellation (abort, deadline or over-budget output) completes only after the
+// child closes, so a caller awaiting the result may start a replacement only
+// once the old child has released its pipes: SIGTERM now, SIGKILL after
+// killGraceMs for a TERM-resistant child, and stdout/close listeners stay
+// attached so the exit is drained without throwing or flipping the result.
 export function printReply({
   text,
   systemPrompt,
   model = TITLE_MODEL,
   timeoutMs = TITLE_TIMEOUT_MS,
   maxOutputBytes = MAX_OUTPUT_BYTES,
+  killGraceMs = KILL_GRACE_MS,
   spawn = nodeSpawn,
   signal,
 } = {}) {
@@ -73,45 +78,53 @@ export function printReply({
   args.push("--", text);
   return new Promise((resolvePromise) => {
     let settled = false;
-    let output = "";
+    let cancelling = false;
+    const chunks = [];
+    let outputBytes = 0;
     let child;
-    const finish = (value) => {
+    let killTimer;
+    const settle = (value) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(killTimer);
       signal?.removeEventListener("abort", abortRun);
       resolvePromise(value);
     };
-    const abortRun = () => {
+    // Cancellation completes at the drained close, never at the signal: the
+    // close is what lets a caller replace the child safely. Re-entry only
+    // re-asserts SIGTERM while a single KILL timer bounds the grace.
+    const cancel = () => {
+      if (settled) return;
+      if (!cancelling) {
+        cancelling = true;
+        killTimer = setTimeout(() => child?.kill("SIGKILL"), killGraceMs);
+      }
       child?.kill("SIGTERM");
-      finish(null);
     };
-    const timer = setTimeout(() => {
-      child?.kill("SIGTERM");
-      finish(null);
-    }, timeoutMs);
+    const abortRun = () => cancel();
+    const timer = setTimeout(cancel, timeoutMs);
     signal?.addEventListener("abort", abortRun, { once: true });
     try {
       child = spawn("pi", args, { cwd: tmpdir(), shell: false, stdio: ["ignore", "pipe", "ignore"] });
     } catch {
-      finish(null);
+      settle(null);
       return;
     }
-    if (signal?.aborted) {
-      child.kill("SIGTERM");
-      finish(null);
-      return;
-    }
-    child.on("error", () => finish(null));
-    child.stdout?.on("data", (chunk) => {
-      if (settled) return;
-      output += chunk;
-      if (output.length > maxOutputBytes) {
-        child.kill("SIGTERM");
-        finish(null);
-      }
+    if (signal?.aborted) cancel();
+    child.on("error", () => {
+      // A spawn failure has no child to drain (pid undefined); a failed kill
+      // leaves the drained close to settle so the ordering contract holds.
+      if (!cancelling || !child.pid) settle(null);
     });
-    child.on("close", (code) => finish(code === 0 ? output : null));
+    child.stdout?.on("data", (chunk) => {
+      if (settled || cancelling) return;
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "utf8");
+      chunks.push(bytes);
+      outputBytes += bytes.length;
+      if (outputBytes > maxOutputBytes) cancel();
+    });
+    child.on("close", (code) => settle(cancelling || code !== 0 ? null : Buffer.concat(chunks).toString("utf8")));
   });
 }
 

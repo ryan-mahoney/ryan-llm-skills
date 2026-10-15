@@ -3,14 +3,16 @@ import { EventEmitter } from "node:events";
 import { test } from "node:test";
 import { cleanTitle, printReply, suggestTitle, TITLE_MODEL } from "./naming.mjs";
 
-// A spawn stand-in that records argv and replays stdout and an exit code.
+// A spawn stand-in that records argv, kill signals and replays stdout and an
+// exit code.
 function fakeSpawn({ stdout = "", code = 0, hang = false } = {}) {
   const calls = [];
   const spawn = (command, args, options) => {
     const child = new EventEmitter();
     child.stdout = new EventEmitter();
     child.killed = false;
-    child.kill = () => { child.killed = true; };
+    child.kills = [];
+    child.kill = (signal) => { child.killed = true; child.kills.push(signal); return true; };
     calls.push({ command, args, options, child });
     if (!hang) setImmediate(() => { child.stdout.emit("data", stdout); child.emit("close", code); });
     return child;
@@ -54,8 +56,11 @@ test("suggestTitle runs a tool-less one-shot Pi call and cleans its reply", asyn
 test("suggestTitle returns null on failure, timeout or empty input", async () => {
   assert.equal(await suggestTitle("x", fakeSpawn({ stdout: "Some title", code: 1 })), null);
   const hung = fakeSpawn({ hang: true });
-  assert.equal(await suggestTitle("x", { spawn: hung.spawn, timeoutMs: 20 }), null);
+  const hungPending = suggestTitle("x", { spawn: hung.spawn, timeoutMs: 20 });
+  await new Promise((resolve) => setTimeout(resolve, 40));
   assert.equal(hung.calls[0].child.killed, true);
+  hung.release();
+  assert.equal(await hungPending, null);
   const throwing = () => { throw new Error("spawn failed"); };
   assert.equal(await suggestTitle("x", { spawn: throwing }), null);
   const unused = fakeSpawn();
@@ -106,20 +111,81 @@ test("abort and deadline kill the child, settle once and drain the exit", async 
   const pending = printReply({ text: "x", spawn: hanging.spawn, signal: controller.signal })
     .then((value) => { seen.push(value); return value; });
   controller.abort();
-  assert.equal(await pending, null);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(seen, []); // cancellation completes only after the drained close
   assert.equal(hanging.calls[0].child.killed, true);
   hanging.release(0, "late reply", 0);
+  assert.equal(await pending, null);
+  assert.deepEqual(seen, [null]); // cancelled output is drained, never returned
+  hanging.release(0, "more late reply", 0);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(seen, [null]);
+  assert.deepEqual(seen, [null]); // a settled result cannot be flipped
   const hung = fakeSpawn({ hang: true, stdout: "late reply" });
   const hungSeen = [];
   const hungPending = printReply({ text: "x", spawn: hung.spawn, timeoutMs: 20 })
     .then((value) => { hungSeen.push(value); return value; });
-  assert.equal(await hungPending, null);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.deepEqual(hungSeen, []); // the deadline cancels; the close still drains first
   assert.equal(hung.calls[0].child.killed, true);
   hung.release(0, "late reply", 0);
-  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(await hungPending, null);
   process.off("unhandledRejection", onUnhandled);
   assert.deepEqual(hungSeen, [null]);
   assert.deepEqual(unhandled, []);
+});
+
+test("cancellation drains a delayed-close child and escalates TERM to KILL", async () => {
+  // A TERM-friendly child that closes late: the promise must not resolve
+  // before close so a caller can await it before starting a replacement, and
+  // the bounded TERM-to-KILL cleanup is cancelled once the child closes.
+  const delayed = fakeSpawn({ hang: true, stdout: "late reply" });
+  const order = [];
+  const controller = new AbortController();
+  const pending = printReply({ text: "x", spawn: delayed.spawn, signal: controller.signal, killGraceMs: 20 })
+    .then((value) => { order.push("resolved"); return value; });
+  delayed.calls[0].child.once("close", () => order.push("closed"));
+  controller.abort();
+  assert.deepEqual(delayed.calls[0].child.kills, ["SIGTERM"]);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(order, []); // no observable completion before close
+  delayed.release(0, "late reply", 0);
+  assert.equal(await pending, null);
+  assert.deepEqual(order, ["closed", "resolved"]); // replacement may start only after close
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(delayed.calls[0].child.kills, ["SIGTERM"]); // close cancels the KILL escalation
+
+  // A TERM-resistant child gets SIGKILL after the grace and still settles at
+  // its close, never before.
+  const resistant = fakeSpawn({ hang: true, stdout: "late reply" });
+  const resistantOrder = [];
+  const resistantController = new AbortController();
+  const resistantPending = printReply({ text: "x", spawn: resistant.spawn, signal: resistantController.signal, killGraceMs: 20 })
+    .then((value) => { resistantOrder.push("resolved"); return value; });
+  resistant.calls[0].child.once("close", () => resistantOrder.push("closed"));
+  resistantController.abort();
+  assert.deepEqual(resistant.calls[0].child.kills, ["SIGTERM"]);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(resistant.calls[0].child.kills, ["SIGTERM", "SIGKILL"]);
+  assert.deepEqual(resistantOrder, []); // still not settled until close
+  resistant.release(0, "late reply", null);
+  assert.equal(await resistantPending, null);
+  assert.deepEqual(resistantOrder, ["closed", "resolved"]);
+});
+
+test("the output budget counts raw stdout bytes across multibyte replies", async () => {
+  const cjk = "日本"; // 2 UTF-16 code units but 6 UTF-8 bytes
+  const bytes = Buffer.from(cjk, "utf8");
+  assert.equal(bytes.length, 6);
+  assert.equal(await printReply({ text: "x", spawn: fakeSpawn({ stdout: bytes }).spawn, maxOutputBytes: 6 }), cjk);
+  // 6 bytes exceed a 4-byte budget even though the decoded string length is 2.
+  const over = fakeSpawn({ stdout: bytes });
+  assert.equal(await printReply({ text: "x", spawn: over.spawn, maxOutputBytes: 4 }), null);
+  assert.equal(over.calls[0].child.killed, true);
+  // Raw stdout buffers keep split multibyte sequences intact across chunks.
+  const split = fakeSpawn({ hang: true });
+  const pending = printReply({ text: "x", spawn: split.spawn, maxOutputBytes: 6 });
+  split.calls[0].child.stdout.emit("data", bytes.subarray(0, 1));
+  split.calls[0].child.stdout.emit("data", bytes.subarray(1));
+  split.release(0, "", 0);
+  assert.equal(await pending, cjk);
 });
