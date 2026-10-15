@@ -11,9 +11,9 @@ import { base, str, time } from './format';
 import { ActionBar, StateNotice, StatusText } from './primitives';
 import {
   coverageConcern, observedSpecReadiness, planningFactsFor, specReadiness, usableDecision,
-  type PlanningFacts, type PrerequisiteFact,
+  type PrerequisiteFact,
 } from './readiness';
-import { discussionRepositoryTarget, plannedTargetChoices, specHandoffInput, startPackageHandoff, type HandoffInput, type PackagePlanningPlan, type PlannedTarget } from './launch-handoff';
+import { discussionRepositoryTarget, plannedTargetChoices, specHandoffInput, startPackageHandoff, type PlannedTarget } from './launch-handoff';
 import { seedNewThreadDraft } from './conversations-state';
 import { linkedAssignmentKey, packageRelative } from './spec-state';
 import { catalogEntryForRecord, type CatalogEntry } from './scope';
