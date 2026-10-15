@@ -19,9 +19,8 @@ Use configured difficulty routing and retained owner/editor pairs through the ma
 Pi runtime. `REVIEW_AGENT` selects independent step reviews; `FINAL_REVIEWER` selects
 the optional fresh final red-flag review and delegated improvements; `SCOUT_AGENT` selects
 optional bounded source discovery for owners and reviewers. Reuse deterministic fact,
-history and rendering helpers. The owner calls `spec_advice` at shared Jev checkpoints;
-use the installed Mercury clerk only for useful bounded prose transformation under
-the compact-delegation contract below. These are defaults, not instructions that a
+history and rendering helpers. The owner calls `spec_advice` at shared Jev checkpoints.
+These are defaults, not instructions that a
 user must repeat in every prompt. Explicit model and run directives take precedence.
 
 An invocation requesting continuation through PR publication authorizes ordinary
@@ -146,13 +145,17 @@ and pass each one on every launch for that role. Preserve explicit provider/mode
 selectors and resolve known role names directly; do not enumerate or test all models
 and agents before implementation. In `<model>[:thinking] from <provider>`, prepend
 the provider to the entire model identifier; preserve every slash and model variant.
-For example, `deepseek/deepseek-v4.1-flash:high from openrouter` becomes
-`openrouter/deepseek/deepseek-v4.1-flash:high`, not a shortened model name.
+For example, `meta/muse-spark-1.3-contributor:xhigh from openrouter` becomes
+`openrouter/meta/muse-spark-1.3-contributor:xhigh`, not a shortened model name.
+DeepSeek models use only the `deepseek` provider: `deepseek-flash:max from deepseek`
+becomes `deepseek/deepseek-flash:max`. Never route a DeepSeek model through OpenRouter
+or another provider, including when a selector omits its provider, a recorded assignment
+names another provider, or a launch fails; report the selector instead of substituting.
 Actual launch validates availability. Use discovery
 only for an ambiguous selector or a concrete launch error, without silently substituting
-a model. The Pi step editor defaults to `openrouter/inception/mercury-2.5:high`; other
+a model. The Pi step editor defaults to `deepseek/deepseek-flash:max`; other
 unassigned roles use agent/settings defaults. A legacy step-implementation assignment
-selects the capable owner model; an explicit editor assignment overrides Mercury.
+selects the capable owner model; an explicit editor assignment overrides that default.
 Record owner/editor models separately.
 
 `FINAL_REVIEWER` enables and selects `spec-final-review`; it does not replace
@@ -280,11 +283,7 @@ the concrete failure; do not claim the model itself lacks the capability or have
 parent transcribe its output to complete the stage.
 
 When a clerical task needs a helper, consult `~/.agents/docs/spec-workflow-efficiency.md` for existing deterministic helpers
-instead of reconstructing their work in prompts. An optional Pi `spec-clerk` subagent
-can draft concise prose from explicitly supplied approved facts when this saves a
-substantial writing pass. It uses Mercury by default, read-only tools, fresh context,
-and a one-minute deadline. The coordinator assesses its draft before use; no mandatory
-clerk, startup probe, engineering decisions or publication authority is added.
+instead of reconstructing their work in prompts.
 
 Give each stage coordinator `package_ref`, `package_dir`, the target checkout paths, assigned
 stage, owning skill path, run-wide constraints, and completion return contract. When

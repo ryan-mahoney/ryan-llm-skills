@@ -136,7 +136,7 @@ recorded run still has a live coordinator.
 It uses the assigned models directly and sends a completion event to the orchestrator.
 See the [runtime setup and API](pi/extensions/spec-runtime/README.md) and
 [run observation guide](docs/spec-runtime-observation.md) for installation and recovery.
-The editor defaults to `inception/mercury-2.5:high` on OpenRouter.
+The editor defaults to `deepseek/deepseek-flash:max`.
 Optional coordinator, owner and reviewer scouting uses the installed `pi-subagents` scout profile with
 `openai-codex/gpt-6-luna:low`, restricted to read/search tools. See
 [scouting setup and scope](skills/spec-run/references/scouting.md). `SCOUT_AGENT` in the
@@ -145,8 +145,7 @@ The initial `REVIEW_AGENT` selects the model; the `spec-stage-reviewer` profile 
 the review role and compatible tools without fixing a model. Step fixes use the
 `spec-step-fixer` profile with the assigned fix model and native/provider write tools.
 See [workflow efficiency](docs/spec-workflow-efficiency.md) for deterministic helpers,
-direct owner `spec_advice` calls to Jev, local Jev effectiveness reports, and optional
-Mercury clerical drafts through `spec-clerk`.
+direct owner `spec_advice` calls to Jev, and local Jev effectiveness reports.
 The [process improvements](docs/spec-coding-process-improvements.md) explain implemented
 changes, observed results and the limits of current performance evidence.
 Owner/editor questions use pi-intercom's scoped channel: the editor waits while the
@@ -180,17 +179,18 @@ pairs through the installed Pi spec runtime. Use bounded editor assignments
 and separate commit assignments. Use REVIEW_AGENT for independent reviews.
 
 DEFAULT_OWNER: deepseek-flash:max from deepseek
-STRONG_OWNER: gpt-5.6-sol:high from openai-codex
-EDITOR_AGENT: mimo-v2.6-pro-ultraspeed:off from xiaomi
+STRONG_OWNER: gpt-6.1-sol:medium from openai-codex
+EDITOR_AGENT: deepseek-flash:max from deepseek
 REVIEW_AGENT: gpt-6.1-sol:medium from openai-codex
 SCOUT_AGENT: gpt-6-luna:low from openai-codex
 PACKAGE: <package folder or workspace/slug>
 ```
 
 The skill owns branch/worktree reuse, unfinished-work recovery, runtime pairing,
-step reviews, bounded scouting, deterministic helpers, Jev checkpoints and optional
-clerical drafts. Add only run-specific exceptions to this prompt; keep the complete
-model assignment section when customizing selectors.
+step reviews, bounded scouting, deterministic helpers and Jev checkpoints. Add only
+run-specific exceptions to this prompt; keep the complete model assignment section
+when customizing selectors. DeepSeek models use only the `deepseek` provider, never
+OpenRouter.
 
 No goal loop is required. The skill directs continuation between stages, and managed
 worker completion events wake the top-level session while Pi remains running. A harness

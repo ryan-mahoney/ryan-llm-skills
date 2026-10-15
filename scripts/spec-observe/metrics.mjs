@@ -182,7 +182,7 @@ export async function readMetrics(node, { maxBytes = 64 * 1024 * 1024 } = {}) {
 }
 
 const inferredRole = item => /^(spec-stage-reviewer|reviewer):/.test(item.name ?? '') ? 'reviewer'
-  : /^(?:spec-clerk:|subagent-spec-clerk-[0-9a-f-]+-\d+$)/.test(item.name ?? '') ? 'clerk' : /^spec-step-fixer:/.test(item.name ?? '') ? 'fixer' : /^scout:/.test(item.name ?? '') ? 'scout' : 'worker';
+  : /^spec-step-fixer:/.test(item.name ?? '') ? 'fixer' : /^scout:/.test(item.name ?? '') ? 'scout' : 'worker';
 
 export async function metrics(packagePath, { session, allSessions = false, maxBytes, now = Date.now() } = {}) {
   const index = await discoverPackage(packagePath);
@@ -293,7 +293,6 @@ export async function metrics(packagePath, { session, allSessions = false, maxBy
     totals: { model_calls: sum('model_calls'), tool_calls: sum('tool_calls'), test_command_calls: sum('test_command_calls'),
       recognized_test_commands: sum('recognized_test_commands'), test_command_results: sum('test_command_results'), test_command_failures: sum('test_command_failures'), test_commands_with_exit: sum('test_commands_with_exit'), connection_errors: sum('connection_errors'), timeout_errors: sum('timeout_errors'), reported_cost: rows.some(a => a.reported_cost !== null) ? sum('reported_cost') : null },
     leaders: { model_calls: most('model_calls'), tool_calls: most('tool_calls'), model_response_seconds: most('model_response_seconds') },
-    mercury: { model_calls: rows.filter(a => /mercury/i.test(a.model)).reduce((n, a) => n + a.model_calls, 0), clerk_model_calls: rows.filter(a => a.role === 'clerk').reduce((n, a) => n + a.model_calls, 0) },
     agents: rows, steps: attempts.sort((a, b) => (a.started_at ?? '').localeCompare(b.started_at ?? '')), coverage, discovery_errors: errors,
     limits: ['Startup uses the first user message in the selected coordinator session, not a proven workflow request; reused sessions can include earlier work. Checkout edits count successful native write/edit results outside .specs; shell writes and semantic correctness are not inferred.',
       'Model calls count persisted assistant responses, including errors; hidden provider retries are unavailable.',
@@ -319,8 +318,7 @@ export function formatMetrics(value) {
   for (const a of value.agents) lines.push(`${a.role} / ${a.model} | ${a.model_calls} | ${a.tool_calls} | ${duration(a.timed_model_calls ? a.model_response_seconds : null)} (${a.timed_model_calls}/${a.model_calls} timed) | ${a.test_command_calls}`);
   lines.push('', 'Managed step attempts:');
   for (const s of value.steps) lines.push(`${s.step} / ${s.assignment_id} | ${s.state} | ${duration(s.elapsed_seconds)}${s.elapsed_seconds === null ? `; ${duration(s.elapsed_to_snapshot_seconds)} since start` : ''} | ${s.editor_assignments} editor assignments | owner→editor ${duration(s.first_editor_seconds)} | editor→checkout edit ${duration(s.editor_to_first_checkout_edit_seconds)}`);
-  lines.push('', `Mercury model calls: ${value.mercury.model_calls}; clerk calls: ${value.mercury.clerk_model_calls}.`,
-    `Coverage: ${value.coverage.length} transcripts, ${value.discovery_errors.length} discovery/read issues, ${value.coverage.filter(c => c.truncated).length} truncated.`,
+  lines.push('', `Coverage: ${value.coverage.length} transcripts, ${value.discovery_errors.length} discovery/read issues, ${value.coverage.filter(c => c.truncated).length} truncated.`,
     'Response time is observed model latency, not total agent runtime. Test detection is heuristic. JSON includes coverage and limitations.');
   return lines.join('\n');
 }

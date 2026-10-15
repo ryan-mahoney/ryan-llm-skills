@@ -1,6 +1,6 @@
 // Operator-facing startup options. Workflow identity is discovered at runtime.
 import { discoveryRoot } from '../../../scripts/spec-observe/discovery.mjs';
-export const SENTINEL_DEFAULT_MODEL = 'openrouter/inception/mercury-2.5:high';
+export const SENTINEL_DEFAULT_MODEL = 'deepseek/deepseek-flash:max';
 export const SENTINEL_MODES = ['observe', 'shadow', 'recover'];
 
 export function parseSentinelStart(args = '') {

@@ -76,7 +76,9 @@ through the package handoffs without asking again.
 
 Carry the exact run-wide selectors into every package, including resumptions and
 fixes where the owning skill uses them. Normalize `MODEL:thinking from PROVIDER`
-to `PROVIDER/MODEL:thinking` once, preserving every slash and suffix. In particular,
+to `PROVIDER/MODEL:thinking` once, preserving every slash and suffix. DeepSeek models
+use only the `deepseek` provider (`deepseek/deepseek-flash:max`); never route one through
+OpenRouter or another provider, and report a selector that does. In particular,
 DEFAULT_OWNER, STRONG_OWNER, EDITOR_AGENT (alias EDITOR_MODEL), REVIEW_AGENT,
 SCOUT_AGENT and FINAL_REVIEWER remain separate roles. FINAL_REVIEWER enables the
 existing optional final review for each package; it does not replace step reviews.

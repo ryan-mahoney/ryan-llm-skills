@@ -65,7 +65,7 @@ Long requests need an explicit input limit and a visible error, not silent trunc
 ## Interpretation contract
 
 One tool-free model request receives the transcript, navigation context, catalog, and three action definitions.
-Mercury 2.5 is the first candidate because this repository already configures it for thread naming.
+`deepseek/deepseek-flash` is the first candidate because this repository already configures it for thread naming.
 The interpretation adapter needs bounded output and a deadline. It cannot reuse title cleanup as a structured parser.
 
 The following JSON illustrates a new proposal contract. It is not an existing endpoint or launch payload.

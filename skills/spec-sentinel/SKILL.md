@@ -70,7 +70,7 @@ cleanup and no timers or dashboard. Active status preserves the running monitor.
 Status after off does not restart it; `--all` does not replace the live export.
 Explicit observe startup opens the dashboard in interactive Pi and lasts until off,
 replacement or controller shutdown. Defaults: discovery beneath `~/Documents`,
-diagnostic model `openrouter/inception/mercury-2.5:high`.
+diagnostic model `deepseek/deepseek-flash:max`.
 
 ## JSON snapshots for other tools
 

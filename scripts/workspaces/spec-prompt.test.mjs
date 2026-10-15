@@ -78,8 +78,8 @@ test("implementation brief invokes spec-end-to-end with the standing model assig
     `pairs through the installed Pi spec runtime. Use bounded editor assignments\n` +
     `and separate commit assignments. Use REVIEW_AGENT for independent reviews.\n\n` +
     `DEFAULT_OWNER: deepseek-flash:max from deepseek\n` +
-    `STRONG_OWNER: gpt-5.6-sol:high from openai-codex\n` +
-    `EDITOR_AGENT: mimo-v2.6-pro-ultraspeed:off from xiaomi\n` +
+    `STRONG_OWNER: gpt-6.1-sol:medium from openai-codex\n` +
+    `EDITOR_AGENT: deepseek-flash:max from deepseek\n` +
     `REVIEW_AGENT: gpt-6.1-sol:medium from openai-codex\n` +
     `SCOUT_AGENT: gpt-6-luna:low from openai-codex\n` +
     `PACKAGE: ${REF}`);

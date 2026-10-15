@@ -1390,7 +1390,7 @@ test('sentinel global modes: a separate monitor controls two repository coordina
     const authority = JSON.parse(readFileSync(join(f.packagePath, 'runtime', 'sentinel', f.args.workflow_id, 'authority', 'grant.json')));
     assert.equal(authority.expires_at, null);
     assert.equal(authority.source_path, null);
-    assert.equal(authority.diagnosis.model, 'openrouter/inception/mercury-2.5:high');
+    assert.equal(authority.diagnosis.model, 'deepseek/deepseek-flash:max');
   }
   await monitor.session.prompt('/spec-sentinel recover');
   // Mode activation resumes already-idle eligible coordinators, without sending
