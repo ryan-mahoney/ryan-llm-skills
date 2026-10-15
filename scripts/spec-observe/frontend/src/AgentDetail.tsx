@@ -1,7 +1,7 @@
 import { createEffect, createSignal, For, on, Show } from 'solid-js';
 import { agentGuidance } from './agent-state';
 import type { AgentViewState } from './agent-state';
-import { specRecordFor, specRoute, workTourRoute } from './agent-links';
+import { briefRoute, repositoryFilesRoute, specRecordFor, specRoute, threadRoute, workTourRoute } from './agent-links';
 import { copyText } from './clipboard';
 import SessionPanel from './SessionPanel';
 import TerminalPanel from './TerminalPanel';
@@ -10,6 +10,7 @@ import type { StatusTone } from './primitives';
 import { age, inlineMarkdown, time } from './format';
 import { assignmentLabel, assignmentTone } from './observation-format';
 import type { WireRecord } from './model';
+import { formatHash } from './route';
 import type { RouteState } from './route';
 
 const list = (value: any): any[] => (Array.isArray(value) ? value : []);
@@ -17,6 +18,15 @@ const list = (value: any): any[] => (Array.isArray(value) ? value : []);
 // a fabricated state.
 const text = (value: any, fallback = 'Not included in this observation'): string =>
   typeof value === 'string' && value ? value : fallback;
+// Short observed ids follow the SpecOverview row convention for record keys.
+const shortId = (value: unknown): string => {
+  const id = (typeof value === 'string' ? value : '').trim();
+  return id.length > 8 ? id.slice(0, 8) : id;
+};
+// Native anchors keep their href on modified clicks; only ordinary clicks are
+// intercepted for in-app navigation (Designs precedent).
+const modifiedClick = (event: MouseEvent) =>
+  event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0;
 // Recorded/observed states read as sentence-case facts in the detail head;
 // missing values keep the explicit null-field wording.
 const displayState = (value: any): string =>
@@ -91,14 +101,25 @@ function AgentDetailBody(props: AgentDetailProps) {
       (c: any) => c.state !== 'resolved' && (c.kind === 'user-held' || c.kind === 'hold-active' || String(c.kind || '').includes('hold')),
     );
   const runQualifier = (): string => (related()?.match === 'package' ? ' · package-level; not this assignment' : '');
+  // Scoped relationships carry the assignment's recorded workspace identity;
+  // the ambient route ws is only a scope when present (All workspaces has none).
+  const scopeWs = () => (typeof props.ws === 'string' && props.ws.trim() !== '' ? props.ws : a().workspace_id);
+  // Shared route link handler: modified clicks keep the native anchor, ordinary
+  // clicks push the explicit route through the App navigation owner.
+  const routeClick = (route: RouteState) => (event: MouseEvent) => {
+    if (modifiedClick(event)) return;
+    event.preventDefault();
+    props.onNavigate(route);
+  };
   const specTarget = (): RouteState | null => {
     const match = related();
-    return match ? specRoute(match.record, props.ws) : null;
+    return match ? specRoute(match.record, scopeWs()) : null;
   };
   const tourTarget = (): RouteState | null => {
     const match = related();
-    return match ? workTourRoute(match.record, props.ws) : null;
+    return match ? workTourRoute(match.record, scopeWs()) : null;
   };
+  const repoTarget = (): RouteState | null => repositoryFilesRoute(scopeWs(), a().repository_id);
   const guidance = () => agentGuidance(a(), related() !== null);
   const locate = (): string | null =>
     typeof a().locate_command === 'string' && a().locate_command ? a().locate_command : null;
@@ -258,7 +279,7 @@ function AgentDetailBody(props: AgentDetailProps) {
               <tbody>
                 <tr><td>Workspace</td><td>{text(o()?.snapshot?.workspace || a().workspace)}</td></tr>
                 <tr><td>Execution directory</td><td class="mono path">{text(a().execution_dir ?? a().executionDir)}</td></tr>
-                <tr><td>Repository</td><td class="mono path">{text(a().repository_id)}</td></tr>
+                <tr><td>Repository</td><td class="mono path"><Show when={repoTarget()} fallback={text(a().repository_id)}>{target => <a class="text-link" href={formatHash(target())} onClick={routeClick(target())}>{a().repository_id}</a>}</Show></td></tr>
                 <tr><td>Workflow</td><td class="mono">{text(a().workflow_id, 'Workflow unknown')}</td></tr>
                 <tr><td>Spec package</td><td class="mono">{text(a().spec_package, 'No spec package')}</td></tr>
                 <tr><td>Linked run execution</td><td class="mono">{run() ? text(run()?.execution) : 'No linked run in this snapshot'}{runQualifier()}</td></tr>
@@ -272,6 +293,43 @@ function AgentDetailBody(props: AgentDetailProps) {
           </Show>
           <Show when={a().unrecorded}><p class="small warn">The record differs from the observation; reconcile with the explicit locate command.</p></Show>
           <p class="small muted">Coverage {coverageState(a().coverage)} · read-only observation; the record is never rewritten here.</p>
+        </section>
+        <section class="section">
+          <div class="section-heading"><h3>Related work</h3></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th scope="col">Object</th><th scope="col">Status</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td>
+                    <Show when={related()} fallback={<span>Spec {text(a().spec_package, '')}</span>}>
+                      {match => {
+                        const target = specRoute(match().record, scopeWs());
+                        return <a class="text-link" href={formatHash(target)} onClick={routeClick(target)}>Spec {text(match().record.package, shortId(match().record.key))}</a>;
+                      }}
+                    </Show>
+                  </td>
+                  <td>{related() ? `${displayState(run()?.workflow_state)}${runQualifier()}` : 'Not recorded'}</td>
+                </tr>
+                <tr>
+                  <td>
+                    <Show when={threadRoute(a())} fallback={<span>Conversation</span>}>
+                      {target => <a class="text-link" href={formatHash(target())} onClick={routeClick(target())}>Conversation {shortId(a().thread_id)}</a>}
+                    </Show>
+                  </td>
+                  <td>{threadRoute(a()) ? 'Recorded' : 'Not recorded'}</td>
+                </tr>
+                <tr>
+                  <td>
+                    <Show when={briefRoute(a())} fallback={<span>Brief</span>}>
+                      {target => <a class="text-link" href={formatHash(target())} onClick={routeClick(target())}>Brief {a().brief}</a>}
+                    </Show>
+                  </td>
+                  <td>{briefRoute(a()) ? 'Recorded' : 'Not recorded'}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </section>
         <Show when={a().key} keyed={true}>
           {(key: string) => <SessionPanel assignment={a()} token={props.token} live={props.live} refresh={props.refresh} onEnded={showEndedSession} />}
