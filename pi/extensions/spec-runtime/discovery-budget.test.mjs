@@ -25,3 +25,17 @@ test('editor checkpoints excessive exploration and resumes after an owner answer
   handlers.tool_result({ toolName: 'edit', isError: false });
   assert.equal(call('read'), undefined);
 });
+
+test('compaction grants a fresh allowance to re-read edit anchors', () => {
+  const handlers = {};
+  let time = 0;
+  installDiscoveryBudget({ on: (name, fn) => { handlers[name] = fn; } }, { limit: 2, maxMs: 100, now: () => time });
+  const call = toolName => handlers.tool_call({ toolName });
+  call('read'); call('read');
+  assert.equal(call('read').block, true);
+  time = 50;
+  handlers.session_compact({});
+  assert.equal(call('read'), undefined, 'anchors dropped by compaction can be read again');
+  assert.equal(call('read'), undefined);
+  assert.equal(call('read').block, true, 'the fresh allowance is still bounded');
+});

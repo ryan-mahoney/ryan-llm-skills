@@ -16,4 +16,8 @@ export function installDiscoveryBudget(pi, { limit = 24, maxMs = 180000, now = D
   pi.on('tool_result', event => {
     if (!event.isError && ['edit', 'write', 'spec_question'].includes(event.toolName)) reset();
   });
+  // Compaction drops the source the editor read, so re-reading its edit anchors is
+  // recovery, not exploration. Without a fresh allowance, a compaction near the limit
+  // blocked every re-read and forced an owner question (twice in one step).
+  pi.on('session_compact', reset);
 }
