@@ -265,6 +265,13 @@ stays in the current assignment. Legacy checkpoints without these optional field
 useful evidence; reconcile their gaps instead of discarding their receipts. Route the
 remaining action before asking for an updated handoff; do not repeat completion alone.
 
+Before calling a test-first step green, map each refusal, failure or unknown-effect
+condition the card or its live invariants name to a case asserting that outcome. Never
+assert that an unknown, corrupt or resource-exhaustion result is permitted unless the card
+names it as permitted. On 2026-10-15 step 3 passed 11 cases while its interpreter test
+asserted that any nonzero verify result permits fallback; review then raised seven
+findings and fixing them took three rounds.
+
 Stop when the assigned checks pass and known relevant gaps are resolved. Do not rerun
 passing checks without an affected change or named uncertainty, or add another harness
 to account for a label. Preserve required visual observations. Reuse existing meaningful
