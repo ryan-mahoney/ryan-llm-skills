@@ -2,7 +2,9 @@
 // only the final media/clock boundary: a fake getUserMedia stream with counting
 // tracks, a fake AudioContext/ScriptProcessor node whose onaudioprocess the
 // case drives with fake input buffers, and fake now()/sleep(); the production
-// capture implementation in ./request-audio is never patched. Case coverage
+// capture implementation in ./request-audio is never patched. The fake clock
+// advances in milliseconds, the same unit as the production performance.now
+// default, so a clock/cut unit mismatch fails these cases. Case coverage
 // maps to the two spec cases:
 // - "Hand-derived 48kHz vectors averages and 44.1kHz output length match; stop
 //   includes pending pre-stop buffer and trims later samples"
@@ -28,7 +30,13 @@ const sampleChunk = (base: number, length: number): Float32Array => {
   return samples;
 };
 
-const makeHarness = (sampleRate: number) => {
+type SetupFailure = {
+  createContext?: boolean;
+  createMediaStreamSource?: boolean;
+  createScriptProcessor?: boolean;
+};
+
+const makeHarness = (sampleRate: number, fail: SetupFailure = {}) => {
   let clock = 0;
   let closeCount = 0;
   let sleepAction: (() => void) | null = null;
@@ -49,15 +57,24 @@ const makeHarness = (sampleRate: number) => {
   const context = {
     sampleRate,
     destination: node(),
-    createMediaStreamSource: () => node(),
-    createScriptProcessor: () => processor,
+    createMediaStreamSource: () => {
+      if (fail.createMediaStreamSource) throw new Error('media source setup failed');
+      return node();
+    },
+    createScriptProcessor: () => {
+      if (fail.createScriptProcessor) throw new Error('processor setup failed');
+      return processor;
+    },
     close: async () => {
       closeCount += 1;
     },
   };
   return {
     mediaDevices: { getUserMedia: async () => stream },
-    createContext: () => context,
+    createContext: () => {
+      if (fail.createContext) throw new Error('context setup failed');
+      return context;
+    },
     now: () => clock,
     sleep: (ms: number) => {
       sleepCalls.push(ms);
@@ -67,7 +84,7 @@ const makeHarness = (sampleRate: number) => {
       return Promise.resolve();
     },
     deliver: (samples: Float32Array) => {
-      clock += samples.length / sampleRate;
+      clock += (samples.length / sampleRate) * 1000;
       processor.onaudioprocess?.({ inputBuffer: { getChannelData: () => samples } });
     },
     setClock: (value: number) => {
@@ -111,9 +128,11 @@ test('stop includes pending pre-stop buffer and trims later samples', async () =
   const capture = await startFakeCapture(harness);
 
   harness.deliver(sampleChunk(0, 4096));
-  // Freeze the stop 0.128 s in: cut = round(0.128 * 48000) = 6144 device
-  // samples, mid-way through the second (pending) callback.
-  harness.setClock(0.128);
+  // Freeze the stop 128 ms in (production clock units): the pre-stop cut is
+  // round((128 / 1000) * 48000) = 6144 device samples, mid-way through the
+  // second (pending) callback, so every sample at/after 6144 — including the
+  // post-stop samples that pending callback delivers — must be trimmed.
+  harness.setClock(128);
   harness.onSleep(() => {
     harness.deliver(sampleChunk(4096, 4096));
   });
@@ -183,11 +202,43 @@ test('denied/no-device maps visibly', async () => {
   assert.throws(() => limitSamples(8000), (error: unknown) => errorCode(error) === 'unsupported-rate');
 });
 
+test('setup failures after acquisition stop tracks and close created context once', async () => {
+  // Throwing context factory: no context is created so none can close, but the
+  // acquired tracks must still stop exactly once and the factory error surface.
+  const factoryHarness = makeHarness(48000, { createContext: true });
+  await assert.rejects(
+    startFakeCapture(factoryHarness),
+    (error: unknown) => (error as Error).message === 'context setup failed',
+  );
+  assert.deepEqual(factoryHarness.trackStops, [1, 1]);
+  assert.equal(factoryHarness.closeCount(), 0);
+
+  // Graph setup failure after the context exists: the original error surfaces,
+  // the tracks stop once, and the created context closes exactly once.
+  const sourceHarness = makeHarness(48000, { createMediaStreamSource: true });
+  await assert.rejects(
+    startFakeCapture(sourceHarness),
+    (error: unknown) => (error as Error).message === 'media source setup failed',
+  );
+  assert.deepEqual(sourceHarness.trackStops, [1, 1]);
+  assert.equal(sourceHarness.closeCount(), 1);
+
+  // Partial graph: the source node exists but the processor does not, so
+  // cleanup must tolerate the unconnected source without throwing or leaking.
+  const processorHarness = makeHarness(48000, { createScriptProcessor: true });
+  await assert.rejects(
+    startFakeCapture(processorHarness),
+    (error: unknown) => (error as Error).message === 'processor setup failed',
+  );
+  assert.deepEqual(processorHarness.trackStops, [1, 1]);
+  assert.equal(processorHarness.closeCount(), 1);
+});
+
 test('retry retains exact clip', async () => {
   const harness = makeHarness(48000);
   const capture = await startFakeCapture(harness);
   harness.deliver(sampleChunk(0, 4096));
-  harness.setClock(1); // cut = min(48000, budget, 4096) = 4096 device samples
+  harness.setClock(1000); // 1000 ms = 1 s; cut = min(48000, budget, 4096) = 4096 device samples
   const clipA = await capture.stop();
   const clipB = await capture.stop();
   assert.equal(clipB, clipA); // identical retained clip values for transcription retry
@@ -198,7 +249,7 @@ test('cancel drops them', async () => {
   const harness = makeHarness(48000);
   const capture = await startFakeCapture(harness);
   harness.deliver(sampleChunk(0, 4096));
-  harness.setClock(1);
+  harness.setClock(1000);
   const clip = await capture.stop();
   assert.ok(clip.length > 0);
   capture.cancel();

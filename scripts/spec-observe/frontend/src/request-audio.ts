@@ -75,6 +75,7 @@ type StartCaptureOptions = {
   onLimit?: () => void;
   mediaDevices?: MediaDevicesLike;
   createContext?: () => AudioContextLike;
+  // Clock readings are milliseconds (the performance.now unit) end to end.
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 };
@@ -125,6 +126,8 @@ export const levelOf = (samples: Float32Array): number => {
 export const limitSamples = (rate: number): number =>
   Math.round(REQUEST_LIMITS.recordingSeconds * requireSupportedRate(rate));
 
+// The clock boundary is milliseconds throughout (performance.now); the sample
+// cut converts that elapsed time to seconds explicitly before scaling by rate.
 const defaultNow = (): number => performance.now();
 
 const defaultSleep = (ms: number): Promise<void> =>
@@ -167,12 +170,14 @@ export const startCapture = async (options: StartCaptureOptions = {}): Promise<C
   }
 
   const ownedTracks = stream.getTracks();
-  const context = (options.createContext ?? defaultCreateContext)();
-  const rate = context.sampleRate;
 
+  // Track ownership is established before any fallible context or graph
+  // initialization; every later failure path runs the shared cleanup below.
+  let context: AudioContextLike | null = null;
   let processor: ScriptProcessorNodeLike | null = null;
   let source: AudioNodeLike | null = null;
   let sourceConnected = false;
+  let processorConnected = false;
   let cleanedUp = false;
   let cancelled = false;
   let limitFired = false;
@@ -182,23 +187,34 @@ export const startCapture = async (options: StartCaptureOptions = {}): Promise<C
   let finishPromise: Promise<Float32Array> | null = null;
 
   // One shared cleanup for every finish path; guarded so it runs exactly once.
+  // Tolerates a missing context and a partial graph: only created nodes are
+  // torn down and only connected nodes are disconnected.
   const cleanup = (): void => {
     if (cleanedUp) return;
     cleanedUp = true;
     if (processor) {
       processor.onaudioprocess = null;
-      processor.disconnect();
+      if (processorConnected) {
+        processor.disconnect();
+        processorConnected = false;
+      }
     }
     if (source && sourceConnected) {
       source.disconnect();
       sourceConnected = false;
     }
     for (const track of ownedTracks) track.stop();
-    context.close();
+    context?.close();
   };
 
+  // Context construction and rate validation are cleanup-protected: a throwing
+  // context factory or unsupported rate still stops the acquired tracks and
+  // closes any created context before the error surfaces.
+  let rate: number;
   let budget: number;
   try {
+    context = (options.createContext ?? defaultCreateContext)();
+    rate = context.sampleRate;
     budget = limitSamples(rate);
   } catch (error) {
     cleanup();
@@ -217,8 +233,9 @@ export const startCapture = async (options: StartCaptureOptions = {}): Promise<C
     for (const chunk of chunks) buffered += chunk.length;
     // Freeze the end at the explicit stop time: samples at/after the cut from a
     // straddling or late callback are trimmed, and the device slice is capped at
-    // the budget before downsampling.
-    const cut = Math.max(0, Math.min(Math.round((stopAt - startTime) * rate), budget, buffered));
+    // the budget before downsampling. now() is milliseconds, so convert the
+    // elapsed time to seconds before scaling by the device rate.
+    const cut = Math.max(0, Math.min(Math.round(((stopAt - startTime) / 1000) * rate), budget, buffered));
     const deviceClip = new Float32Array(cut);
     let offset = 0;
     for (const chunk of chunks) {
@@ -257,12 +274,20 @@ export const startCapture = async (options: StartCaptureOptions = {}): Promise<C
     }
   };
 
-  source = context.createMediaStreamSource(stream);
-  processor = context.createScriptProcessor(SCRIPT_PROCESSOR_BUFFER_SIZE, 1, 1);
-  source.connect(processor);
-  sourceConnected = true;
-  processor.connect(context.destination);
-  processor.onaudioprocess = onAudioProcess;
+  // Graph setup is cleanup-protected the same way, so a throwing media source
+  // or processor step cannot leak the acquired tracks or the created context.
+  try {
+    source = context.createMediaStreamSource(stream);
+    processor = context.createScriptProcessor(SCRIPT_PROCESSOR_BUFFER_SIZE, 1, 1);
+    source.connect(processor);
+    sourceConnected = true;
+    processor.connect(context.destination);
+    processorConnected = true;
+    processor.onaudioprocess = onAudioProcess;
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
 
   const stop = async (): Promise<Float32Array> => {
     if (cancelled) throw audioError('cancelled', CAPTURE_CANCELLED_MESSAGE);
