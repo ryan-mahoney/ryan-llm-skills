@@ -8,6 +8,7 @@ import { activityRecorder } from './monitor.mjs';
 import { SCOUT_MODEL } from './scout.mjs';
 import { createLogSummary } from '../../../scripts/spec-facts/core.mjs';
 import { checkPackage, locatePackage } from '../../../scripts/spec-location/index.mjs';
+import { artifactEnvironment } from '../../../scripts/spec-location/artifact-environment.mjs';
 import { prepareSpecWorktree } from '../../../scripts/spec-location/worktree.mjs';
 import { decide, collectFacts } from '../../../scripts/jev/core.mjs';
 import { preparedEntry } from './startup.mjs';
@@ -151,7 +152,8 @@ export function summary(record) {
     owner_model: record.owner_model, editor_model: record.editor_model, routing_reason: record.routing_reason,
     environment: record.environment,
     handoff: record.handoff || completionStatus(record), progress: join(record.package, 'runtime/progress.json'),
-    result: record.result, stop_reason: record.stop_reason, result_truncated: record.result_truncated, full_result_path: record.full_result_path, error: record.error,
+    result: record.result, stop_reason: record.stop_reason, shutdown_cleanup: record.shutdown_cleanup === true,
+    result_truncated: record.result_truncated, full_result_path: record.full_result_path, error: record.error,
     next: record.state === 'failed' && record.stop_reason === 'length' ? 'Inspect preserved partial work and assign a bounded continuation; the packet did not complete. Do not repeat the same assignment unchanged.' : record.handoff?.status === 'handoff_incomplete' ? 'Repair the structured handoff only; preserve code and prior checks. Review/fix remains required.' : record.state === 'running' ? 'await completion event; do not poll' : record.state === 'blocked' ? 'resolve worker termination before another writer' : 'evaluate result; independent step review remains required' };
 }
 // A run holds the writer role while its own record is running (or blocked on a live
@@ -213,7 +215,7 @@ export async function terminateGroup(record, pid) {
 export function spawnManaged(record, role, command, args, onRegistered = () => {}) {
   const child = spawn('/bin/bash', ['-c', 'IFS= read -r gate && [ "$gate" = start ] && exec "$@"', 'spec-runtime', command, ...args], {
     cwd: record.checkout, detached: true,
-    env: { ...process.env, SPEC_RUNTIME_ROLE: role, SPEC_RUNTIME_RECORD: join(record.package, 'runtime/runs', `${record.id}.json`),
+    env: { ...process.env, ...artifactEnvironment(record.package), SPEC_RUNTIME_ROLE: role, SPEC_RUNTIME_RECORD: join(record.package, 'runtime/runs', `${record.id}.json`),
       PI_INTERCOM_SCOPE_ID: record.id, PI_INTERCOM_STABLE_ID: `spec-${role}-${record.id}` },
     stdio: ['pipe', 'pipe', 'pipe'] });
   child.stdin.on('error', () => {});
@@ -296,7 +298,8 @@ export function launch(record, role, prompt, options = {}) {
   const activity = activityRecorder(record, role);
   let reportLifecycleFailure;
   const lifecycleFailure = new Promise(resolveFailure => { reportLifecycleFailure = resolveFailure; });
-  let pending = '', finalText = '', lastStop, failure, stderr = '';
+  let pending = '', finalText = '', lastStop, failure, stderr = '', shutdownTimer, shutdownCleanup = false;
+  const clearShutdown = () => { clearTimeout(shutdownTimer); shutdownTimer = undefined; };
   child.stdout.on('data', chunk => {
     appendFileSync(stream, chunk, { mode: 0o600 });
     pending += chunk.toString();
@@ -306,6 +309,8 @@ export function launch(record, role, prompt, options = {}) {
       try {
         const value = JSON.parse(line);
         activity.event(value);
+        if (['agent_start', 'turn_start', 'tool_execution_start', 'message_start'].includes(value.type)) clearShutdown();
+        if (value.type === 'agent_start') { finalText = ''; lastStop = undefined; failure = undefined; }
         // Fatal lifecycle handling is independent of observation: the cleanup
         // receipt is reported before any observer seam runs, so a hostile or
         // blocking observer can never delay mandatory cancellation.
@@ -322,6 +327,25 @@ export function launch(record, role, prompt, options = {}) {
             ? 'Model response reached its length limit; packet is incomplete. Preserve changes, inspect the partial result, and assign a bounded continuation. Do not treat partial text as completion or retry unchanged.'
             : lastStop === 'error' || lastStop === 'aborted' ? value.message.errorMessage || lastStop : undefined;
         }
+        // Some extension resources survive native print-mode settlement. Give
+        // normal disposal time to finish, then stop only this invocation's live
+        // process group. A settled event alone never releases ownership.
+        if (value.type === 'agent_settled' && value.aborted === false && finalText.trim() && lastStop === 'stop' && !failure) {
+          clearShutdown();
+          shutdownTimer = setTimeout(async () => {
+            try {
+              if (child.exitCode !== null || child.signalCode !== null) return;
+              if (activeGroups(record).some(group => group.pid !== child.pid && !(role === 'editor' && group.role === 'owner'))) {
+                reportLifecycleFailure('Settled worker has active managed descendants; cancel the run before replacing it.');
+                return;
+              }
+              event(record, 'worker_shutdown_cleanup', { role, pid: child.pid, reason: 'settled print process did not exit' });
+              shutdownCleanup = true;
+              if (!await (options.stopSettledGroup || terminateGroup)(record, child.pid))
+                reportLifecycleFailure('Settled worker termination unconfirmed; retain process ownership.');
+            } catch (error) { reportLifecycleFailure(`Settled worker cleanup failed: ${error.message}`); }
+          }, options.shutdownGraceMs ?? 15000);
+        }
       } catch { /* preserve non-JSON diagnostics on disk */ }
     }
   });
@@ -329,7 +353,9 @@ export function launch(record, role, prompt, options = {}) {
   const done = new Promise(resolveDone => {
     child.on('error', error => { failure = error.message; });
     child.on('close', (code, signal) => {
-      const error = child.launchError || failure || (code !== 0 ? `Pi exited ${code ?? signal}` : !finalText || lastStop === 'toolUse' ? 'Pi exited without a final assistant result' : undefined);
+      clearShutdown();
+      const cleanupExit = shutdownCleanup && ['SIGTERM', 'SIGKILL'].includes(signal);
+      const error = child.launchError || failure || (code !== 0 && !cleanupExit ? `Pi exited ${code ?? signal}` : !finalText || lastStop === 'toolUse' ? 'Pi exited without a final assistant result' : undefined);
       activity.finish(error);
       const fullResultPath = `${stream}.result.txt`;
       try {
@@ -337,7 +363,7 @@ export function launch(record, role, prompt, options = {}) {
         const truncated = finalText.length > 8000;
         const notice = `\n[Result truncated. Read the needed portion of ${fullResultPath}; do not repeat the assignment.]`;
         resolveDone({ code, signal, result: truncated ? finalText.slice(0, Math.max(0, 8000 - notice.length)) + notice : finalText,
-          result_truncated: truncated, stop_reason: lastStop, full_result_path: fullResultPath, stream, errors, error, configuration_failure: configurationFailure(error) || (error ? configurationFailure(stderr) : undefined) });
+          result_truncated: truncated, stop_reason: lastStop, shutdown_cleanup: shutdownCleanup, full_result_path: fullResultPath, stream, errors, error, configuration_failure: configurationFailure(error) || (error ? configurationFailure(stderr) : undefined) });
       } catch (cause) {
         resolveDone({ code, signal, stream, errors, error: `Cannot preserve full result: ${cause.message}${error ? `; ${error}` : ''}` });
       }
@@ -457,6 +483,7 @@ export class Runtime {
       record.state = result.error ? 'failed' : 'completed'; record.error = result.error; record.result = result.result; record.stop_reason = result.stop_reason;
       record.handoff = completionStatus(record, { checkHead: true });
       record.result_truncated = result.result_truncated; record.full_result_path = result.full_result_path; record.finished_at = timestamp();
+      record.shutdown_cleanup = result.shutdown_cleanup === true;
     }
     save(record); event(record, 'run_finished', { state: record.state, error: record.error });
     if (record.state !== 'blocked') { clearTimeout(this.active.get(record.id)?.timer); this.active.delete(record.id); }

@@ -34,6 +34,59 @@ function prepare(f, difficulty = 'hard') {
   return { ...input, strong_owner_model: 'test/strong' };
 }
 
+test('settled print worker with leaked handles is stopped before its result releases the run', async t => {
+  const f = await fixture(t, `
+    process.on('SIGTERM', () => {});
+    console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'Retained handoff'}]}}));
+    console.log(JSON.stringify({type:'agent_settled',aborted:false}));
+    setInterval(() => {}, 1000);
+  `);
+  const launchProcess = f.options.launchProcess;
+  f.options.launchProcess = (r, role, prompt, opts) => launchProcess(r, role, prompt, { ...opts, shutdownGraceMs: 25 });
+  const runtime = new Runtime(f.options);
+  const started = await runtime.start(f.input);
+  const result = await f.finished;
+  assert.equal(result.state, 'completed');
+  assert.equal(result.shutdown_cleanup, true);
+  assert.equal(loadRun(f.packagePath, started.run_id).shutdown_cleanup, true);
+  assert.equal(loadRun(f.packagePath, started.run_id).result, 'Retained handoff');
+  assert.equal(groupAlive(f.pids[0]), false);
+  assert.equal(result.handoff.status, 'handoff_incomplete', 'shutdown is not acceptance or a fabricated handoff');
+});
+
+test('a final response without native settlement never triggers shutdown cleanup', async t => {
+  const f = await fixture(t, `
+    console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'Still processing'}]}}));
+    setTimeout(() => process.exit(0), 100);
+  `);
+  const launchProcess = f.options.launchProcess;
+  f.options.launchProcess = (r, role, prompt, opts) => launchProcess(r, role, prompt, { ...opts, shutdownGraceMs: 5 });
+  const runtime = new Runtime(f.options);
+  await runtime.start(f.input); await f.finished;
+  assert.equal(loadRun(f.packagePath).shutdown_cleanup, false);
+});
+
+test('settled editor cleanup preserves its live owner and returns the retained result', async t => {
+  const f = await fixture(t, `
+    if(process.env.SPEC_RUNTIME_ROLE === 'editor') {
+      console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'Edits complete'}]}}));
+      console.log(JSON.stringify({type:'agent_settled',aborted:false}));
+    }
+    setInterval(() => {}, 1000);
+  `);
+  const launchProcess = f.options.launchProcess;
+  f.options.launchProcess = (r, role, prompt, opts) => launchProcess(r, role, prompt, { ...opts, shutdownGraceMs: 25 });
+  const runtime = new Runtime(f.options);
+  await runtime.start(f.input);
+  const record = loadRun(f.packagePath);
+  const result = await runEditor(record, 'Edit one function', undefined, f.options.launchProcess);
+  assert.equal(result.error, undefined);
+  assert.equal(result.result, 'Edits complete');
+  assert.equal(groupAlive(f.pids[0]), true);
+  assert.equal(groupAlive(f.pids[1]), false);
+  await runtime.cancel(f.packagePath, record.id);
+});
+
 test('prepared startup routes hard work, returns retained progress, and never equates worker completion with acceptance', async t => {
   const f = await fixture(t), input = prepare(f), runtime = new Runtime(f.options);
   const started = await runtime.startup(input, '/parent/session.jsonl');

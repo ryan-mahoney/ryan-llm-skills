@@ -88,3 +88,23 @@ test('owned workflow exposes a repeated stall and resume cannot replenish the sa
   workflow.restore({ sessionManager: { getSessionFile: () => 'another-session', getBranch: () => f.entries } });
   assert.equal(workflow.context({ messages: [] }), undefined);
 });
+
+test('authorized objective correction replaces stale routing without replenishing continuation budget', async t => {
+  const f = await fixture(t);
+  let workflow = createWorkflowContinuation(f.pi);
+  workflow.register(f.record, 'Finish steps 5-9 with old-provider; draft PR only.');
+  workflow.beforeSettle(boundary(), f.guards);
+  workflow.beforeSettle(boundary(), f.guards);
+  const objective = 'Complete the package, scoped independent reviews and draft PR; no merge.';
+  assert.throws(() => workflow.register(f.record, objective), /expected_revision/);
+  assert.throws(() => workflow.register(f.record, objective, 'publication', { expected_revision: 2, authority: 'User correction' }), /expected_revision/);
+  const corrected = workflow.register(f.record, objective, 'publication', { expected_revision: 1, authority: 'Reconciled user inbox: use current routing and finish the package.' });
+  assert.equal(corrected.objective_revision, 2);
+  assert.equal(corrected.nudges, 2);
+  workflow = createWorkflowContinuation(f.pi); workflow.restore(f.ctx);
+  const content = workflow.context({ messages: [{ customType: 'spec-workflow-continuation', content: 'old-provider' }] }).messages[0].content;
+  assert.doesNotMatch(content, /old-provider|steps 5-9/);
+  assert.match(content, /runtime\/progress.json/);
+  assert.match(content, /draft PR; no merge/);
+  assert.equal(workflow.beforeSettle(boundary(), f.guards), undefined);
+});

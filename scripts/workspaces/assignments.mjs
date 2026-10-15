@@ -1721,6 +1721,7 @@ export async function launchAssignment(input = {}, options = {}) {
       piPath: plan.record.pi_path,
       piArgs: approved.piArgs,
       assignmentId: id,
+      specPackage: plan.record.spec_package,
     }, tmuxOptions);
   } catch (error) {
     spawnError = error;

@@ -82,7 +82,7 @@ test('spec metadata exemptions keep executable, config, arbitrary and escaped pa
   const workspace = join(repo, 'storage/projects/demo');
   mkdirSync(join(workspace, 'specs/feature/reviews'), { recursive: true });
   writeFileSync(join(workspace, 'kit.yaml'), 'version: 1\n');
-  for (const path of ['project-context.md', 'specs/feature/ledger.md', 'specs/feature/pr-rebase-log.md', 'specs/feature/learnings/step-003-learning.md', 'specs/feature/step-003-subspec.md', 'specs/feature/reviews/step-003-fix.md', 'specs/feature/merge-evidence.json'])
+  for (const path of ['project-context.md', 'specs/feature/ledger.md', 'specs/feature/pr-rebase-log.md', 'specs/feature/learnings/step-003-learning.md', 'specs/feature/step-003-subspec.md', 'specs/feature/reviews/step-003-fix.md', 'specs/feature/merge-evidence.json', 'specs/feature/evidence-assembly.json', 'specs/feature/merge-evidence.draft.json', 'specs/feature/work-tour.draft.json'])
     assert.equal(classifySpecArtifact('write', { path: join(workspace, path) }, repo), 'unknown', path);
   for (const path of ['specs/feature/evidence/check.mjs', 'specs/feature/package.json', 'specs/feature/fixture.json', 'specs/feature/arbitrary.md', 'specs/feature/../../../../../src/app.js', 'kit.yaml', 'specs/feature/runtime/run.json'])
     assert.equal(classifySpecArtifact('edit', { path: join(workspace, path) }, repo), undefined, path);

@@ -193,6 +193,8 @@ test("tmux adapter: first launch bootstraps keys and runs fixture with exact arg
   const cwd = join(root, "work");
   await mkdir(cwd, { recursive: true });
   const logPath = join(root, "fake-pi.jsonl");
+  const specPackage = join(root, 'canonical package');
+  await mkdir(specPackage);
   process.env.FAKE_PI_LOG = logPath;
   state.socketPath = socketPath;
 
@@ -207,11 +209,14 @@ test("tmux adapter: first launch bootstraps keys and runs fixture with exact arg
     piPath: process.execPath,
     piArgs,
     assignmentId,
+    specPackage,
   });
   state.pids.push(result.panePid);
 
   assert.equal(result.socketPath, socketPath);
   assert.equal(result.sessionName, name);
+  assert.equal(await tmuxOutput(socketPath, ['show-environment', '-t', `=${name}`, 'PI_WARDEN_HOST_PATHS']), `PI_WARDEN_HOST_PATHS=${specPackage}`);
+  assert.notEqual(process.env.PI_WARDEN_HOST_PATHS, specPackage, 'scope is per launch, not a process-global setting');
   assert.match(result.paneId, /^%\d+$/);
   assert.ok(Number.isSafeInteger(result.panePid) && result.panePid > 0);
   assert.equal(result.piIdentity.pid, result.panePid);

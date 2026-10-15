@@ -74,7 +74,14 @@ and `workflow_id`, the user's whole-workflow `objective` including publication l
 and `completion_stage` (`publication` for a requested PR, `work-tour` for an explicitly
 local outcome). This retains the coordinator's own obligation across compaction and
 premature final responses; it does not enable Sentinel observation or intervention.
-Reuse that objective on resume. Do not register a step-sized objective for a package run.
+Keep the objective stable: desired outcome and authority limits only. Do not embed
+completed/remaining step lists, current SHAs, checkout state or model routing. Resolve
+those from the current checkpoint, progress, locations and reconciled inbox outcomes.
+Reuse the objective on resume. If it contains obsolete facts or the user changes scope,
+call `spec_workflow` with the replacement outcome and `update` containing the returned
+`objective_revision` as `expected_revision` and current user/inbox `authority`; preserve
+every unsuperseded limit. This replaces stale context without resetting continuation attempts.
+Do not register a step-sized objective for a package run.
 The runtime continues only at a completed idle boundary with reconciled input and no
 hold, pending message or active worker. Two nudges without a new obligation expose a
 stall instead of retrying indefinitely. Failures and aborts still need their specific
@@ -303,6 +310,17 @@ user supplied a fallback or approves the change. Announcing a substitution does 
 authorize it. If the requested route remains unavailable, checkpoint that stage with
 the concrete failure; do not claim the model itself lacks the capability or have the
 parent transcribe its output to complete the stage.
+
+Declare the canonical adjacent package as an artifact destination at host launch.
+Adjacent spec assignments and managed owner/editor launches set
+`PI_WARDEN_HOST_PATHS` to that resolved package; their child reviewers and tour agents
+inherit it. For a manually launched Pi coordinator, resolve the package first and
+start it with `PI_WARDEN_HOST_PATHS="$package_dir" pi ...`. This is Warden's host-path
+contract, not a request to disable its guards. Do not allow the entire storage root
+or sibling packages. The review/tour packet names its permitted artifact files and
+keeps implementation code read-only. An already running coordinator needs a deliberate
+resume with the host setting before children can inherit it; do not retry held writes
+through shell, alternate tools or parent transcription.
 
 When a clerical task needs a helper, consult `~/.agents/docs/spec-workflow-efficiency.md` for existing deterministic helpers
 instead of reconstructing their work in prompts.

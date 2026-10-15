@@ -201,6 +201,14 @@ timeouts terminate their process groups. Editor descendants still alive at hando
 revoke the run and block the next editor. The overall deadline cancels the run.
 Normal Pi session shutdown also cancels its managed runs.
 
+A native `agent_settled` event with `aborted: false` and a complete final response
+starts a 15-second shutdown grace period. If the print worker still owns a live
+process, the launcher records `worker_shutdown_cleanup` and terminates only that
+invocation's tracked group (TERM, then KILL). It waits for actual exit; new model/tool
+activity cancels the grace timer. Active managed descendants or unconfirmed cleanup
+require normal runtime cancellation. The result retains its full text and cleanup flag;
+the existing handoff validation and independent review obligations still apply.
+
 This is lifecycle enforcement for cooperative managed workers, not an OS security
 sandbox. Deliberately detached external services and writers started outside the
 runtime are not covered. Do not leave background services alive after a managed shell
@@ -584,6 +592,13 @@ prematurely complete. Holds, blockers, errors, aborts and pending input prevent 
 Final completion requires all prepared step handoffs and a complete final-stage receipt;
 publication additionally requires a recorded PR URL for every target. These facts preserve
 the existing review and acceptance responsibilities; they do not certify those judgments.
+
+Keep this objective to the stable outcome and authority limits. Progress, checkout
+revisions and model routing come from canonical records and reconciled directions.
+`update: {expected_revision, authority}` replaces obsolete wording after a reconciled
+user/inbox change; `expected_revision` is the returned `objective_revision` (legacy
+entries start at 1). The append-only replacement survives resume without replenishing
+the current obligation's nudges. A stale revision is refused.
 
 At most two continuations are allowed per unchanged obligation revision. The allowance
 persists through resume and repeated registration. A repeated stall produces a visible
