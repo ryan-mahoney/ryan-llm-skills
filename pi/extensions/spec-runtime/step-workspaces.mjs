@@ -1048,17 +1048,24 @@ function validateRetainedWorkspace(retained, request) {
   if (!rootStat.isDirectory()) invalid(`the recorded wave root is not a directory: ${waveRoot}`);
   const realRoot = realpathSync(waveRoot);
   for (const [field, value] of paths) {
-    let stat;
-    try {
-      stat = lstatSync(value);
-    } catch {
-      invalid(`retained ${field} path is missing: ${value}`);
+    // Check ancestors in order, refusing a redirect before inspecting anything
+    // beneath it. A real leaf inside realRoot alone does not prove topology.
+    const components = value.slice(waveRoot.length + 1).split(sep);
+    let componentPath = waveRoot;
+    for (const component of components) {
+      componentPath = join(componentPath, component);
+      let stat;
+      try {
+        stat = lstatSync(componentPath);
+      } catch {
+        invalid(`retained ${field} path is missing: ${componentPath}`);
+      }
+      if (stat.isSymbolicLink()) invalid(`retained ${field} path is a symbolic link: ${componentPath}`);
+      if (!stat.isDirectory()) invalid(`retained ${field} path is not a directory: ${componentPath}`);
     }
-    if (stat.isSymbolicLink()) invalid(`retained ${field} path is a symbolic link: ${value}`);
-    if (!stat.isDirectory()) invalid(`retained ${field} path is not a directory: ${value}`);
     const real = realpathSync(value);
-    if (real !== realRoot && !real.startsWith(`${realRoot}${sep}`)) {
-      invalid(`retained ${field} path resolves outside the wave root: ${value}`);
+    if (real !== join(realRoot, ...components)) {
+      invalid(`retained ${field} path resolves outside its recorded topology: ${value}`);
     }
   }
 }
@@ -1152,4 +1159,3 @@ export async function importSealedHead({ repo, source, sha, retentionRef }) {
   }
   if (existing === null) gitText(['-C', repository, 'update-ref', ref, target]);
 }
-

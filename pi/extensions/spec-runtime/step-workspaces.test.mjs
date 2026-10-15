@@ -8,7 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
@@ -553,6 +553,69 @@ test('wave workspaces: retained remount preserves dirty state and blocks unclean
   assert.ok(!existsSync(join(remounted.upper, 'docs', 'remove-me.txt')), 'the deletion stands after remount');
   assert.ok(existsSync(join(record.lower, 'docs', 'remove-me.txt')), 'the lower deletion source is untouched');
 });
+
+for (const withRequest of [false, true]) {
+  test(`wave workspaces: retained within-root ancestor redirection refuses ${withRequest ? 'with' : 'without'} request`, async t => {
+    await assertRetainedAncestorRedirectionRefused(t, withRequest);
+  });
+}
+
+async function assertRetainedAncestorRedirectionRefused(t, withRequest) {
+  for (const mode of ['overlayfs', 'worktree']) {
+    const ancestors = mode === 'overlayfs'
+      ? ['attempts', 'attempt', 'snapshots', 'snapshot']
+      : ['attempts', 'attempt'];
+    for (const ancestor of ancestors) {
+      await t.test(`${mode}: ${ancestor}`, async t => {
+        const label = `retained-ancestor-${mode}-${ancestor}-${withRequest}`;
+        const target = makeTargetRepo(t, `${label}-target`);
+        const waveRoot = freshRoot(t, `${label}-root`);
+        const ownership = makeOwnership(t, label);
+        const record = await prepareStepWorkspace(workspaceOptions({
+          target, waveRoot, ownership, packageId: label, label,
+          attemptId: 'alias', baseCommit: target.c2, mode,
+        }));
+        const released = await createOverlayPhases({ ownership }).endPhase({
+          token: record.claim.token, epoch: record.claim.epoch, drain: 'confirmed',
+        });
+        assert.equal(released.status, 'released');
+        const original = {
+          attempts: join(waveRoot, 'attempts'),
+          attempt: join(waveRoot, 'attempts', 'alias'),
+          snapshots: join(waveRoot, 'snapshots'),
+          snapshot: join(waveRoot, 'snapshots', record.snapshotId),
+        }[ancestor];
+        const replacement = join(waveRoot, 'replacement');
+        renameSync(original, replacement);
+        symlinkSync(replacement, original);
+        const paths = mode === 'overlayfs'
+          ? ['lower', 'upper', 'work', 'merged', 'gitDir']
+          : ['worktree'];
+        const expected = { baseCommit: record.baseCommit, snapshotId: record.snapshotId };
+        for (const field of paths) {
+          expected[field] = record[field];
+          assert.ok(lstatSync(record[field]).isDirectory(), 'each leaf is still a real directory');
+          assert.ok(realpathSync(record[field]).startsWith(`${waveRoot}/`), 'redirection stays within root');
+        }
+        const before = treeSnapshot(waveRoot);
+        const targetBefore = treeSnapshot(target.worktree);
+        await assertNoClaims(ownership, label);
+        await assertRefusalAsync('retained-workspace-invalid', () => remountRetainedWorkspace({
+          retained: JSON.parse(JSON.stringify(record.retained)),
+          expected,
+          previous: { token: record.claim.token, epoch: record.claim.epoch },
+          phaseToken: `${label}-next`,
+          coordinator: coordinatorFor(label),
+          ownership,
+          ...(withRequest ? { request: retainedRequest(record, waveRoot) } : {}),
+        }));
+        await assertNoClaims(ownership, label);
+        assert.deepEqual(treeSnapshot(waveRoot), before, 'refusal leaves the full redirected tree unchanged');
+        assert.deepEqual(treeSnapshot(target.worktree), targetBefore, 'refusal leaves the canonical repository unchanged');
+      });
+    }
+  }
+}
 
 // F6: a retained record is re-mountable only while it still describes the
 // requested attempt and a real, intact workspace on disk. These cases tamper
