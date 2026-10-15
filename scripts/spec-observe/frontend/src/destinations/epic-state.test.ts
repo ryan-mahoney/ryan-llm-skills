@@ -14,6 +14,7 @@ import {
   epicRecordedState,
   epicViewState,
   focusMember,
+  memberAgentRoute,
   memberPlanning,
   memberRecords,
   nextToPlan,
@@ -300,4 +301,29 @@ test('epic planning accepts prepared prerequisites regardless of assignment cove
   const partial = epicMemberPlanningRow(epic, member, [{ ...record, assignment_coverage: { state: 'partial' } }]);
   assert.equal(partial.action.disabled, false);
   assert.equal(partial.action.reason, null);
+});
+
+test('member agent route prefers the observed row and never fabricates an identifier', () => {
+  assert.deepEqual(
+    memberAgentRoute({
+      key: '["ws-kit-alpha","0b1f4c62-1111-2222-3333-444455556666"]',
+      assignment_id: '0b1f4c62-1111-2222-3333-444455556666',
+      workspace_id: 'ws-kit-alpha',
+      workspace: 'alpha-dir',
+    }, 'fallback-ws'),
+    { dest: 'agents', ws: 'ws-kit-alpha', id: '["ws-kit-alpha","0b1f4c62-1111-2222-3333-444455556666"]' },
+  );
+  assert.deepEqual(
+    memberAgentRoute({ key: '["ws-kit-alpha","0b1f4c62-1111-2222-3333-444455556666"]', workspace: 'alpha-dir' }, 'fallback-ws'),
+    { dest: 'agents', ws: 'alpha-dir', id: '["ws-kit-alpha","0b1f4c62-1111-2222-3333-444455556666"]' },
+  );
+  const filtered = memberAgentRoute(
+    { assignment_id: '0b1f4c62-1111-2222-3333-444455556666', workspace_id: 'ws-kit-alpha' },
+    'fallback-ws',
+  );
+  assert.deepEqual(filtered, { dest: 'agents', ws: 'ws-kit-alpha', q: '0b1f4c62-1111-2222-3333-444455556666' });
+  assert.equal(Object.hasOwn(filtered ?? {}, 'id'), false);
+  assert.equal(memberAgentRoute(null, 'fallback-ws'), null);
+  assert.equal(memberAgentRoute({ workspace_id: 'ws-kit-alpha' }, 'fallback-ws'), null);
+  assert.equal(memberAgentRoute({ key: '', assignment_id: '', workspace_id: 'ws-kit-alpha' }, 'fallback-ws'), null);
 });
