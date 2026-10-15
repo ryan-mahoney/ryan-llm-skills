@@ -619,3 +619,92 @@ test('wave workspaces: preparation receipts bind identity and validated staging 
   assert.equal(readFileSync(join(record.lower, 'dep.js'), 'utf8'), 'module.exports = 2;\n');
 });
 
+test('wave workspaces: interrupted snapshot publication is recovered or named distinctly', async t => {
+  const target = makeTargetRepo(t, 'wave-workspaces-publish-target');
+  const waveRoot = freshRoot(t, 'wave-workspaces-publish-root');
+  const ownership = makeOwnership(t, 'wave-workspaces-publish');
+  const baseCommit = target.c2;
+  const declaration = { command: 'npm ci --ignore-scripts', lockfiles: [], environment: [] };
+  const staging = stagePreparedInput(t, target, baseCommit);
+  const { snapshotId } = setupIdentity({ baseCommit, setup: declaration, targetRoot: target.worktree });
+  const preparationReceipt = {
+    ok: true, drain: 'confirmed', baseCommit, trackedClean: true,
+    snapshotId, stagingDigest: stagingDigest(staging),
+  };
+  const snapshotDir = join(waveRoot, 'snapshots');
+  const snapshotRoot = join(snapshotDir, snapshotId);
+  const options = attemptId => ({
+    ...workspaceOptions({
+      target, waveRoot, ownership, packageId: 'wave-publish', label: 'publish', attemptId, baseCommit,
+      mode: 'overlayfs', setup: declaration, env: { HOME: process.env.HOME, PATH: process.env.PATH }, preparationReceipt,
+    }),
+    staging,
+  });
+
+  // Interrupted publication, case one: only a leftover publication temporary
+  // directory beside the final snapshot root exists.
+  const leftover = join(snapshotDir, `.publish-${snapshotId}`);
+  mkdirSync(join(leftover, 'lower'), { recursive: true });
+  writeFileSync(join(leftover, 'lower', 'poison.txt'), 'interrupted mid-copy\n');
+
+  const recovered = await prepareStepWorkspace(options('attempt-publish-1'));
+  assert.equal(existsSync(snapshotRoot), true, 'recovery ends with the snapshot at the final path');
+  assert.equal(existsSync(leftover), false, 'the leftover publication temporary directory is discarded, never adopted');
+  assert.equal(existsSync(join(recovered.lower, 'poison.txt')), false, 'a leftover partial lower is never adopted blindly');
+  assert.equal(readFileSync(join(recovered.lower, 'README.md'), 'utf8'), 'base\n', 'the recovered lower is complete');
+  const recordName = readdirSync(snapshotRoot).find(name => name !== 'lower');
+  assert.ok(recordName, 'the recovered snapshot carries its record beside the lower');
+
+  const reused = await prepareStepWorkspace(options('attempt-publish-2'));
+  assert.equal(readFileSync(join(reused.lower, 'README.md'), 'utf8'), 'base\n', 'a subsequent call yields a usable complete frozen lower');
+
+  // Interrupted publication, case two: the final path exists but is
+  // incomplete. The exact-reason match below also proves it is never reported
+  // as snapshot-mismatch.
+  rmSync(snapshotRoot, { recursive: true, force: true });
+  mkdirSync(join(snapshotRoot, 'lower'), { recursive: true });
+  writeFileSync(join(snapshotRoot, 'lower', 'half.txt'), 'half built\n');
+  await assertRefusalAsync('snapshot-publication-incomplete', () => prepareStepWorkspace(options('attempt-publish-3')));
+
+  rmSync(join(snapshotRoot, 'lower'), { recursive: true, force: true });
+  writeFileSync(join(snapshotRoot, recordName), `${JSON.stringify({ version: 1, snapshotId, identity: {} }, null, 2)}\n`);
+  await assertRefusalAsync('snapshot-publication-incomplete', () => prepareStepWorkspace(options('attempt-publish-4')));
+
+  // Clearing the incomplete final path lets the next call rebuild a complete
+  // frozen lower.
+  rmSync(snapshotRoot, { recursive: true, force: true });
+  const rebuilt = await prepareStepWorkspace(options('attempt-publish-5'));
+  assert.equal(readFileSync(join(rebuilt.lower, 'README.md'), 'utf8'), 'base\n', 'a subsequent call yields a usable complete frozen lower');
+});
+
+test('wave workspaces: a complete snapshot with a conflicting identity still refuses as snapshot-mismatch', async t => {
+  const target = makeTargetRepo(t, 'wave-workspaces-conflict-target');
+  const waveRoot = freshRoot(t, 'wave-workspaces-conflict-root');
+  const ownership = makeOwnership(t, 'wave-workspaces-conflict');
+  const baseCommit = target.c2;
+  const declaration = { command: 'npm ci --ignore-scripts', lockfiles: [], environment: [] };
+  const staging = stagePreparedInput(t, target, baseCommit);
+  const { snapshotId } = setupIdentity({ baseCommit, setup: declaration, targetRoot: target.worktree });
+  const preparationReceipt = {
+    ok: true, drain: 'confirmed', baseCommit, trackedClean: true,
+    snapshotId, stagingDigest: stagingDigest(staging),
+  };
+  const options = attemptId => ({
+    ...workspaceOptions({
+      target, waveRoot, ownership, packageId: 'wave-conflict', label: 'conflict', attemptId, baseCommit,
+      mode: 'overlayfs', setup: declaration, env: { HOME: process.env.HOME, PATH: process.env.PATH }, preparationReceipt,
+    }),
+    staging,
+  });
+
+  const first = await prepareStepWorkspace(options('attempt-conflict-1'));
+  const snapshotRoot = join(waveRoot, 'snapshots', snapshotId);
+  const recordName = readdirSync(snapshotRoot).find(name => name !== 'lower');
+  const stored = JSON.parse(readFileSync(join(snapshotRoot, recordName), 'utf8'));
+  stored.identity = { ...stored.identity, tampered: true };
+  writeFileSync(join(snapshotRoot, recordName), `${JSON.stringify(stored, null, 2)}\n`);
+  assert.equal(existsSync(first.lower), true, 'the snapshot stays structurally complete');
+
+  await assertRefusalAsync('snapshot-mismatch', () => prepareStepWorkspace(options('attempt-conflict-2')));
+});
+

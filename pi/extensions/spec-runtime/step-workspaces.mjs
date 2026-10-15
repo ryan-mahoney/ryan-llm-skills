@@ -14,7 +14,7 @@
 // by a positive unavailable classification whose fallbackEligible flag is true.
 import { createHash } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
 import { createOverlayPhases, retainLayer, validateLayers } from './overlay.mjs';
@@ -469,25 +469,48 @@ function extractCommitTree({ source, baseCommit, destination }) {
 // recorded identity that no longer matches the computed one is refused, never
 // repaired in place, so no attempt can observe a lower it did not freeze.
 async function ensureSnapshot({ snapshotRoot, snapshotId, lower, identity, source, baseCommit, staging }) {
+  const snapshotDir = join(snapshotRoot, '..');
+  const publishTmp = join(snapshotDir, `.publish-${snapshotId}`);
   if (existsSync(snapshotRoot)) {
-    const stored = readSnapshotRecord(snapshotRoot);
-    const matches = stored
-      && stored.version === SNAPSHOT_VERSION
-      && stored.snapshotId === snapshotId
-      && canonicalJson(stored.identity) === canonicalJson(identity)
+    let stored = null;
+    try {
+      stored = readSnapshotRecord(snapshotRoot);
+    } catch {
+      stored = null;
+    }
+    // A final path that is structurally incomplete (record missing or not a
+    // valid record, or lower missing) is an interrupted publication, not an
+    // identity conflict: it gets its own refusal reason so a partial
+    // publication is never mistaken for a genuine mismatch.
+    const structurallyComplete = Boolean(stored)
+      && typeof stored === 'object'
+      && 'version' in stored
+      && 'snapshotId' in stored
+      && 'identity' in stored
       && isDirectory(lower);
+    if (!structurallyComplete) refuse('snapshot-publication-incomplete', `snapshot ${snapshotId} was published incompletely`);
+    const matches = stored.version === SNAPSHOT_VERSION
+      && stored.snapshotId === snapshotId
+      && canonicalJson(stored.identity) === canonicalJson(identity);
     if (!matches) refuse('snapshot-mismatch', `snapshot ${snapshotId} exists with a different identity`);
     return;
   }
-  mkdirSync(snapshotRoot, { recursive: true });
-  mkdirSync(lower, { recursive: true });
   // The frozen lower is produced from a staging input, never by archiving the
   // source commit straight into the final snapshot directory: a caller-
   // supplied input carries the prepared source tree at baseCommit plus the
   // prepared dependency output, and the default input stages the commit
   // archive first. Both are consumed through the same copy path, so prepared
-  // dependency output has a route into the frozen lower while the snapshot
-  // directory is still written directly (unchanged this run).
+  // dependency output has a route into the frozen lower. The complete lower
+  // plus its snapshot record are assembled in a temporary directory beside
+  // the final snapshot root (same filesystem) and moved into place with one
+  // rename, so a partially built snapshot is never visible under the final
+  // snapshots/<snapshotId> path. A leftover publication temporary directory
+  // from an interrupted run is discarded here, never adopted blindly as a
+  // valid snapshot.
+  rmSync(publishTmp, { recursive: true, force: true });
+  mkdirSync(snapshotDir, { recursive: true });
+  const publishLower = join(publishTmp, 'lower');
+  mkdirSync(publishLower, { recursive: true });
   const ownedStaging = staging ? null : mkdtempSync(join(tmpdir(), 'wave-lower-staging-'));
   try {
     const input = staging ?? { source: join(ownedStaging, 'source'), dependencies: join(ownedStaging, 'dependencies') };
@@ -496,13 +519,15 @@ async function ensureSnapshot({ snapshotRoot, snapshotId, lower, identity, sourc
       mkdirSync(input.dependencies, { recursive: true });
       await extractCommitTree({ source, baseCommit, destination: input.source });
     }
-    copyTreeInto(input.source, lower);
-    copyTreeInto(input.dependencies, lower);
+    copyTreeInto(input.source, publishLower);
+    copyTreeInto(input.dependencies, publishLower);
     writeFileSync(
-      join(snapshotRoot, SNAPSHOT_RECORD),
+      join(publishTmp, SNAPSHOT_RECORD),
       `${JSON.stringify({ version: SNAPSHOT_VERSION, snapshotId, identity }, null, 2)}\n`,
     );
+    renameSync(publishTmp, snapshotRoot);
   } finally {
+    rmSync(publishTmp, { recursive: true, force: true });
     if (ownedStaging) rmSync(ownedStaging, { recursive: true, force: true });
   }
 }
