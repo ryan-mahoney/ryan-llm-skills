@@ -6,9 +6,9 @@
 // failed attempt storage are retained across phase exit, and a later phase may
 // only re-claim the same upper after a positive drain.
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { isAbsolute, join, normalize } from 'node:path';
+import { basename, dirname, isAbsolute, join, normalize } from 'node:path';
 
 const LAUNCH_TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 const OPTION_KEYS = new Set(['token', 'lower', 'upper', 'work', 'merged', 'chdir', 'command', 'stat']);
@@ -63,21 +63,27 @@ export function retainLayer({ lower, upper, work, merged, gitDir = null, baseCom
   return Object.freeze({ lower, upper, work, merged, gitDir, baseCommit, snapshotId, upperId });
 }
 
-// Phase claims are keyed by the upper/work pair (the checkout identity), so at
-// most one phase can mount a given upper. Held claims refuse regardless of
-// coordinator liveness: liveness is never authority to mount, only a positive
-// drain (via endPhase) releases the claim for remount.
+// Phase claims are keyed by the canonical upper directory alone: every
+// reservation of one upper conflicts regardless of the supplied work
+// spelling, so at most one phase can mount a given upper (INV-2 / INV-6).
+// Held claims refuse regardless of coordinator liveness: liveness is never
+// authority to mount, only a positive drain (via endPhase) releases the claim
+// for remount. The recorded attempt binds the phase token to the canonical
+// work identity so a replay is recognized only for the complete ownership
+// identity (package, coordinator session/epoch/pid/start, token, work);
+// anything else is a refusal, never a fresh permit.
 export function createOverlayPhases({ ownership }) {
   async function startPhase({ packageId, upper, work, phaseToken, coordinator }) {
     requirePhaseToken(phaseToken);
+    const attempt = phaseAttemptBinding(phaseToken, work);
     const result = await ownership.reserveCheckout({
       packageId,
-      attempt: phaseToken,
-      checkout: { gitCommonDir: upper, worktreeGitDir: work },
+      attempt,
+      checkout: { gitCommonDir: upper, worktreeGitDir: upper },
       coordinator,
     });
     if (result.status === 'reserved') return { status: 'permitted', claim: result.claim };
-    if (result.status === 'held' && result.claim.attempt === phaseToken) {
+    if (result.status === 'held' && replayMatches(result.claim, { packageId, attempt, coordinator })) {
       return { status: 'replayed', claim: result.claim };
     }
     return { status: 'refused', reason: 'upper-held', claim: result.claim };
@@ -88,6 +94,31 @@ export function createOverlayPhases({ ownership }) {
   }
 
   return { startPhase, endPhase };
+}
+
+// The recorded attempt binds the phase token to the canonical work identity,
+// so the same upper with a different work directory is never mistaken for a
+// replay of the held claim while an aliased spelling of the same work is.
+function phaseAttemptBinding(phaseToken, work) {
+  if (!isAbsolutePath(work)) throw refusal('work-invalid', 'work must be an absolute path');
+  return `${phaseToken}+${canonicalIdentity(work)}`;
+}
+
+// Replay requires the complete ownership identity: package, attempt binding,
+// claim epoch and the full normalized coordinator identity must all match the
+// held claim. A held claim with any mismatch is upper-held (INV-2), never
+// replayed authority.
+function replayMatches(claim, { packageId, attempt, coordinator }) {
+  if (!claim) return false;
+  return (
+    claim.packageId === packageId &&
+    claim.attempt === attempt &&
+    claim.epoch === coordinator?.epoch &&
+    claim.coordinator?.session === coordinator?.session &&
+    claim.coordinator?.epoch === coordinator?.epoch &&
+    claim.coordinator?.pid === coordinator?.pid &&
+    claim.coordinator?.started_at === coordinator?.started_at
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -110,10 +141,32 @@ function inspectLayers({ lower, upper, work, merged, stat = statSync }) {
   for (const key of LAYER_KEYS) {
     const stats = statOrNull(stat, identities[key]);
     if (!stats) return failure('identity-missing', `${key} does not exist`);
+    if (typeof stats.isDirectory === 'function' && !stats.isDirectory()) {
+      return failure('identity-not-directory', `${key} must be a directory`);
+    }
     if (key === 'upper' || key === 'work') devices[key] = stats.dev;
   }
   if (devices.upper !== devices.work) {
     return failure('upper-work-filesystem-mismatch', 'upper and work must share one filesystem');
+  }
+  // Resolved filesystem identities (not spellings) decide exclusion: nested
+  // layers, symlink aliases of one another and non-directory entries are all
+  // refused, so no aliasing can produce two phase identities for one tree.
+  const resolved = {};
+  for (const key of LAYER_KEYS) resolved[key] = canonicalIdentity(identities[key]);
+  const resolvedSeen = new Set();
+  for (const key of LAYER_KEYS) {
+    if (resolvedSeen.has(resolved[key])) {
+      return failure('identity-not-distinct', `${key} resolves to a duplicate layer identity`);
+    }
+    resolvedSeen.add(resolved[key]);
+    for (const other of LAYER_KEYS) {
+      if (other === key) continue;
+      const prefix = resolved[other].endsWith('/') ? resolved[other] : `${resolved[other]}/`;
+      if (resolved[key].startsWith(prefix)) {
+        return failure('identity-nested', `${key} nests inside ${other}`);
+      }
+    }
   }
   return { ok: true, identities, devices };
 }
@@ -124,6 +177,14 @@ function inspectGitDir(gitDir, merged) {
   const candidate = normalize(gitDir);
   const prefix = merged.endsWith('/') ? merged : `${merged}/`;
   if (candidate === merged || candidate.startsWith(prefix)) {
+    return failure('git-inside-merged', 'gitDir must stay outside the merged tree');
+  }
+  // A private Git directory reached through any alias of merged is refused on
+  // resolved identity, not only on spelling.
+  const resolvedGit = canonicalIdentity(gitDir);
+  const resolvedMerged = canonicalIdentity(merged);
+  const resolvedPrefix = resolvedMerged.endsWith('/') ? resolvedMerged : `${resolvedMerged}/`;
+  if (resolvedGit === resolvedMerged || resolvedGit.startsWith(resolvedPrefix)) {
     return failure('git-inside-merged', 'gitDir must stay outside the merged tree');
   }
   return { ok: true, gitDir };
@@ -138,6 +199,25 @@ function statOrNull(stat, path) {
     return stat(path);
   } catch {
     return null;
+  }
+}
+
+// Mirrors ownership's canonicalPath: realpath the deepest existing ancestor
+// and re-append any not-yet-created suffix, so symlink aliases of one
+// directory share one filesystem identity.
+function canonicalIdentity(path) {
+  const suffix = [];
+  let current = path;
+  for (;;) {
+    try {
+      const resolved = realpathSync(current);
+      return suffix.length ? join(resolved, ...suffix.reverse()) : resolved;
+    } catch {
+      const base = dirname(current);
+      if (base === current) return normalize(path);
+      suffix.push(basename(current));
+      current = base;
+    }
   }
 }
 
@@ -207,37 +287,27 @@ export async function runCapabilityProbe({ runner, fixtureRoot } = {}) {
   return { boundary, fixtureDir: fixture.fixtureDir, phases, result };
 }
 
+// The probe result decides fallback before any attempt write (the explicit
+// pre-attempt-write boundary): only positively observed, enumerated
+// unavailability authorizes fallback. Failed probe execution, exhaustion, I/O
+// corruption, signals, missing or malformed results and unrecognized effects
+// stay blocked (INV-4). Both mount observations are validated and retained.
 export function interpretProbeResult({ spawnError = null, collect = null, verify = null } = {}) {
   if (spawnError && spawnError.code === 'ENOENT') {
     return capability('unavailable', 'bwrap-absent', PROBE_REMEDIES['bwrap-absent'], true);
   }
-  if (!collect || collect.exitCode !== 0) {
-    const stderr = typeof collect?.stderr === 'string' ? collect.stderr : '';
-    if (PROBE_OPTION_PATTERN.test(stderr)) {
-      return capability('unavailable', 'overlay-options-absent', PROBE_REMEDIES['overlay-options-absent'], true);
-    }
-    if (PROBE_PERMISSION_PATTERN.test(stderr) && PROBE_USERNS_PATTERN.test(stderr)) {
-      return capability('unavailable', 'userns-denied', PROBE_REMEDIES.userns, true);
-    }
-    if (PROBE_PERMISSION_PATTERN.test(stderr) && PROBE_MOUNT_PATTERN.test(stderr)) {
-      return capability('unavailable', 'mount-denied', PROBE_REMEDIES.userns, true);
-    }
-    return capability('blocked', 'unknown-effect', null, false);
-  }
+  if (probeExecutionFailed(collect)) return classifyProbeFailure(collect);
 
-  const collected = parseProbeJson(collect.stdout);
-  if (!hasProbeFields(collected, ['fstype', 'options', 'copyUp', 'deletion'])) {
-    return capability('blocked', 'corrupt-output', null, false);
-  }
-  if (!verify || verify.exitCode !== 0) {
-    return capability('unavailable', 'semantics-failed', PROBE_REMEDIES['semantics-failed'], true);
-  }
-
-  const verified = parseProbeJson(verify.stdout);
-  if (!hasProbeFields(verified, ['fstype', 'options', 'retainedWrite', 'retainedDeletion'])) {
-    return capability('blocked', 'corrupt-output', null, false);
-  }
+  const collected = readProbeRecord(collect.stdout, ['fstype', 'options', 'copyUp', 'deletion']);
+  if (!collected) return capability('blocked', 'corrupt-output', null, false);
   if (collected.fstype !== 'overlay') {
+    return capability('unavailable', 'filesystem-unsupported', PROBE_REMEDIES['filesystem-unsupported'], true);
+  }
+  if (probeExecutionFailed(verify)) return classifyProbeFailure(verify);
+
+  const verified = readProbeRecord(verify.stdout, ['fstype', 'options', 'retainedWrite', 'retainedDeletion']);
+  if (!verified) return capability('blocked', 'corrupt-output', null, false);
+  if (verified.fstype !== 'overlay') {
     return capability('unavailable', 'filesystem-unsupported', PROBE_REMEDIES['filesystem-unsupported'], true);
   }
   if (collected.copyUp !== true || collected.deletion !== true || verified.retainedWrite !== true || verified.retainedDeletion !== true) {
@@ -254,6 +324,8 @@ export function interpretProbeResult({ spawnError = null, collect = null, verify
       options: collected.options,
       copyUp: collected.copyUp,
       deletion: collected.deletion,
+      verifyFstype: verified.fstype,
+      verifyOptions: verified.options,
       retainedWrite: verified.retainedWrite,
       retainedDeletion: verified.retainedDeletion,
     },
@@ -272,7 +344,11 @@ const PROBE_REMEDIES = Object.freeze({
   'filesystem-unsupported': 'place retained overlay layers on a local filesystem supporting kernel OverlayFS',
 });
 
-const PROBE_OPTION_PATTERN = /unknown option|unrecognized option|--overlay/i;
+// Only a positively observed unsupported-option diagnostic counts as the
+// enumerated overlay-options-absent unavailability; a failure that merely
+// mentions --overlay (I/O errors, exhaustion, signals) is not a diagnostic
+// about absent options and must stay blocked.
+const PROBE_OPTION_PATTERN = /(?:unknown|unrecognized|invalid)[\s-]+option\b[^]*--overlay|--overlay[^]*(?:unknown|unrecognized|invalid)[\s-]+option\b/i;
 const PROBE_PERMISSION_PATTERN = /permission denied|operation not permitted/i;
 const PROBE_USERNS_PATTERN = /unshare|user.?namespace/i;
 const PROBE_MOUNT_PATTERN = /mount|overlay/i;
@@ -320,6 +396,7 @@ function defaultProbeRunner({ argv }) {
   if (result.error) throw result.error;
   return {
     exitCode: typeof result.status === 'number' ? result.status : 1,
+    signal: result.signal ?? null,
     stdout: typeof result.stdout === 'string' ? result.stdout : '',
     stderr: typeof result.stderr === 'string' ? result.stderr : '',
   };
@@ -327,7 +404,7 @@ function defaultProbeRunner({ argv }) {
 
 function failedPhase(error) {
   const detail = error && typeof error.message === 'string' ? error.message : String(error);
-  return { exitCode: 1, stdout: '', stderr: detail };
+  return { exitCode: 1, signal: null, stdout: '', stderr: detail };
 }
 
 function parseProbeJson(stdout) {
@@ -340,8 +417,44 @@ function parseProbeJson(stdout) {
   }
 }
 
-function hasProbeFields(value, fields) {
-  return value !== null && fields.every(field => Object.hasOwn(value, field));
+// A probe phase record is a real execution result only with exitCode 0 and no
+// terminating signal; anything else (a missing record included) is failed
+// execution, classified narrowly below.
+function probeExecutionFailed(record) {
+  return !record || record.signal != null || record.exitCode !== 0;
+}
+
+// Failed execution is never observed semantics. Only positively observed
+// diagnostics are enumerated unavailability: an absent-option diagnostic, a
+// permission denial tied to user namespaces or to mounting. Exhaustion, I/O
+// errors, signals and unrecognized effects stay blocked.
+function classifyProbeFailure(record) {
+  const stderr = record && typeof record.stderr === 'string' ? record.stderr : '';
+  if (PROBE_OPTION_PATTERN.test(stderr)) {
+    return capability('unavailable', 'overlay-options-absent', PROBE_REMEDIES['overlay-options-absent'], true);
+  }
+  if (PROBE_PERMISSION_PATTERN.test(stderr) && PROBE_USERNS_PATTERN.test(stderr)) {
+    return capability('unavailable', 'userns-denied', PROBE_REMEDIES.userns, true);
+  }
+  if (PROBE_PERMISSION_PATTERN.test(stderr) && PROBE_MOUNT_PATTERN.test(stderr)) {
+    return capability('unavailable', 'mount-denied', PROBE_REMEDIES.userns, true);
+  }
+  return capability('blocked', 'unknown-effect', null, false);
+}
+
+// One JSON observation line with every required field of the documented type:
+// non-empty strings for fstype/options and strict booleans for the semantic
+// flags. Missing, unparseable or mistyped observations are corruption.
+function readProbeRecord(stdout, fields) {
+  const parsed = parseProbeJson(stdout);
+  if (!parsed || !fields.every(field => Object.hasOwn(parsed, field))) return null;
+  if (typeof parsed.fstype !== 'string' || parsed.fstype.length === 0) return null;
+  if (typeof parsed.options !== 'string' || parsed.options.length === 0) return null;
+  for (const field of fields) {
+    if (field === 'fstype' || field === 'options') continue;
+    if (typeof parsed[field] !== 'boolean') return null;
+  }
+  return parsed;
 }
 
 function capability(status, reason, remedy, fallbackEligible) {
@@ -358,7 +471,12 @@ upper=$3
 
 # Field 1 after the " - " separator is the filesystem type and field 3 is the
 # mount's super options; only the line whose mount point ($5) is the merged
-# directory is read.
+# directory is read. The mount table path is an optional positional argument
+# (default /proc/self/mountinfo) so tests substitute only the kernel mount
+# boundary while every probe operation runs for real.
+mountinfo=/proc/self/mountinfo
+if [ "$#" -ge 4 ]; then mountinfo=$4; fi
+
 mount_field() {
   awk -v target="$merged" -v want="$1" '
     $5 == target {
@@ -367,7 +485,7 @@ mount_field() {
       if (count >= want) print parts[want]
       exit
     }
-  ' /proc/self/mountinfo
+  ' "$mountinfo"
 }
 
 fstype=$(mount_field 1)

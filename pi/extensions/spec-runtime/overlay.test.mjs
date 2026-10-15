@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -60,6 +60,53 @@ function assertRefusal(reason, options) {
       return true;
     },
   );
+}
+
+// The claim attempt binds the phase token to the canonical work identity; the
+// test computes it independently from the documented contract.
+function attemptBinding(token, work) {
+  return `${token}+${realpathSync(work)}`;
+}
+
+// Command-level probe runner: it executes the exact command argv handed to the
+// boundary (including the production probe script text) and substitutes only
+// the kernel mount boundary - a synthetic mountinfo line passed as the script's
+// fourth positional argument plus symlinked merged entries standing in for
+// kernel copy-up and whiteout behavior. Removing any probe operation from the
+// script breaks the emitted records and/or the independent filesystem oracle.
+function scriptProbeRunner({ calls = null, captured = null, betweenPhases = null, mountFstype = 'overlay' } = {}) {
+  return async ({ argv, phase }) => {
+    if (calls) calls.push({ argv, phase });
+    const overlaySrc = argv.indexOf('--overlay-src');
+    const overlayIndex = argv.indexOf('--overlay');
+    const dirs = {
+      lower: argv[overlaySrc + 1],
+      upper: argv[overlayIndex + 1],
+      work: argv[overlayIndex + 2],
+      merged: argv[overlayIndex + 3],
+    };
+    if (captured) Object.assign(captured, dirs);
+    const mountinfo = join(dirs.work, 'substituted-mountinfo');
+    if (phase === 'collect') {
+      writeFileSync(join(dirs.upper, 'wave-probe-copy-up.txt'), '');
+      writeFileSync(join(dirs.upper, 'wave-probe-delete.txt'), 'whiteout stand-in\n');
+      symlinkSync(join(dirs.upper, 'wave-probe-copy-up.txt'), join(dirs.merged, 'wave-probe-copy-up.txt'));
+      symlinkSync(join(dirs.lower, 'wave-probe-delete.txt'), join(dirs.merged, 'wave-probe-delete.txt'));
+      writeFileSync(
+        mountinfo,
+        `36 25 0:32 / ${dirs.merged} rw - ${mountFstype} ${mountFstype} rw,nosuid,nodev,redirect_dir=nofollow,uuid=on,userxattr\n`,
+      );
+    }
+    if (phase === 'verify' && betweenPhases) await betweenPhases(dirs);
+    const command = argv.slice(argv.indexOf('--') + 1).concat(mountinfo);
+    const result = spawnSync(command[0], command.slice(1), { encoding: 'utf8', shell: false });
+    return {
+      exitCode: typeof result.status === 'number' ? result.status : 1,
+      signal: result.signal ?? null,
+      stdout: typeof result.stdout === 'string' ? result.stdout : '',
+      stderr: typeof result.stderr === 'string' ? result.stderr : '',
+    };
+  };
 }
 
 test('wave overlay: fixed argv preserves host PIDs/network and enters the merged cwd', t => {
@@ -203,7 +250,7 @@ test('wave overlay: interrupted launch never clears retained work directories', 
   assert.equal(retry.status, 'refused', JSON.stringify(retry));
   assert.equal(retry.reason, 'upper-held');
   assert.equal(retry.claim.token, first.claim.token);
-  assert.equal(retry.claim.attempt, 'phase-interrupted-1');
+  assert.equal(retry.claim.attempt, attemptBinding('phase-interrupted-1', work));
 
   assert.equal(readFileSync(marker, 'utf8'), 'retained attempt\n');
   assert.equal(statSync(marker).mode & 0o777, 0o600);
@@ -246,7 +293,7 @@ test('wave overlay: a second phase cannot mount the same upper while the first i
   assert.equal(liveBlocked.status, 'refused', JSON.stringify(liveBlocked));
   assert.equal(liveBlocked.reason, 'upper-held');
   assert.equal(liveBlocked.claim.token, live.claim.token);
-  assert.equal(liveBlocked.claim.attempt, 'phase-live-1');
+  assert.equal(liveBlocked.claim.attempt, attemptBinding('phase-live-1', work));
 
   const unknownCoordinator = { session: 'overlay-unknown', epoch: 3, pid: process.pid, started_at: 'not-the-live-process-start' };
   const unknown = await startPhase({
@@ -268,7 +315,7 @@ test('wave overlay: a second phase cannot mount the same upper while the first i
   assert.equal(unknownBlocked.status, 'refused', JSON.stringify(unknownBlocked));
   assert.equal(unknownBlocked.reason, 'upper-held');
   assert.equal(unknownBlocked.claim.token, unknown.claim.token);
-  assert.equal(unknownBlocked.claim.attempt, 'phase-unknown-1');
+  assert.equal(unknownBlocked.claim.attempt, attemptBinding('phase-unknown-1', otherWork));
 });
 
 test('wave overlay: claim replay is idempotent and only positive drain permits retained remount', async t => {
@@ -419,11 +466,59 @@ test('wave overlay: capability parsing distinguishes enumerated unavailability f
     status: 'blocked', reason: 'corrupt-output', fallbackEligible: false, remedy: null, observed: null,
   });
 
-  checked('verify exited nonzero', interpretProbeResult({
+  checked('verify execution failure with unrecognized effect is blocked', interpretProbeResult({
     collect: phase(0, JSON.stringify(validCollect())),
     verify: phase(1, '', 'probe: remount verification failed'),
   }), {
-    status: 'unavailable', reason: 'semantics-failed', fallbackEligible: true, remedy: remedy.semantics,
+    status: 'blocked', reason: 'unknown-effect', fallbackEligible: false, remedy: null,
+  });
+
+  checked('verify resource exhaustion is blocked', interpretProbeResult({
+    collect: phase(0, JSON.stringify(validCollect())),
+    verify: phase(1, '', 'write failed after remount: No space left on device'),
+  }), {
+    status: 'blocked', reason: 'unknown-effect', fallbackEligible: false, remedy: null,
+  });
+
+  checked('collect I/O failure naming --overlay is blocked', interpretProbeResult({
+    collect: phase(1, '', 'write failed after --overlay setup: Input/output error'),
+    verify: phase(0, JSON.stringify(validVerify())),
+  }), {
+    status: 'blocked', reason: 'unknown-effect', fallbackEligible: false, remedy: null,
+  });
+
+  checked('signal termination is blocked', interpretProbeResult({
+    collect: { ...phase(0, JSON.stringify(validCollect())), signal: 'SIGSEGV' },
+    verify: phase(0, JSON.stringify(validVerify())),
+  }), {
+    status: 'blocked', reason: 'unknown-effect', fallbackEligible: false, remedy: null,
+  });
+
+  checked('missing verify result is blocked', interpretProbeResult({
+    collect: phase(0, JSON.stringify(validCollect())),
+  }), {
+    status: 'blocked', reason: 'unknown-effect', fallbackEligible: false, remedy: null,
+  });
+
+  checked('non-boolean observation fields are corrupt', interpretProbeResult({
+    collect: phase(0, JSON.stringify(validCollect({ copyUp: 'true' }))),
+    verify: phase(0, JSON.stringify(validVerify())),
+  }), {
+    status: 'blocked', reason: 'corrupt-output', fallbackEligible: false, remedy: null, observed: null,
+  });
+
+  checked('empty observation strings are corrupt', interpretProbeResult({
+    collect: phase(0, JSON.stringify(validCollect({ options: '' }))),
+    verify: phase(0, JSON.stringify(validVerify())),
+  }), {
+    status: 'blocked', reason: 'corrupt-output', fallbackEligible: false, remedy: null, observed: null,
+  });
+
+  checked('wrong remount filesystem is unsupported', interpretProbeResult({
+    collect: phase(0, JSON.stringify(validCollect())),
+    verify: phase(0, JSON.stringify(validVerify({ fstype: 'ext4' }))),
+  }), {
+    status: 'unavailable', reason: 'filesystem-unsupported', fallbackEligible: true, remedy: remedy.filesystem,
   });
 
   checked('filesystem unsupported', interpretProbeResult({
@@ -452,7 +547,11 @@ test('wave overlay: capability parsing distinguishes enumerated unavailability f
     verify: phase(0, JSON.stringify(validVerify())),
   }), {
     status: 'supported', reason: 'overlay-supported', fallbackEligible: false, remedy: null,
-    observed: { fstype: 'overlay', options, copyUp: true, deletion: true, retainedWrite: true, retainedDeletion: true },
+    observed: {
+      fstype: 'overlay', options, copyUp: true, deletion: true,
+      verifyFstype: 'overlay', verifyOptions: options,
+      retainedWrite: true, retainedDeletion: true,
+    },
   });
 
   assert.deepEqual([...seenEligible].sort(), [...eligibleReasons].sort(), 'exactly the enumerated pre-write reasons are fallback-eligible');
@@ -465,14 +564,11 @@ test('wave overlay: probe orchestration checks copy-up, deletion and remount and
   const collectPayload = { fstype: 'overlay', options, copyUp: true, deletion: true };
   const verifyPayload = { fstype: 'overlay', options, retainedWrite: true, retainedDeletion: true };
   const calls = [];
-  const runner = async ({ argv, phase }) => {
-    calls.push({ argv, phase });
-    return {
-      exitCode: 0,
-      stdout: JSON.stringify(phase === 'collect' ? collectPayload : verifyPayload),
-      stderr: '',
-    };
-  };
+  // The runner executes the production probe script (command-level
+  // assertions); only the kernel mount boundary is substituted. The observed
+  // records below therefore fail if copy-up, deletion, mount observation or
+  // retained verification operations are removed from the script.
+  const runner = scriptProbeRunner({ calls });
 
   const out = await runCapabilityProbe({ runner, fixtureRoot });
   t.after(() => rmSync(out.fixtureDir, { recursive: true, force: true }));
@@ -481,12 +577,14 @@ test('wave overlay: probe orchestration checks copy-up, deletion and remount and
   assert.equal(calls.length, 2, 'the runner is invoked exactly twice');
   assert.deepEqual(calls.map(call => call.phase), ['collect', 'verify']);
   assert.deepEqual(out.phases, {
-    collect: { exitCode: 0, stdout: JSON.stringify(collectPayload), stderr: '' },
-    verify: { exitCode: 0, stdout: JSON.stringify(verifyPayload), stderr: '' },
+    collect: { exitCode: 0, signal: null, stdout: `${JSON.stringify(collectPayload)}\n`, stderr: '' },
+    verify: { exitCode: 0, signal: null, stdout: `${JSON.stringify(verifyPayload)}\n`, stderr: '' },
   });
   assert.equal(out.result.status, 'supported');
   assert.deepEqual(out.result.observed, {
-    fstype: 'overlay', options, copyUp: true, deletion: true, retainedWrite: true, retainedDeletion: true,
+    fstype: 'overlay', options, copyUp: true, deletion: true,
+    verifyFstype: 'overlay', verifyOptions: options,
+    retainedWrite: true, retainedDeletion: true,
   });
 
   const fixedPrefix = ['bwrap', '--unshare-user', '--die-with-parent', '--bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--overlay-src'];
@@ -513,15 +611,15 @@ test('wave overlay: probe orchestration checks copy-up, deletion and remount and
   assert.ok(out.fixtureDir.startsWith(fixtureRoot), 'fixtureDir lives under the injected fixtureRoot');
 
   const failingCalls = [];
-  const failingRunner = async ({ phase }) => {
-    failingCalls.push(phase);
-    return phase === 'collect'
-      ? { exitCode: 0, stdout: JSON.stringify(collectPayload), stderr: '' }
-      : { exitCode: 0, stdout: JSON.stringify({ ...verifyPayload, retainedDeletion: false }), stderr: '' };
-  };
+  // The real script reports a failed retained deletion when the emulated
+  // merged view shows the deleted entry again after the phase exit.
+  const failingRunner = scriptProbeRunner({
+    calls: failingCalls,
+    betweenPhases: dirs => writeFileSync(join(dirs.merged, 'wave-probe-delete.txt'), 'regressed\n'),
+  });
   const failing = await runCapabilityProbe({ runner: failingRunner, fixtureRoot });
   t.after(() => rmSync(failing.fixtureDir, { recursive: true, force: true }));
-  assert.deepEqual(failingCalls, ['collect', 'verify']);
+  assert.deepEqual(failingCalls.map(call => call.phase), ['collect', 'verify']);
   assert.equal(failing.result.status, 'unavailable');
   assert.equal(failing.result.reason, 'semantics-failed');
   assert.equal(failing.result.fallbackEligible, true);
@@ -547,20 +645,17 @@ test('wave overlay: substituted OS responses are never labeled real kernel proof
   const collectPayload = { fstype: 'overlay', options, copyUp: true, deletion: true };
   const verifyPayload = { fstype: 'overlay', options, retainedWrite: true, retainedDeletion: true };
   const phases = [];
-  const runner = async ({ phase }) => {
-    phases.push(phase);
-    return {
-      exitCode: 0,
-      stdout: JSON.stringify(phase === 'collect' ? collectPayload : verifyPayload),
-      stderr: '',
-    };
-  };
+  const runner = scriptProbeRunner({ calls: phases });
 
   const out = await runCapabilityProbe({ runner, fixtureRoot });
   t.after(() => rmSync(out.fixtureDir, { recursive: true, force: true }));
 
   assert.equal(out.boundary, 'substituted');
-  assert.deepEqual(phases, ['collect', 'verify']);
+  assert.deepEqual(phases.map(call => call.phase), ['collect', 'verify']);
+  assert.deepEqual(out.phases, {
+    collect: { exitCode: 0, signal: null, stdout: `${JSON.stringify(collectPayload)}\n`, stderr: '' },
+    verify: { exitCode: 0, signal: null, stdout: `${JSON.stringify(verifyPayload)}\n`, stderr: '' },
+  });
   for (const [label, value] of [['probe output', out], ['interpreted result', out.result]]) {
     assert.equal(Object.hasOwn(value, 'kernelProof'), false, `${label} must not claim kernelProof`);
     assert.equal(Object.hasOwn(value, 'proof'), false, `${label} must not claim proof`);
@@ -572,11 +667,178 @@ test('wave overlay: substituted OS responses are never labeled real kernel proof
   assert.equal(out.result.status, 'supported');
   assert.equal(out.result.reason, 'overlay-supported');
   assert.deepEqual(out.result.observed, {
-    fstype: 'overlay', options, copyUp: true, deletion: true, retainedWrite: true, retainedDeletion: true,
+    fstype: 'overlay', options, copyUp: true, deletion: true,
+    verifyFstype: 'overlay', verifyOptions: options,
+    retainedWrite: true, retainedDeletion: true,
   });
   assert.deepEqual(
     out.result,
     interpretProbeResult({ collect: out.phases.collect, verify: out.phases.verify }),
     'the same substituted outputs always interpret the same way',
   );
+});
+
+test('wave overlay: one canonical upper permits one phase regardless of work spelling', async t => {
+  const dir = freshRoot(t, 'wave-overlay-upper-key');
+  const { upper, work } = makeLayerDirs(dir);
+  const otherWork = join(dir, 'other-work');
+  mkdirSync(otherWork);
+  const { startPhase, endPhase } = createOverlayPhases({ ownership: createOwnership({ registryRoot: join(dir, 'registry') }) });
+  const coordinator = liveCoordinator('overlay-upper-key');
+
+  const first = await startPhase({ packageId: 'pkg-upper-key', upper, work, phaseToken: 'phase-upper-key-1', coordinator });
+  assert.equal(first.status, 'permitted', JSON.stringify(first));
+
+  // The same canonical upper conflicts regardless of the supplied work.
+  const second = await startPhase({ packageId: 'pkg-upper-key', upper, work: otherWork, phaseToken: 'phase-upper-key-2', coordinator });
+  assert.equal(second.status, 'refused', JSON.stringify(second));
+  assert.equal(second.reason, 'upper-held');
+  assert.equal(second.claim.token, first.claim.token);
+
+  // A path alias of the same upper conflicts too.
+  const upperAlias = join(dir, 'upper-alias');
+  symlinkSync(upper, upperAlias);
+  const aliased = await startPhase({ packageId: 'pkg-upper-key', upper: upperAlias, work, phaseToken: 'phase-upper-key-3', coordinator });
+  assert.equal(aliased.status, 'refused', JSON.stringify(aliased));
+  assert.equal(aliased.reason, 'upper-held');
+  assert.equal(aliased.claim.token, first.claim.token);
+
+  // The recorded binding replays only for the same canonical work identity,
+  // including an aliased spelling of that work.
+  const workAlias = join(dir, 'work-alias');
+  symlinkSync(work, workAlias);
+  const replay = await startPhase({ packageId: 'pkg-upper-key', upper, work, phaseToken: 'phase-upper-key-1', coordinator });
+  assert.equal(replay.status, 'replayed', JSON.stringify(replay));
+  assert.equal(replay.claim.token, first.claim.token);
+  assert.equal(replay.claim.attempt, attemptBinding('phase-upper-key-1', work));
+  const aliasReplay = await startPhase({ packageId: 'pkg-upper-key', upper, work: workAlias, phaseToken: 'phase-upper-key-1', coordinator });
+  assert.equal(aliasReplay.status, 'replayed', JSON.stringify(aliasReplay));
+  assert.equal(aliasReplay.claim.token, first.claim.token);
+
+  // Only a positive drain frees the upper for a new phase.
+  const released = await endPhase({ token: first.claim.token, epoch: first.claim.epoch, drain: 'confirmed' });
+  assert.equal(released.status, 'released');
+  const next = await startPhase({ packageId: 'pkg-upper-key', upper, work: otherWork, phaseToken: 'phase-upper-key-2', coordinator });
+  assert.equal(next.status, 'permitted', JSON.stringify(next));
+});
+
+test('wave overlay: replay requires the complete claim identity', async t => {
+  const dir = freshRoot(t, 'wave-overlay-replay-identity');
+  const { upper, work } = makeLayerDirs(dir);
+  const { startPhase } = createOverlayPhases({ ownership: createOwnership({ registryRoot: join(dir, 'registry') }) });
+  const coordinator = liveCoordinator('overlay-replay-id');
+
+  const first = await startPhase({ packageId: 'pkg-replay', upper, work, phaseToken: 'phase-replay-1', coordinator });
+  assert.equal(first.status, 'permitted', JSON.stringify(first));
+
+  const otherPackage = await startPhase({ packageId: 'pkg-replay-other', upper, work, phaseToken: 'phase-replay-1', coordinator });
+  assert.equal(otherPackage.status, 'refused', JSON.stringify(otherPackage));
+  assert.equal(otherPackage.reason, 'upper-held');
+  assert.equal(otherPackage.claim.token, first.claim.token);
+
+  const otherSession = await startPhase({
+    packageId: 'pkg-replay', upper, work, phaseToken: 'phase-replay-1',
+    coordinator: { ...coordinator, session: 'overlay-replay-other' },
+  });
+  assert.equal(otherSession.status, 'refused', JSON.stringify(otherSession));
+  assert.equal(otherSession.reason, 'upper-held');
+  assert.equal(otherSession.claim.token, first.claim.token);
+
+  const otherEpoch = await startPhase({
+    packageId: 'pkg-replay', upper, work, phaseToken: 'phase-replay-1',
+    coordinator: { ...coordinator, epoch: coordinator.epoch + 1 },
+  });
+  assert.equal(otherEpoch.status, 'refused', JSON.stringify(otherEpoch));
+  assert.equal(otherEpoch.reason, 'upper-held');
+  assert.equal(otherEpoch.claim.token, first.claim.token);
+
+  const otherWorker = await startPhase({
+    packageId: 'pkg-replay', upper, work, phaseToken: 'phase-replay-1',
+    coordinator: { ...coordinator, pid: coordinator.pid + 1 },
+  });
+  assert.equal(otherWorker.status, 'refused', JSON.stringify(otherWorker));
+  assert.equal(otherWorker.reason, 'upper-held');
+
+  // The exact complete identity still replays idempotently.
+  const replay = await startPhase({ packageId: 'pkg-replay', upper, work, phaseToken: 'phase-replay-1', coordinator });
+  assert.equal(replay.status, 'replayed', JSON.stringify(replay));
+  assert.equal(replay.claim.token, first.claim.token);
+  assert.equal(replay.claim.attempt, first.claim.attempt);
+});
+
+test('wave overlay: resolved layer identities refuse nesting, aliases and non-directories', t => {
+  const dir = freshRoot(t, 'wave-overlay-layer-identity');
+  const { lower, upper, work, merged } = makeLayerDirs(dir);
+
+  // Ancestor/descendant layer identities are refused under any spelling.
+  const nested = validateLayers({ lower: dir, upper, work, merged });
+  assert.equal(nested.ok, false, JSON.stringify(nested));
+  assert.equal(nested.reason, 'identity-nested');
+
+  // A symlink alias of another layer resolves to a duplicate identity.
+  const lowerAlias = join(dir, 'lower-alias');
+  symlinkSync(upper, lowerAlias);
+  const aliased = validateLayers({ lower: lowerAlias, upper, work, merged });
+  assert.equal(aliased.ok, false, JSON.stringify(aliased));
+  assert.equal(aliased.reason, 'identity-not-distinct');
+
+  // A regular file is not a layer directory.
+  const file = join(dir, 'lower-file');
+  writeFileSync(file, 'not a directory\n');
+  const fileLayer = validateLayers({ lower: file, upper, work, merged });
+  assert.equal(fileLayer.ok, false, JSON.stringify(fileLayer));
+  assert.equal(fileLayer.reason, 'identity-not-directory');
+
+  // A private Git directory reached through an alias inside merged is refused.
+  const privateGit = join(merged, '.git');
+  mkdirSync(privateGit);
+  const gitAlias = join(dir, 'git-alias');
+  symlinkSync(privateGit, gitAlias);
+  const git = validateLayers({ lower, upper, work, merged, gitDir: gitAlias });
+  assert.equal(git.ok, false, JSON.stringify(git));
+  assert.equal(git.reason, 'git-inside-merged');
+
+  // Distinct symlinked layer roots remain valid, recorded by their spelling.
+  const mergedReal = join(dir, 'merged-real');
+  mkdirSync(mergedReal);
+  const mergedAlias = join(dir, 'merged-alias');
+  symlinkSync(mergedReal, mergedAlias);
+  const ok = validateLayers({ lower, upper, work, merged: mergedAlias });
+  assert.equal(ok.ok, true, JSON.stringify(ok));
+  assert.deepEqual(ok.identities, { lower, upper, work, merged: mergedAlias, gitDir: null });
+
+  // buildOverlayArgv refuses through the same identity pipeline.
+  assertRefusal('identity-nested', { token: 'phase-nested-1', lower: dir, upper, work, merged, command: ['true'] });
+});
+
+test('wave overlay: probe script operations are proven by an independent filesystem oracle', async t => {
+  const fixtureRoot = freshRoot(t, 'wave-overlay-script-oracle');
+  const options = 'rw,nosuid,nodev,redirect_dir=nofollow,uuid=on,userxattr';
+  const captured = {};
+  const out = await runCapabilityProbe({ runner: scriptProbeRunner({ captured }), fixtureRoot });
+  t.after(() => rmSync(out.fixtureDir, { recursive: true, force: true }));
+
+  assert.equal(out.boundary, 'substituted');
+  // Independent oracle: the filesystem itself, not the script's JSON, proves
+  // the copy-up, the whiteout and the retained lower/upper content.
+  assert.ok(readFileSync(join(captured.upper, 'wave-probe-copy-up.txt'), 'utf8').includes('wave-probe-modified'), 'copy-up content lives in the upper layer');
+  assert.ok(readFileSync(join(captured.lower, 'wave-probe-copy-up.txt'), 'utf8').includes('wave-probe-base'), 'lower source content is retained');
+  assert.throws(() => statSync(join(captured.merged, 'wave-probe-delete.txt')), error => error.code === 'ENOENT', 'the deleted entry is gone from the merged view');
+  assert.equal(statSync(join(captured.upper, 'wave-probe-delete.txt')).isFile(), true, 'the whiteout stand-in remains in the upper layer');
+  assert.equal(statSync(join(captured.lower, 'wave-probe-delete.txt')).isFile(), true, 'the deleted lower source is retained');
+
+  assert.equal(out.result.status, 'supported');
+  assert.deepEqual(out.result.observed, {
+    fstype: 'overlay', options, copyUp: true, deletion: true,
+    verifyFstype: 'overlay', verifyOptions: options,
+    retainedWrite: true, retainedDeletion: true,
+  });
+
+  // The substituted mount boundary is the only filesystem-type oracle: a
+  // non-OverlayFS mount observation is positively unsupported.
+  const ext4 = await runCapabilityProbe({ runner: scriptProbeRunner({ mountFstype: 'ext4' }), fixtureRoot });
+  t.after(() => rmSync(ext4.fixtureDir, { recursive: true, force: true }));
+  assert.equal(ext4.result.status, 'unavailable');
+  assert.equal(ext4.result.reason, 'filesystem-unsupported');
+  assert.equal(ext4.result.fallbackEligible, true);
 });
