@@ -17,8 +17,8 @@ metadata:
 Apply [Verification and Review](../../rules/verification-and-review.md) for focused-check scheduling
 and batched Jev verification/review-triage checkpoints.
 
-Own one assigned step from the prepared package. In Pi, use the retained owner/editor
-pair described in [Paired execution](references/paired-execution.md); the owner invokes
+Own one assigned step from the prepared package. In Pi, use a retained owner and a fresh editor for each
+assignment as described in [Paired execution](references/paired-execution.md); the owner invokes
 one synchronous `spec_editor` assignment at a time with the chosen implementation
 approach and bounded scope, assesses its result, then
 selects the next assignment. Use the paired reference's short assignment packet;
@@ -42,6 +42,18 @@ with the unresolved question and diagnostics (or `decision-required` for missing
 authority); the runtime completion event returns that handoff to the coordinator.
 Use a supervisor messaging tool only on harnesses that actually provide it.
 Do not launch a replacement owner yourself.
+
+## Context budget
+
+Use [context management](../../pi/extensions/context-budget/README.md). Keep the
+coordinator on progress, decisions, review outcomes and artifact pointers; leave source
+investigation and implementation history in the assigned worker. Read references only
+for the current stage. Give each fresh worker its relevant contracts, current decisions,
+source paths, preservation constraints and stop rule; never copy the whole parent chat.
+Use bounded searches and source ranges; keep full logs and reports in artifacts. Native
+compaction is a backstop and must preserve pending obligations and evidence revisions.
+An oversized-request stop is not permission to retry the same payload: recover from
+canonical artifacts in a fresh session, preserving checkout changes and writer locks.
 
 ## Routed Overseer Messages
 
@@ -403,7 +415,7 @@ material limitation without claiming the feature is complete.
 
 ## Completion Report
 
-Return outcome, learning path, commit, retained editor ID when paired, and unresolved
+Return outcome, learning path, commit, editor session paths when paired, and unresolved
 decisions or material gaps. The learning and evidence artifacts hold commands, results,
 changed files, and visual observations; do not repeat them in the handoff. End with no
 active editor so the coordinator can safely run fixes or assign the next step.

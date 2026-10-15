@@ -203,10 +203,11 @@ export async function metrics(packagePath, { session, allSessions = false, maxBy
     nodes.get(file).firstDispatch = Math.min(...selectedRuns.filter(r => r.parent_session === file).map(r => ms(r.started_at)).filter(Number.isFinite));
   }
   for (const record of selectedRuns) for (const role of ['owner', 'editor']) {
-    if (record[`${role}_session`] && Number.isFinite(ms(record.started_at)))
+    const files = role === 'editor' ? (record.editor_sessions ?? [record.editor_session]) : [record.owner_session];
+    for (const file of files) if (file && Number.isFinite(ms(record.started_at)))
       {
-        addNode(record[`${role}_session`], role, [[ms(record.started_at), Number.isFinite(ms(record.finished_at)) ? ms(record.finished_at) : now]]);
-        nodes.get(record[`${role}_session`]).checkout = record.checkout;
+        addNode(file, role, [[ms(record.started_at), Number.isFinite(ms(record.finished_at)) ? ms(record.finished_at) : now]]);
+        nodes.get(file).checkout = record.checkout;
       }
   }
   // Historical missing workers outside this selection are not coverage gaps here.

@@ -887,3 +887,23 @@ test('launch passes exact nested model and thinking separately and captures sele
     assertLease(record);
   } finally { await runtime.cancel(f.packagePath); }
 });
+
+test('editor packets use separate durable sessions while preserving checkout changes', async t => {
+  const f = await fixture(t, `setInterval(()=>{},1000)`);
+  const runtime = new Runtime(f.options); await runtime.start(f.input);
+  const record = loadRun(f.packagePath), sessions = [];
+  const source = join(record.checkout, 'pending.txt'); writeFileSync(source, 'accepted change');
+  const launchEditor = (run, role, prompt) => {
+    assert.equal(role, 'editor'); assert.match(prompt, /FRESH EDITOR/);
+    assert.equal(readFileSync(source, 'utf8'), 'accepted change');
+    sessions.push(run.editor_session);
+    return { child: {}, done: Promise.resolve({ result: 'done' }) };
+  };
+  for (const packet of ['First edit', 'Second edit']) {
+    const result = await runEditor(record, packet, undefined, launchEditor);
+    assert.equal(result.editor_session, sessions.at(-1));
+  }
+  assert.notEqual(sessions[0], sessions[1]);
+  assert.deepEqual(JSON.parse(readFileSync(join(f.packagePath, 'runtime/runs', `${record.id}-editor-sessions.json`), 'utf8')), sessions);
+  await runtime.cancel(f.packagePath, undefined, 1000);
+});

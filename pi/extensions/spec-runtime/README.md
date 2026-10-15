@@ -1,6 +1,6 @@
 # Pi spec step runtime
 
-This extension runs one prepared step with a retained owner/editor pair. `spec-run`
+This extension runs one prepared step with a retained owner and a fresh editor session per assignment. `spec-run`
 still chooses the step and owner tier, evaluates the result, requests independent
 review, and advances the package. No model discovery, baseline test suite, generated
 workflow script, or separate editor reconnaissance pass is part of startup.
@@ -63,8 +63,11 @@ step is a new assignment. Never use a new ID to bypass an active run.
 Optional `attempt_kind` records why an assignment exists: `implementation`,
 `verification-continuation`, `implementation-repair`, `review-repair`, or `launch-retry`.
 It does not authorize another attempt. Omitted legacy reasons remain unknown.
-New steps default to `session_scope: "step"`, separating retained owner/editor
-sessions by canonical step while retaining context across that step's retries. Explicit
+New steps default to `session_scope: "step"`, separating retained owner
+sessions by canonical step while retaining owner context across that step's retries.
+Every editor packet starts fresh; its actual transcript path is returned and appended
+to `runtime/runs/<run-id>-editor-sessions.json`. The legacy `editor_session` remains
+a directory anchor. Observation metrics include all recorded editor sessions. Explicit
 `"package"` preserves cross-step reuse. Supply a concise current dependency handoff;
 existing attempt receipts and active sessions retain their recorded scope. A new retry
 ID on the same step inherits its latest recorded scope when omitted. Changing

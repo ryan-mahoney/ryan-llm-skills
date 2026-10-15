@@ -16,6 +16,7 @@ import { registerRepositorySearch } from './search.mjs';
 import { createSentinelControl } from './sentinel-control.mjs';
 import { installProgressContext, recordCheckpoint, refreshProgress } from './completion.mjs';
 import { metrics, formatMetrics } from './metrics.mjs';
+import { installContextBudget } from '../context-budget/policy.mjs';
 
 const result = (value: unknown, isError = false) => ({ content: [{ type: 'text', text: JSON.stringify(value) }], details: value, isError });
 const optional = (description: string) => Type.Optional(Type.String({ description }));
@@ -92,6 +93,7 @@ function realpathStep(step: string): string {
 }
 
 export default function (pi: any) {
+  installContextBudget(pi);
   const role = process.env.SPEC_RUNTIME_ROLE;
   if (role) {
     const record = JSON.parse(readFileSync(process.env.SPEC_RUNTIME_RECORD!, 'utf8'));
@@ -164,7 +166,7 @@ export default function (pi: any) {
           try { const reply = await runVerification(record, args.command, args.timeout, signal, args.server); return result(reply, Boolean(reply.error) || reply.exit_code !== 0); }
           catch (error: any) { return result({ error: error.message, receipt_id: error.receipt_id }, true); }
         } });
-      pi.registerTool({ name: 'spec_editor', label: 'Spec editor', description: 'Apply a bounded transformation whose behavior and architectural approach the owner has chosen; let the editor choose local implementation details. Send a Change/Edits/Preserve/Return packet with named symbols and concrete operations. The owner reads/searches source directly; reserve facts-only requests for a blocking fact unavailable through those tools. Return a compact result and artifact paths. The editor does not run verification; the owner uses spec_verify after the return. Do not delegate whole-step design or open-ended repair. Assess the return before the next assignment; commit is separate. No polling.',
+      pi.registerTool({ name: 'spec_editor', label: 'Spec editor', description: 'Start a fresh editor session for this packet; include current decisions, paths and preservation constraints without relying on prior editor chat. Apply a bounded transformation whose behavior and architectural approach the owner has chosen; let the editor choose local implementation details. Send a Change/Edits/Preserve/Return packet with named symbols and concrete operations. The owner reads/searches source directly; reserve facts-only requests for a blocking fact unavailable through those tools. Return a compact result and artifact paths. The editor does not run verification; the owner uses spec_verify after the return. Do not delegate whole-step design or open-ended repair. Assess the return before the next assignment; commit is separate. No polling.',
         parameters: Type.Object({ assignment: Type.String() }),
         async execute(_id: string, args: any, signal: AbortSignal) {
           try { const reply = await communication.beginEditor(() => runEditor(record, args.assignment, signal), signal); return result(reply, Boolean(reply.error)); }
@@ -661,7 +663,7 @@ export default function (pi: any) {
     diagnosisController = null;
     await Promise.allSettled([...runtime.active.values()].map(({ record }: any) => runtime.cancel(record.package, record.id)));
   });
-  pi.registerTool({ name: 'spec_dispatch', label: 'Spec step runtime', description: 'Use startup to enter a prepared package in one call: first-step selection, recorded difficulty routing, worktree setup and dispatch; existing progress returns a resume obligation without replay. Start launches an explicit prepared spec step with an owner and retained editor. Creates/reuses the worktree of the target repository named by the step (spec-steps.json `repository`; required with several targets), refuses a package whose previous run still has a live coordinator, and delivers a completion event. Repeated assignment IDs are idempotent. Status is for explicit recovery, never polling. Cancellation returns only after confirmed process-group termination.',
+  pi.registerTool({ name: 'spec_dispatch', label: 'Spec step runtime', description: 'Use startup to enter a prepared package in one call: first-step selection, recorded difficulty routing, worktree setup and dispatch; existing progress returns a resume obligation without replay. Start launches an explicit prepared spec step with a retained owner and fresh editor per assignment. Creates/reuses the worktree of the target repository named by the step (spec-steps.json `repository`; required with several targets), refuses a package whose previous run still has a live coordinator, and delivers a completion event. Repeated assignment IDs are idempotent. Status is for explicit recovery, never polling. Cancellation returns only after confirmed process-group termination.',
     parameters: Type.Object({ action: Type.Union([Type.Literal('startup'), Type.Literal('start'), Type.Literal('status'), Type.Literal('cancel')]), package: Type.String({ description: 'The spec package (a `workspace/slug` ref or its folder)' }),
       strong_owner_model: optional('Optional STRONG_OWNER; startup routes prepared hard steps here'), owner_override: optional('Explicit owner for the selected step; takes precedence over owner_model in start and startup, including tier routing'),
       step: optional('Absolute canonical prepared subspec path; required for start'), owner_model: optional('provider/model[:thinking]; required unless owner_override is supplied'), editor_model: optional('provider/model[:thinking]; required for start'), scout_model: optional('SCOUT_AGENT selector as provider/model[:thinking]; default openai-codex/gpt-6-luna:low'),

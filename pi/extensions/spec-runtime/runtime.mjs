@@ -276,7 +276,8 @@ export function environmentFacts(checkout, primary) {
     next: 'Resolve missing dependencies from these paths or repository setup instructions. Existence is not compatibility or permission to share writable build output. Do not search the filesystem root.' };
 }
 
-// Each assignment is a fresh native print process using the same retained Pi session file.
+// Owners retain step state. Each editor packet has its own native session; its
+// questions continue in that same process, never in a competing writer.
 // Discovery stays disabled: no goal continuation, subagent fanout, or unrelated extension tools.
 export function launch(record, role, prompt, options = {}) {
   const session = record[`${role}_session`];
@@ -426,7 +427,7 @@ export class Runtime {
     atomic(join(this.indexDir, `${id}.json`), { run_id: id, package: config.package, package_ref: config.package_ref, manifest: join(runtimeDir, 'runs', `${id}.json`), parent_session: parentSession });
     let task;
     try {
-      const prompt = `Implement this prepared step as its architect/owner using spec_editor.\nPACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${targetFacts(record)}${currentHandoff(record)}Read the card and required policy. Choose the implementation approach yourself, then send a short Change/Edits/Preserve/Return packet for a bounded transformation. Name affected symbols, the chosen approach and preservation constraints; let the editor choose local implementation details and batch related edits. The editor does not run tests, compile/lint checks or other executable verification. After it returns, use spec_verify for necessary focused checks and diagnose failures before assigning bounded corrections. Do not check every packet automatically; reuse valid evidence. Read/search missing source facts directly. The editor normally reads and edits in one assignment; reserve facts-only requests for a specific blocking fact unavailable through your tools. Request compact results with artifact paths, not source inventories. Do not delegate architecture, whole-step restoration, or an entire acceptance suite with open-ended repairs. Reuse retained context. Assess each returned diff/result before the next packet; commit is a separate assignment after acceptance of the completed changes and required evidence. Use spec_scout only for a bounded discovery gap worth delegating; direct reads remain the default. Do not discover models, run startup suites, poll, or start other agents outside that scout tool. The runtime retains both sessions. Before ending, call spec_complete with decisions, introduced symbols, gaps and step-owned evidence assessments. It writes the canonical learning from verification receipts; an evidence log is not a learning. Commit via the editor first when complete. Missing handoffs remain unfinished obligations. This owner assignment ends after this step; independent review belongs to the coordinator.\n${input.instructions || ''}`;
+      const prompt = `Implement this prepared step as its architect/owner using spec_editor.\nPACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${targetFacts(record)}${currentHandoff(record)}Read the card and required policy. Choose the implementation approach yourself, then send a short Change/Edits/Preserve/Return packet for a bounded transformation. Name affected symbols, the chosen approach and preservation constraints; let the editor choose local implementation details and batch related edits. The editor does not run tests, compile/lint checks or other executable verification. After it returns, use spec_verify for necessary focused checks and diagnose failures before assigning bounded corrections. Do not check every packet automatically; reuse valid evidence. Read/search missing source facts directly. The editor normally reads and edits in one assignment; reserve facts-only requests for a specific blocking fact unavailable through your tools. Request compact results with artifact paths, not source inventories. Do not delegate architecture, whole-step restoration, or an entire acceptance suite with open-ended repairs. Keep owner context bounded. Every editor call starts a fresh session: include the chosen decisions, relevant files and preservation constraints in each packet; never refer to prior chat. Assess each returned diff/result before the next packet; commit is a separate assignment after acceptance of the completed changes and required evidence. Use spec_scout only for a bounded discovery gap worth delegating; direct reads remain the default. Do not discover models, run startup suites, poll, or start other agents outside that scout tool. The runtime retains the owner session and records each fresh editor session. Before ending, call spec_complete with decisions, introduced symbols, gaps and step-owned evidence assessments. It writes the canonical learning from verification receipts; an evidence log is not a learning. Commit via the editor first when complete. Missing handoffs remain unfinished obligations. This owner assignment ends after this step; independent review belongs to the coordinator.\n${input.instructions || ''}`;
       task = this.launchProcess(record, 'owner', `${prompt}\nEnvironment paths (observations, not setup approval): ${JSON.stringify(record.environment)}`, { onEvent: this.onWorkerEvent });
     }
     catch (error) { record.state = 'failed'; record.finished_at = timestamp(); record.error = error.message; save(record); throw error; }
@@ -511,8 +512,16 @@ export async function runEditor(record, assignment, signal, launchProcess = laun
   let task;
   try {
     invalidateCompletion(record);
-    task = launchProcess(record, 'editor', `PACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${targetFacts(record)}${assignment}`);
-    event(record, 'editor_started', { pid: task.child.pid, editor_session: record.editor_session });
+    const session = join(dirname(record.editor_session), 'editors', `${randomUUID()}.jsonl`);
+    mkdirSync(dirname(session), { recursive: true });
+    // A separate receipt avoids stale owner/coordinator manifest writes losing
+    // invocation history. Keep the legacy editor_session as a directory anchor.
+    const sessionsFile = join(record.package, 'runtime/runs', `${record.id}-editor-sessions.json`);
+    const sessions = existsSync(sessionsFile) ? read(sessionsFile) : [];
+    sessions.push(session);
+    atomic(sessionsFile, sessions);
+    task = launchProcess({ ...record, editor_session: session }, 'editor', `PACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${targetFacts(record)}FRESH EDITOR: This packet is your complete assignment, not a continuation of prior editor chat. Preserve existing working-tree changes. Read the relevant card contracts and current named source; ask the owner for a missing decision. Do not repeat prior work or verification.\n${assignment}`);
+    event(record, 'editor_started', { pid: task.child.pid, editor_session: session });
     let stopping;
     let reportUnconfirmed;
     const unconfirmed = new Promise(resolveFailure => { reportUnconfirmed = resolveFailure; });
@@ -549,7 +558,7 @@ export async function runEditor(record, assignment, signal, launchProcess = laun
       event(record, 'editor_configuration_failed', failure);
     }
     event(record, 'editor_finished', { state: result.error ? 'failed' : 'completed', error: result.error });
-    return result;
+    return { ...result, editor_session: session };
   } finally { if (!task || !activeGroups(record).some(group => group.role !== 'owner')) rmSync(editorLock, { recursive: true, force: true }); }
 }
 

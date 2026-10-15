@@ -256,22 +256,28 @@ export async function discoverPackage(packagePath, options = {}) {
     let record;
     try { record = JSON.parse(await readFile(path.join(runtime, 'runs', file), 'utf8')); }
     catch { index.errors.push({ path: path.join(runtime, 'runs', file), code: 'INVALID_RUN_RECORD' }); continue; }
+    if (!record || typeof record.id !== 'string') continue; // Ignore sidecar receipts.
     const safe = {};
     for (const key of ['id', 'assignment_id', 'step', 'checkout', 'owner_model', 'editor_model', 'parent_session', 'owner_session', 'editor_session', 'state', 'pid', 'started_at', 'finished_at', 'dispatch_requested_at']) {
       if (typeof record[key] === 'string' || typeof record[key] === 'number') safe[key] = record[key];
     }
+    try {
+      const sessions = JSON.parse(await readFile(path.join(runtime, 'runs', `${record.id}-editor-sessions.json`), 'utf8'));
+      if (!Array.isArray(sessions) || sessions.some(file => typeof file !== 'string')) throw new Error('Invalid editor sessions');
+      safe.editor_sessions = sessions;
+    } catch (error) { if (error.code !== 'ENOENT') index.errors.push({ path: file, code: 'INVALID_EDITOR_SESSIONS' }); }
     records.push(safe);
-    for (const key of ['parent_session', 'owner_session', 'editor_session']) {
-      const filePath = record[key];
+    for (const filePath of [record.parent_session, record.owner_session, ...(safe.editor_sessions ?? [record.editor_session])]) {
       if (!filePath || typeof filePath !== 'string') continue;
       if (!byFile.has(filePath)) {
         try { const item = await header(filePath); if (item) { byFile.set(filePath, item); index.sessions.push(item); } }
         catch (error) { index.errors.push({ path: filePath, code: error.code }); }
       }
     }
-    for (const [childKey, parentKey] of [['owner_session', 'parent_session'], ['editor_session', 'owner_session']]) {
-      const child = byFile.get(record[childKey]);
-      const parent = byFile.get(record[parentKey]);
+    for (const [childFile, parentFile] of [[record.owner_session, record.parent_session],
+      ...(safe.editor_sessions ?? [record.editor_session]).map(file => [file, record.owner_session])]) {
+      const child = byFile.get(childFile);
+      const parent = byFile.get(parentFile);
       if (child && parent && child !== parent) { child.parent_id = parent.id; child.parent_file = parent.file; }
     }
   }

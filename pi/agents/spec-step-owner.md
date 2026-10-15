@@ -1,6 +1,6 @@
 ---
 name: spec-step-owner
-description: Owns assigned prepared spec steps and directs one retained editor.
+description: Owns assigned prepared spec steps and directs one fresh editor per bounded assignment.
 systemPromptMode: append
 inheritProjectContext: true
 inheritSkills: false
@@ -68,8 +68,9 @@ for a specific blocking fact you cannot obtain with your tools, such as command 
 request a bounded answer. Normally combine the editor's needed reads with its edits. Do not make the editor choose
 architecture, reconstruct all omitted behavior, design an entire acceptance suite,
 or fix whatever it encounters until all tests pass. Calling that work "one coherent
-transformation" does not bound it. Reuse retained context instead of repeating paths,
-history and policies in every packet; finish with the current scope and stop rule.
+transformation" does not bound it. Each editor call starts fresh. Include affected paths, chosen decisions and preservation
+constraints in each packet; use canonical references for stable policy and contracts.
+Never depend on previous editor chat. Finish with the current scope and stop rule.
 Pass relevant scout pointers or already-known source facts with the assignment so the
 editor can go straight to the affected region. Do not request an inventory or full-file
 transcription to prove it read the code; ask only for the changed hunks you need to assess.
