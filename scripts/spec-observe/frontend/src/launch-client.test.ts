@@ -347,3 +347,95 @@ test('suggestion sources follow the owning binding and never retarget a thread d
     params: { workspace_id: 'ws-2' },
   });
 });
+
+test('explicit model pair reaches direct, thread and package preview/launch bodies', async (t) => {
+  const MODEL = { provider: 'deepseek', model: 'deepseek-v4-pro' };
+  // Direct context with explicit model
+  const directCalls = scopeFetch(t, [
+    jsonResponse(200, { record: { assignment_id: ASSIGNMENT_ID }, contractDigest: DIGEST }),
+    jsonResponse(200, { assignment: { assignment_id: ASSIGNMENT_ID }, observation: { assignment_id: ASSIGNMENT_ID } }),
+  ]);
+  const directCtx: LaunchContext = { ws: 'ws-2', target: 'repo-2', model: MODEL } as LaunchContext;
+  await previewLaunchAssignment(directCtx, { requestId: REQUEST_ID, assignmentId: ASSIGNMENT_ID }, TOKEN);
+  await submitLaunchAssignment(directCtx, { requestId: REQUEST_ID, assignmentId: ASSIGNMENT_ID, expectedDigest: DIGEST }, TOKEN);
+  const [directPreview, directLaunch] = directCalls;
+  assert.equal('provider' in directPreview.body, true);
+  assert.equal(directPreview.body.provider, 'deepseek');
+  assert.equal('model' in directPreview.body, true);
+  assert.equal(directPreview.body.model, 'deepseek-v4-pro');
+  assert.equal(directLaunch.body.provider, 'deepseek');
+  assert.equal(directLaunch.body.model, 'deepseek-v4-pro');
+
+  // Direct+package context with explicit model (no /api/workspace GET happens)
+  const directPkgCalls = scopeFetch(t, [
+    jsonResponse(200, {}),
+    jsonResponse(200, { record: { assignment_id: ASSIGNMENT_ID }, contractDigest: DIGEST }),
+    jsonResponse(200, { assignment: { assignment_id: ASSIGNMENT_ID }, observation: { assignment_id: ASSIGNMENT_ID } }),
+  ]);
+  const directPkgCtx: LaunchContext = { ws: 'ws-2', target: 'repo-2', package: '/storage/proj/specs/pkg', model: MODEL } as LaunchContext;
+  await previewLaunchAssignment(directPkgCtx, { requestId: REQUEST_ID, assignmentId: ASSIGNMENT_ID }, TOKEN);
+  await submitLaunchAssignment(directPkgCtx, { requestId: REQUEST_ID, assignmentId: ASSIGNMENT_ID, expectedDigest: DIGEST }, TOKEN);
+  const [prepare, directPkgPreview, directPkgLaunch] = directPkgCalls;
+  assert.equal(prepare.url, '/api/dispatch/prepare-spec-target');
+  assert.deepEqual(prepare.body, { workspace_id: 'ws-2', spec_package: '/storage/proj/specs/pkg', repository_id: 'repo-2' });
+  assert.equal(directPkgPreview.body.provider, 'deepseek');
+  assert.equal(directPkgPreview.body.model, 'deepseek-v4-pro');
+  assert.equal(directPkgPreview.body.spec_package, '/storage/proj/specs/pkg');
+  assert.equal(directPkgLaunch.body.provider, 'deepseek');
+  assert.equal(directPkgLaunch.body.model, 'deepseek-v4-pro');
+
+  // Thread context with explicit model
+  const threadCalls = scopeFetch(t, [
+    jsonResponse(200, { record: { assignment_id: ASSIGNMENT_ID }, contractDigest: DIGEST }),
+    jsonResponse(200, { assignment: { assignment_id: ASSIGNMENT_ID }, observation: { assignment_id: ASSIGNMENT_ID } }),
+  ]);
+  const threadCtx: LaunchContext = { ws: 'ws-1', thread: 'thread-1', model: MODEL } as LaunchContext;
+  await previewLaunchAssignment(threadCtx, { requestId: REQUEST_ID, assignmentId: ASSIGNMENT_ID }, TOKEN);
+  await submitLaunchAssignment(threadCtx, { requestId: REQUEST_ID, assignmentId: ASSIGNMENT_ID, expectedDigest: DIGEST }, TOKEN);
+  const [threadPreview, threadLaunch] = threadCalls;
+  assert.equal(threadPreview.body.provider, 'deepseek');
+  assert.equal(threadPreview.body.model, 'deepseek-v4-pro');
+  assert.equal(threadLaunch.body.provider, 'deepseek');
+  assert.equal(threadLaunch.body.model, 'deepseek-v4-pro');
+
+  // saveLaunchBrief bodies never carry provider or model
+  const saveCalls = scopeFetch(t, [
+    jsonResponse(200, { brief: 'briefs/req-1.md' }),
+    jsonResponse(200, { brief: 'briefs/req-2.md' }),
+    jsonResponse(200, { brief: 'briefs/req-3.md' }),
+  ]);
+  await saveLaunchBrief(directCtx, REQUEST_ID, { title: 'T', content: 'C', references: [] }, TOKEN);
+  await saveLaunchBrief(directPkgCtx, REQUEST_ID, { title: 'T', content: 'C', references: [] }, TOKEN);
+  await saveLaunchBrief(threadCtx, REQUEST_ID, { title: 'T', content: 'C', references: [] }, TOKEN);
+  assert.equal('provider' in saveCalls[0].body, false);
+  assert.equal('model' in saveCalls[0].body, false);
+});
+
+test('context without model produces today\'s body shape (no provider/model fields)', async (t) => {
+  const noModelCtx: LaunchContext = { ws: 'ws-2', target: 'repo-2' };
+  const threadNoModelCtx: LaunchContext = { ws: 'ws-1', thread: 'thread-1' };
+
+  // Direct preview without model
+  const directCalls = scopeFetch(t, [jsonResponse(200, { record: { assignment_id: ASSIGNMENT_ID }, contractDigest: DIGEST })]);
+  await previewLaunchAssignment(noModelCtx, { requestId: REQUEST_ID, assignmentId: ASSIGNMENT_ID }, TOKEN);
+  assert.equal('provider' in directCalls[0].body, false);
+  assert.equal('model' in directCalls[0].body, false);
+
+  // Direct launch without model
+  const directLaunchCalls = scopeFetch(t, [jsonResponse(200, { assignment: { assignment_id: ASSIGNMENT_ID }, observation: { assignment_id: ASSIGNMENT_ID } })]);
+  await submitLaunchAssignment(noModelCtx, { requestId: REQUEST_ID, assignmentId: ASSIGNMENT_ID, expectedDigest: DIGEST }, TOKEN);
+  assert.equal('provider' in directLaunchCalls[0].body, false);
+  assert.equal('model' in directLaunchCalls[0].body, false);
+
+  // Thread preview without model
+  const threadCalls = scopeFetch(t, [jsonResponse(200, { record: { assignment_id: ASSIGNMENT_ID }, contractDigest: DIGEST })]);
+  await previewLaunchAssignment(threadNoModelCtx, { requestId: REQUEST_ID, assignmentId: ASSIGNMENT_ID }, TOKEN);
+  assert.equal('provider' in threadCalls[0].body, false);
+  assert.equal('model' in threadCalls[0].body, false);
+
+  // Thread launch without model
+  const threadLaunchCalls = scopeFetch(t, [jsonResponse(200, { assignment: { assignment_id: ASSIGNMENT_ID }, observation: { assignment_id: ASSIGNMENT_ID } })]);
+  await submitLaunchAssignment(threadNoModelCtx, { requestId: REQUEST_ID, assignmentId: ASSIGNMENT_ID, expectedDigest: DIGEST }, TOKEN);
+  assert.equal('provider' in threadLaunchCalls[0].body, false);
+  assert.equal('model' in threadLaunchCalls[0].body, false);
+});

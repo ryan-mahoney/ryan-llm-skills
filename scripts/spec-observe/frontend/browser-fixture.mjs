@@ -3,9 +3,11 @@ import {createServer} from 'node:http';
 import {mkdtemp,realpath,mkdir,readFile,writeFile,rm,rename,access} from 'node:fs/promises';
 import {tmpdir,hostname} from 'node:os';
 import {join} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
 import {execFileSync,spawn} from 'node:child_process';
 import {createDashboardServer} from '../dashboard.mjs';
+import {parseModelCatalog} from '../model-routes.mjs';
 import {collectWorkspace} from '../sentinel.mjs';
 import {createDiscussionService} from '../../workspaces/discussion.mjs';
 import {createReferenceCatalog} from '../../workspaces/references.mjs';
@@ -17,13 +19,25 @@ const plannedLaunch=process.env.SENTINEL_PLANNED_LAUNCH==='1';
 const specsReadiness=process.env.SENTINEL_SPECS_READINESS==='1';
 const epicPlanning=process.env.SENTINEL_EPIC_PLANNING==='1';
 const filesFixture=process.env.SENTINEL_REPOSITORY_FILES==='1';
+const modelsFixture=process.env.SENTINEL_MODELS==='1';
 const handoffIntegration=process.env.SENTINEL_HANDOFF_INTEGRATION==='1'&&(plannedLaunch||specsReadiness||epicPlanning);
-const root=await realpath(await mkdtemp(join(tmpdir(),'sentinel-solid-browser-')));
+const root=await realpath(process.env.SENTINEL_FIXTURE_ROOT??await mkdtemp(join(tmpdir(),'sentinel-solid-browser-')));
 // Real final-integration resolution reads HOME and PATH: isolate both to this
 // fixture root so the real catalog sees root/.agents skills and the fake pi
 // file, never the live operator home.
-if(handoffIntegration){process.env.HOME=root;process.env.PATH=`${root}:${process.env.PATH??''}`;}
+if(handoffIntegration||modelsFixture){process.env.HOME=root;process.env.PATH=`${root}:${process.env.PATH??''}`;}
 const storage=join(root,'storage');await setupStorage(storage);
+// Models fixture (gated by SENTINEL_MODELS=1)
+let modelsReadAt=Date.now();
+let modelsCatalogFail=false;
+let observerMode=false;
+let modelsPreferencePosts=0;
+let modelsCatalogDrop='';
+const modelsPreferredSeed=`{"version":1,"preferred":[{"provider":"pi-claude-cli","model":"claude-sonnet-5-5"},{"provider":"pi-claude-cli","model":"claude-haiku-5-5"},{"provider":"zai","model":"glm-5.3"},{"provider":"deepseek","model":"deepseek-v4-pro"},{"provider":"kimi-coding","model":"k3"},{"provider":"openai-codex","model":"gpt-6-sol"},{"provider":"old-provider","model":"retired-model"}],"updated_at":"2026-10-14T14:31:00.000Z"}`;
+if(modelsFixture){
+ const prefDir=join(root,'agent','spec-sentinel');await mkdir(prefDir,{recursive:true});
+ await writeFile(join(prefDir,'preferred-models.json'),modelsPreferredSeed);
+}
 const workspace=await createWorkspace(storage,{id:'fixture',name:'Browser fixture'});
 await createWorkspace(storage,{id:'other',name:'Other workspace'});
 const mismatchDirectory=await createWorkspace(storage,{id:'physical',name:'Physical directory'});
@@ -32,6 +46,49 @@ await writeFile(join(mismatchDirectory.directory,'kit.yaml'),'version: 1\nid: al
 await writeFile(join(neighborDirectory.directory,'kit.yaml'),'version: 1\nid: physical\nname: Physical neighbor\nrepositories: []\n');
 const checkout=join(root,'checkout');await mkdir(checkout,{recursive:true});execFileSync('git',['init','--quiet',checkout],{stdio:'ignore'});
 const secondCheckout=join(root,'checkout-two');if(plannedLaunch){await mkdir(secondCheckout,{recursive:true});execFileSync('git',['init','--quiet',secondCheckout],{stdio:'ignore'});}
+// Models fixture catalog building
+const buildTable=(rows)=>{
+ const header=['provider','model','context','max-out','thinking','images'];
+ const widths=header.map((h,i)=>Math.max(h.length,...rows.map(r=>String(r[i]??'').length)));
+ return [header.map((h,i)=>h.padEnd(widths[i])).join('  '),...rows.map(r=>r.map((c,i)=>String(c??'').padEnd(widths[i])).join('  '))].join('\n');
+};
+const modelsFixtureRows=[
+ ['pi-claude-cli','claude-sonnet-5-5','1M','128K','yes','yes'],
+ ['pi-claude-cli','claude-haiku-5-5','1M','128K','yes','yes'],
+ ['pi-claude-cli','claude-opus-5-5','1M','128K','yes','yes'],
+ ['pi-claude-cli','claude-fable-5','1M','128K','yes','yes'],
+ ['zai','glm-5.3','272K','64K','yes','no'],
+ ['zai','glm-4.7','200K','32K','no','no'],
+ ['zai','glm-5.3-flash','128K','16K','no','yes'],
+ ['deepseek','deepseek-v4-pro','1M','128K','yes','no'],
+ ['deepseek','deepseek-flash','128K','16K','no','yes'],
+ ['kimi-coding','k3','1M','128K','yes','no'],
+ ['kimi-coding','k3-256k','256K','32K','yes','no'],
+ ['kimi-coding','kimi-for-coding','1M','64K','yes','no'],
+ ['openai-codex','gpt-6-sol','1M','128K','yes','yes'],
+ ['openai-codex','gpt-5.6-luna','272K','64K','yes','yes'],
+ ['openai-codex','gpt-5.5','200K','32K','no','no'],
+ ['openrouter','anthropic/claude-sonnet-4','1M','128K','yes','yes'],
+ ['openrouter','openai/gpt-4.1','1M','128K','yes','yes'],
+ ['openrouter','google/gemini-1.5','1M','128K','yes','yes'],
+ ['groq','llama3-70b','128K','32K','no','no'],
+ ['groq','mixtral-8x7b','128K','32K','no','no'],
+ ['gmicloud','gemini-1.5-pro','1M','128K','yes','yes'],
+ ['gmicloud','gemini-1.5-flash','272K','64K','yes','yes']
+];
+let modelsCatalogTable=buildTable(modelsFixtureRows);
+const fixtureCatalog={
+ host:'fixture-host',
+ async read(){
+  if(modelsCatalogFail)return {state:'failed',host:'fixture-host',failed_at:new Date(modelsReadAt).toISOString(),reason:'catalog-unavailable'};
+  let models=parseModelCatalog(modelsCatalogTable);
+  if(modelsCatalogDrop){
+   const [provider,model]=modelsCatalogDrop.split('|');
+   models=models.filter(m=>!(m.provider===provider&&m.model===model));
+  }
+  return {state:'ready',host:'fixture-host',read_at:new Date(modelsReadAt).toISOString(),providers:new Set(models.map(m=>m.provider)).size,models};
+ }
+};
 // Real spec-worktree preparation needs a base commit in each isolated repo.
 if(plannedLaunch)for(const directory of [checkout,secondCheckout])execFileSync('git',['-C',directory,'-c','user.name=Browser fixture','-c','user.email=fixture@example.invalid','commit','--quiet','--allow-empty','-m','Initialize fixture repository'],{stdio:'ignore'});
 // Checkout-scoped suggestion target: visible only when file suggestions are
@@ -234,8 +291,15 @@ async function handoffTmuxRun(socketPath,args){
  return {ok:true,code:0,stdout,stderr:''};
 }
 const handoffPsRun=()=>({stdout:'',complete:true});
-const integrationCatalog=handoffIntegration?createReferenceCatalog({home:root,agentDir:join(root,'agent')}):null;
-const handoffService=handoffIntegration?createDiscussionService({root:storage,agentDir:join(root,'agent'),referenceCatalog:integrationCatalog,assignmentAdapters:{tmuxRun:handoffTmuxRun,observationProbes:{tmuxRun:handoffTmuxRun,psRun:handoffPsRun}}}):null;
+const integrationCatalog=(handoffIntegration||modelsFixture)?createReferenceCatalog({home:root,agentDir:join(root,'agent')}):null;
+const modelRpcCalls=[];
+const modelSpawn=(command,args,options)=>{
+ if(command!=='pi')return spawn(command,args,options);
+ modelRpcCalls.push({command,args:[...args]});
+ const child=spawn(process.execPath,[fileURLToPath(new URL('../../workspaces/fixtures/fake-pi-rpc.mjs',import.meta.url)),...args],options);
+ return child;
+};
+const handoffService=(handoffIntegration||modelsFixture)?createDiscussionService({...modelsFixture?{spawn:modelSpawn}:{},root:storage,agentDir:join(root,'agent'),referenceCatalog:modelsFixture?referenceCatalog:integrationCatalog,assignmentAdapters:{tmuxRun:handoffTmuxRun,observationProbes:{tmuxRun:handoffTmuxRun,psRun:handoffPsRun}}}):null;
 const integrationSessionControl=handoffIntegration?createSessionControl({storageRoot:storage,transport:{run:handoffTmuxRun}}):null;
 let integrationPublishChain=Promise.resolve();
 function publishIntegrationSnapshot(){
@@ -299,6 +363,7 @@ const thread1='11111111-1111-4111-8111-111111111111',thread2='22222222-2222-4222
 // thread3 stores a worktree path that maps to the fixture-docs checkout and is
 // displayed as the stored path, never as an inferred repository id.
 let threads=[{thread_id:thread1,workspace_id:'fixture',title:'Discussion one',state:'idle',queue:[],attention:null,queue_paused:false,history_only:false,generation:1,updated_at:new Date().toISOString(),target:{kind:'repository',repository_id:'fixture-repo'}},{thread_id:thread2,workspace_id:'fixture',title:'Discussion two',state:'idle',queue:[],attention:null,queue_paused:false,history_only:false,generation:1,target:{kind:'workspace'}},{thread_id:thread3,workspace_id:'fixture',title:'Discussion worktree',state:'idle',queue:[],attention:null,queue_paused:false,history_only:false,generation:1,target:{kind:'worktree',path:docsCheckout}}];
+if(modelsFixture)threads=await Promise.all(threads.map(({title,target})=>handoffService.create({workspace_id:'fixture',title,target})));
 let entries=[{id:'entry-1',timestamp:new Date().toISOString(),message:{role:'assistant',content:[{type:'text',text:'Ready to discuss. <script>unsafe()</script>'}]}}];
 let localOperator=false;
 let tick=0,staleLaunch=!plannedLaunch,failSend=false,delaySend=false,delayBrief=false,delayDispatchBrief=false,failDispatchBrief=false,delayDispatchSuggestions=false;
@@ -395,7 +460,7 @@ const fixtureDiscussion={
  async suggestions(input){posts.push({name:'suggestions',input});if(delaySuggestions)await new Promise(r=>setTimeout(r,650));const thread=threads.find(item=>item.thread_id===input.thread_id);if(!thread)throw Object.assign(new Error('Thread not found'),{code:'thread-not-found'});const target=thread.target&&typeof thread.target==='object'?thread.target:{};let executionDir=workspace.directory;if(target.kind==='repository'){const match=dispatchRepos.find(repo=>repo.id===target.repository_id);if(match)executionDir=await realpath(match.path);}else if(target.kind==='worktree'&&typeof target.path==='string'){executionDir=await realpath(target.path);}return referenceCatalog.suggest({workspace:{...workspace,repositories:dispatchRepos.map(repo=>({id:repo.id,path:repo.path}))},executionDir,kind:input.kind,query:input.query});},
  async list({workspace_id}){if(holdThreads&&(!holdThreadsWorkspace||workspace_id===holdThreadsWorkspace))await waitForRelease(threadWaiters);if(failThreads)throw Object.assign(new Error('Fixture thread list unavailable'),{code:'service-closed'});return {threads:workspace_id==='fixture'?copied(threads):[],invalid:workspace_id==='fixture'&&invalidRecords?[{reason:'invalid-json'},{reason:'fixture-secret-token'}]:[]};},
  async history({before}){if(before)return {entries:[{id:'entry-old',message:{role:'user',content:'Older message'}}],truncated:false,incomplete_tail:false};if(longHistory)return {entries:Array.from({length:48},(_,index)=>({id:`entry-long-${index+1}`,timestamp:new Date(Date.now()-index*60000).toISOString(),message:{role:index%2?'assistant':'user',content:`Long history message ${index+1}. Fixture transcript line for the retained reading position. A second sentence keeps each row tall enough to scroll.`}})),truncated:true,incomplete_tail:false};return {entries:copied(entries),truncated:true,incomplete_tail:incompleteTail};},
- async create(input){const entry={name:'create',input};posts.push(entry);if(delayCreate)await waitForRelease(createWaiters);if(failCreate)throw Object.assign(new Error('Fixture conversation creation failed'),{code:'service-closed'});const t={...threads[0],thread_id:randomUUID(),title:input.title||'New thread',target:input.target||{kind:'workspace'},queue:[],attention:null};threads=[t,...threads];createdThreads.push({thread_id:t.thread_id,workspace_id:t.workspace_id,target:copied(t.target)});entry.result={thread_id:t.thread_id};return copied(t);},
+ async create(input){const entry={name:'create',input};posts.push(entry);if(delayCreate)await waitForRelease(createWaiters);if(failCreate)throw Object.assign(new Error('Fixture conversation creation failed'),{code:'service-closed'});const t={...threads[0],thread_id:randomUUID(),title:input.title||'New thread',target:input.target||{kind:'workspace'},queue:[],attention:null,model:input.model?{provider:input.model.provider,model:input.model.model}:null};threads=[t,...threads];createdThreads.push({thread_id:t.thread_id,workspace_id:t.workspace_id,target:copied(t.target),model:copied(t.model)});entry.result={thread_id:t.thread_id};return copied(t);},
  async send(input){posts.push({name:'send',input});if(holdSend)await waitForRelease(sendWaiters);if(delaySend)await new Promise(r=>setTimeout(r,700));if(failSend)throw Object.assign(new Error('Temporary fixture failure'),{code:'service-closed'});entries.push({id:randomUUID(),message:{role:'user',content:input.text}});return {state:'accepted'};},
  async stop(input){posts.push({name:'stop',input});threads=threads.map(t=>t.thread_id===input.thread_id?{...t,queue_paused:true,owns_response:false}:t);return {};},
  async resume(input){posts.push({name:'resume',input});threads=threads.map(t=>t.thread_id===input.thread_id?{...t,queue_paused:false,attention:null}:t);return {};},
@@ -413,7 +478,20 @@ const fixtureDiscussion={
  subscribe({thread_id},callback){subscribers.add({thread_id,callback});const current=()=>threads.find(t=>t.thread_id===thread_id);const timer=setInterval(()=>callback({type:'state',event:copied(current()??{}),workspace_id:'fixture',thread_id,generation:1}),700);return ()=>{clearInterval(timer);for(const item of subscribers)if(item.callback===callback)subscribers.delete(item);};},
 };
 const observedDispatch=name=>async input=>{const entry={name,input};posts.push(entry);try{const result=await handoffService[name](input);entry.result=result;return result;}catch(error){entry.error={code:error?.code??null,message:error?.message??String(error)};throw error;}};
-const discussion=handoffIntegration?{...fixtureDiscussion,list:observedDispatch('list'),prepareSpecTarget:observedDispatch('prepareSpecTarget'),dispatchSuggestions:observedDispatch('dispatchSuggestions'),dispatchSaveBrief:observedDispatch('dispatchSaveBrief'),dispatchPreview:observedDispatch('dispatchPreview'),dispatchLaunch:observedDispatch('dispatchLaunch')}:fixtureDiscussion;
+const observedModel=name=>async input=>{
+ const entry={name,input};posts.push(entry);
+ try{
+  const result=await handoffService[name](input);entry.result=result;
+  if(name==='create')createdThreads.push(JSON.parse(await readFile(join(workspace.directory,'threads',`${result.thread_id}.json`),'utf8')));
+  if(name==='dispatchLaunch'){
+   const record=JSON.parse(await readFile(join(workspace.directory,'assignments',`${input.assignment_id}.json`),'utf8'));
+   entry.persisted=record;
+   resolverDiagnostics.push({name,matched:record.contract_digest===input.expectedDigest,record});
+  }
+  return result;
+ }catch(error){entry.error={code:error?.code??null,message:error?.message??String(error)};throw error;}
+};
+const discussion=modelsFixture?{...handoffService,...Object.fromEntries(['create','send','dispatchSuggestions','dispatchSaveBrief','dispatchPreview','dispatchLaunch','prepareSpecTarget'].map(name=>[name,observedModel(name)]))}:handoffIntegration?{...fixtureDiscussion,list:observedDispatch('list'),prepareSpecTarget:observedDispatch('prepareSpecTarget'),dispatchSuggestions:observedDispatch('dispatchSuggestions'),dispatchSaveBrief:observedDispatch('dispatchSaveBrief'),dispatchPreview:observedDispatch('dispatchPreview'),dispatchLaunch:observedDispatch('dispatchLaunch')}:fixtureDiscussion;
 // Result-case epic inventory: the bound planning result returns to this epic
 // and offers the next independent member while its launch runs.
 const plannedEpic={workspace:'fixture',epic:'demo',title:'Demo epic',state:'active',next:'other-browser',members:[{name:'base',package:'base',workspace:'fixture',status:specsReadiness?'merged':'prepared',requires:[],waiting_on:[],attention:false,planning:{prepared:true,step_count:2,preparation:{outcome:'prepared',reported_at:'2026-10-09T12:00:00Z',source:'spec-prepare.md',read:'ok',bytes:80},decision:null,receipts:[]}},{name:'browser',package:'browser',workspace:'fixture',status:'prepared',requires:['base'],waiting_on:[],attention:false,planning:{prepared:true,step_count:3,preparation:{outcome:'prepared',reported_at:'2026-10-10T12:00:00Z',source:'spec-prepare.md',read:'ok',bytes:120},decision:null,receipts:[]}},{name:'other-browser',package:'other-browser',workspace:'fixture',status:'proposed',requires:[],waiting_on:[],attention:false,planning:{proposal:false,prepared:false,step_count:0,preparation:{outcome:'missing'},decision:null,receipts:[]}}],summary:{total:3,merged:0,complete:0,attention:0},coverage:{state:'complete',reasons:[]}};
@@ -517,7 +595,7 @@ async function handleTerminalRequest(req,res,url,assetMatch){
 }
 if(handoffIntegration)await publishIntegrationSnapshot();
 else await writeFile(observerFile,JSON.stringify(makeSnapshot()));
-const dashboard=createDashboardServer({agentDir:join(root,'agent'),storageRoot:storage,publicHost:'dashboard.example',discussion,sessionControl});
+const dashboard=createDashboardServer({...modelsFixture?{modelCatalog:fixtureCatalog}:{},agentDir:join(root,'agent'),storageRoot:storage,publicHost:'dashboard.example',discussion,sessionControl});
 const server=createServer(async(req,res)=>{
  const url=new URL(req.url,'http://fixture');
  if(url.pathname==='/__fixture/control'){
@@ -525,6 +603,7 @@ const server=createServer(async(req,res)=>{
   let controlResult=null;
   if(handoffIntegration&&action==='handoff-complete-planning')try{controlResult=await completeHandoffPlanning(url);}catch(error){controlResult={control:'handoff-complete-planning',error:String(error?.message??error)};}
   if(handoffIntegration&&action==='handoff-write-receipt')try{controlResult=await writeHandoffReceipt(url);}catch(error){controlResult={control:'handoff-write-receipt',error:String(error?.message??error)};}
+  if(action==='observer')observerMode=url.searchParams.get('value')==='true';
   if(action==='session-end-fails')sessionEndFails=url.searchParams.get('value')==='true';
   if(action==='session-identity'){const next=url.searchParams.get('value');sessionIdentity=next?next:'fixture-identity';}
   if(action==='terminal-state')terminalState=url.searchParams.get('value')||'none';
@@ -612,7 +691,13 @@ const server=createServer(async(req,res)=>{
   if(action==='state-delay-ms')boundary.stateDelayMs=numberValue(url.searchParams.get('value'),0,5000);
   if(action==='state-clock-offset-ms')boundary.stateClockOffsetMs=numberValue(url.searchParams.get('value'),-120000,120000);
   if(action==='catalog-mode')await applyCatalogMode(url.searchParams.get('value')||'healthy');
-  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({...packageIdentity,posts,threads,createdThreads,tick,boundary,threadControls:{holdThreads,holdThreadsWorkspace,failThreads,longHistory,incompleteTail,invalidRecords,listFailStatus,historyFailStatus,responseState},subscribedThreadIds:[...new Set([...subscribers].map(item=>item.thread_id))],createControls:{delayCreate,failCreate},session:{identity:sessionIdentity,ended:sessionEnded},terminal:{state:terminalState,delayMs:terminalDelayMs,openDelayMs:terminalOpenDelayMs,failAsset:terminalFailAsset,assignment:terminalAssignment,counts:terminalCounts},review:{holdDispatchPreview,holdDispatchLaunch,dispatchPreviewRefusal,dispatchLaunchRefusal,staleLaunch,holdingRun:reviewHoldingRun?.assignment_id??null},launch:{outcome:dispatchLaunchOutcome,published:[...launchedAssignments.keys()]},diagnostics:{resolvers:resolverDiagnostics},boundaryLog:boundaryLog.slice(-60),active:[...activeBoundary.values()],launchResolutions:Object.fromEntries(launchResolutions),briefWritesPending,completedBriefWrites,integration:handoffIntegration?{enabled:true,processStarts:handoffNewSessions,sessions:[...handoffSessions.values()].map(session=>({session:session.name,socket:session.socketPath,assignment_id:session.assignmentId,ended:session.ended})),tmuxCalls:handoffTmuxCalls.length}:{enabled:false},...(controlResult??{})}));return;
+  if(modelsFixture&&action==='models-catalog-fail')modelsCatalogFail=url.searchParams.get('value')==='true';
+  if(modelsFixture&&action==='models-stale'){modelsReadAt=url.searchParams.get('value')==='true'?Date.now()-30*60*60*1000:Date.now();}
+  if(modelsFixture&&action==='models-preferences-broken')await writeFile(join(root,'agent','spec-sentinel','preferred-models.json'),url.searchParams.get('value')==='true'?'{ broken json':modelsPreferredSeed);
+  if(modelsFixture&&action==='models-preferences-empty')await writeFile(join(root,'agent','spec-sentinel','preferred-models.json'),url.searchParams.get('value')==='true'?`{"version":1,"preferred":[],"updated_at":"2026-10-14T14:31:00.000Z"}`:modelsPreferredSeed);
+  if(modelsFixture&&action==='models-catalog-drop')modelsCatalogDrop=url.searchParams.get('value')||'';
+  const modelsState=modelsFixture?{catalogFail:modelsCatalogFail,drop:modelsCatalogDrop,readAt:new Date(modelsReadAt).toISOString(),stale:Date.now()-modelsReadAt>24*60*60*1000}:null;
+  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({...packageIdentity,posts,resolverDiagnostics,threads,createdThreads,modelRpcCalls,modelTmuxCalls:handoffTmuxCalls,tick,boundary,threadControls:{holdThreads,holdThreadsWorkspace,failThreads,longHistory,incompleteTail,invalidRecords,listFailStatus,historyFailStatus,responseState},subscribedThreadIds:[...new Set([...subscribers].map(item=>item.thread_id))],createControls:{delayCreate,failCreate},session:{identity:sessionIdentity,ended:sessionEnded},terminal:{state:terminalState,delayMs:terminalDelayMs,openDelayMs:terminalOpenDelayMs,failAsset:terminalFailAsset,assignment:terminalAssignment,counts:terminalCounts},review:{holdDispatchPreview,holdDispatchLaunch,dispatchPreviewRefusal,dispatchLaunchRefusal,staleLaunch,holdingRun:reviewHoldingRun?.assignment_id??null},launch:{outcome:dispatchLaunchOutcome,published:[...launchedAssignments.keys()]},diagnostics:{resolvers:resolverDiagnostics},boundaryLog:boundaryLog.slice(-60),active:[...activeBoundary.values()],launchResolutions:Object.fromEntries(launchResolutions),briefWritesPending,completedBriefWrites,integration:handoffIntegration?{enabled:true,processStarts:handoffNewSessions,sessions:[...handoffSessions.values()].map(session=>({session:session.name,socket:session.socketPath,assignment_id:session.assignmentId,ended:session.ended})),tmuxCalls:handoffTmuxCalls.length}:{enabled:false},models:modelsState,...(controlResult??{})}));return;
  }
  const terminalAsset=/^\/api\/assignment-terminal\/([^/]+)\/([^/]+)$/.exec(url.pathname);
  if(url.pathname==='/api/assignment-terminal/open'||terminalAsset){await handleTerminalRequest(req,res,url,terminalAsset);return;}
@@ -626,6 +711,7 @@ const server=createServer(async(req,res)=>{
   const status=threadRead==='threads'?listFailStatus:historyFailStatus;
   if(status){res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify({error:threadRead==='threads'?'Fixture thread list unavailable':'Fixture transcript read unavailable'}));return;}
  }
+ if(url.pathname==='/api/models/preferred'&&req.method==='POST')modelsPreferencePosts+=1;
  if(!readKind){dashboard.emit('request',req,res);return;}
  const id=url.searchParams.get('id')??'';
  const attempt={
@@ -640,6 +726,15 @@ const server=createServer(async(req,res)=>{
  res.on('close',()=>{if(!res.writableEnded)finishBoundary(boundaryAttemptNumber,'aborted');});
  const originalEnd=res.end.bind(res);
  res.end=(body,encoding,callback)=>{
+  if(readKind==='state'&&observerMode&&(typeof body==='string'||Buffer.isBuffer(body))){
+   const text=Buffer.isBuffer(body)?body.toString('utf8'):body;
+   try{
+    const parsed=JSON.parse(text);
+    delete parsed.action_token;
+    delete parsed.thread_action_token;
+    body=JSON.stringify(parsed);
+   }catch{}
+  }
   if(readKind==='state'&&attempt.offset!==0&&(typeof body==='string'||Buffer.isBuffer(body))){
    const text=Buffer.isBuffer(body)?body.toString('utf8'):body;
    try{
@@ -670,7 +765,7 @@ const timer=setInterval(()=>{
 console.log(JSON.stringify({url:`http://127.0.0.1:${server.address().port}`,root,checkout,secondCheckout,otherPackage:otherPkg,...packageIdentity,thread1,thread2,thread3,worktreeTarget:docsCheckout,integration:handoffIntegration}));
 async function close(){
  clearInterval(timer);
- if(handoffIntegration){
+ if(handoffIntegration||modelsFixture){
   await integrationPublishChain.catch(()=>{});
   if(handoffService)await handoffService.close().catch(()=>{});
   for(const session of handoffSessions.values())endHandoffSession(session);
