@@ -27,21 +27,15 @@ If positioning is missing, ask for it in one line before proceeding. A cover can
 
 Optional but valuable, and worth asking for once if not offered: comparable titles or images of comp covers, series membership, the subtitle and any straplines or endorsement quotes that must appear, and constraints (publisher template, existing series look, what can't change).
 
-## Before Step 1: establish your eyes
+## Before Step 1: inspect through Luna
 
-The cover image is this critique's entire evidence base, and not every model
-running this skill can view images — one that cannot will write a fluent, wholly
-fabricated critique rather than admit it. Settle the question first with the
-sibling `see` skill: run its probe and carry the mode into the output.
-
-- `host-vision` — view the image and work exactly as written below.
-- `codex-relay` — you cannot see it. Every observation comes from a `codex-see`
-  question: the blind read first, with the positioning withheld, then the
-  thumbnail test (ask explicitly what survives at thumbnail scale), then one
-  question per rubric dimension. Attribute each observation to the relay.
-- `source-only` — you have no eyes. Stop. Say the cover cannot be examined and
-  offer the alternatives (install Codex CLI, or describe the cover in text). Do
-  not critique a cover you have not seen.
+The cover supplies this critique's visual evidence. Follow the sibling `see`
+skill's Luna relay policy even when the host supports vision. Keep image data out
+of the critique session and attribute visual observations to `codex-relay`.
+Ask the blind read with positioning withheld, then the thumbnail test and each rubric dimension.
+Never strengthen an uncertain relay answer. If inspection is unavailable, record
+`source-only` and the exact gap; do not produce a visual critique from source or
+an uninspected image. `see` owns explicit direct-viewing exceptions.
 
 ## Method
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# codex-see — text-only image analysis relay for host models without vision.
+# codex-see — image analysis in a separate session with a text-only return.
 #
 # Sends one or more images plus a question to Codex CLI running a vision
 # model (Luna by default) and prints the model's final text answer to stdout.
@@ -39,7 +39,7 @@ for img in "$@"; do
   IMAGE_ARGS+=(-i "$img")
 done
 
-PREAMBLE='You are the remote eyes for a coding agent that cannot view images. Examine the attached image(s) and answer the question below with precise, concrete visual facts: positions, approximate pixel sizes, colors (hex or nearest common name), alignment, spacing relationships, and any visible text verbatim. When multiple images are attached, refer to them as "image 1", "image 2", ... in attachment order. Report only what is visible; if something cannot be determined from the image(s), say so explicitly. Do not run commands and do not speculate about source code.'
+PREAMBLE='You are the designated image relay, already running in a separate session so the calling agent retains text findings without image data. This task explicitly authorizes you to inspect the attached images directly. Do not start or request another relay; the caller has already performed that delegation. Answer the question with concrete visible observations, defects and uncertainty, grouped by image and requested criterion. Keep the answer concise unless an exhaustive inventory is requested. When multiple images are attached, refer to them as "image 1", "image 2", ... in attachment order. Report only what is visible; if something cannot be determined, say so explicitly. Do not infer behavior from a screenshot. Do not run commands or speculate about source code. The calling agent owns implementation decisions and the review verdict.'
 
 ANSWER="$(mktemp)"
 LOG="$(mktemp)"

@@ -6,10 +6,11 @@ rendered result as required implementation work, not optional final polish:
 In the Pi owner/editor pair, the owner owns capture, image inspection, visual decisions
 and evidence. Use `spec_verify` for capture/vision-relay commands after the editor
 returns; the editor applies bounded corrections and does not run the visual checks.
-Read `uishot` and `see` only when visual work is relevant. Establish vision for the
-current model/harness rather than carrying another worker's cached verdict across
-model changes. Independent reviewers reuse applicable captures and obtain fresh ones
-only to close a concrete evidence gap against a stable reviewed revision.
+Read `uishot` and `see` only when visual work is relevant. Route image inspection
+through Luna even when the owner supports vision; retain text findings and artifact
+paths, not image payloads. Independent reviewers reuse applicable captures and ask
+their own relay questions. Obtain fresh captures only to close a concrete evidence
+gap against a stable reviewed revision.
 
 For a needed dev server, pass `server: {command, ready_url, readiness_timeout}` to
 `spec_verify` and put the capture operation in its outer `command`. The server command
@@ -22,7 +23,7 @@ another writer and notifies the coordinator.
 
 1. Before editing, inspect any named visual reference and the applicable local design
    system and design/UX rules. Read the installed `uishot` skill completely and resolve
-   its bundled launcher before the first capture. Open static reference images directly.
+   its bundled launcher before the first capture. Inspect static reference images through Luna.
    For an executable reference or an existing production view reachable by URL, use
    `uishot` to capture the relevant page, region, states, and viewport sizes before
    editing so the implementation loop begins with observed pixels rather than inference.
@@ -62,11 +63,11 @@ another writer and notifies the coordinator.
    off-screen bounding boxes establish layout position, not visual readability.
    Exercise narrow-screen reveal/focus and changed navigation actions when required,
    and scan accessibility in the affected states rather than only the initial page.
-5. Inspect every screenshot through the eyes established by the `see` skill: view the
-   image directly under `host-vision`, or relay it through `see`'s `codex-see` under
-   `codex-relay`. Establish that mode once, before the first inspection, instead of
-   assuming the model running this step can view images — one that cannot will
-   describe a screenshot it never saw. Do not infer correctness from a successful
+5. Inspect every required screenshot through `see`'s Luna relay (`codex-see`). Pass
+   image paths and focused visual criteria; keep the image data out of the owner and
+   reviewer sessions. Record `codex-relay`, the question, observations, uncertainties
+   and revision applicability. A reviewer makes its own relay inspection; the owner’s
+   visual summary is not a substitute. Do not infer correctness from a successful
    capture command, DOM assertions, or snapshot bytes.
    Compare against the visual reference when one exists and assess hierarchy, alignment,
    spacing, typography, color and contrast, clipping, overflow, layering, content states,
@@ -90,7 +91,7 @@ browser, stop it after the final capture and confirm `uishot status` reports it 
 preserve a browser that was already running. Record the cleanup commands and outcomes.
 
 If `uishot` and the repository's Playwright path cannot render the UI, or screenshots
-can be neither viewed directly nor relayed through `see` after practical local
+cannot be inspected through `see` after practical local
 diagnosis, record the exact attempts and preserve
 the result as `checkpoint`; passing non-visual tests does not make a `visualDesign: true`
 step complete. Count visual correction cycles in `fix_attempts`. In the learning prose,

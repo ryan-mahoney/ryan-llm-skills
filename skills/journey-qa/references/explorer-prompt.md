@@ -76,18 +76,14 @@ you stop and think, and `blocked` when you could not tell what to do next. Use
 last step. Notes are how the confusion you experienced reaches the review; do not
 save them for the end.
 
-Establish your eyes before you claim anything about how a screen looks:
-
-  ~/.agents/skills/see/scripts/see-check mode
-
-If that prints anything other than `unknown`, use the mode it reports. Otherwise
-run `~/.agents/skills/see/scripts/see-check start`, open the PNG it writes, report
-the colours you actually see left to right to `see-check verify`, and use the
-mode that answer establishes. `see-check` names the relay mode after the relay tool; this harness
-calls that mode `relayed-vision`. Report only what you actually saw. In the
-`relayed-vision` mode every visual fact comes from the relay rather than from
-you. In the `source-only` mode you have no visual evidence at all: work from the accessibility
-snapshot text and say so, and make no claim about how anything looks.
+Use Luna for screenshot inspection even when your host model supports vision.
+Invoke `~/.agents/skills/see/scripts/codex-see` with a focused question and the
+allowed capture paths. Keep image payloads out of this session; retain text
+observations and uncertainty, attributed to the relay. This harness calls the
+mode `relayed-vision`. Do not run a host-vision probe or open the PNGs directly.
+If the relay fails, diagnose that specific error; if inspection remains unavailable,
+record `source-only`, use the accessibility text, and make no visual claims.
+A missing visual inspection remains a gap, never a pass.
 
 When you finish, pass the mode you established as `--eyes` on `finish`, spelled
 the way this harness spells it: `host-vision`, `relayed-vision` or

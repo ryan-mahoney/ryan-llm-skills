@@ -2,14 +2,14 @@
 name: uishot
 description: Take a screenshot of a running web app and look at it. Use this whenever you write, change, or debug UI code and want to verify how it actually renders — after adding a component, adjusting layout or spacing, fixing responsive behaviour, or when the user says something "looks wrong". Do not guess at visual output; capture it and inspect the image. Also use it to check a page at a specific viewport width, to capture one component in isolation, or to see console errors on a page.
 metadata:
-  version: "1"
+  version: "2"
 ---
 
 # uishot
 
 Screenshots a page from a running dev server, waits until it has actually
-finished rendering, writes a PNG, and prints the absolute path so you can read
-the image back and inspect it.
+finished rendering, writes a PNG, and prints its absolute path for Luna inspection
+through the sibling `see` skill. Keep the PNG out of the calling session.
 
 ## Resolve the launcher
 
@@ -38,16 +38,15 @@ write a whole interface and inspect it once at the end.
 "$UISHOT" http://localhost:3000/checkout
 ```
 
-Then inspect the PNG at the printed `file:` path. Check `console_errors:` before
+Then relay the PNG at the printed `file:` path to Luna. Check `console_errors:` before
 changing CSS or layout.
 
-Capturing is not seeing. Before you draw any conclusion from an image, know
-which eyes you have — the sibling `see` skill settles that in one probe and
-returns `host-vision` (open the PNG with the local image tool), `codex-relay`
-(ask `see`'s `codex-see` about the PNG), or `source-only` (no visual evidence;
-say so rather than describing the page). Not every model behind this skill can
-view images, and the ones that cannot will happily describe a screenshot they
-never saw.
+Capturing is not seeing. Follow the sibling `see` skill: always use its Luna
+relay for screenshot inspection, even when the calling model can view images.
+Ask specific visual questions and retain compact text findings with image paths,
+states, viewports and revision applicability. Do not open the PNG in the parent
+session. If the relay fails, record the visual evidence gap; do not infer a pass
+from successful capture or DOM assertions. `see` owns explicit direct-viewing exceptions.
 
 ## Commands
 
@@ -69,7 +68,7 @@ A bare URL implies `shot`, so `"$UISHOT" shot <url>` and
 
 Output is `key: value` lines. The two that matter most:
 
-- `file:` — absolute path of the PNG. Read this image.
+- `file:` — absolute path of the PNG. Pass it to the Luna relay.
 - `console_errors:` — if non-zero, the individual messages follow on
   `console_error:` lines. A broken-looking UI is very often explained here, so
   check these before theorising about CSS.
@@ -105,7 +104,7 @@ waits for it.
 
 | Code | Meaning | What to do |
 |---|---|---|
-| 0 | captured | read the PNG |
+| 0 | captured | inspect the PNG through Luna |
 | 2 | bad arguments | check the flag it names |
 | 3 | selector not found / zero size | fix the selector or raise `--timeout` |
 | 4 | navigation failed or 4xx/5xx | is the dev server running on that URL |

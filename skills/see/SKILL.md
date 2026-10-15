@@ -1,116 +1,103 @@
 ---
 name: see
-description: Establish whether the running model can actually view images, and relay image analysis to a vision model (Codex CLI + Luna) when it cannot. Use before drawing any conclusion from a screenshot, mockup, cover, page image, or design capture — including inside other skills such as uishot, ux-auditor, and the ux-*-critique skills — and whenever the user says to use codex or Luna as the eyes. Also use when an image-viewing attempt errored or returned nothing.
+description: Inspect screenshots, mockups, covers and page images through the Luna text relay, keeping image data out of the calling session. Use for visual verification and critique, including uishot and spec reviews. Probe host vision only when direct viewing is explicitly requested.
 license: MIT
 metadata:
-  version: "1"
+  version: "2"
 ---
 
 # see
 
-The eyes contract for every skill that reasons about an image.
+Use Luna for image inspection, including when the calling model supports vision.
+Images stay in a separate ephemeral relay session; the coordinator, implementation
+owner and reviewer retain paths, questions and compact text findings. This keeps
+image payloads out of their working context without dropping visual verification.
 
-These skills are synced to Claude Code, Codex, Cline, Augment and OpenCode, and
-the model behind them is chosen at runtime. Some of those models cannot view
-images at all, and a model that cannot see usually does not announce it — it
-describes the screenshot anyway. That failure is silent, which makes it the
-dangerous one.
+## 1. Use the Luna relay
 
-So never route on model identity. Route on a measured capability.
+Resolve `SEE` to the absolute path of `scripts/codex-see` in this skill directory.
+Do not copy it into the project. Use `codex-relay` as the inspection mode; a cached
+`host-vision` probe result does not override this routing policy. No vision probe
+is needed for the relay.
 
-## 1. Establish the mode
+```bash
+"$SEE" "<specific visual questions>" <image> [<image> ...]
+```
 
-Resolve `SEE_CHECK` to the absolute path of `scripts/see-check` in this skill
-directory, and `SEE` to `scripts/codex-see`. Do not copy either into the project.
+Only the relay opens the images. Do not read screenshots with image-capable tools,
+attach them to the parent session, or print their base64 data. Pass local image
+paths, the relevant criteria, and a small related set of captures to the relay.
+Its output is text. Keep the full answer in an evidence artifact when needed and
+return only findings, uncertainties and that artifact's path to the coordinator.
+
+- Defaults to `gpt-5.6-luna`; change `CODEX_VISION_MODEL` only on user request.
+- Images are numbered in attachment order. Name each image's state and viewport
+  in the question so the answer maps back to the correct capture.
+- A nonzero exit is not visual evidence (5: CLI missing; 4: relay failed;
+  3: image missing). Diagnose the specific error. Do not silently switch to direct
+  viewing, another model, or a source-only pass. If inspection remains unavailable,
+  record `source-only` and leave required visual acceptance unresolved.
+
+Ask for visible observations for each relevant criterion, defects and anything
+that cannot be determined. Avoid an exhaustive inventory unless the task needs it.
+For example:
+
+```bash
+"$SEE" "Image 1: populated member table at 1280x900. Image 2: empty state at 1280x900. For each: is the changed row visible, is its text readable without clipping, and are the expected actions distinguishable? Report observations, defects and uncertainty per image. Do not infer click behavior." populated.png empty.png
+```
+
+For comparisons, identify reference and implementation images and the properties
+to compare. Re-ask with a targeted capture when a relevant detail is uncertain;
+never strengthen an uncertain relay answer. Screenshots establish visible state,
+not navigation, persistence, authorization or other behavior needing executable evidence.
+
+## 2. Preserve evidence and independent review
+
+Record the image paths, state/viewport, source revision and dirty-state applicability,
+relay question, actual model selection, answer and limitations in existing evidence.
+Use package-relative paths in spec artifacts. Do not claim direct host inspection
+when the observations came from the relay.
+
+An independent reviewer reuses applicable captures but asks its own Luna questions
+against the reviewed criteria. It assesses the returned observations together with
+code and behavioral evidence; Luna does not own the review verdict. An implementation
+owner's visual summary alone does not replace the reviewer's inspection. Do not drop
+images or required states merely to fit a context budget.
+
+After a visual code correction, capture the affected state again and obtain a fresh
+relay inspection. Reuse unchanged, revision-applicable captures; do not repeat a
+whole browser journey merely because the inspecting session is new.
+
+## 3. Explicit direct-viewing exception
+
+Use host vision only when the user explicitly requests direct inspection or a
+higher-priority tool contract requires it. Establish actual capability for the
+current model and harness before making visual claims; another worker's cached
+capability does not establish yours. This exception does not change the default
+Luna route for later work.
+
+Resolve `SEE_CHECK` to the absolute path of `scripts/see-check` in this skill directory.
 
 ```bash
 "$SEE_CHECK" mode
 ```
 
-If that prints a mode other than `unknown`, use it — a verdict from the last six
-hours on this same host is still good. Otherwise run the probe:
+Reuse a non-`unknown` verdict only if it was established for the current model and
+harness. Otherwise reset it and run the probe:
 
 ```bash
+"$SEE_CHECK" reset
 "$SEE_CHECK" start
 ```
 
-It writes a PNG showing four colored squares and prints its path. View that
-image, then report the colors left to right:
+View the generated probe and report only the colors actually seen, left to right,
+to `"$SEE_CHECK" verify <colors>`. If the image cannot be viewed, report that failure
+rather than guessing. The capability result is `host-vision`, `codex-relay` or
+`source-only`. Direct viewing requires `host-vision`; report the actual inspection
+mode and unresolved limitations. Do not infer pixels from source or image bytes.
 
-```bash
-"$SEE_CHECK" verify red green purple yellow
-```
+## Getting images
 
-Synonyms and prose are fine; the reading is what matters. Report only colors you
-actually saw. If the image will not open, the tool errors, or you get bytes
-instead of a picture, that is the answer — pass the failure through rather than
-guessing. A wrong answer here is a correct outcome; a lucky guess corrupts every
-visual claim downstream.
-
-The verdict is one of three modes:
-
-| Mode | Meaning | How you see |
-|---|---|---|
-| `host-vision` | you read the digits correctly | view images directly |
-| `codex-relay` | you could not, and codex is installed | ask `codex-see` |
-| `source-only` | you could not, and codex is missing | no visual evidence at all |
-
-`see-check reset` discards the verdict if the model changes mid-session.
-
-## 2. Seeing in each mode
-
-**host-vision** — open images with the local image tool as normal. Nothing else
-to do.
-
-**codex-relay** — every visual fact comes from `codex-see`. It sends the images
-plus a question to Codex CLI running the Luna vision model and prints the text
-answer.
-
-```bash
-"$SEE" "<question>" <image> [<image> ...]
-```
-
-- Non-zero exit means the answer is invalid; read stderr and follow it
-  (5 = codex CLI missing, 4 = codex run failed, 3 = image path wrong).
-- Defaults to `gpt-5.6-luna`. Override only on request, via `CODEX_VISION_MODEL`.
-- Multiple images are attached in order and referred to as "image 1", "image 2".
-
-Ask narrow, structured questions — one broad pass, then targeted follow-ups:
-
-```bash
-# Inventory pass (one per image)
-"$SEE" "Inventory this UI top to bottom: every region, its text verbatim, layout structure, colors, spacing relationships, and icons." proto.png
-
-# Comparison pass
-"$SEE" "Image 1 is the design prototype; image 2 is the implementation. List every visual difference: layout, spacing, typography, color, borders/radius/shadows, content, icons. Be exhaustive and concrete." proto.png impl.png
-
-# Measurement / targeted follow-up
-"$SEE" "In image 1, what is the approximate padding inside the card under 'Billing', and what hex color is the primary button?" impl.png
-
-# Verification pass (after a correction)
-"$SEE" "Image 1 is the prototype, image 2 the corrected implementation. Is the header now visually equivalent: same height, logo placement, nav spacing, background color? Answer yes/no per property with what you see." proto.png impl.png
-```
-
-**source-only** — you have no visual evidence. Audit from source, and say so
-explicitly in the output. Do not describe what a page "looks like".
-
-## 3. Rules that hold in every mode
-
-1. In `codex-relay` and `source-only`, treat image bytes as opaque. Never open,
-   read, or interpret a PNG/JPG directly.
-2. Every visual claim traces to something: a `codex-see` answer, an image you
-   actually viewed, or a source file. Say which.
-3. Never strengthen a `codex-see` answer. If it says a thing cannot be
-   determined, re-ask with a cropped or targeted capture, or record it as
-   unresolved.
-4. Declare the mode in whatever the calling skill outputs, so a reader knows how
-   much the visual findings are worth.
-5. Never verify a visual fix without a fresh look — a fresh capture viewed
-   directly, or a fresh `codex-see` pass. Code that should work is not evidence
-   that it does.
-
-## Getting images in the first place
-
-`see` interprets images; it does not capture them. Use the sibling `uishot`
-skill to screenshot a running page or a `file://` prototype, then bring the PNG
-back here.
+Use the sibling `uishot` skill or the repository's owned Playwright fixture to
+capture the relevant state. Keep images as artifacts and pass their paths to Luna.
+For documents, export the relevant pages to images before using the relay.

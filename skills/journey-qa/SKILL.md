@@ -153,9 +153,9 @@ node "$SKILL_DIR/scripts/build-deck.mjs" --summary \
 ```
 
 Inspect the result rather than trusting the command. Capture it with `uishot`
-at `--viewport 1280x800` and look at the PNG through the `see` skill's eyes
-mode; record which mode you used (`host-vision`, `relayed-vision` or
-`source-only`) alongside the deck, and say so when you have no visual evidence.
+at `--viewport 1280x800` and inspect it through the `see` skill's Luna relay.
+Keep image data out of this session. Record `relayed-vision` alongside the deck,
+or `source-only` when inspection is unavailable; do not imply a visual pass.
 
 `<decks>` is `<capturesDir>/<repository>/ux-qa/decks/`, from `node ~/.agents/scripts/spec-location/cli.mjs resolve --cwd <app checkout>`. Decks are local files in workspace storage outside every checkout, so they are never committed. Publishing a
 deck anywhere is a separate explicit action the orchestrator takes, never a

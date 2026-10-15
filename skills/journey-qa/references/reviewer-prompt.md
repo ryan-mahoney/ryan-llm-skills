@@ -39,21 +39,18 @@ two reviews are independent. Do not read the application source, the tests, the
 harness code or the documentation; you are reviewing a run, not the product's
 design intent.
 
-Establish your eyes before you claim anything about how a screen looks:
+Use Luna for screenshot inspection even when your host model supports vision.
+Invoke `~/.agents/skills/see/scripts/codex-see` with a focused question and the
+allowed capture paths. Keep image payloads out of this session; retain text
+observations and uncertainty, attributed to the relay. This harness calls the
+mode `relayed-vision`. Do not run a host-vision probe or open the PNGs directly.
+If the relay fails, diagnose that specific error; if inspection remains unavailable,
+record `source-only`, use the accessibility text, and make no visual claims.
+A missing visual inspection remains a gap, never a pass.
 
-  ~/.agents/skills/see/scripts/see-check mode
-
-If that prints anything other than `unknown`, use the mode it reports. Otherwise
-run `~/.agents/skills/see/scripts/see-check start`, open the PNG it writes, report
-the colours you actually see left to right to `see-check verify`, and use the mode
-that answer establishes. `see-check` names the relay mode after the relay tool; this harness
-calls that mode `relayed-vision`. Report only what you actually saw. In the `relayed-vision`
-mode every visual fact comes from the relay rather than from you, and every observation you write
-down that rests on an image is attributed to that relay. In the `source-only`
-mode you have no visual evidence at all: work from the recorded text and the
-accessibility snapshot in the step log, say so, and make no claim about how
-anything looks. Copy the run's `result.json` `eyes` value into `review.json`
-`eyes`, and if your own mode differs from the run's, say so in {REVIEW_MD}.
+Ask your own relay questions; do not reuse the explorer's visual judgment. Keep
+the run's `result.json` `eyes` value in `review.json` for schema compatibility,
+and record your actual inspection mode in {REVIEW_MD}.
 
 Then score, in this order.
 
@@ -127,7 +124,7 @@ builder fails on it.
 ```json
 {
   "run": "ux-qa-2026-03-04-import-a1b2",
-  "eyes": "host-vision",
+  "eyes": "relayed-vision",
   "steps": [
     {
       "n": 4,

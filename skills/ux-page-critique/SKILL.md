@@ -23,22 +23,15 @@ If the JTBD is missing, ask for it in one line before proceeding — a critique 
 
 Optional but valuable, and worth asking for once if not offered: known friction points (support tickets, drop-off, questions users keep asking), the surrounding flow (what screen comes before and after), constraints (design system, framework, what can't change), and the platform/viewport.
 
-## Before Step 1: establish your eyes
+## Before Step 1: inspect through Luna
 
-The image is this critique's entire evidence base, and not every model running
-this skill can view images — one that cannot will write a fluent, wholly
-fabricated critique rather than admit it. Settle the question first with the
-sibling `see` skill: run its probe and carry the mode into the output.
-
-- `host-vision` — view the image and work exactly as written below.
-- `codex-relay` — you cannot see it. Every observation comes from a `codex-see`
-  question. Ask the blind read as its own relayed question with the JTBD
-  withheld, then one relayed question per rubric dimension. Attribute each
-  observation to the relay, and never restate a relay answer more confidently
-  than it was given.
-- `source-only` — you have no eyes. Stop. Say the image cannot be examined and
-  offer the alternatives (install Codex CLI, or describe the page in text). Do
-  not critique a screenshot you have not seen.
+The screenshot supplies this critique's visual evidence. Follow the sibling `see`
+skill's Luna relay policy even when the host supports vision. Keep image data out
+of the critique session and attribute visual observations to `codex-relay`.
+Ask the blind read with the JTBD withheld, then ask about each rubric dimension.
+Never strengthen an uncertain relay answer. If inspection is unavailable, record
+`source-only` and the exact gap; do not produce a visual critique from source or
+an uninspected image. `see` owns explicit direct-viewing exceptions.
 
 ## Method
 

@@ -120,11 +120,10 @@ Write `app/test/screenshots/{formNameKebab}.screenshot.js` from the four-test te
 
 ### 6b. Capture & Review Loop
 
-0. Establish your eyes with the sibling `see` skill before the first capture.
-   `host-vision` means read the PNGs directly; `codex-relay` means every visual
-   judgement below comes from a `codex-see` question about the PNG; `source-only`
-   means you cannot verify this form visually — say so plainly in the final
-   report instead of implying the screenshots were reviewed.
+0. Follow the sibling `see` skill's Luna relay policy. Pass PNG paths and specific
+   questions to `codex-see`; keep image data out of this session. Retain the text
+   observations and limitations as `codex-relay` evidence. If inspection is
+   unavailable, record `source-only` and leave visual verification unresolved.
 1. Start the harness: `bun app/test/screenshots/harness/serve.js &`
 2. Capture: `bunx playwright test --config playwright.screenshot.config.js`
 3. **Read every screenshot** and evaluate against the checklist below.

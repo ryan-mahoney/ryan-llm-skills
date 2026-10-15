@@ -2,15 +2,13 @@
 
 A screen page without images asks the reader to trust prose about pixels. Capture every documented state, keep the files local, and cite each one by capture ID where it belongs.
 
-## Before anything: establish your eyes
+## Inspect through Luna
 
-Capturing is not seeing. Run the sibling `see` skill's probe and carry the result:
-
-- `host-vision` — open the PNG and inspect it yourself.
-- `codex-relay` — you cannot see it. Ask `codex-see` about the image and attribute every visual observation to the relay.
-- `source-only` — you have no eyes. Still capture and link the files; the reader can see them. Do not write any claim about how the page looks, and say in the handoff that the captures are unverified.
-
-A model that cannot see an image will describe it fluently anyway. This probe is the guard against that.
+Capturing is not seeing. Follow the sibling `see` skill's Luna relay policy:
+pass screenshot paths and focused questions, keep image data out of the documenting
+session, and retain attributed text observations. Record `codex-relay`. If inspection
+is unavailable, still link the captures but mark them unverified and make no visual
+claims. `see` owns explicit direct-viewing exceptions.
 
 ## Tooling
 

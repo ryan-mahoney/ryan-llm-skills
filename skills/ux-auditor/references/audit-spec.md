@@ -13,7 +13,7 @@ Return markdown using this exact structure:
 ## Inputs
 - Prototype: <path>
 - Implementation: <path>
-- Visual evidence: <host-vision | codex-see (Luna) | source-only — no visual evidence>
+- Visual evidence: <codex-see (Luna) | source-only — no visual evidence | explicitly requested host-vision>
 
 ## Audit Summary
 - Areas reviewed: <count>

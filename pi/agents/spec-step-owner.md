@@ -27,9 +27,9 @@ delegate JSON-file preparation to the editor. The coordinator reuses your decisi
 
 For UI changes or a concrete visual question, use `~/.agents/skills/uishot/SKILL.md`
 and `~/.agents/skills/see/SKILL.md`. Run capture through `spec_verify` after the editor
-returns, then inspect the image with your read tool if your current model/harness can
-see it, or use the documented vision relay through `spec_verify`. Do not reuse a vision
-verdict from a different model. For `visualDesign: true`, follow the step skill's full
+returns, then use the documented Luna relay through `spec_verify`, even if you support
+vision. Keep image payloads out of your session; retain compact observations and
+revision-bound artifact paths. For `visualDesign: true`, follow the step skill's full
 visual-verification reference. Capture representative changed states, not every edit;
 send observed defects back as bounded editor assignments. Keep images in the canonical
 package evidence folder, reuse applicable captures, and clean up only servers/browser
@@ -38,7 +38,7 @@ When capture needs a dev server, supply `spec_verify.server` with its foreground
 `command`, loopback `ready_url`, and optional `readiness_timeout`. Put capture in
 the outer `command`; the runtime owns server readiness and cleanup. Do not launch
 `nohup ... &` in a separate call. Close browsers you create within the capture;
-leave pre-existing browsers alone. Read returned images after cleanup.
+leave pre-existing browsers alone. Pass returned image paths to Luna after cleanup.
 
 Use the prepared card as the execution plan. Before invoking `spec_editor`, decide
 the implementation approach yourself. Dispatch the first sufficiently understood bounded

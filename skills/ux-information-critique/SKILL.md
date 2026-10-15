@@ -27,23 +27,15 @@ If the reading job is missing, ask for it in one line: "Who reads this, and how 
 
 Optional but valuable, and worth asking for once if not offered: the trim size and whether the sample is at actual size, the book's genre and competitive set, which page types exist beyond those shown (openers, tables, index, notes), known reader complaints, and constraints (template, brand, tooling, what can't change).
 
-## Before Step 1: establish your eyes
+## Before Step 1: inspect through Luna
 
-The page images are this critique's entire evidence base, and not every model
-running this skill can view images or render a PDF — one that cannot will write
-a fluent, wholly fabricated critique rather than admit it. Settle the question
-first with the sibling `see` skill: run its probe and carry the mode into the
-output.
-
-- `host-vision` — read the images or PDF pages directly and work as written below.
-- `codex-relay` — you cannot see them. Every observation comes from a `codex-see`
-  question, and the relay takes images, not PDFs: export the pages to PNGs
-  first, one spread per image, and relay them in reading order. Ask the blind
-  read with the reading job withheld, then one question per rubric dimension.
-  Attribute each observation to the relay.
-- `source-only` — you have no eyes. Stop. Say the pages cannot be examined and
-  offer the alternatives (install Codex CLI, or describe the layout in text). Do
-  not critique a spread you have not seen.
+The page images supply this critique's visual evidence. Follow the sibling `see`
+skill's Luna relay policy even when the host supports vision. Keep image data out
+of the critique session and attribute visual observations to `codex-relay`.
+Export PDF pages to PNGs, one spread per image, and relay them in reading order. Ask the blind read with the reading job withheld, then each rubric dimension.
+Never strengthen an uncertain relay answer. If inspection is unavailable, record
+`source-only` and the exact gap; do not produce a visual critique from source or
+an uninspected image. `see` owns explicit direct-viewing exceptions.
 
 ## Method
 

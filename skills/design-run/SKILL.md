@@ -49,9 +49,10 @@ output.
 3. Derive status: `node ~/.agents/scripts/design/cli.mjs status <design-dir>`. Decide the
    work list from the arguments. Separately check for `screens/NN-<id>.md`; CLI status
    accounts for HTML and captures, not guides. Missing guides need a documentation pass.
-4. When producing or visually reviewing HTML, establish eyes with the sibling `see` skill
-   once: `host-vision`, `codex-relay`, or `source-only`. In `source-only` mode every visual check below is recorded as not
-   performed; say so in the output instead of implying inspection.
+4. When producing or visually reviewing HTML, follow the sibling `see` skill's Luna
+   relay policy. Keep captures out of the design session and retain text observations
+   with their image paths. Record `codex-relay`, or `source-only` when inspection is
+   unavailable; in that case record visual checks as unperformed.
 5. When producing or visually reviewing HTML, serve the design directory on loopback
    in the background:
    `python3 -m http.server <port> --directory <design-dir> --bind 127.0.0.1`. Pick an

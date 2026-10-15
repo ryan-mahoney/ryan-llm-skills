@@ -49,9 +49,10 @@ review or repeat files already inspected. On failure, diagnose or read directly 
 than switching scout models.
 
 For UI review, `~/.agents/skills/uishot/SKILL.md` provides capture and
-`~/.agents/skills/see/SKILL.md` establishes how your current model/harness inspects
-images. Reuse relevant owner captures tied to the reviewed revision and inspect them;
-do not trust another model's vision-mode cache or infer pixels from source. Capture
+`~/.agents/skills/see/SKILL.md` routes inspection through Luna. Reuse relevant owner
+captures tied to the reviewed revision and ask your own Luna questions; do not load
+image payloads into your review session or rely only on the owner's visual summary.
+Retain the relay observations and limitations; you own the review verdict. Capture
 again only for a concrete missing state or changed visual evidence, with a stable
 review target and the required process cleanup. While implementation is active, do
 not start a server/check against its changing checkout; report the exact evidence gap

@@ -478,8 +478,10 @@ skip a fired lens because its preferred skill is absent.
   changed views before judging them if current inspected captures do not establish
   the relevant state. Reuse applicable step captures and inspection records, checking
   their provenance; recapture for changed UI, missing states, or concrete uncertainty.
-  Establish eyes with `see`. Capture with
-  `uishot` at the default viewport and at 320px. Cite what you saw. Layout
+  Follow `see`'s Luna relay policy: ask your own visual questions about applicable
+  captures, retain text observations and limitations, and keep image payloads out
+  of the review session. You own the verdict. Capture with `uishot` at the default
+  viewport and at 320px when fresh captures are needed. Cite the relay evidence. Layout
   breakage, clipping, and contrast failures do not appear in a diff. When nothing
   renders, review from source and record the lens as source-only rather than
   implying the UI was seen.

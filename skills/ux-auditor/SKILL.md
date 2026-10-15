@@ -1,6 +1,6 @@
 ---
 name: ux-auditor
-description: Exhaustively audit a top-level UI implementation component against an HTML prototype and produce a grouped markdown checklist of corrections. Use when a user asks for UI parity review, visual QA, design implementation audit, pixel-level drift detection, or behavior/style mismatch analysis between prototype HTML and shipped component code. Works on hosts with and without image viewing — it establishes which it has before making any visual claim.
+description: Exhaustively audit a top-level UI implementation component against an HTML prototype and produce a grouped markdown checklist of corrections. Use when a user asks for UI parity review, visual QA, design implementation audit, pixel-level drift detection, or behavior/style mismatch analysis between prototype HTML and shipped component code. Uses the Luna relay for visual inspection without loading screenshots into the audit session.
 disable-model-invocation: true
 license: MIT
 metadata:
@@ -30,21 +30,13 @@ If either argument is missing or unreadable, stop and ask for the missing path.
 A running-app URL or pre-captured screenshot paths may be appended after the two
 required arguments; use them for the visual passes.
 
-## Step 0: Establish your eyes
+## Step 0: Inspect through Luna
 
-Do this before any visual claim. The model running this skill may not be able to
-view images, and a model that cannot see will usually describe a screenshot
-anyway rather than admit it.
-
-Read the sibling `see` skill and follow its Step 1 probe. It returns one mode:
-
-- `host-vision` — view screenshots directly.
-- `codex-relay` — every visual fact comes from `see`'s `codex-see` relay.
-- `source-only` — no visual evidence; audit from source and say so.
-
-Carry the mode into the `Visual evidence:` line of the output. Everything below
-that says "look at" means "look at in `host-vision`, ask `codex-see` in
-`codex-relay`, and skip with a stated gap in `source-only`."
+Follow the sibling `see` skill's Luna relay policy, including when the host supports
+vision. Keep screenshots out of the audit session. Ask your own visual questions,
+retain the text observations and uncertainty, and make the audit judgment yourself.
+Use `codex-relay` in `Visual evidence:`; if inspection is unavailable, use
+`source-only` and state the gap. `see` owns explicit direct-viewing exceptions.
 
 ## Audit Workflow
 
