@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 import os from 'node:os';
 import path from 'node:path';
-import { realpath } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 import { discover, discoverManaged, discoverPackage, report } from './core.mjs';
 import { metrics, formatMetrics } from './metrics.mjs';
 import { collectWorkspace, renderWorkspace, readEnrollments } from './sentinel.mjs';
 import { createRepositoryDiscovery } from './discovery.mjs';
 import { changedMembers, epicWaitState, epicWaves, parseEpic } from './epics.mjs';
-import { listEpics } from '../spec-location/index.mjs';
+import { checkPackage, listEpics } from '../spec-location/index.mjs';
+import { validateStepIndex } from './steps.mjs';
 import { resolveStorageRoot } from '../workspaces/store.mjs';
 import { publicHint } from '../../pi/extensions/spec-runtime/monitor.mjs';
 
@@ -17,11 +18,12 @@ const options = {};
 // Resolve after the write has been handed to the OS; process.exit can otherwise
 // truncate a snapshot larger than the pipe buffer.
 const print = text => new Promise(resolve => process.stdout.write(`${text}\n`, resolve));
-const usage = `Usage: node scripts/spec-observe/cli.mjs list|runs|report|metrics|sentinel|epic [options]
+const usage = `Usage: node scripts/spec-observe/cli.mjs list|runs|report|metrics|sentinel|epic|steps [options]
   epic lint --workspace W --epic SLUG [--root PATH]  Validate one epic record; print its dependency waves (exit 1 when invalid)
   epic wait --workspace W --epic SLUG [--minutes N] [--interval-seconds N] [--root PATH]
                          Block until a member's status, attention or launched session changes, or N minutes
                          pass (default 10, at most 60; checks every 60 seconds); print members and what changed
+  steps lint PACKAGE     Validate the package step index against its targets and evidence plan (exit 1 when invalid)
   metrics --package PATH  Calls, role/model response time, steps, test submissions and cost
   --format text|json     Metrics output (default json)
   --all-sessions         Metrics across all recorded coordinator sessions, including pauses
@@ -91,6 +93,24 @@ try {
         ({ name, status, attention, step, waiting_on, pr_url, sessions: current.state[name].sessions })),
       coverage: epic.coverage }, null, 2));
     process.exit(0);
+  }
+  if (command === 'steps') {
+    const [action, ...rest] = args;
+    if (action !== 'lint' || rest.length !== 1) { console.error(usage); process.exit(2); }
+    const checked = await checkPackage(rest[0]);
+    if (!checked.ok) { console.error(`${checked.code}: ${checked.message}`); process.exit(2); }
+    let index;
+    let evidencePlan;
+    try {
+      index = JSON.parse(await readFile(path.join(checked.locations.package_dir, 'spec-steps.json'), 'utf8'));
+      evidencePlan = JSON.parse(await readFile(path.join(checked.locations.package_dir, 'evidence-plan.json'), 'utf8'));
+    } catch (error) {
+      console.error(`unreadable step index: ${error.message}`);
+      process.exit(2);
+    }
+    const result = validateStepIndex(index, { targets: checked.locations.targets.map(target => target.id), evidencePlan });
+    await print(JSON.stringify(result, null, 2));
+    process.exit(result.ok ? 0 : 1);
   }
   if (!['list', 'runs', 'report', 'metrics', 'sentinel'].includes(command)) throw new Error(usage);
   const sentinelAction = command === 'sentinel' ? args.shift() : null;

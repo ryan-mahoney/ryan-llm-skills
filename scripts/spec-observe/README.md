@@ -291,6 +291,12 @@ status rules: [docs/spec-epics.md](../../docs/spec-epics.md).
 `cli.mjs epic wait --workspace W --epic S [--minutes N]` blocks until a member's status, attention
 or launched session (`workspaces launch` assignment) changes, or N minutes pass, then prints every
 member, the changed names and the ready members. Step progress alone does not end the wait.
+`cli.mjs steps lint PACKAGE` resolves one spec-location package, reads its
+`spec-steps.json` and `evidence-plan.json`, and prints the `steps.mjs`
+`validateStepIndex` result as one JSON document: dependency waves, conflicting
+writes, wave-check coverage, setup completeness and `concurrency_ready`. Exit
+status is 0 for a valid index, 1 when `ok` is false and 2 for arguments that do
+not resolve to a package. Lint is read-only; it never writes the index.
 
 Active observers check each target's entry in `pr-url.json`
 (`{package_ref, targets: {<repo id>: {url, branch, base, mode, ...}}}`) against authoritative
