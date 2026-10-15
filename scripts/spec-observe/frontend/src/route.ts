@@ -1,4 +1,5 @@
 export type Destination =
+  | 'next-steps'
   | 'specs'
   | 'epics'
   | 'agents'
@@ -31,6 +32,7 @@ export type RouteMode = 'push' | 'replace';
 export type RouteListener = (route: RouteState) => void;
 
 export const DESTINATIONS: readonly Destination[] = [
+  'next-steps',
   'specs',
   'epics',
   'agents',
