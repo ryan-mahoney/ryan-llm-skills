@@ -132,6 +132,68 @@ function workspaceOptions({
   };
 }
 
+for (const allocation of ['publication lower', 'fallback staging']) {
+  test(`wave workspaces: ${allocation} allocation failure cleans owned publication staging`, t => {
+    const target = makeTargetRepo(t, 'wave-allocation-target');
+    const waveRoot = freshRoot(t, 'wave-allocation-root');
+    const registryRoot = freshRoot(t, 'wave-allocation-ownership');
+    const options = workspaceOptions({
+      target, waveRoot, packageId: 'wave-allocation', label: 'allocation',
+      attemptId: 'attempt-allocation', baseCommit: target.c2,
+    });
+    const script = `
+      import assert from 'node:assert/strict';
+      import { registerHooks } from 'node:module';
+      import { mkdirSync, mkdtempSync, readdirSync } from 'node:fs';
+      import { join } from 'node:path';
+      import { createOwnership } from ${JSON.stringify(new URL('./ownership.mjs', import.meta.url).href)};
+      const moduleUrl = ${JSON.stringify(new URL('./step-workspaces.mjs', import.meta.url).href)};
+      const allocation = ${JSON.stringify(allocation)};
+      const original = Object.assign(new Error('injected ENOSPC: ' + allocation), { code: 'ENOSPC' });
+      let injected = false;
+      globalThis.__waveAllocation = (kind, path, options) => {
+        if (!injected && kind === allocation) {
+          injected = true;
+          throw original;
+        }
+        return kind === 'publication lower' ? mkdirSync(path, options) : mkdtempSync(path);
+      };
+      const hooks = registerHooks({
+        load(url, context, nextLoad) {
+          const loaded = nextLoad(url, context);
+          if (url !== moduleUrl) return loaded;
+          const source = String(loaded.source)
+            .replace("mkdirSync(publishLower, { recursive: true })",
+              "globalThis.__waveAllocation('publication lower', publishLower, { recursive: true })")
+            .replace("mkdtempSync(join(tmpdir(), 'wave-lower-staging-'))",
+              "globalThis.__waveAllocation('fallback staging', join(tmpdir(), 'wave-lower-staging-'))");
+          return { ...loaded, source };
+        },
+      });
+      const { prepareStepWorkspace } = await import(moduleUrl);
+      const ownership = createOwnership({ registryRoot: ${JSON.stringify(registryRoot)} });
+      const options = { ...${JSON.stringify(options)}, ownership };
+      await assert.rejects(() => prepareStepWorkspace(options), error => {
+        assert.strictEqual(error, original, 'preserve the original allocation error');
+        return true;
+      });
+      assert.equal(injected, true, 'allocation fault was reached');
+      assert.equal((await ownership.inspectClaims()).claims.length, 0, 'failed publisher releases its claim');
+      assert.deepEqual(readdirSync(join(options.waveRoot, 'snapshots')), [],
+        'failed publisher leaves no owned publication staging');
+      const retry = await prepareStepWorkspace({ ...options, phaseToken: 'phase-allocation-retry' });
+      assert.equal(retry.backend, 'overlayfs');
+      assert.deepEqual(readdirSync(join(options.waveRoot, 'snapshots')), [retry.snapshotId]);
+      const { createOverlayPhases } = await import(${JSON.stringify(new URL('./overlay.mjs', import.meta.url).href)});
+      await createOverlayPhases({ ownership }).endPhase({ ...retry.claim, drain: 'confirmed' });
+      assert.equal((await ownership.inspectClaims()).claims.length, 0);
+      hooks.deregister();
+      delete globalThis.__waveAllocation;
+    `;
+    execFileSync(process.execPath, ['--input-type=module', '-e', script], GIT);
+  });
+}
+
 test('wave workspaces: backend selection follows capability classification', () => {
   const supported = supportedCapability();
   assert.equal(supported.status, 'supported');

@@ -618,10 +618,11 @@ async function ensureSnapshot({ snapshotRoot, snapshotId, lower, identity, sourc
   rmSync(join(snapshotDir, `.publish-${snapshotId}`), { recursive: true, force: true });
   mkdirSync(snapshotDir, { recursive: true });
   const publishTmp = mkdtempSync(join(snapshotDir, `.publish-${snapshotId}-`));
-  const publishLower = join(publishTmp, 'lower');
-  mkdirSync(publishLower, { recursive: true });
-  const ownedStaging = staging ? null : mkdtempSync(join(tmpdir(), 'wave-lower-staging-'));
+  let ownedStaging = null;
   try {
+    const publishLower = join(publishTmp, 'lower');
+    mkdirSync(publishLower, { recursive: true });
+    ownedStaging = staging ? null : mkdtempSync(join(tmpdir(), 'wave-lower-staging-'));
     const input = staging ?? { source: join(ownedStaging, 'source'), dependencies: join(ownedStaging, 'dependencies') };
     if (ownedStaging) {
       mkdirSync(input.source, { recursive: true });
