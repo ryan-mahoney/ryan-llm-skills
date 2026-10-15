@@ -452,6 +452,10 @@ def run_list_case(report: dict, fixture: subprocess.Popen, receipt: dict, eviden
             select_slug(slug, workspace)
             expect(primary_action()).to_have_text(expected_primary)
             expect(page.locator(".object-top .status")).to_have_text(expected_status)
+            if slug == "waiting":
+                # spec.md alone supplies neither a prepared index nor report.
+                expect(page.locator(".detail-body")).to_contain_text("Not planned")
+                capture("waiting-readiness")
         report["scenarios"].append("Selecting each seeded subject shows its independently expected suggested action and exact observed status")
 
         # Epic subject with real member planning and the next-member launch route.
@@ -656,6 +660,67 @@ def run_list_case(report: dict, fixture: subprocess.Popen, receipt: dict, eviden
         report["scenarios"].append("Literal markup in an observed summary renders as text with no element or handler execution")
 
         # --- 3. Presentation freeze and continuity -------------------------- #
+        # AC-13 boundaries missing from the original All-with-siblings case:
+        # the sole Critique match changes stage; the last in-scope row leaves.
+        for boundary in ("filtered-stage", "last-removal"):
+            control("next-reset")
+            held_page = context.new_page()
+            held_page.clock.install()
+            held_page.on("pageerror", lambda error: report["pageErrors"].append(str(error)))
+            attach_console_evidence(held_page, boundary, report)
+            if boundary == "last-removal":
+                def sole_scan(route):
+                    response = route.fetch()
+                    payload = response.json()
+                    payload["rows"] = [item for item in payload["rows"] if item["slug"] == "recommended"]
+                    payload["coverage"] = {**payload["coverage"], "state": "complete", "reasons": [], "unread": []}
+                    route.fulfill(response=response, json=payload)
+                held_page.route("**/api/next-steps", sole_scan)
+            suffix = "?filter=critique" if boundary == "filtered-stage" else ""
+            held_page.goto(receipt["url"] + "/#/next-steps" + suffix, wait_until="domcontentloaded")
+            held_row = held_page.locator('tr.queue-row').filter(has=held_page.locator('a.subject', has_text="recommended"))
+            expect(held_row).to_be_visible(timeout=20000)
+            held_row.locator("a.subject").click()
+            button = held_row.locator("button.step-link")
+            button.hover()
+            button.evaluate("el => { el.focus(); window.__heldNode = el; }")
+            before = held_row.bounding_box()["y"]
+            mutation = control("next-critique") if boundary == "filtered-stage" else control("next-remove", slug="recommended")
+            live_scan = request_json(fixture, receipt["url"], "/api/next-steps")
+            if boundary == "filtered-stage":
+                assert mutation["file"]["exists"]
+                assert next(item for item in live_scan["rows"] if item["slug"] == "recommended")["stage"] == "critique"
+            else:
+                assert mutation["stats"][0]["exists"] is False
+                assert not any(item["slug"] == "recommended" for item in live_scan["rows"])
+            held_page.clock.run_for(31000)
+            held_page.wait_for_timeout(400)
+            expect(held_row).to_be_visible()
+            assert held_page.evaluate("() => window.__heldNode === document.activeElement")
+            assert abs(held_row.bounding_box()["y"] - before) < 1
+            expect(held_page.locator("#next-step-heading")).to_have_text("recommended")
+            if boundary == "filtered-stage":
+                expect(button).to_have_text("Write spec")
+                expect(button).to_be_enabled()
+                expect(held_page.locator(".detail-actions button").first).to_have_text("Write spec")
+            else:
+                expect(held_row).to_have_class(re.compile("unavailable"))
+                expect(button).to_be_disabled()
+                expect(held_page.locator(".detail-actions button").first).to_be_disabled()
+            shot = evidence / f"production-{boundary}-held.png"
+            held_page.screenshot(path=str(shot))
+            report["captures"].append(str(shot))
+            if boundary == "last-removal":
+                held_page.locator(".list-refresh button").evaluate("el => el.click()")
+                held_page.wait_for_timeout(300)
+                assert held_page.evaluate("() => window.__heldNode === document.activeElement")
+            held_page.mouse.move(0, 0)
+            held_page.evaluate("() => document.activeElement.blur()")
+            expect(held_page.locator("tr.queue-row")).to_have_count(0)
+            expect(held_page.get_by_text("No matching files" if boundary == "filtered-stage" else "No new planning or review files", exact=True)).to_be_visible()
+            report["scenarios"].append(f"{boundary}: held active node/position/selection survives live empty classification, current action updates, exit flushes")
+            held_page.close()
+        control("next-reset")
         freeze_page = context.new_page()
         freeze_page.set_default_timeout(15000)
         freeze_page.on("pageerror", lambda error: report["pageErrors"].append(str(error)))

@@ -170,6 +170,7 @@ const stepSentence = (row: NextStepRow): string => row.step.id === 'write-spec' 
 const stepDetail = (row: NextStepRow): string => {
   if (row.held) return row.held;
   if (row.running) return 'This assignment is already running; follow it to see progress.';
+  if (row.step.id === 'open-spec' && row.step.reason) return row.step.reason;
   const parts: string[] = [];
   if (row.stage === 'epic') {
     const members = membersOf(row).length;
@@ -490,22 +491,7 @@ export default function NextStepsDestination(props: DestinationProps) {
   const allRows = createMemo(() => nextStepRows(scan(), rowsContext()));
   const counts = createMemo(() => filterCounts(allRows()));
   const rows = createMemo(() => visibleRows(allRows(), filter(), query()));
-  const rowsByKey = createMemo(() => new Map(rows().map(row => [row.key, row] as const)));
-  const selectedKey = createMemo(() => {
-    const id = props.route.id ?? '';
-    return id && rowsByKey().has(id) ? id : '';
-  });
-  const selected = createMemo(() => rowsByKey().get(selectedKey()) ?? null);
-  // The epic detail members come from the observed epic record, matched by the
-  // exact selected workspace and epic/name identity; the row's own record is a
-  // package match, not the epic.
-  const selectedEpic = createMemo(() => {
-    const current = selected();
-    if (!current) return null;
-    return props.epics.find(epic => epic
-      && text(epic.workspace) === current.workspace
-      && (text(epic.epic) === current.slug || text(epic.name) === current.slug)) ?? null;
-  });
+  const rowsByKey = createMemo(() => new Map(allRows().map(row => [row.key, row] as const)));
   const view = createMemo(() => nextStepsViewState(scan(), allRows(), {
     filter: filter(),
     q: query(),
@@ -515,8 +501,10 @@ export default function NextStepsDestination(props: DestinationProps) {
     now: serverNow(),
   }));
   // A failed initial load is a read error, not an endless skeleton; the
-  // retained-scan refresh failure stays a banner-only condition.
+  // retained-scan refresh failure stays a banner-only condition. Held/pinned
+  // membership keeps the table mounted even when the live filter is empty.
   const read = (): NextStepsViewState['read'] => {
+    if (displayKeys().length > 0) return 'ideal';
     const current = view().read;
     if (current === 'loading' && scan() === null && scanError() !== '' && !pending()) return 'error';
     return current;
@@ -608,6 +596,29 @@ export default function NextStepsDestination(props: DestinationProps) {
     const next = [...list];
     next.splice(Math.min(Math.max(pin.index, 0), next.length), 0, pin.key);
     return next;
+  });
+
+  const selectedKey = createMemo(() => {
+    const id = props.route.id ?? '';
+    return id && displayKeys().includes(id) ? id : '';
+  });
+  const selected = createMemo(() => {
+    const key = selectedKey();
+    const current = rowsByKey().get(key);
+    if (current) return current;
+    const previous = lastRows.get(key);
+    if (!previous) return null;
+    const held = 'Unavailable in this scan';
+    const hold = (action: NextStepAction): NextStepAction => ({ ...action, kind: 'held', reason: held });
+    return { ...previous, held, step: hold(previous.step), secondary: previous.secondary.map(hold) };
+  });
+  // Match epic detail by exact workspace and epic identity, not slug alone.
+  const selectedEpic = createMemo(() => {
+    const current = selected();
+    if (!current) return null;
+    return props.epics.find(epic => epic
+      && text(epic.workspace) === current.workspace
+      && (text(epic.epic) === current.slug || text(epic.name) === current.slug)) ?? null;
   });
 
   const pinFocusedRow = () => {
