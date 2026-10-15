@@ -23,7 +23,6 @@ import {
 } from './launch-handoff';
 import type { HandoffInput } from './launch-handoff';
 import {
-  contextKey,
   editLaunchDraft,
   getLaunchDraft,
   launchReviewedDraft,
@@ -290,6 +289,7 @@ export type ProposalBinding = {
   signature: string | null;
   revision: number;
   requestId: string | null;
+  status: 'inspect' | 'composed' | 'reviewed';
 };
 
 export type PrepareProposalOptions = { newRequest?: boolean };
@@ -353,6 +353,19 @@ const proposalGateReason = (candidate: ProposalCandidate, context: ProposalConte
       : 'A design request needs an observed valid design index and design brief.';
   }
   return '';
+};
+
+// Readiness authority must describe the exact package resolved by the handoff
+// owner, not another ready record (even one with the same entity basename).
+const bindingGateReason = (binding: ProposalBinding, context: ProposalContext): string => {
+  if (binding.candidate.action === 'implement_spec') {
+    const record = object(context.record) ? context.record : null;
+    const observed = record ? specHandoffInput(record, 'implement', planningFactsFor(record)) : null;
+    if (!observed || observed.ws !== binding.launch.ws || observed.packageRef !== binding.launch.package) {
+      return 'The observed package record does not match the prepared proposal; refresh the observation before reviewing or launching.';
+    }
+  }
+  return proposalGateReason(binding.candidate, context);
 };
 
 // ---- explicit proposal composition ---------------------------------------
@@ -845,7 +858,9 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
   const entryGuard = (key: string, entry: RequestEntry): (() => boolean) => {
     const revision = entry.revision;
     const snapshot = entry.snapshot;
-    return () => entries.get(key) === entry && entry.revision === revision && entry.snapshot === snapshot;
+    const binding = entry.binding;
+    return () => entries.get(key) === entry && entry.revision === revision && entry.snapshot === snapshot
+      && entry.binding === binding;
   };
 
   const runPrepare = async (
@@ -868,7 +883,6 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
     const definition = requestActionOf(text(selected.action));
     if (!definition) return refuse('An unknown request action was named.');
 
-    const guard = entryGuard(workspace, entry);
     const observed = environment.observe();
     const initialSignature = observed.signature;
 
@@ -919,19 +933,21 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
     }
 
     // The binding is installed before any protected-state return so re-entry
-    // can inspect existing work: its launch target comes from the retained
-    // draft, and a preview signature carries over only across the same launch
-    // context.
+    // can inspect existing work. This selection is not evidence that its brief
+    // has been composed: no prior request/candidate approval carries over.
     const retained = getLaunchDraft(launch);
-    const prior = entry.binding;
-    entry.binding = {
+    const binding: ProposalBinding = {
       candidate: { ...candidate },
       context: { ...observed.context },
       launch: retained ? { ...launch, target: retained.target ?? null } : launch,
-      signature: prior && contextKey(prior.launch) === contextKey(launch) ? prior.signature : null,
+      signature: null,
       revision: entry.revision,
       requestId: entry.requestId,
+      status: 'inspect',
     };
+    entry.binding = binding;
+    entry.signature = null;
+    const guard = entryGuard(workspace, entry);
 
     // Retained pending or ANY recorded outcome is inspect-only. Only an
     // explicit newRequest replaces an acknowledged launched outcome, and
@@ -1051,10 +1067,14 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
       return refuse(proposalFailure('save', error));
     }
     if (!guard()) return refuse('The request changed while the brief was being saved; prepare it again.');
+    binding.status = 'composed';
+    notify();
 
     // Readiness that moved since the initial observation refuses the review
     // instead of reviewing stale readiness.
     const afterSave = environment.observe();
+    const afterSaveGate = bindingGateReason(binding, afterSave.context);
+    if (afterSaveGate) return refuse(afterSaveGate);
     if (afterSave.signature !== initialSignature) {
       return refuse('Observed readiness facts changed while this proposal was being prepared; prepare it again.');
     }
@@ -1071,11 +1091,13 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
     // The preview signature is stored from the latest observation, and only
     // while it still matches the initial one the whole composition ran under.
     const latest = environment.observe();
+    const latestGate = bindingGateReason(binding, latest.context);
+    if (latestGate) return refuse(latestGate);
     if (latest.signature !== initialSignature) {
       return refuse('Observed readiness facts changed while the brief was being reviewed; review it again.');
     }
     entry.signature = latest.signature;
-    if (entry.binding) entry.binding = { ...entry.binding, signature: latest.signature };
+    entry.binding = { ...binding, status: 'reviewed', signature: latest.signature };
     notify();
     return { ok: true, status: 'reviewed', work: view(entry) };
   };
@@ -1113,13 +1135,14 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
     }
     const retained = getLaunchDraft(binding.launch);
     if (retained?.pending || retained?.result) return inspect();
+    if (binding.status === 'inspect') return refuse('Prepare this proposal successfully before reviewing its brief.');
     const guard = entryGuard(workspace, entry);
     const observed = environment.observe();
     if (!observed.live) return refuse('Connect to the live workspace service to review this brief.');
     if (!observed.token) return refuse('The workspace action token is unavailable.');
     // The implement/design readiness gates re-run before any approval is
     // refreshed, so a stale binding can never re-approve moved facts.
-    const gateReason = proposalGateReason(binding.candidate, observed.context);
+    const gateReason = bindingGateReason(binding, observed.context);
     if (gateReason) return refuse(gateReason);
     const previewSignature = observed.signature;
     try {
@@ -1131,11 +1154,13 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
     // The signature must be unchanged across the preview await, and the stored
     // preview signature comes from the latest observation.
     const latest = environment.observe();
+    const latestGate = bindingGateReason(binding, latest.context);
+    if (latestGate) return refuse(latestGate);
     if (latest.signature !== previewSignature) {
       return refuse('Observed readiness facts changed while the brief was being reviewed; review it again.');
     }
     entry.signature = latest.signature;
-    entry.binding = { ...binding, signature: latest.signature };
+    entry.binding = { ...binding, status: 'reviewed', signature: latest.signature };
     notify();
     return { ok: true, status: 'reviewed', work: view(entry) };
   };
@@ -1154,6 +1179,7 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
     }
     const retained = getLaunchDraft(binding.launch);
     if (retained?.pending || retained?.result) return inspect();
+    if (binding.status !== 'reviewed') return refuse('Prepare and review this proposal successfully before launching.');
     const guard = entryGuard(workspace, entry);
     const observed = environment.observe();
     if (!observed.live) return refuse('Connect to the live workspace service to launch.');
@@ -1162,7 +1188,7 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
       return refuse('Observed readiness facts changed since this proposal was reviewed; review it again before launching.');
     }
     // The current implement/design readiness gates hold at dispatch too.
-    const gateReason = proposalGateReason(binding.candidate, observed.context);
+    const gateReason = bindingGateReason(binding, observed.context);
     if (gateReason) return refuse(gateReason);
     try {
       await launchReviewedDraft(binding.launch, observed.token);

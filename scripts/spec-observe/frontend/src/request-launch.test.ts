@@ -156,6 +156,134 @@ const launchReply = (state: string): unknown => ({
   assignment: { assignment_id: ASSIGNMENT_ID, state }, observation: { assignment_id: ASSIGNMENT_ID },
 });
 
+// Run independently with the production tsx loader and --test-name-pattern
+// 'failed corrected-request|unrelated observed package|superseded candidate review'.
+test('failed corrected-request preparation cannot review or launch the previous brief after reconnect', async (t) => {
+  const ws = 'ws-fix-failed-reprepare';
+  const selected = wireCandidate(ws, 'alpha');
+  const record = readyRecord(ws, 'alpha', [{ id: 'repo', primary: '/workspace/repo' }]);
+  const calls = scopeFetch(t, call => {
+    if (call.url === '/api/request/interpret') return jsonResponse(200, wireProposal(call.body.request_id, [selected]));
+    if (call.url === '/api/dispatch/save-brief') return jsonResponse(200, { brief: 'briefs/alpha.md' });
+    if (call.url === `/api/workspace?id=${ws}`) return workspaceInventory(ws, [{ alias: 'repo', canonicalPath: '/workspace/repo' }]);
+    if (call.url === '/api/dispatch/prepare-spec-target') return jsonResponse(200, {});
+    if (call.url === '/api/dispatch/preview') return jsonResponse(200, previewReply('repo'));
+    if (call.url === '/api/dispatch/launch') return jsonResponse(200, launchReply('running'));
+    throw new Error(`unexpected fetch ${call.url}`);
+  });
+  const store = createRequestStore();
+  const probe = proposalEnvironment({ context: { record } });
+  store.editTranscript(ws, 'Request A');
+  await store.submitRequest(ws, TOKEN);
+  assert.equal((await store.prepareProposal(ws, selected, probe.env)).ok, true);
+  const launch = store.getRequest(ws)!.binding!.launch;
+  const savedA = getLaunchDraft(launch)!.saved!;
+  store.editTranscript(ws, 'Corrected request B');
+  await store.submitRequest(ws, TOKEN);
+  probe.set({ live: false });
+  assert.equal((await store.prepareProposal(ws, selected, probe.env)).ok, false);
+  probe.set({ live: true });
+  const count = calls.length;
+  assert.equal((await store.reviewProposal(ws, probe.env)).ok, false);
+  assert.equal((await store.launchProposal(ws, probe.env)).ok, false);
+  assert.equal(calls.length, count, 'no old-brief preview or dispatch after reconnect');
+  assert.deepEqual(getLaunchDraft(launch)!.saved, savedA, 'retained bytes stay inspectable, not approved for B');
+  assert.equal((await store.prepareProposal(ws, selected, probe.env)).ok, true);
+  assert.match(getLaunchDraft(launch)!.saved!.content, /Corrected request B/);
+  assert.equal((await store.launchProposal(ws, probe.env)).ok, true);
+  assert.equal(calls.filter(call => call.url === '/api/dispatch/launch').length, 1);
+});
+
+test('unrelated observed package cannot authorize re-review or dispatch of the bound package', async (t) => {
+  const ws = 'ws-fix-observed-identity';
+  const selected = wireCandidate(ws, 'alpha');
+  const record = readyRecord(ws, 'alpha', [{ id: 'repo', primary: '/workspace/repo' }]);
+  const calls = scopeFetch(t, call => {
+    if (call.url === '/api/request/interpret') return jsonResponse(200, wireProposal(call.body.request_id, [selected]));
+    if (call.url === '/api/dispatch/save-brief') return jsonResponse(200, { brief: 'briefs/alpha.md' });
+    if (call.url === `/api/workspace?id=${ws}`) return workspaceInventory(ws, [{ alias: 'repo', canonicalPath: '/workspace/repo' }]);
+    if (call.url === '/api/dispatch/prepare-spec-target') return jsonResponse(200, {});
+    if (call.url === '/api/dispatch/preview') return jsonResponse(200, previewReply('repo'));
+    if (call.url === '/api/dispatch/launch') return jsonResponse(200, launchReply('running'));
+    throw new Error(`unexpected fetch ${call.url}`);
+  });
+  const store = createRequestStore();
+  const probe = proposalEnvironment({ context: { record } });
+  store.editTranscript(ws, 'Implement alpha');
+  await store.submitRequest(ws, TOKEN);
+  assert.equal((await store.prepareProposal(ws, selected, probe.env)).ok, true);
+  const count = calls.length;
+  const owner = activeOwner(ws, String(record.package));
+  for (const replacement of [
+    readyRecord(ws, 'beta', []),
+    { ...record, package: '/another/storage/specs/alpha' },
+    { ...record, workspace: 'another-workspace' },
+  ]) {
+    probe.set({ context: { record: replacement, assignments: [owner] } });
+    const reviewed = await store.reviewProposal(ws, probe.env);
+    const launched = await store.launchProposal(ws, probe.env);
+    assert.equal(reviewed.ok, false);
+    assert.equal(launched.ok, false);
+    if (!reviewed.ok) assert.match(reviewed.reason, /does not match/);
+    if (!launched.ok) assert.match(launched.reason, /does not match/);
+  }
+  assert.equal(calls.length, count, 'mismatches cause no preview or launch POST');
+  probe.set({ context: { record, assignments: [owner] } });
+  assert.equal((await store.reviewProposal(ws, probe.env)).ok, false, 'the exact package owner still blocks');
+  assert.equal((await store.launchProposal(ws, probe.env)).ok, false);
+  assert.equal(calls.length, count);
+});
+
+test('superseded candidate review cannot restore A while candidate B is being prepared', async (t) => {
+  const ws = 'ws-fix-selection-generation';
+  const a: ProposalCandidate = { action: 'plan_epic', workspace: ws, entity: `workspace:${ws}`, goal: 'Plan A' };
+  const b: ProposalCandidate = { action: 'build_screens', workspace: ws, entity: 'design:beta', goal: 'Build B' };
+  const oldReview = deferredResponse();
+  const newSave = deferredResponse();
+  let previews = 0;
+  let saves = 0;
+  const calls = scopeFetch(t, call => {
+    if (call.url === '/api/request/interpret') return jsonResponse(200, wireProposal(call.body.request_id, [a, b]));
+    if (call.url === '/api/dispatch/save-brief') {
+      saves += 1;
+      return saves === 2 ? newSave.promise : jsonResponse(200, { brief: 'briefs/a.md' });
+    }
+    if (call.url === '/api/dispatch/preview') {
+      previews += 1;
+      return previews === 2 ? oldReview.promise : jsonResponse(200, previewReply(''));
+    }
+    if (call.url === '/api/dispatch/launch') return jsonResponse(200, launchReply('running'));
+    throw new Error(`unexpected fetch ${call.url}`);
+  });
+  const store = createRequestStore();
+  const probe = proposalEnvironment({ context: { designIndex: true, designBrief: true } });
+  store.editTranscript(ws, 'Plan or build');
+  await store.submitRequest(ws, TOKEN);
+  assert.equal((await store.prepareProposal(ws, a, probe.env)).ok, true);
+  const reviewA = store.reviewProposal(ws, probe.env);
+  await flush();
+  assert.equal(previews, 2);
+  const prepareB = store.prepareProposal(ws, b, probe.env);
+  await flush();
+  assert.equal(saves, 2);
+  oldReview.resolve(jsonResponse(200, previewReply('')));
+  assert.equal((await reviewA).ok, false, 'superseded review completion is ignored');
+  assert.equal(store.getRequest(ws)!.binding!.candidate.action, 'build_screens');
+  assert.equal(store.getRequest(ws)!.binding!.signature, null);
+  newSave.resolve(jsonResponse(200, { brief: 'briefs/b.md' }));
+  const outcome = await prepareB;
+  assert.equal(outcome.ok, true);
+  const binding = store.getRequest(ws)!.binding!;
+  assert.equal(binding.candidate.action, 'build_screens');
+  assert.equal(binding.launch.skill, 'design-run');
+  assert.match(getLaunchDraft(binding.launch)!.saved!.content, /Build B/);
+  assert.equal((await store.launchProposal(ws, probe.env)).ok, true);
+  const launches = calls.filter(call => call.url === '/api/dispatch/launch');
+  assert.equal(launches.length, 1);
+  assert.equal(launches[0].body.skill, 'design-run');
+  assert.equal(launches[0].body.request_id, getLaunchDraft(binding.launch)!.saved!.requestId);
+});
+
 test('a typed prepared single-target proposal shares one prepare promise and composes one save and one preview', async (t) => {
   const ws = 'ws-ev11-single';
   const slug = 'alpha-single';
