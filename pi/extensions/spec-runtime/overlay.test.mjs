@@ -62,10 +62,11 @@ function assertRefusal(reason, options) {
   );
 }
 
-// The claim attempt binds the phase token to the canonical work identity; the
-// test computes it independently from the documented contract.
+// The claim attempt binds the phase token to the canonical work identity as
+// an unambiguous tuple; the test computes it independently from the documented
+// contract, so delimiter-containing tokens and work paths cannot collide.
 function attemptBinding(token, work) {
-  return `${token}+${realpathSync(work)}`;
+  return JSON.stringify([token, realpathSync(work)]);
 }
 
 // Command-level probe runner: it executes the exact command argv handed to the
@@ -841,4 +842,109 @@ test('wave overlay: probe script operations are proven by an independent filesys
   assert.equal(ext4.result.status, 'unavailable');
   assert.equal(ext4.result.reason, 'filesystem-unsupported');
   assert.equal(ext4.result.fallbackEligible, true);
+});
+
+test('wave overlay: abnormal termination and effect diagnostics never authorize fallback', () => {
+  const options = 'rw,nosuid,nodev,redirect_dir=nofollow,uuid=on,userxattr';
+  const phase = (exitCode, stdout, stderr = '') => ({ exitCode, stdout, stderr });
+  const validCollect = (overrides = {}) => ({ fstype: 'overlay', options, copyUp: true, deletion: true, ...overrides });
+  const validVerify = (overrides = {}) => ({ fstype: 'overlay', options, retainedWrite: true, retainedDeletion: true, ...overrides });
+  const blockedUnknown = (label, result) => {
+    assert.equal(result.status, 'blocked', label);
+    assert.equal(result.reason, 'unknown-effect', label);
+    assert.equal(result.remedy, null, label);
+    assert.equal(result.fallbackEligible, false, label);
+  };
+
+  // Abnormal termination vetoes an otherwise eligible diagnostic in each
+  // phase: a signalled run has unknown effects whatever its stderr says.
+  blockedUnknown('signalled verify', interpretProbeResult({
+    collect: phase(0, JSON.stringify(validCollect())),
+    verify: { ...phase(1, '', 'bwrap: Unknown option --overlay'), signal: 'SIGKILL' },
+  }));
+  blockedUnknown('signalled collect', interpretProbeResult({
+    collect: { ...phase(1, '', 'bwrap: Unknown option --overlay'), signal: 'SIGKILL' },
+    verify: phase(0, JSON.stringify(validVerify())),
+  }));
+
+  // Mixed diagnostics in either phase are not a positive observation that the
+  // overlay options are absent: an unknown --help option plus an I/O failure
+  // after an --overlay mention is an unknown-effect failure.
+  const mixed = 'bwrap: Unknown option --help\nwrite failed after --overlay setup: Input/output error';
+  blockedUnknown('mixed diagnostics in collect', interpretProbeResult({
+    collect: phase(1, '', mixed),
+    verify: phase(0, JSON.stringify(validVerify())),
+  }));
+  blockedUnknown('mixed diagnostics in verify', interpretProbeResult({
+    collect: phase(0, JSON.stringify(validCollect())),
+    verify: phase(1, '', mixed),
+  }));
+
+  // Exhaustion, I/O and corruption diagnostics block on their own, even when
+  // they sit next to an --overlay mention.
+  for (const stderr of [
+    'No space left on device',
+    'Input/output error after --overlay setup',
+    'i/o error',
+    'write failed',
+    'ENOSPC',
+    'EIO',
+  ]) {
+    blockedUnknown(`effect diagnostic: ${stderr}`, interpretProbeResult({
+      collect: phase(1, '', stderr),
+      verify: phase(0, JSON.stringify(validVerify())),
+    }));
+  }
+
+  // A genuine, unsignalled unknown overlay option with a finite nonzero exit
+  // remains positively observed enumerated unavailability.
+  for (const [label, record] of [
+    ['collect', { collect: phase(1, '', 'bwrap: Unknown option --overlay'), verify: phase(0, JSON.stringify(validVerify())) }],
+    ['verify', { collect: phase(0, JSON.stringify(validCollect())), verify: phase(1, '', 'bwrap: Unknown option --overlay') }],
+  ]) {
+    const genuine = interpretProbeResult(record);
+    assert.equal(genuine.status, 'unavailable', label);
+    assert.equal(genuine.reason, 'overlay-options-absent', label);
+    assert.equal(genuine.fallbackEligible, true, label);
+    assert.ok(genuine.remedy, label);
+  }
+});
+
+test('wave overlay: phase attempt bindings are injective for delimiter-containing tokens and work paths', async () => {
+  const coordinator = { session: 'wave-session', epoch: 'wave-epoch', pid: 4242, started_at: 'wave-start' };
+  const attempts = [];
+  let heldClaim = null;
+  const ownership = {
+    async reserveCheckout({ packageId, attempt }) {
+      attempts.push(attempt);
+      if (!heldClaim) {
+        heldClaim = { packageId, attempt, epoch: coordinator.epoch, coordinator, token: 'wave-phase-token' };
+        return { status: 'reserved', claim: heldClaim };
+      }
+      return { status: 'held', claim: heldClaim };
+    },
+    async releaseClaim() {
+      return { status: 'released' };
+    },
+  };
+  const phases = createOverlayPhases({ ownership });
+
+  // Reviewer collision pair: token 'probe+/tmp/wave-a' with work '/tmp/wave-b'
+  // collides with token 'probe' with work '/tmp/wave-a+/tmp/wave-b' under any
+  // flat "token+work" join.
+  const first = await phases.startPhase({ packageId: 'wave-pkg', upper: '/tmp/wave-upper', work: '/tmp/wave-b', phaseToken: 'probe+/tmp/wave-a', coordinator });
+  assert.equal(first.status, 'permitted', JSON.stringify(first));
+
+  // The exact same operation replays idempotently (recovery path).
+  const replay = await phases.startPhase({ packageId: 'wave-pkg', upper: '/tmp/wave-upper', work: '/tmp/wave-b', phaseToken: 'probe+/tmp/wave-a', coordinator });
+  assert.equal(replay.status, 'replayed', JSON.stringify(replay));
+  assert.equal(replay.claim.token, first.claim.token);
+
+  // A distinct operation with delimiter-containing token and work is a
+  // different binding: it must be refused, never replayed.
+  const alias = await phases.startPhase({ packageId: 'wave-pkg', upper: '/tmp/wave-upper', work: '/tmp/wave-a+/tmp/wave-b', phaseToken: 'probe', coordinator });
+  assert.equal(alias.status, 'refused', JSON.stringify(alias));
+  assert.equal(alias.reason, 'upper-held');
+  assert.notEqual(attempts[2], attempts[0], 'distinct operations must bind to distinct attempts');
+  assert.equal(attempts[1], attempts[0], 'the exact operation must bind identically');
 });

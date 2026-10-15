@@ -96,12 +96,14 @@ export function createOverlayPhases({ ownership }) {
   return { startPhase, endPhase };
 }
 
-// The recorded attempt binds the phase token to the canonical work identity,
-// so the same upper with a different work directory is never mistaken for a
-// replay of the held claim while an aliased spelling of the same work is.
+// The recorded attempt binds the phase token to the canonical work identity as
+// an unambiguous tuple, so no delimiter inside a token or a work path can make
+// two distinct operations collide: the same upper with a different work
+// directory is never mistaken for a replay of the held claim, while an exact
+// replay (or an aliased spelling of the same work) still binds identically.
 function phaseAttemptBinding(phaseToken, work) {
   if (!isAbsolutePath(work)) throw refusal('work-invalid', 'work must be an absolute path');
-  return `${phaseToken}+${canonicalIdentity(work)}`;
+  return JSON.stringify([phaseToken, canonicalIdentity(work)]);
 }
 
 // Replay requires the complete ownership identity: package, attempt binding,
@@ -345,10 +347,16 @@ const PROBE_REMEDIES = Object.freeze({
 });
 
 // Only a positively observed unsupported-option diagnostic counts as the
-// enumerated overlay-options-absent unavailability; a failure that merely
-// mentions --overlay (I/O errors, exhaustion, signals) is not a diagnostic
-// about absent options and must stay blocked.
-const PROBE_OPTION_PATTERN = /(?:unknown|unrecognized|invalid)[\s-]+option\b[^]*--overlay|--overlay[^]*(?:unknown|unrecognized|invalid)[\s-]+option\b/i;
+// enumerated overlay-options-absent unavailability: a single bounded
+// diagnostic naming the overlay option itself as the rejected option (either
+// word order, optionally quoted). The pattern never spans a line break and
+// never glues an unrelated unknown-option diagnostic to a later --overlay
+// mention, so failures that merely mention --overlay (I/O errors, exhaustion,
+// signals) are not diagnostics about absent options and must stay blocked.
+const PROBE_OPTION_PATTERN = /(?:unknown|unrecognized|invalid)[ \t-]+option\b[\t :='"|,]*--overlay(?:-src)?\b|--overlay(?:-src)?\b[\t :='"|,]*(?:unknown|unrecognized|invalid)[ \t-]+option\b/i;
+// Exhaustion, I/O and corruption diagnostics mean unknown side effects: they
+// block before any diagnostic-based fallback eligibility (INV-4).
+const PROBE_EFFECT_PATTERN = /\bno space left|input\/output error|\bi\/o error|write failed|\bENOSPC\b|\bEIO\b/i;
 const PROBE_PERMISSION_PATTERN = /permission denied|operation not permitted/i;
 const PROBE_USERNS_PATTERN = /unshare|user.?namespace/i;
 const PROBE_MOUNT_PATTERN = /mount|overlay/i;
@@ -424,12 +432,24 @@ function probeExecutionFailed(record) {
   return !record || record.signal != null || record.exitCode !== 0;
 }
 
-// Failed execution is never observed semantics. Only positively observed
-// diagnostics are enumerated unavailability: an absent-option diagnostic, a
-// permission denial tied to user namespaces or to mounting. Exhaustion, I/O
-// errors, signals and unrecognized effects stay blocked.
+// Failed execution is never observed semantics. Abnormal termination and
+// indeterminate executions block first: a terminating signal or an exit code
+// that is not a plain finite integer failure (missing, mistyped or a
+// contradictory zero) has unknown effects whatever its diagnostics say.
+// Exhaustion, I/O and corruption diagnostics block next, before any
+// diagnostic-based fallback eligibility. Only positively observed diagnostics
+// remain enumerated unavailability: a bounded absent-option diagnostic naming
+// the overlay option, a permission denial tied to user namespaces or to
+// mounting.
 function classifyProbeFailure(record) {
-  const stderr = record && typeof record.stderr === 'string' ? record.stderr : '';
+  if (!record || record.signal != null || !Number.isInteger(record.exitCode) || record.exitCode === 0) {
+    return capability('blocked', 'unknown-effect', null, false);
+  }
+  const stdout = typeof record.stdout === 'string' ? record.stdout : '';
+  const stderr = typeof record.stderr === 'string' ? record.stderr : '';
+  if (PROBE_EFFECT_PATTERN.test(`${stdout}\n${stderr}`)) {
+    return capability('blocked', 'unknown-effect', null, false);
+  }
   if (PROBE_OPTION_PATTERN.test(stderr)) {
     return capability('unavailable', 'overlay-options-absent', PROBE_REMEDIES['overlay-options-absent'], true);
   }
