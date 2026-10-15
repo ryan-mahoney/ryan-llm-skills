@@ -12,7 +12,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createOverlayPhases, interpretProbeResult } from './overlay.mjs';
 import { createHash as newHash } from 'node:crypto';
 import {
@@ -1233,4 +1233,132 @@ test('wave workspaces: backend provenance records requested selection and remedy
   }));
   assertProvenance(overlay, { requestedBackend: 'auto', selectedBackend: 'overlayfs' }, 'attempt-prov-overlay', 'auto overlayfs');
 });
-
+test('wave workspaces: concurrent snapshot publishers never expose an interrupted partial lower', { timeout: 60000 }, async t => {
+  for (const interrupt of [true, false]) {
+    await t.test(interrupt ? 'interrupted contender' : 'completed contender reuses winner', async t => {
+      const target = makeTargetRepo(t, 'wave-concurrent-target');
+      const waveRoot = freshRoot(t, 'wave-concurrent-root');
+      const registryRoot = freshRoot(t, 'wave-concurrent-ownership');
+      const signals = freshRoot(t, 'wave-concurrent-signals');
+      const staging = stagePreparedInput(t, target, target.c2);
+      writeFileSync(join(staging.dependencies, 'dependency.txt'), 'prepared dependency\n');
+      const setup = { command: 'node --version', lockfiles: [], environment: [] };
+      const { snapshotId } = setupIdentity({ baseCommit: target.c2, setup, targetRoot: target.worktree });
+      const options = {
+        ...workspaceOptions({
+          target, waveRoot, packageId: 'wave-concurrent', label: 'concurrent', baseCommit: target.c2,
+          preparationReceipt: {
+            ok: true, drain: 'confirmed', baseCommit: target.c2, trackedClean: true,
+            snapshotId, stagingDigest: stagingDigest(staging),
+          },
+        }),
+        staging,
+      };
+      const childCode = `
+        import fs from 'node:fs';
+        import { syncBuiltinESMExports } from 'node:module';
+        import { join } from 'node:path';
+        const { options, registryRoot, signals, role, interrupt, moduleUrl, ownershipUrl } = JSON.parse(process.argv[1]);
+        const copy = fs.copyFileSync, chmod = fs.chmodSync;
+        let paused = false;
+        function pause(path) {
+          if (paused || !path.includes('/.publish-') || !path.includes('/lower/')) return;
+          paused = true;
+          fs.writeFileSync(join(signals, role + '.paused'), path);
+          const deadline = Date.now() + 15000;
+          while (!fs.existsSync(join(signals, role + '.release'))) {
+            if (Date.now() > deadline) throw new Error('publisher barrier timed out: ' + role);
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+          }
+          if (role === 'b' && interrupt) throw new Error('injected publisher interruption');
+        }
+        fs.copyFileSync = (source, destination, ...rest) => {
+          if (role === 'b') pause(destination);
+          return copy(source, destination, ...rest);
+        };
+        fs.chmodSync = (path, ...rest) => {
+          const result = chmod(path, ...rest);
+          if (role === 'a' && path.endsWith('/README.md')) pause(path);
+          return result;
+        };
+        syncBuiltinESMExports();
+        const { prepareStepWorkspace } = await import(moduleUrl);
+        const { createOwnership } = await import(ownershipUrl);
+        try {
+          const record = await prepareStepWorkspace({
+            ...options, attemptId: 'attempt-' + role, phaseToken: 'phase-' + role,
+            coordinator: { ...options.coordinator, pid: process.pid },
+            ownership: createOwnership({ registryRoot }),
+          });
+          fs.writeFileSync(join(signals, role + '.result'), JSON.stringify({ record }));
+        } catch (error) {
+          fs.writeFileSync(join(signals, role + '.result'), JSON.stringify({ error: error.message }));
+        }
+      `;
+      const launch = role => {
+        const child = spawn(process.execPath, ['--input-type=module', '-e', childCode, JSON.stringify({
+          options, registryRoot, signals, role, interrupt,
+          moduleUrl: new URL('./step-workspaces.mjs', import.meta.url).href,
+          ownershipUrl: new URL('./ownership.mjs', import.meta.url).href,
+        })], { stdio: ['ignore', 'ignore', 'pipe'] });
+        let stderr = '';
+        child.stderr.on('data', chunk => { stderr += chunk; });
+        const exited = new Promise((resolve, reject) => {
+          child.on('error', reject);
+          child.on('exit', code => code === 0 ? resolve() : reject(new Error(`publisher ${role}: ${code}: ${stderr}`)));
+        });
+        // Attach immediately so teardown cannot produce an unhandled rejection.
+        exited.catch(() => {});
+        t.after(() => { if (child.exitCode === null) child.kill('SIGKILL'); });
+        return exited;
+      };
+      const waitFor = async name => {
+        const deadline = Date.now() + 15000;
+        while (!existsSync(join(signals, name))) {
+          assert.ok(Date.now() < deadline, `publisher barrier timed out: ${name}`);
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+      };
+      const a = launch('a');
+      await waitFor('a.paused'); // A has copied and chmodded README.
+      const b = launch('b');
+      await waitFor('b.paused'); // B has created staging, but has not copied a file.
+      writeFileSync(join(signals, 'a.release'), '');
+      await a;
+      const first = JSON.parse(readFileSync(join(signals, 'a.result'), 'utf8'));
+      assert.equal(first.error, undefined, 'the first publisher succeeds');
+      const assertContents = lower => {
+        for (const [input, prefix] of [[staging.source, ''], [staging.dependencies, '']]) {
+          const check = (directory, relative) => {
+            for (const entry of readdirSync(directory, { withFileTypes: true })) {
+              const path = join(relative, entry.name);
+              if (entry.isDirectory()) check(join(directory, entry.name), path);
+              else {
+                assert.deepEqual(readFileSync(join(lower, path)), readFileSync(join(input, path)), `${path}: complete bytes`);
+                assert.equal(statSync(join(lower, path)).mode & 0o777, statSync(join(input, path)).mode & 0o777, `${path}: complete modes`);
+              }
+            }
+          };
+          check(input, prefix);
+        }
+      };
+      assertContents(first.record.lower);
+      assert.notEqual(readFileSync(join(signals, 'a.paused'), 'utf8').split('/lower/')[0],
+        readFileSync(join(signals, 'b.paused'), 'utf8').split('/lower/')[0], 'publishers exclusively own different staging directories');
+      writeFileSync(join(signals, 'b.release'), '');
+      await b;
+      const second = JSON.parse(readFileSync(join(signals, 'b.result'), 'utf8'));
+      if (interrupt) assert.match(second.error, /injected publisher interruption/);
+      else {
+        assert.equal(second.error, undefined, 'a completed losing publisher reuses the winner');
+        assert.equal(second.record.lower, first.record.lower);
+      }
+      const third = await prepareStepWorkspace({
+        ...options, attemptId: 'attempt-c', phaseToken: 'phase-c', ownership: createOwnership({ registryRoot }),
+      });
+      assert.equal(third.lower, first.record.lower, 'an uninstrumented caller reuses the winner');
+      assertContents(third.lower);
+      assert.deepEqual(readdirSync(join(waveRoot, 'snapshots')), [snapshotId], 'each publisher cleans only its own staging');
+    });
+  }
+});

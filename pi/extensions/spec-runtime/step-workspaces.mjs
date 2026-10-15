@@ -578,7 +578,6 @@ function extractCommitTree({ source, baseCommit, destination }) {
 // repaired in place, so no attempt can observe a lower it did not freeze.
 async function ensureSnapshot({ snapshotRoot, snapshotId, lower, identity, source, baseCommit, staging }) {
   const snapshotDir = join(snapshotRoot, '..');
-  const publishTmp = join(snapshotDir, `.publish-${snapshotId}`);
   if (existsSync(snapshotRoot)) {
     let stored = null;
     try {
@@ -612,11 +611,13 @@ async function ensureSnapshot({ snapshotRoot, snapshotId, lower, identity, sourc
   // plus its snapshot record are assembled in a temporary directory beside
   // the final snapshot root (same filesystem) and moved into place with one
   // rename, so a partially built snapshot is never visible under the final
-  // snapshots/<snapshotId> path. A leftover publication temporary directory
-  // from an interrupted run is discarded here, never adopted blindly as a
-  // valid snapshot.
-  rmSync(publishTmp, { recursive: true, force: true });
+  // snapshots/<snapshotId> path. Each publisher exclusively owns its staging:
+  // neither another publisher nor its cleanup may change a tree being copied.
+  // Discard only the legacy shared temporary path; current publishers never
+  // use it. Interrupted unique staging is never adopted or deleted by peers.
+  rmSync(join(snapshotDir, `.publish-${snapshotId}`), { recursive: true, force: true });
   mkdirSync(snapshotDir, { recursive: true });
+  const publishTmp = mkdtempSync(join(snapshotDir, `.publish-${snapshotId}-`));
   const publishLower = join(publishTmp, 'lower');
   mkdirSync(publishLower, { recursive: true });
   const ownedStaging = staging ? null : mkdtempSync(join(tmpdir(), 'wave-lower-staging-'));
@@ -633,7 +634,17 @@ async function ensureSnapshot({ snapshotRoot, snapshotId, lower, identity, sourc
       join(publishTmp, SNAPSHOT_RECORD),
       `${JSON.stringify({ version: SNAPSHOT_VERSION, snapshotId, identity }, null, 2)}\n`,
     );
-    renameSync(publishTmp, snapshotRoot);
+    try {
+      // A complete, nonempty final directory cannot be replaced by rename:
+      // the first successful rename wins without mutating any peer's staging.
+      renameSync(publishTmp, snapshotRoot);
+    } catch (error) {
+      if (error.code !== 'EEXIST' && error.code !== 'ENOTEMPTY') throw error;
+      // Reuse only a winner whose record, identity and lower pass the same
+      // validation as a later caller; do not swallow a conflicting identity
+      // or an incomplete final publication.
+      await ensureSnapshot({ snapshotRoot, snapshotId, lower, identity, source, baseCommit, staging });
+    }
   } finally {
     rmSync(publishTmp, { recursive: true, force: true });
     if (ownedStaging) rmSync(ownedStaging, { recursive: true, force: true });
