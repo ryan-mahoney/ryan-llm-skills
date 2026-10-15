@@ -11,12 +11,11 @@ import { base, str, time } from './format';
 import { ActionBar, StateNotice, StatusText } from './primitives';
 import {
   coverageConcern, observedSpecReadiness, planningFactsFor, specReadiness,
-  type PlanningFacts, type PrerequisiteFact,
+  type PrerequisiteFact,
 } from './readiness';
-import { plannedTargetChoices, startPackageHandoff, type HandoffInput, type PackagePlanningPlan, type PlannedTarget } from './launch-handoff';
+import { plannedTargetChoices, specHandoffInput, startPackageHandoff, type PlannedTarget } from './launch-handoff';
 import { linkedAssignmentKey, packageRelative } from './spec-state';
 import { formatHash } from './route';
-import { packagePlanningPlan } from '../../../workspaces/spec-prompt.mjs';
 import type { WireRecord } from './model';
 import type { RouteState } from './route';
 
@@ -46,26 +45,6 @@ export type SpecReadinessProps = {
   // target (standalone use) the inline ActionBar below remains the fallback.
   actionsMount?: HTMLElement;
 };
-
-// Shared hand-off seed: observed identity plus the canonical package targets
-// already carried by the record. The presentation/stage derivation stays with
-// launch-handoff and spec-prompt, never in this view.
-function handoffInput(record: WireRecord, kind: 'implement' | 'plan', facts: PlanningFacts | null): HandoffInput {
-  const ws = text(record.workspace);
-  return {
-    ws,
-    packageRef: str(record.package) || str(record.package_ref),
-    targets: Array.isArray(record.targets) ? (record.targets as PlannedTarget[]) : [],
-    planningPlan: kind === 'plan'
-      ? packagePlanningPlan({
-          proposal: facts?.proposal === true,
-          critiqueRecommended: facts?.critiqueRecommended === true,
-          critique: facts?.critique === true,
-        }) as PackagePlanningPlan
-      : undefined,
-    returnRoute: { dest: 'specs', ws, filter: 'ready' },
-  };
-}
 
 export default function SpecReadiness(props: SpecReadinessProps) {
   const record = (): WireRecord => props.record;
@@ -275,7 +254,7 @@ export default function SpecReadiness(props: SpecReadinessProps) {
     setHandoffError('');
     setHandoffStatus('');
     try {
-      const outcome = await startPackageHandoff(kind, handoffInput(record(), kind, facts()), props.token, props.onNavigate);
+      const outcome = await startPackageHandoff(kind, specHandoffInput(record(), kind, facts()), props.token, props.onNavigate);
       if (!outcome.ok) {
         setHandoffError(outcome.reason);
         return;
@@ -626,7 +605,7 @@ export function SpecImplementEntry(props: SpecImplementEntryProps) {
     setBusy(true);
     setError('');
     try {
-      const outcome = await startPackageHandoff('implement', handoffInput(props.record, 'implement', planningFactsFor(props.record)), props.token ?? '', props.onNavigate);
+      const outcome = await startPackageHandoff('implement', specHandoffInput(props.record, 'implement', planningFactsFor(props.record)), props.token ?? '', props.onNavigate);
       if (!outcome.ok) setError(outcome.reason);
     } catch (cause) {
       setError(cause instanceof Error && cause.message

@@ -12,13 +12,37 @@
 // transport-free and Node-free.
 import { createSignal } from 'solid-js';
 import { HttpError, postAudio, postJson } from './api';
+import { seedNewThreadDraft } from './conversations-state';
+import { base } from './format';
+import {
+  packageLaunchPresentation,
+  plannedTargetChoices,
+  seedColdHandoff,
+  specHandoffInput,
+  startPackageHandoff,
+} from './launch-handoff';
+import type { HandoffInput } from './launch-handoff';
+import {
+  contextKey,
+  editLaunchDraft,
+  getLaunchDraft,
+  launchReviewedDraft,
+  reviewLaunchDraft,
+  saveLaunchDraft,
+  seedLaunchDraft,
+} from './launch-state';
+import type { LaunchContext } from './launch-state';
 import type { WireRecord } from './model';
 import {
   coverageStateOf,
   observedSpecReadiness,
   planningAssignmentFor,
+  planningFactsFor,
 } from './readiness';
 import { startCapture } from './request-audio';
+import { busyAgentsHref, parseHash } from './route';
+import type { RouteState } from './route';
+import { REQUEST_ACTIONS, requestBrief } from '../../../workspaces/request-actions.mjs';
 
 export type RequestPhase = 'ready' | 'recording' | 'transcribing' | 'interpreting' | 'result' | 'preview' | 'failure';
 export type RequestResultVariant = 'proposal' | 'alternatives' | 'clarification' | 'conversation';
@@ -64,6 +88,7 @@ export type RequestWork = {
   signature: string | null;
   pending: RequestPending | null;
   revision: number;
+  binding: ProposalBinding | null;
   primaryAction: { enabled: boolean; reason: string };
 };
 
@@ -89,6 +114,11 @@ export type RequestStore = {
   enterPreview: (workspace: string, signature: string) => RequestWork;
   closePanel: (workspace: string) => RequestWork | undefined;
   discardRequest: (workspace: string) => RequestWork;
+  prepareProposal: (workspace: string, candidate: ProposalCandidate, environment: ProposalEnvironment, options?: PrepareProposalOptions) => Promise<ProposalOutcome>;
+  reviewProposal: (workspace: string, environment: ProposalEnvironment) => Promise<ProposalOutcome>;
+  launchProposal: (workspace: string, environment: ProposalEnvironment) => Promise<ProposalOutcome>;
+  startConversation: (workspace: string, environment: ProposalEnvironment) => RequestWork | undefined;
+  openAgent: (workspace: string, environment: ProposalEnvironment, assignmentId: string) => void;
 };
 
 const STALE_REASON = 'The request changed after this result was returned; submit the current transcript, scope and references again.';
@@ -193,12 +223,20 @@ export function pageContext(input: PageContextInput = {}): PageContext {
 // Pure derivation of the Implement-spec-style proposal. Owner joining uses
 // planningAssignmentFor's exact canonical package identity (exact workspace
 // plus exact canonical package path; basename-only must never join).
+// The shipped candidate shape from request-interpret: the entity is a typed
+// catalog reference (spec:<slug>, design:<slug> or workspace:<id>) and the
+// remaining fields are the validated canonical uses/resolved_refs/research and
+// the quoted goal/constraints text.
 export type ProposalCandidate = {
   action: string;
   goal?: string;
   workspace?: string;
   package?: string;
   entity?: string;
+  uses?: string[];
+  resolved_refs?: string[];
+  research?: Record<string, string>;
+  constraints?: string[];
 };
 export type ProposalContext = {
   record?: WireRecord | null;
@@ -206,6 +244,10 @@ export type ProposalContext = {
   assignments?: WireRecord[];
   coverage?: WireRecord | null;
   design?: WireRecord | null;
+  // Observed design planning inputs supplied by the environment; the design
+  // launch gate reads these facts instead of inferring from screen count.
+  designIndex?: boolean | null;
+  designBrief?: boolean | null;
 };
 export type ProposalFacts = {
   readiness: string;
@@ -220,6 +262,41 @@ export type ProposalDecision = {
   reason: string;
   facts: ProposalFacts;
 };
+
+// The environment boundary for explicit proposal composition. observe() is
+// re-read before every awaited store operation so live/token/facts are never
+// captured stale; navigate() receives only resolved RouteState values and
+// close() is the optional request-panel dismissal.
+export type ProposalObservation = {
+  live: boolean;
+  token: string | null;
+  signature: string | null;
+  context: ProposalContext;
+};
+export type ProposalEnvironment = {
+  observe: () => ProposalObservation;
+  navigate: (route: RouteState) => void;
+  close?: () => void;
+};
+
+// The selected candidate, the observed context and the preview signature bound
+// to one request entry. The launch context is the ordinary launch-state
+// identity (no new identity is minted here) so a later surface can read the
+// composed draft with getLaunchDraft(binding.launch).
+export type ProposalBinding = {
+  candidate: ProposalCandidate;
+  context: ProposalContext;
+  launch: LaunchContext;
+  signature: string | null;
+  revision: number;
+  requestId: string | null;
+};
+
+export type PrepareProposalOptions = { newRequest?: boolean };
+export type ProposalStatus = 'brief' | 'reviewed' | 'inspect';
+export type ProposalOutcome =
+  | { ok: true; status: ProposalStatus; work: RequestWork }
+  | { ok: false; reason: string; work: RequestWork };
 
 const ownerIdentity = (owner: WireRecord): string =>
   [text(owner.display), text(owner.id) || text(owner.assignment_id), text(owner.spec_package)]
@@ -259,6 +336,119 @@ export function deriveProposal(candidate: ProposalCandidate, context: ProposalCo
     facts,
   };
 }
+
+// The readiness gate re-run before every approval refresh and dispatch:
+// implement_spec re-derives its readiness decision (an active owner or missing
+// preparation refuses), and build_screens requires the observed design index
+// and design brief rather than screen count. plan_epic carries no extra gate.
+const proposalGateReason = (candidate: ProposalCandidate, context: ProposalContext): string => {
+  const action = text(candidate.action);
+  if (action === 'implement_spec') {
+    const decision = deriveProposal(candidate, context);
+    return decision.action === 'launchable' ? '' : decision.reason;
+  }
+  if (action === 'build_screens' || action === 'build-screens') {
+    return context.designIndex === true && context.designBrief === true
+      ? ''
+      : 'A design request needs an observed valid design index and design brief.';
+  }
+  return '';
+};
+
+// ---- explicit proposal composition ---------------------------------------
+// One delimited Request work section per launch brief. The section carries the
+// requestBrief content and is replaced in place on re-prepare, so the canonical
+// base text and ordinary retained draft text survive untouched and repeated
+// prepares never append the request again.
+const REQUEST_SECTION_BEGIN = '--- Begin request work ---';
+const REQUEST_SECTION_END = '--- End request work ---';
+
+const withRequestWorkSection = (content: string, section: string): string => {
+  const block = `${REQUEST_SECTION_BEGIN}\n${section}\n${REQUEST_SECTION_END}`;
+  const begin = content.indexOf(REQUEST_SECTION_BEGIN);
+  const end = content.indexOf(REQUEST_SECTION_END);
+  if (begin !== -1 && end > begin) {
+    return content.slice(0, begin) + block + content.slice(end + REQUEST_SECTION_END.length);
+  }
+  const baseText = content.replace(/\s+$/, '');
+  return baseText === '' ? block : `${baseText}\n\n${block}`;
+};
+
+// The action catalog is the only skill/authority source; an own property is
+// required so inherited names never resolve to an action.
+type RequestActionDefinition = {
+  id: string;
+  targetType: string;
+  skill?: string;
+  authority?: string;
+  presentationOwner?: string;
+  prerequisites?: readonly string[];
+};
+
+const requestActionOf = (action: string): RequestActionDefinition | undefined =>
+  Object.hasOwn(REQUEST_ACTIONS, action)
+    ? (REQUEST_ACTIONS as unknown as Record<string, RequestActionDefinition>)[action]
+    : undefined;
+
+type RequestBrief = { title: string; content: string; launchable: boolean; reason?: string };
+
+const stringsOf = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+
+const researchOf = (value: unknown): Record<string, string> => {
+  const out: Record<string, string> = {};
+  if (object(value)) {
+    for (const key of Object.keys(value)) {
+      const flag = (value as WireRecord)[key];
+      if (typeof flag === 'string') out[key] = flag;
+    }
+  }
+  return out;
+};
+
+// Comparable identity over the shipped candidate fields so the selected
+// proposal is exactly one of the current result's candidates.
+const candidateKey = (candidate: WireRecord | ProposalCandidate): string => {
+  const raw = candidate as WireRecord;
+  const research = researchOf(raw.research);
+  return JSON.stringify([
+    text(raw.action),
+    text(raw.workspace),
+    text(raw.entity),
+    text(raw.goal),
+    stringsOf(raw.uses),
+    stringsOf(raw.resolved_refs),
+    stringsOf(raw.constraints),
+    Object.keys(research).sort().map(key => [key, research[key]]),
+  ]);
+};
+
+const refTypeOf = (value: string): string => (value.includes(':') ? value.slice(0, value.indexOf(':')) : '');
+const refSlugOf = (value: string): string => (value.includes(':') ? value.slice(value.indexOf(':') + 1) : value);
+
+// The typed spec entity carries the catalog's pkg.slug. It matches the
+// observed record's own slug/name or the basename of its canonical package
+// and package_ref; this basename policy applies only to request entity
+// matching and is never applied to readiness owner joins. An unmatched record
+// is refused outright; an unrelated record is never substituted.
+const specRecordMatches = (entity: string, record: WireRecord): boolean => {
+  const slug = refSlugOf(text(entity));
+  if (slug === '') return false;
+  const candidates = [text(record.slug), text(record.name)];
+  for (const source of [text(record.package), text(record.package_ref)]) {
+    if (source !== '') candidates.push(base(source));
+  }
+  return candidates.some(value => value === slug);
+};
+
+const proposalFailure = (operation: 'save' | 'review' | 'launch', error: unknown): string => {
+  if (error instanceof Error && error.message) return error.message;
+  return operation === 'save'
+    ? 'The brief could not be saved. Retry the same brief.'
+    : operation === 'review'
+      ? 'The brief could not be reviewed. Retry the same brief.'
+      : 'The launch could not be recorded. Inspect the recorded outcome before retrying.';
+};
 
 // Stable comparable signature over preparation facts, prerequisite states,
 // owner assignment identity and target choice (workspace/package/target/model).
@@ -316,6 +506,7 @@ type RequestEntry = {
   signature: string | null;
   pending: RequestPending | null;
   revision: number;
+  binding: ProposalBinding | null;
 };
 
 const primaryActionOf = (entry: RequestEntry): { enabled: boolean; reason: string } =>
@@ -347,6 +538,7 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
   const view = (entry: RequestEntry): RequestWork => ({
     ...entry,
     refs: cloneRefs(entry.refs),
+    binding: entry.binding ? { ...entry.binding, candidate: { ...entry.binding.candidate } } : null,
     primaryAction: primaryActionOf(entry),
   });
 
@@ -357,7 +549,7 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
         phase: 'ready', transcript: '', scope: key ? { workspace: key } : null, workspaceSelection: null,
         refs: [], requestId: crypto.randomUUID(), snapshot: null, result: null, failure: null,
         stale: false, staleReason: null, clip: null, clipNeedsTranscription: false, recording: false,
-        signature: null, pending: null, revision: 0,
+        signature: null, pending: null, revision: 0, binding: null,
       };
       entries.set(key, entry);
     }
@@ -639,11 +831,367 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
     entry.staleReason = null;
     entry.snapshot = null;
     entry.signature = null;
+    entry.binding = null;
     entry.requestId = crypto.randomUUID();
     entry.phase = 'ready';
     entry.revision += 1;
     notify();
     return view(entry);
+  };
+
+  // ---- explicit proposal selection, review and launch --------------------
+  // The guard captures the request entry's revision and snapshot so awaits
+  // never review or overwrite a newer entry after an edit or a new request.
+  const entryGuard = (key: string, entry: RequestEntry): (() => boolean) => {
+    const revision = entry.revision;
+    const snapshot = entry.snapshot;
+    return () => entries.get(key) === entry && entry.revision === revision && entry.snapshot === snapshot;
+  };
+
+  const runPrepare = async (
+    workspace: string,
+    candidate: ProposalCandidate,
+    environment: ProposalEnvironment,
+    options: PrepareProposalOptions,
+  ): Promise<ProposalOutcome> => {
+    const entry = ensureEntry(workspace);
+    const inspect = (): ProposalOutcome => ({ ok: true, status: 'inspect', work: view(entry) });
+    const refuse = (reason: string): ProposalOutcome => ({ ok: false, reason, work: view(entry) });
+
+    // Only a candidate carried by the current, non-stale interpretation of this
+    // workspace's request may be selected.
+    const result = entry.result;
+    if (!result || entry.stale) return refuse('Submit the current request and select a proposal from its result again.');
+    const selected = list(result.reply.candidates).find(raw => candidateKey(raw) === candidateKey(candidate));
+    if (!selected) return refuse('The selected proposal is not one of the current result candidates.');
+    if (text(selected.workspace) !== workspace) return refuse('The selected proposal does not match this request workspace.');
+    const definition = requestActionOf(text(selected.action));
+    if (!definition) return refuse('An unknown request action was named.');
+
+    const guard = entryGuard(workspace, entry);
+    const observed = environment.observe();
+    const initialSignature = observed.signature;
+
+    // Entity typing follows the action's catalog target type: a design action
+    // names a design, and a workspace action names exactly this workspace.
+    const entity = text(selected.entity);
+    const entityType = refTypeOf(entity);
+    const entitySlug = refSlugOf(entity);
+    if (definition.id === 'build_screens' && (entityType !== 'design' || entitySlug === '')) {
+      return refuse('The selected proposal does not name a design.');
+    }
+    if (definition.id === 'plan_epic' && entity !== `workspace:${workspace}`) {
+      return refuse('The selected proposal does not name this workspace.');
+    }
+
+    // Resolve the launch identity through the existing owners first, without
+    // seeding: implement_spec composes the package-bound hand-off and its
+    // canonical presentation/targets, plan_epic and build_screens the
+    // whole-workspace catalog context.
+    let launch: LaunchContext;
+    let handoff: HandoffInput | null = null;
+    let multi = false;
+    let seedTitle = '';
+    let seedBase = '';
+    if (definition.id === 'implement_spec') {
+      if (entityType !== 'spec') return refuse('The selected proposal does not name a spec package.');
+      const record = object(observed.context.record) ? observed.context.record : null;
+      if (!record || text(record.workspace) !== workspace || !specRecordMatches(entity, record)) {
+        return refuse('The observed package record does not match the selected spec; refresh the observation before preparing this launch.');
+      }
+      handoff = specHandoffInput(record, 'implement', planningFactsFor(record));
+      const choices = plannedTargetChoices(handoff.targets);
+      multi = choices.length > 1;
+      const presentation = packageLaunchPresentation('implement', handoff.packageRef);
+      seedTitle = presentation.title;
+      seedBase = presentation.content;
+      // The same identity seedColdHandoff derives, resolved before any gate so
+      // retained outcomes stay inspectable (also offline) on fresh re-entry.
+      launch = {
+        ws: workspace,
+        package: handoff.packageRef,
+        skill: presentation.skill,
+        authority: presentation.authority,
+        target: choices.length === 1 ? choices[0].path : null,
+      };
+    } else {
+      launch = { ws: workspace, skill: text(definition.skill), authority: 'none', target: null };
+    }
+
+    // The binding is installed before any protected-state return so re-entry
+    // can inspect existing work: its launch target comes from the retained
+    // draft, and a preview signature carries over only across the same launch
+    // context.
+    const retained = getLaunchDraft(launch);
+    const prior = entry.binding;
+    entry.binding = {
+      candidate: { ...candidate },
+      context: { ...observed.context },
+      launch: retained ? { ...launch, target: retained.target ?? null } : launch,
+      signature: prior && contextKey(prior.launch) === contextKey(launch) ? prior.signature : null,
+      revision: entry.revision,
+      requestId: entry.requestId,
+    };
+
+    // Retained pending or ANY recorded outcome is inspect-only. Only an
+    // explicit newRequest replaces an acknowledged launched outcome, and
+    // unconfirmed/failed outcomes never begin a corrected attempt here.
+    const replace = options.newRequest === true && retained?.result?.kind === 'launched';
+    if (!replace && (retained?.pending || retained?.result)) {
+      notify();
+      return inspect();
+    }
+
+    // Readiness gates run only once retained work is protected: implement
+    // re-derives its readiness decision, and build_screens requires the
+    // observed design index and design brief, never screen count alone.
+    const gateReason = proposalGateReason(candidate, observed.context);
+    if (gateReason) {
+      notify();
+      return refuse(gateReason);
+    }
+
+    // The delimited Request work section carries requestBrief content; for
+    // build_screens the same brief also gates launchability on the observed
+    // design index and design brief, never on screen count alone.
+    let brief: RequestBrief;
+    try {
+      brief = requestBrief(text(selected.action), {
+        workspace,
+        entity: refSlugOf(text(selected.entity)) || undefined,
+        transcript: entry.transcript,
+        source: entry.clip && !entry.clipNeedsTranscription ? 'spoken' : 'typed',
+        goal: text(selected.goal),
+        constraints: stringsOf(selected.constraints),
+        uses: stringsOf(selected.uses),
+        research: researchOf(selected.research),
+        observed: {
+          designIndex: observed.context.designIndex === true,
+          designBrief: observed.context.designBrief === true,
+        },
+      }) as RequestBrief;
+    } catch (error) {
+      return refuse(error instanceof Error && error.message ? error.message : 'The request brief could not be composed.');
+    }
+    if (definition.id === 'build_screens' && brief.launchable !== true) {
+      return refuse(brief.reason ?? 'A design request needs an observed valid design index and design brief.');
+    }
+    const section = brief.content;
+    if (definition.id !== 'implement_spec') {
+      seedTitle = brief.title;
+      seedBase = '';
+    }
+
+    // Live/token gate before any store write; observe() is re-read before each
+    // awaited store operation below.
+    const ready = environment.observe();
+    if (!ready.live) return refuse('Connect to the live workspace service to prepare this proposal.');
+    if (!ready.token) return refuse('The workspace action token is unavailable.');
+    const token = ready.token;
+
+    // Several canonical targets cannot be guessed: carry the operator's
+    // request into the target-choice brief and delegate the existing hand-off,
+    // then close the panel. Protected outcomes were already checked above so a
+    // recorded success is never relaunched; the draft is re-read before every
+    // write so a pending or recorded outcome is never written over, and
+    // startPackageHandoff keeps owning routing and target selection without any
+    // save or preview here.
+    if (multi && handoff) {
+      let chooserDraft = getLaunchDraft(launch);
+      if (!replace && (chooserDraft?.pending || chooserDraft?.result)) return inspect();
+      if (replace || !chooserDraft) {
+        seedLaunchDraft(launch, { title: seedTitle, content: withRequestWorkSection(seedBase, section), stage: 'brief' });
+      } else {
+        const content = withRequestWorkSection(text(chooserDraft.content), section);
+        if (content !== text(chooserDraft.content)) {
+          chooserDraft = getLaunchDraft(launch);
+          if (!replace && (chooserDraft?.pending || chooserDraft?.result)) return inspect();
+          editLaunchDraft(launch, { content });
+        }
+      }
+      const outcome = await startPackageHandoff('implement', handoff, token, route => environment.navigate(route));
+      environment.close?.();
+      return outcome.ok
+        ? { ok: true, status: 'brief', work: view(entry) }
+        : { ok: false, reason: outcome.reason, work: view(entry) };
+    }
+
+    // Only after protected-state handling, the live/token gate and the
+    // readiness gates may the single-target implement hand-off seed its
+    // canonical brief; the multi-target path above delegates instead.
+    if (handoff) {
+      const cold = seedColdHandoff('implement', handoff);
+      if (!cold.ok) return refuse(cold.reason);
+    }
+
+    // Preserve a retained model/target and draft text: one delimited Request
+    // work section is added or replaced idempotently instead of appending. The
+    // draft is re-read before every edit/save/review so a pending or recorded
+    // outcome is never written over.
+    let draft = getLaunchDraft(launch);
+    if (!replace && (draft?.pending || draft?.result)) return inspect();
+    if (replace || !draft) {
+      seedLaunchDraft(launch, { title: seedTitle, content: withRequestWorkSection(seedBase, section), stage: 'brief' });
+    } else {
+      const content = withRequestWorkSection(text(draft.content), section);
+      if (content !== text(draft.content)) {
+        draft = getLaunchDraft(launch);
+        if (!replace && (draft?.pending || draft?.result)) return inspect();
+        editLaunchDraft(launch, { content });
+      }
+    }
+
+    draft = getLaunchDraft(launch);
+    if (!replace && (draft?.pending || draft?.result)) return inspect();
+    const beforeSave = environment.observe();
+    if (!beforeSave.live || !beforeSave.token) return refuse('Connect to the live workspace service to save this brief.');
+    try {
+      await saveLaunchDraft(launch, beforeSave.token);
+    } catch (error) {
+      return refuse(proposalFailure('save', error));
+    }
+    if (!guard()) return refuse('The request changed while the brief was being saved; prepare it again.');
+
+    // Readiness that moved since the initial observation refuses the review
+    // instead of reviewing stale readiness.
+    const afterSave = environment.observe();
+    if (afterSave.signature !== initialSignature) {
+      return refuse('Observed readiness facts changed while this proposal was being prepared; prepare it again.');
+    }
+    if (!afterSave.live || !afterSave.token) return refuse('Connect to the live workspace service to review this brief.');
+    draft = getLaunchDraft(launch);
+    if (!replace && (draft?.pending || draft?.result)) return inspect();
+    try {
+      await reviewLaunchDraft(launch, afterSave.token);
+    } catch (error) {
+      return refuse(proposalFailure('review', error));
+    }
+    if (!guard()) return refuse('The request changed while the brief was being reviewed; prepare it again.');
+
+    // The preview signature is stored from the latest observation, and only
+    // while it still matches the initial one the whole composition ran under.
+    const latest = environment.observe();
+    if (latest.signature !== initialSignature) {
+      return refuse('Observed readiness facts changed while the brief was being reviewed; review it again.');
+    }
+    entry.signature = latest.signature;
+    if (entry.binding) entry.binding = { ...entry.binding, signature: latest.signature };
+    notify();
+    return { ok: true, status: 'reviewed', work: view(entry) };
+  };
+
+  // Duplicate prepare calls share exactly one promise through this synchronous
+  // workspace latch; the seed/save/review composition runs once per selection.
+  const preparations = new Map<string, Promise<ProposalOutcome>>();
+
+  const prepareProposal = (
+    workspace: string,
+    candidate: ProposalCandidate,
+    environment: ProposalEnvironment,
+    options: PrepareProposalOptions = {},
+  ): Promise<ProposalOutcome> => {
+    const running = preparations.get(workspace);
+    if (running) return running;
+    const promise = runPrepare(workspace, candidate, environment, options).finally(() => {
+      if (preparations.get(workspace) === promise) preparations.delete(workspace);
+    });
+    preparations.set(workspace, promise);
+    return promise;
+  };
+
+  // Re-review of the bound brief. The current signature is stored only after a
+  // successful current preview, so a refused or stale preview never advances
+  // the recorded facts.
+  const reviewProposal = async (workspace: string, environment: ProposalEnvironment): Promise<ProposalOutcome> => {
+    const entry = ensureEntry(workspace);
+    const inspect = (): ProposalOutcome => ({ ok: true, status: 'inspect', work: view(entry) });
+    const refuse = (reason: string): ProposalOutcome => ({ ok: false, reason, work: view(entry) });
+    const binding = entry.binding;
+    if (!binding) return refuse('Select a proposal and prepare it before reviewing.');
+    if (entry.revision !== binding.revision || entry.requestId !== binding.requestId) {
+      return refuse('The request changed after this proposal was prepared; prepare it again.');
+    }
+    const retained = getLaunchDraft(binding.launch);
+    if (retained?.pending || retained?.result) return inspect();
+    const guard = entryGuard(workspace, entry);
+    const observed = environment.observe();
+    if (!observed.live) return refuse('Connect to the live workspace service to review this brief.');
+    if (!observed.token) return refuse('The workspace action token is unavailable.');
+    // The implement/design readiness gates re-run before any approval is
+    // refreshed, so a stale binding can never re-approve moved facts.
+    const gateReason = proposalGateReason(binding.candidate, observed.context);
+    if (gateReason) return refuse(gateReason);
+    const previewSignature = observed.signature;
+    try {
+      await reviewLaunchDraft(binding.launch, observed.token);
+    } catch (error) {
+      return refuse(proposalFailure('review', error));
+    }
+    if (!guard()) return refuse('The request changed while the brief was being reviewed; prepare it again.');
+    // The signature must be unchanged across the preview await, and the stored
+    // preview signature comes from the latest observation.
+    const latest = environment.observe();
+    if (latest.signature !== previewSignature) {
+      return refuse('Observed readiness facts changed while the brief was being reviewed; review it again.');
+    }
+    entry.signature = latest.signature;
+    entry.binding = { ...binding, signature: latest.signature };
+    notify();
+    return { ok: true, status: 'reviewed', work: view(entry) };
+  };
+
+  // Dispatch is delegated to launch-state only after the current live/token/
+  // signature and request checks pass; the launch owner's own pending latch
+  // shares duplicate launches.
+  const launchProposal = async (workspace: string, environment: ProposalEnvironment): Promise<ProposalOutcome> => {
+    const entry = ensureEntry(workspace);
+    const inspect = (): ProposalOutcome => ({ ok: true, status: 'inspect', work: view(entry) });
+    const refuse = (reason: string): ProposalOutcome => ({ ok: false, reason, work: view(entry) });
+    const binding = entry.binding;
+    if (!binding) return refuse('Select a proposal and prepare it before launching.');
+    if (entry.revision !== binding.revision || entry.requestId !== binding.requestId) {
+      return refuse('The request changed after this proposal was prepared; prepare it again.');
+    }
+    const retained = getLaunchDraft(binding.launch);
+    if (retained?.pending || retained?.result) return inspect();
+    const guard = entryGuard(workspace, entry);
+    const observed = environment.observe();
+    if (!observed.live) return refuse('Connect to the live workspace service to launch.');
+    if (!observed.token) return refuse('The workspace action token is unavailable.');
+    if (observed.signature !== binding.signature) {
+      return refuse('Observed readiness facts changed since this proposal was reviewed; review it again before launching.');
+    }
+    // The current implement/design readiness gates hold at dispatch too.
+    const gateReason = proposalGateReason(binding.candidate, observed.context);
+    if (gateReason) return refuse(gateReason);
+    try {
+      await launchReviewedDraft(binding.launch, observed.token);
+    } catch (error) {
+      const settled = getLaunchDraft(binding.launch);
+      if (settled?.result) return inspect();
+      return refuse(proposalFailure('launch', error));
+    }
+    if (!guard()) return refuse('The request changed while the launch was being recorded.');
+    notify();
+    return inspect();
+  };
+
+  // Conversation entry: one-use transcript seed, the Conversations tab=new
+  // route only, then the panel closes. No thread is created here.
+  const startConversation = (workspace: string, environment: ProposalEnvironment): RequestWork | undefined => {
+    const entry = entries.get(workspace);
+    if (!entry) return undefined;
+    seedNewThreadDraft(workspace, { text: entry.transcript });
+    environment.navigate({ dest: 'conversations', ws: workspace, tab: 'new' });
+    environment.close?.();
+    return view(entry);
+  };
+
+  // Agent entry resolves the observed assignment key inventory so an agent
+  // click selects the observed row instead of the first list row.
+  const openAgent = (workspace: string, environment: ProposalEnvironment, assignmentId: string): void => {
+    const observed = environment.observe();
+    environment.navigate(parseHash(busyAgentsHref(workspace, text(assignmentId) || undefined, list(observed.context.assignments))));
   };
 
   return {
@@ -657,6 +1205,11 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
     enterPreview,
     closePanel,
     discardRequest,
+    prepareProposal,
+    reviewProposal,
+    launchProposal,
+    startConversation,
+    openAgent,
   };
 }
 
@@ -672,3 +1225,8 @@ export const submitRequest = requestStore.submitRequest;
 export const enterPreview = requestStore.enterPreview;
 export const closePanel = requestStore.closePanel;
 export const discardRequest = requestStore.discardRequest;
+export const prepareProposal = requestStore.prepareProposal;
+export const reviewProposal = requestStore.reviewProposal;
+export const launchProposal = requestStore.launchProposal;
+export const startConversation = requestStore.startConversation;
+export const openAgent = requestStore.openAgent;

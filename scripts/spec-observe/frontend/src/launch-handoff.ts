@@ -11,6 +11,7 @@ import {
 } from './launch-state';
 import type { LaunchContext, LaunchDraft, LaunchDraftError } from './launch-state';
 import type { WireRecord } from './model';
+import { str } from './format';
 import { subscribeRoute } from './route';
 import type { RouteMode, RouteState } from './route';
 import {
@@ -50,6 +51,28 @@ export type HandoffInput = {
   target?: string | null;
   returnRoute?: RouteState;
 };
+
+// Shared hand-off seed: observed identity plus the canonical package targets
+// already carried by the record. The presentation/stage derivation stays with
+// launch-handoff and spec-prompt, never in the calling view.
+const text = (value: unknown): string => (typeof value === 'string' ? value : '');
+
+export function specHandoffInput(record: WireRecord, kind: HandoffKind, facts: PlanningFacts | null): HandoffInput {
+  const ws = text(record.workspace);
+  return {
+    ws,
+    packageRef: str(record.package) || str(record.package_ref),
+    targets: Array.isArray(record.targets) ? (record.targets as PlannedTarget[]) : [],
+    planningPlan: kind === 'plan'
+      ? packagePlanningPlan({
+          proposal: facts?.proposal === true,
+          critiqueRecommended: facts?.critiqueRecommended === true,
+          critique: facts?.critique === true,
+        }) as PackagePlanningPlan
+      : undefined,
+    returnRoute: { dest: 'specs', ws, filter: 'ready' },
+  };
+}
 
 export type HandoffPresentation = {
   title: string;

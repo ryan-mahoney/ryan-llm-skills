@@ -10,7 +10,7 @@ import {
 } from './launch-state';
 import {
   coldPlanningPlan, discussionRepositoryTarget, handoffReturn, launchContextForRoute, packageLaunchPresentation, plannedTargetChoices,
-  retargetPackageHandoff, seedColdHandoff, startPackageHandoff, type HandoffInput, type PackagePlanningPlan, type PlannedTarget,
+  retargetPackageHandoff, seedColdHandoff, specHandoffInput, startPackageHandoff, type HandoffInput, type PackagePlanningPlan, type PlannedTarget,
 } from './launch-handoff';
 import { navigate, type RouteState } from './route';
 import { CRITIQUE_ONLY_PLAN, packagePlanningPlan } from '../../../workspaces/spec-prompt.mjs';
@@ -746,4 +746,49 @@ test('package handoff retarget after review clears approval and requires a fresh
   assert.equal(calls[8].body.repository_id, 'repo-eleven-b');
   assert.equal(calls[8].body.expectedDigest, NEXT_DIGEST);
   assert.equal(getLaunchDraft(started.context)?.result?.kind, 'launched');
+});
+
+test('specHandoffInput derives the moved SpecReadiness seed verbatim for implement and plan', () => {
+  const record = {
+    workspace: 'ws-handoff-input',
+    package: '/storage/proj/specs/pkg-input',
+    package_ref: 'ws-handoff-input/pkg-input',
+    targets: [{ id: 'input-alias', primary: '/workspace/repos/input' }],
+  };
+  const facts = (overrides: Partial<PlanningFacts> = {}): PlanningFacts => ({
+    proposal: true, critique: false, critiqueRecommended: false, prepared: true, steps: null,
+    preparation: null, decision: null, receipts: [], worktreeRecorded: null, ...overrides,
+  });
+
+  // Implement carries no planning plan and keeps the canonical identity and
+  // return route the moved SpecReadiness helper always produced.
+  const implement = specHandoffInput(record, 'implement', facts());
+  assert.deepEqual(implement, {
+    ws: 'ws-handoff-input',
+    packageRef: '/storage/proj/specs/pkg-input',
+    targets: [{ id: 'input-alias', primary: '/workspace/repos/input' }],
+    planningPlan: undefined,
+    returnRoute: { dest: 'specs', ws: 'ws-handoff-input', filter: 'ready' },
+  });
+
+  // Plan maps the observed planning facts to the shared stages and stop.
+  const epic = specHandoffInput(record, 'plan', facts({ critiqueRecommended: true }));
+  assert.deepEqual(epic.planningPlan, {
+    skill: 'spec-architect-critics', stages: ['spec-architect-critics', 'spec-write'], stop: 'prepared',
+  });
+  const presentation = packageLaunchPresentation('plan', epic.packageRef, epic.planningPlan);
+  assert.deepEqual(presentation.stages, ['spec-architect-critics', 'spec-write']);
+  assert.equal(presentation.stop, 'prepared');
+
+  const written = specHandoffInput(record, 'plan', facts({ critique: true }));
+  assert.deepEqual(written.planningPlan, { skill: 'spec-write', stages: ['spec-write'], stop: 'prepared' });
+
+  const fresh = specHandoffInput(record, 'plan', facts({ proposal: false, critiqueRecommended: true }));
+  assert.deepEqual(fresh.planningPlan, { skill: 'spec-architect-initial', stages: ['spec-architect-initial'], stop: 'proposal' });
+
+  // package_ref fills the reference when package is absent and targets stay verbatim.
+  const fallback = specHandoffInput({ workspace: 'ws-x', package_ref: 'ws-x/pkg', targets: [] }, 'implement', null);
+  assert.equal(fallback.packageRef, 'ws-x/pkg');
+  assert.deepEqual(fallback.targets, []);
+  assert.deepEqual(fallback.returnRoute, { dest: 'specs', ws: 'ws-x', filter: 'ready' });
 });
