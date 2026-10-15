@@ -15,6 +15,7 @@ import {
 } from './readiness';
 import { plannedTargetChoices, specHandoffInput, startPackageHandoff, type PlannedTarget } from './launch-handoff';
 import { linkedAssignmentKey, packageRelative } from './spec-state';
+import { catalogEntryForRecord, type CatalogEntry } from './scope';
 import { formatHash } from './route';
 import type { WireRecord } from './model';
 import type { RouteState } from './route';
@@ -26,12 +27,16 @@ const shortId = (value: unknown): string => {
   const id = text(value);
   return id.length > 8 ? id.slice(0, 8) : id;
 };
+const modifiedClick = (event: MouseEvent): boolean => event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0;
 
 export type SpecReadinessProps = {
   record: WireRecord;
   records?: WireRecord[];
   assignments: WireRecord[];
   epics?: WireRecord[];
+  ws?: string;
+  catalog?: CatalogEntry[];
+  workspace?: WireRecord | null;
   live: boolean;
   token?: string;
   onOpenAgent: (key: string) => void;
@@ -174,6 +179,10 @@ export default function SpecReadiness(props: SpecReadinessProps) {
       && [str(item.package), str(item.package_ref), str(item.name)].some(value => value === target || base(value) === base(target)),
     ) ?? null;
   };
+  // A prerequisite may live in its own workspace: resolve the prerequisite
+  // record's own catalog entry rather than the selected spec's scope. An
+  // unresolved entry leaves ws unset instead of guessing.
+  const prerequisiteWs = (item: WireRecord): string | undefined => catalogEntryForRecord(item, 'run', props.catalog ?? [])?.id;
   const reportPath = (): string => {
     const source = text(facts()?.preparation?.source);
     if (!source) return '';
@@ -308,7 +317,7 @@ export default function SpecReadiness(props: SpecReadinessProps) {
           class="ds-btn ds-btn--primary"
           data-action="open-prerequisite"
           data-prerequisite={name}
-          href={formatHash({ dest: 'specs', id: key })}
+          href={formatHash({ dest: 'specs', ws: prerequisiteWs(target), id: key })}
           onClick={event => {
             event.preventDefault();
             props.onSelectPackage(text(target.workspace), base(target.package));
@@ -475,8 +484,9 @@ export default function SpecReadiness(props: SpecReadinessProps) {
                     <a
                       class="text-link"
                       data-related="epic"
-                      href={formatHash({ dest: 'epics', id: epicKey() })}
+                      href={formatHash({ dest: 'epics', ws: props.ws, id: epicKey() })}
                       onClick={event => {
+                        if (modifiedClick(event)) return;
                         event.preventDefault();
                         props.onOpenEpic(epicKey());
                       }}
@@ -495,8 +505,9 @@ export default function SpecReadiness(props: SpecReadinessProps) {
                           <a
                             class="text-link"
                             data-prerequisite={fact.name}
-                            href={formatHash({ dest: 'specs', id: text(item().key) })}
+                            href={formatHash({ dest: 'specs', ws: prerequisiteWs(item()), id: text(item().key) })}
                             onClick={event => {
+                              if (modifiedClick(event)) return;
                               event.preventDefault();
                               props.onSelectPackage(text(item().workspace), base(item().package));
                             }}

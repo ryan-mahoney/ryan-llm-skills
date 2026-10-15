@@ -6,7 +6,7 @@
 
 After npm run build --prefix scripts/spec-observe/frontend:
 SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 120s uv run --script \
-  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs|context|catalog|member|search|filters|specs-list|specs-overview|specs-variants|specs-activity|specs-relaunch|files-workspace|files-sources|files-continuity|files-recovery|files-read-refresh]
+  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs|context|catalog|member|search|filters|specs-list|specs-overview|specs-variants|specs-activity|specs-links|specs-relaunch|files-workspace|files-sources|files-continuity|files-recovery|files-read-refresh]
 Only the fixture substitutes workers; App, adapters and file APIs are real.
 """
 import argparse
@@ -29,7 +29,7 @@ from playwright.sync_api import expect, sync_playwright
 from reference_screens import reference_screens
 
 args = argparse.ArgumentParser()
-args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters', 'specs-list', 'specs-workspace', 'specs-overview', 'specs-variants', 'specs-activity', 'specs-relaunch', 'files-workspace', 'files-sources', 'files-continuity', 'files-recovery', 'files-read-refresh'])
+args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters', 'specs-list', 'specs-workspace', 'specs-overview', 'specs-variants', 'specs-activity', 'specs-links', 'specs-relaunch', 'files-workspace', 'files-sources', 'files-continuity', 'files-recovery', 'files-read-refresh'])
 case = args.parse_args().case
 root = Path(__file__).resolve().parent
 evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-route-evidence'))
@@ -86,6 +86,8 @@ the App, route/scope/registry, files-model and the server file APIs are real.
 fixture_env = dict(os.environ)
 if case == 'context':
     fixture_env['SENTINEL_NONCANONICAL_CONTEXT'] = '1'
+if case == 'specs-links':
+    fixture_env['SENTINEL_SPECS_LINKS'] = '1'
 if case in ('files-workspace', 'files-sources', 'files-continuity', 'files-recovery', 'files-read-refresh'):
     fixture_env['SENTINEL_REPOSITORY_FILES'] = '1'
 fixture = subprocess.Popen(['node', str(root / 'browser-fixture.mjs')], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=fixture_env)
@@ -3435,6 +3437,259 @@ try:
             assert not detail_requests, detail_requests
             report['scenarios'].append('Imported offline snapshot keeps the unmapped Spec detail readable without workspace requests')
 
+        if case == 'specs-links':
+            # Real fixture App, catalog, workspace store and Files routes; only
+            # /api/state is fulfilled. The links workspace binds repository
+            # alias "frontend" to the frontend checkout and alias "app" to a
+            # different physical checkout, so a recorded package target is
+            # resolved by canonical path through the shared hand-off owner and
+            # never by target id. Records that cannot resolve one healthy
+            # repository must stay plain text instead of guessing a repository
+            # or dropping the workspace scope.
+            (evidence / 'step-007').mkdir(parents=True, exist_ok=True)
+            now = '2026-10-12T12:00:00.000Z'
+            links = receipt['links']
+            workspace = links['workspace']
+            package = links['package']
+            other_package = links['other']
+            frontend_checkout = links['frontend']
+            collision_checkout = links['collision']
+            specs_directory = str(Path(package).parent)
+            ghost_package = specs_directory + '/links-ghost'
+            multi_package = specs_directory + '/links-multi'
+            foreign_package = specs_directory + '/links-foreign'
+            canonical_key = json.dumps([workspace, package, 'recent-completion'], separators=(',', ':'))
+            ghost_key = json.dumps([workspace, ghost_package, 'recent-completion'], separators=(',', ':'))
+            multi_key = json.dumps([workspace, multi_package, 'recent-completion'], separators=(',', ':'))
+            foreign_key = json.dumps(['ghost-links', foreign_package, 'recent-completion'], separators=(',', ':'))
+            run_key = json.dumps([workspace, package, 'run-1'], separators=(',', ':'))
+            planned_key = json.dumps([workspace, other_package, 'planned-package', None], separators=(',', ':'))
+            head = '9f2c1ab4d5e6'
+            modifier = 'Meta' if os.uname().sysname == 'Darwin' else 'Control'
+            state = {'value': None}
+
+            def on_state(route):
+                route.fulfill(json=state['value'])
+
+            context.route('**/api/state**', on_state)
+
+            def capture(name, width):
+                page.set_viewport_size({'width': width, 'height': 900})
+                path = evidence / 'step-007' / f'{name}-{width}.png'
+                page.screenshot(path=str(path), full_page=True)
+                report.setdefault('captures', []).append(str(path))
+
+            def capture_both(name):
+                capture(name, 1280)
+                capture(name, 1600)
+
+            def target(target_id, primary):
+                return {'id': target_id, 'primary': primary}
+
+            def merged(workspace_id, package_path, package_ref, targets, assignment_id):
+                return {'workspace': workspace_id, 'package': package_path, 'package_ref': package_ref,
+                        'assignment_id': assignment_id, 'recent_completion': True,
+                        'source_paths': ['spec.md'], 'step_count': 3, 'total_steps': 3,
+                        'observed_at': now, 'coverage': {'state': 'complete', 'reasons': []},
+                        'completed_at': now, 'completion_basis': 'merged-pr',
+                        'obligation': f'Cross-linked {package_ref} completed against the resolved repository.',
+                        'merge': {'state': 'merged', 'number': 41, 'head': head, 'branch': 'spec/links-collision',
+                                  'url': 'https://example.invalid/pulls/41'},
+                        'targets': targets}
+
+            def envelope(runs=(), recently=(), planned=(), assignments=(), epics=()):
+                return {'schema_version': 1, 'generated_at': now,
+                        'observers': [{'observer_id': 'links-fixture', 'state': 'observing', 'published_at': now,
+                                       'snapshot': {'workspace': workspace,
+                                                    'coverage': {'state': 'complete', 'observed_at': now, 'reasons': []},
+                                                    'runs': list(runs), 'recently_completed': list(recently),
+                                                    'planned_packages': list(planned),
+                                                    'assignments': list(assignments),
+                                                    'assignment_coverage': {'state': 'complete', 'reasons': []},
+                                                    'epics': list(epics)}}]}
+
+            def fragment(href):
+                return urlsplit(href).fragment
+
+            def fragment_params(href):
+                return parse_qs(urlsplit(href).fragment.partition('?')[2])
+
+            def publication_row(label):
+                return page.locator('tr').filter(has_text=label)
+
+            # A: the package target id "app" collides with a different
+            # checkout, but its canonical primary is the frontend checkout, so
+            # resolution returns the frontend alias (id=frontend, never the
+            # recorded app id), and the linked Files route reads frontend bytes.
+            canonical = merged(workspace, package, f'{workspace}/links-collision',
+                               [target('app', frontend_checkout)], 'links-merged')
+            state['value'] = envelope(recently=[canonical])
+            open_route('specs', ws=workspace, id=canonical_key, filter='completed')
+            expect(page.locator('.object-head h2')).to_contain_text('links-collision')
+            repository = page.locator('[data-related="publication-repository"]')
+            expect(repository).to_have_count(1)
+            expect(repository).to_have_text('frontend')
+            branch = page.locator('[data-related="publication-branch"]')
+            expect(branch).to_have_count(1)
+            expect(branch).to_contain_text(head)
+            expect(branch).to_contain_text('spec/links-collision')
+            repository_href = repository.get_attribute('href')
+            assert fragment(repository_href).startswith('/files?'), repository_href
+            repository_params = fragment_params(repository_href)
+            assert repository_params['ws'] == [workspace], repository_href
+            assert repository_params['source'] == ['repository'], repository_href
+            assert repository_params['id'] == ['frontend'], repository_href
+            repository.scroll_into_view_if_needed()
+            capture_both('canonical')
+            repository.click()
+            expect(page.locator('h1')).to_have_text('Files')
+            assert fragment_params(page.url)['source'] == ['repository'], page.url
+            assert fragment_params(page.url)['id'] == ['frontend'], page.url
+            marker = page.locator('.files-destination button.file-record').filter(has=page.get_by_text('frontend-marker.md', exact=True)).first
+            expect(marker).to_be_visible()
+            marker.click()
+            expect(page.locator('.files-destination .reader-head h2')).to_have_text('frontend-marker.md')
+            expect(page.locator('.files-destination .reader')).to_contain_text('Canonical frontend checkout bytes.')
+            expect(page.locator('.files-destination')).not_to_contain_text('collision-marker.md')
+            report['scenarios'].append('Recorded target resolves by canonical path: the colliding app alias stays unused and the repository link opens the frontend checkout bytes')
+
+            # Modified click opens the same resolved route in a new page.
+            open_route('specs', ws=workspace, id=canonical_key, filter='completed')
+            repository = page.locator('[data-related="publication-repository"]')
+            expect(repository).to_have_count(1)
+            with context.expect_page() as opened:
+                repository.click(modifiers=[modifier])
+            popup = opened.value
+            popup.wait_for_load_state('domcontentloaded')
+            popup_params = fragment_params(popup.url)
+            assert popup_params['ws'] == [workspace], popup.url
+            assert popup_params['source'] == ['repository'], popup.url
+            assert popup_params['id'] == ['frontend'], popup.url
+            popup.close()
+
+            # All-workspaces variant: no ws in the route still derives the
+            # owning links workspace from the record.
+            open_route('specs', id=canonical_key, filter='completed')
+            repository = page.locator('[data-related="publication-repository"]')
+            expect(repository).to_have_count(1)
+            assert fragment_params(repository.get_attribute('href'))['ws'] == [workspace]
+            capture('canonical-nows', 1280)
+            report['scenarios'].append('A record opened without ws still links its resolved repository into the owning links workspace')
+
+            # D: an active run without ws derives the owning workspace for the
+            # Agent and Epic links; modified clicks keep the same scoped route.
+            active = {'workspace': workspace, 'package': package, 'package_ref': f'{workspace}/links-collision',
+                      'assignment_id': 'run-1', 'workflow_id': 'workflow-links',
+                      'execution': 'running', 'workflow_state': 'working', 'is_current_assignment': True,
+                      'activity': 'Cross-linking repository aliases', 'obligation': 'Resolve the recorded repository aliases',
+                      'observed_at': now, 'coverage': {'state': 'complete', 'reasons': []},
+                      'spec_progress': {'current_position': 1, 'total_steps': 2, 'current_name': 'Resolve links'},
+                      'timing': {'started_at': now, 'attempts': []},
+                      'epic': {'epic': 'links-epic', 'workspace': workspace},
+                      'targets': [target('frontend', frontend_checkout)]}
+            assignment = {'workspace': workspace, 'workspace_id': workspace, 'assignment_id': 'run-1',
+                          'spec_package': f'{workspace}/links-collision', 'workflow_id': 'workflow-links',
+                          'display': 'live', 'state': 'live',
+                          'coverage': {'state': 'complete', 'reasons': []},
+                          'task_activity': {'state': 'working', 'reason': 'Resolving recorded repository aliases.'},
+                          'nextAction': 'Follow the recorded repository target'}
+            epic = {'workspace': workspace, 'epic': 'links-epic', 'title': 'Links epic', 'state': 'active',
+                    'members': [{'name': 'links-collision', 'package': package, 'workspace': workspace,
+                                 'status': 'in-progress', 'waiting_on': [], 'attention': False}],
+                    'summary': {'total': 1, 'merged': 0, 'complete': 0, 'attention': 0},
+                    'next': 'links-collision', 'coverage': {'state': 'complete', 'reasons': []}}
+            state['value'] = envelope(runs=[active], assignments=[assignment], epics=[epic])
+            page.reload()
+            open_route('specs', id=run_key)
+            expect(page.locator('.object-head h2')).to_contain_text('links-collision')
+            agent = page.get_by_role('link', name='Agent run-1')
+            expect(agent).to_have_count(1)
+            epic_link = page.locator('[data-related="epic"]')
+            expect(epic_link).to_have_count(1)
+            agent_href = agent.get_attribute('href')
+            epic_href = epic_link.get_attribute('href')
+            assert fragment(agent_href).startswith('/agents?'), agent_href
+            assert fragment_params(agent_href)['ws'] == [workspace], agent_href
+            assert fragment(epic_href).startswith('/epics?'), epic_href
+            assert fragment_params(epic_href)['ws'] == [workspace], epic_href
+            capture_both('active-nows')
+            with context.expect_page() as opened:
+                agent.click(modifiers=[modifier])
+            popup = opened.value
+            popup.wait_for_load_state('domcontentloaded')
+            assert fragment(popup.url).startswith('/agents?'), popup.url
+            assert fragment_params(popup.url)['ws'] == [workspace], popup.url
+            popup.close()
+            with context.expect_page() as opened:
+                epic_link.click(modifiers=[modifier])
+            popup = opened.value
+            popup.wait_for_load_state('domcontentloaded')
+            assert fragment(popup.url).startswith('/epics?'), popup.url
+            assert fragment_params(popup.url)['ws'] == [workspace], popup.url
+            popup.close()
+            report['scenarios'].append('Without ws the active record still links its Agent and Epic into the owning links workspace, in place and in a new page')
+
+            # E: a waiting planned record without ws derives the owning
+            # workspace for its prerequisite link.
+            waiting_epic = {'workspace': workspace, 'epic': 'links-route', 'title': 'Links route epic', 'state': 'active',
+                            'members': [{'name': 'links-collision', 'package': package, 'workspace': workspace,
+                                         'status': 'ready', 'waiting_on': [], 'attention': False},
+                                        {'name': 'links-other', 'package': other_package, 'workspace': workspace,
+                                         'status': 'planned', 'waiting_on': ['links-collision'], 'requires': ['links-collision'],
+                                         'attention': False}],
+                            'summary': {'total': 2, 'merged': 0, 'complete': 0, 'attention': 0},
+                            'next': 'links-other', 'coverage': {'state': 'complete', 'reasons': []}}
+            waiting = {'workspace': workspace, 'package': other_package, 'package_ref': f'{workspace}/links-other',
+                       'planned': True, 'step_count': 3, 'prepared': True, 'observed_at': now,
+                       'preparation': {'outcome': 'prepared'}, 'coverage': {'state': 'complete', 'reasons': []},
+                       'source_paths': ['spec.md'], 'epic': {'epic': 'links-route', 'workspace': workspace},
+                       'targets': [target('frontend', frontend_checkout)]}
+            state['value'] = envelope(planned=[waiting], recently=[canonical], epics=[waiting_epic])
+            page.reload()
+            open_route('specs', id=planned_key, filter='planned')
+            expect(page.locator('.object-head h2')).to_contain_text('links-other')
+            prerequisite = page.locator('[data-action="open-prerequisite"]')
+            expect(prerequisite).to_have_count(1)
+            expect(prerequisite).to_have_attribute('data-prerequisite', 'links-collision')
+            prerequisite_href = prerequisite.get_attribute('href')
+            assert fragment(prerequisite_href).startswith('/specs?'), prerequisite_href
+            assert fragment_params(prerequisite_href)['ws'] == [workspace], prerequisite_href
+            capture_both('prerequisite')
+            report['scenarios'].append('A waiting planned record without ws links its prerequisite into the owning links workspace')
+
+            # B and C: records that cannot resolve exactly one healthy
+            # repository keep their recorded label as plain text.
+            ghost = merged(workspace, ghost_package, f'{workspace}/links-ghost',
+                           [target('ghost', specs_directory + '/links-ghost-checkout')], 'links-ghost')
+            multi = merged(workspace, multi_package, f'{workspace}/links-multi',
+                           [target('app', frontend_checkout), target('frontend', collision_checkout)], 'links-multi')
+            foreign = merged('ghost-links', foreign_package, 'ghost-links/links-foreign',
+                             [target('app', collision_checkout)], 'links-foreign')
+
+            state['value'] = envelope(recently=[ghost])
+            page.reload()
+            open_route('specs', ws=workspace, id=ghost_key, filter='completed')
+            expect(publication_row('Repository')).to_contain_text('ghost')
+            expect(publication_row('Repository').locator('a')).to_have_count(0)
+            expect(page.locator('[data-related="publication-branch"]')).to_have_count(0)
+            publication_row('Completion time').scroll_into_view_if_needed()
+            capture('refusal', 1280)
+            report['scenarios'].append('A target with no healthy repository match stays plain text on the Repository row with no link')
+
+            state['value'] = envelope(recently=[multi])
+            page.reload()
+            open_route('specs', ws=workspace, id=multi_key, filter='completed')
+            expect(publication_row('Repository')).to_contain_text('app')
+            expect(publication_row('Repository').locator('a')).to_have_count(0)
+            report['scenarios'].append('A multi-target package refuses repository preselection and keeps its recorded label as plain text')
+
+            state['value'] = envelope(recently=[foreign])
+            page.reload()
+            open_route('specs', id=foreign_key, filter='completed')
+            expect(publication_row('Repository')).to_contain_text('app')
+            expect(publication_row('Repository').locator('a')).to_have_count(0)
+            report['scenarios'].append('A record whose workspace cannot be resolved keeps its recorded label as plain text with no link')
+
         if case == 'specs-relaunch':
             # Real fixture, App and polling stay in place; only /api/state is
             # annotated with the relaunch identity and the two relaunch endpoints
@@ -3607,7 +3862,7 @@ finally:
         fixture.kill()
         fixture.wait()
     report['elapsedSeconds'] = round(time.monotonic() - started, 3)
-    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'files-context.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'specs-list.json' if case == 'specs-list' else 'specs-workspace.json' if case == 'specs-workspace' else 'specs-variants.json' if case == 'specs-variants' else 'specs-overview.json' if case == 'specs-overview' else 'specs-activity.json' if case == 'specs-activity' else 'specs-relaunch.json' if case == 'specs-relaunch' else 'files-workspace.json' if case == 'files-workspace' else 'files-sources.json' if case == 'files-sources' else 'files-continuity.json' if case == 'files-continuity' else 'files-recovery.json' if case == 'files-recovery' else 'files-read-refresh.json' if case == 'files-read-refresh' else 'step-002-fix-browser.json'
+    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'files-context.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'specs-list.json' if case == 'specs-list' else 'specs-workspace.json' if case == 'specs-workspace' else 'specs-variants.json' if case == 'specs-variants' else 'specs-overview.json' if case == 'specs-overview' else 'specs-activity.json' if case == 'specs-activity' else 'specs-links.json' if case == 'specs-links' else 'specs-relaunch.json' if case == 'specs-relaunch' else 'files-workspace.json' if case == 'files-workspace' else 'files-sources.json' if case == 'files-sources' else 'files-continuity.json' if case == 'files-continuity' else 'files-recovery.json' if case == 'files-recovery' else 'files-read-refresh.json' if case == 'files-read-refresh' else 'step-002-fix-browser.json'
     target = evidence / filename
     temporary = target.with_name(target.name + '.tmp')
     temporary.write_text(json.dumps(report, indent=2) + '\n')

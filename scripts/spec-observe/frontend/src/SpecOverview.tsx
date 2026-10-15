@@ -4,13 +4,18 @@ import { assignmentLabel, assignmentTone, completionLabel, duration, epicStats, 
 import { linkedAssignmentKey, observationEnd, type ObservationContext } from './spec-state';
 import { targetRepositoryId } from './scope';
 import { StateNotice, StatusText, type StatusTone } from './primitives';
-import { formatHash } from './route';
+import { repositoryFilesRoute } from './agent-links';
+import { discussionRepositoryTarget, type PlannedTarget } from './launch-handoff';
+import { formatHash, type RouteState } from './route';
 import type { WireRecord } from './model';
 
 export type SpecOverviewProps = {
   record: WireRecord;
   assignments: WireRecord[];
   context: ObservationContext;
+  ws?: string;
+  workspace?: WireRecord | null;
+  onNavigate: (next: RouteState) => void;
   onOpenAgent: (key: string) => void;
   onOpenEpic: (key: string) => void;
 };
@@ -34,6 +39,7 @@ const safeHttpUrl = (value: unknown): string | null => {
   const url = text(value);
   return /^https?:\/\//i.test(url) ? url : null;
 };
+const modifiedClick = (event: MouseEvent): boolean => event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0;
 const completionNote = (record: WireRecord): string => {
   const basis = text(record.completion_basis);
   if (basis === 'manual') return 'Marked complete by the operator. Accepted step evidence and merge status remain as recorded.';
@@ -151,6 +157,20 @@ export default function SpecOverview(props: SpecOverviewProps) {
     const branch = text(merge.branch);
     return { head, branch, url: text(merge.url), completed: validTimeText(record().completed_at) };
   };
+  // Repository/Branch links resolve the package primary to the workspace
+  // repository alias through the shared hand-off owner, then to the Files
+  // route; an unresolved record/workspace or multi-target package stays plain
+  // text in repositoryLabel.
+  const publicationTarget = () => discussionRepositoryTarget(props.workspace ?? null, props.ws ?? '', Array.isArray(record().targets) ? record().targets as PlannedTarget[] : []);
+  const repositoryRoute = (): RouteState | null => {
+    const resolved = publicationTarget();
+    if (!props.ws || !resolved.ok || !resolved.target) return null;
+    return repositoryFilesRoute(props.ws, resolved.target);
+  };
+  const repositoryLabel = (): string => {
+    const resolved = publicationTarget();
+    return resolved.ok && resolved.target ? resolved.target : (targetRepositoryId(record()) || 'Not recorded');
+  };
   return <>
     <Show when={!record().planned && !record().recent_completion}>
       <div class="progress-head">
@@ -195,16 +215,17 @@ export default function SpecOverview(props: SpecOverviewProps) {
             <tbody>
               <tr>
                 <td>
-                  <Show when={linkedAssignment()} fallback={<span>{text(record().assignment_id) ? `Assignment ${shortId(record().assignment_id)}` : 'Assignment'}</span>}>
+                  <Show when={linkedAssignment()} fallback={<span>{text(record().assignment_id) ? `Agent ${shortId(record().assignment_id)}` : 'Agent'}</span>}>
                     {assignment => <a
                       class="text-link"
-                      href={formatHash({ dest: 'agents', id: linkedAssignmentKey(record(), props.assignments) ?? undefined })}
+                      href={formatHash({ dest: 'agents', ws: props.ws, id: linkedAssignmentKey(record(), props.assignments) ?? undefined })}
                       onClick={event => {
+                        if (modifiedClick(event)) return;
                         event.preventDefault();
                         const key = linkedAssignmentKey(record(), props.assignments);
                         if (key) props.onOpenAgent(key);
                       }}
-                    >Assignment {shortId(assignment().assignment_id)}</a>}
+                    >Agent {shortId(assignment().assignment_id)}</a>}
                   </Show>
                 </td>
                 <td>
@@ -218,8 +239,10 @@ export default function SpecOverview(props: SpecOverviewProps) {
                   <Show when={relatedEpic()} fallback={<span>{text(record().epic?.epic) ? `Epic ${text(record().epic.epic)}` : 'Epic'}</span>}>
                     {epic => <a
                       class="text-link"
-                      href={formatHash({ dest: 'epics', id: epicKey(epic()) })}
+                      data-related="epic"
+                      href={formatHash({ dest: 'epics', ws: props.ws, id: epicKey(epic()) })}
                       onClick={event => {
+                        if (modifiedClick(event)) return;
                         event.preventDefault();
                         props.onOpenEpic(epicKey(epic()));
                       }}
@@ -274,11 +297,47 @@ export default function SpecOverview(props: SpecOverviewProps) {
                 </td>
               </tr>
               <tr>
+                <td>Repository</td>
+                <td>
+                  <Show when={repositoryRoute()} fallback={<span class="mono">{repositoryLabel()}</span>}>
+                    {route => <a
+                      class="text-link"
+                      data-related="publication-repository"
+                      href={formatHash(route())}
+                      onClick={event => {
+                        if (modifiedClick(event)) return;
+                        event.preventDefault();
+                        props.onNavigate(route());
+                      }}
+                    >{repositoryLabel()}</a>}
+                  </Show>
+                </td>
+              </tr>
+              <tr>
                 <td>Branch</td>
                 <td>
-                  <Show when={publicationRows().head || publicationRows().branch} fallback="Not recorded">
-                    <Show when={publicationRows().head}><span class="mono">{publicationRows().head}</span></Show>
-                    <Show when={publicationRows().branch}><span class="muted">{publicationRows().branch}</span></Show>
+                  <Show
+                    when={repositoryRoute()}
+                    fallback={
+                      <Show when={publicationRows().head || publicationRows().branch} fallback="Not recorded">
+                        <Show when={publicationRows().head}><span class="mono">{publicationRows().head}</span></Show>
+                        <Show when={publicationRows().branch}><span class="muted">{publicationRows().branch}</span></Show>
+                      </Show>
+                    }
+                  >
+                    {route => <a
+                      class="text-link"
+                      data-related="publication-branch"
+                      href={formatHash(route())}
+                      onClick={event => {
+                        if (modifiedClick(event)) return;
+                        event.preventDefault();
+                        props.onNavigate(route());
+                      }}
+                    >
+                      <Show when={publicationRows().head}><span class="mono">{publicationRows().head}</span></Show>
+                      <Show when={publicationRows().branch}><span class="muted">{publicationRows().branch}</span></Show>
+                    </a>}
                   </Show>
                 </td>
               </tr>
