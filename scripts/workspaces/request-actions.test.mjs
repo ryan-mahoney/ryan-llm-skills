@@ -168,6 +168,33 @@ test("omitted request inputs are refused rather than silently dropped", () => {
   assert.throws(() => requestBrief("implement_spec", { ...planInput, entity: undefined }), { code: "invalid-request" });
 });
 
+test("inherited property names are refused as unknown actions with a static reason", () => {
+  // Plain catalog indexing would return an inherited value for these names and
+  // accept them as launchable; the brief boundary must refuse every one instead.
+  const inherited = [
+    "toString",
+    "constructor",
+    "__proto__",
+    "hasOwnProperty",
+    "isPrototypeOf",
+    "propertyIsEnumerable",
+    "valueOf",
+    "toLocaleString",
+    "__defineGetter__",
+    "__defineSetter__",
+    "__lookupGetter__",
+    "__lookupSetter__",
+  ];
+  for (const action of inherited) {
+    assert.equal(Object.hasOwn(REQUEST_ACTIONS, action), false, action);
+    const refused = (build) => assert.throws(build, (error) =>
+      error.code === "invalid-request" && typeof error.message === "string" && !error.message.includes(action));
+    refused(() => requestBrief(action, planInput));
+    refused(() => requestBrief(action, { ...planInput, entity: "agent-tooling/newui-13-request-work" }));
+    refused(() => requestBrief(action, { ...planInput, entity: undefined, observed: { designIndex: true, designBrief: true } }));
+  }
+});
+
 test("build screens without an observed valid design index and brief stays nonlaunchable", () => {
   const base = {
     workspace: "agent-tooling",

@@ -142,7 +142,9 @@ function actionBlock(definition, { workspaceId, entityId, refs, launchable }) {
 // valid; otherwise the brief still renders with a static reason and its
 // content makes no launchability claim. Pure and synchronous.
 export function requestBrief(action, { workspace, entity, transcript, source, goal, constraints, uses, research, observed } = {}) {
-  const definition = typeof action === "string" ? REQUEST_ACTIONS[action] : undefined;
+  // An own catalog property is required: plain indexing would return an
+  // inherited value ("toString", "constructor", "__proto__") for unknown actions.
+  const definition = typeof action === "string" && Object.hasOwn(REQUEST_ACTIONS, action) ? REQUEST_ACTIONS[action] : undefined;
   if (!definition) throw invalid("An unknown request action was named.");
   const workspaceId = canonicalIdentifier(workspace, "workspace");
   const goalText = requiredText(goal, "goal");
