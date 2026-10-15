@@ -324,6 +324,84 @@ test('wave workspaces: private Git metadata stays independent and imports exact 
   assert.equal(git(target.worktree, ['rev-parse', retentionRef]), target.c2, 'a conflicting import leaves the ref untouched');
 });
 
+test('wave workspaces: a novel private head is imported with its exact objects', async t => {
+  const target = makeTargetRepo(t, 'wave-workspaces-novel-target');
+  const waveRoot = freshRoot(t, 'wave-workspaces-novel-root');
+  const ownership = makeOwnership(t, 'wave-workspaces-novel');
+  const attempt = await prepareStepWorkspace(workspaceOptions({
+    target,
+    waveRoot,
+    ownership,
+    packageId: 'wave-novel',
+    label: 'novel',
+    attemptId: 'attempt-novel',
+    baseCommit: target.c2,
+    mode: 'overlayfs',
+  }));
+  const privateGit = args => execFileSync('git', ['--git-dir', attempt.gitDir, ...args], GIT).trim();
+  const commitEnv = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'Wave Reviewer',
+    GIT_AUTHOR_EMAIL: 'wave-reviewer@example.test',
+    GIT_AUTHOR_DATE: '2026-10-15T00:00:00 +0000',
+    GIT_COMMITTER_NAME: 'Wave Reviewer',
+    GIT_COMMITTER_EMAIL: 'wave-reviewer@example.test',
+    GIT_COMMITTER_DATE: '2026-10-15T00:00:00 +0000',
+  };
+
+  // A genuinely novel commit exists only in the attempt's private repository.
+  const expectedParent = privateGit(['rev-parse', 'HEAD']);
+  mkdirSync(join(attempt.merged, 'docs'), { recursive: true });
+  writeFileSync(join(attempt.merged, 'docs', 'novel-import.txt'), 'novel private payload\n');
+  execFileSync('git', ['--git-dir', attempt.gitDir, '--work-tree', attempt.merged, 'add', '--', 'docs/novel-import.txt'], GIT);
+  execFileSync('git', ['--git-dir', attempt.gitDir, '--work-tree', attempt.merged, 'commit', '-q', '-m', 'novel private head'], { ...GIT, env: commitEnv });
+  const novelSha = privateGit(['rev-parse', 'HEAD']);
+  const novelTree = privateGit(['rev-parse', `${novelSha}^{tree}`]);
+  const baseTree = privateGit(['rev-parse', `${target.c2}^{tree}`]);
+  assert.notEqual(novelSha, target.c2, 'the novel head is a new commit');
+  assert.notEqual(novelTree, baseTree, 'the novel commit changes the tree');
+  assert.equal(privateGit(['rev-parse', `${novelSha}^`]), expectedParent, 'the novel commit records the expected parent');
+
+  // The canonical repository genuinely lacks the novel object before the import.
+  assert.throws(
+    () => git(target.worktree, ['cat-file', '-e', `${novelSha}^{commit}`]),
+    'the canonical repository lacks the novel commit object',
+  );
+  assert.throws(
+    () => git(target.worktree, ['rev-parse', '--verify', `${novelSha}^{commit}`]),
+    'the novel sha does not verify in the canonical repository',
+  );
+  assert.ok(
+    !existsSync(join(target.worktree, '.git', 'objects', novelSha.slice(0, 2), novelSha.slice(2))),
+    'no loose novel object exists in the canonical object store',
+  );
+
+  const privateHeadBeforeImport = privateGit(['rev-parse', 'HEAD']);
+  const retentionRef = 'refs/waves/retained/novel-head';
+  await importSealedHead({ repo: target.worktree, source: attempt.gitDir, sha: novelSha, retentionRef });
+
+  // The canonical repository now holds the exact novel objects.
+  assert.doesNotThrow(() => git(target.worktree, ['cat-file', '-e', `${novelSha}^{commit}`]), 'the novel commit resolves in the canonical repository');
+  assert.equal(git(target.worktree, ['cat-file', '-t', novelSha]), 'commit', 'the novel sha is a commit in the canonical repository');
+  assert.equal(git(target.worktree, ['rev-parse', `${novelSha}^{tree}`]), novelTree, 'the exact changed tree is imported');
+  assert.notEqual(git(target.worktree, ['rev-parse', `${novelSha}^{tree}`]), baseTree, 'the imported tree is not the base tree');
+  assert.equal(git(target.worktree, ['rev-parse', `${novelSha}^`]), expectedParent, 'the expected parent commit is preserved');
+  assert.doesNotThrow(() => git(target.worktree, ['merge-base', '--is-ancestor', target.c1, novelSha]), 'the first base commit is an ancestor of the novel head');
+  assert.doesNotThrow(() => git(target.worktree, ['merge-base', '--is-ancestor', target.c2, novelSha]), 'the base commit is an ancestor of the novel head');
+  assert.notEqual(novelSha, target.c2, 'the base commit is a proper ancestor of the novel head');
+  assert.equal(
+    git(target.worktree, ['cat-file', '-p', `${novelSha}:docs/novel-import.txt`]),
+    'novel private payload',
+    'the changed blob is present at its exact path',
+  );
+  assert.equal(git(target.worktree, ['rev-parse', retentionRef]), novelSha, 'the retention ref names the novel sha');
+  assert.ok(!existsSync(join(target.worktree, '.git', 'objects', 'info', 'alternates')), 'no alternates are left behind');
+
+  // The private repository is unchanged by the import.
+  assert.equal(privateGit(['rev-parse', 'HEAD']), privateHeadBeforeImport, 'the private head is untouched');
+  assert.equal(privateGit(['rev-parse', `${novelSha}^{tree}`]), novelTree, 'the private objects are untouched');
+});
+
 test('wave workspaces: worktree fallback preserves canonical common-dir and isolated setup', async t => {
   const target = makeTargetRepo(t, 'wave-workspaces-fallback-target');
   const waveRoot = freshRoot(t, 'wave-workspaces-fallback-root');
