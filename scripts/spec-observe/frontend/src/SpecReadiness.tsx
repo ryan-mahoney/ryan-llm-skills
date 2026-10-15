@@ -319,6 +319,7 @@ export default function SpecReadiness(props: SpecReadinessProps) {
           data-prerequisite={name}
           href={formatHash({ dest: 'specs', ws: prerequisiteWs(target), id: key })}
           onClick={event => {
+            if (modifiedClick(event)) return;
             event.preventDefault();
             props.onSelectPackage(text(target.workspace), base(target.package));
           }}

@@ -3657,6 +3657,36 @@ try:
             capture_both('prerequisite')
             report['scenarios'].append('A waiting planned record without ws links its prerequisite into the owning links workspace')
 
+            # The readiness table's own prerequisite row carries the same
+            # scoped destination as the primary action.
+            prerequisite_row = page.locator('[data-prerequisite="links-collision"]:not([data-action="open-prerequisite"])')
+            expect(prerequisite_row).to_have_count(1)
+            prerequisite_row_href = prerequisite_row.get_attribute('href')
+            assert fragment(prerequisite_row_href).startswith('/specs?'), prerequisite_row_href
+            assert fragment_params(prerequisite_row_href)['ws'] == [workspace], prerequisite_row_href
+            assert fragment_params(prerequisite_row_href)['id'] == fragment_params(prerequisite_href)['id'], prerequisite_row_href
+
+            # Native modified click opens the same scoped prerequisite route in
+            # a new page instead of running the in-place callback.
+            with context.expect_page() as opened:
+                prerequisite.click(modifiers=[modifier])
+            popup = opened.value
+            popup.wait_for_load_state('domcontentloaded')
+            assert fragment(popup.url).startswith('/specs?'), popup.url
+            assert fragment_params(popup.url)['ws'] == [workspace], popup.url
+            assert fragment_params(popup.url)['id'] == fragment_params(prerequisite_href)['id'], popup.url
+            popup.close()
+
+            # An ordinary click keeps the callback and selects the
+            # prerequisite's own recent-completion record in place; this runs
+            # last because it navigates the page.
+            prerequisite.click()
+            expect(page.locator('.object-head h2')).to_contain_text('links-collision')
+            assert fragment(page.url).startswith('/specs?'), page.url
+            assert fragment_params(page.url)['id'] == fragment_params(prerequisite_href)['id'], page.url
+
+            report['scenarios'].append('The primary prerequisite action reaches the same scoped prerequisite fragment in a new page under a native modified click, and selects the prerequisite record on an ordinary click')
+
             # B and C: records that cannot resolve exactly one healthy
             # repository keep their recorded label as plain text.
             ghost = merged(workspace, ghost_package, f'{workspace}/links-ghost',
