@@ -9,8 +9,9 @@
 import { For, Match, Show, Switch } from 'solid-js';
 import { ActionBar, StateNotice, StatusText } from './primitives';
 import { str, time } from './format';
-import { packagePlanningPlan } from '../../../workspaces/spec-prompt.mjs';
+import { CRITIQUE_ONLY_PLAN, packagePlanningPlan } from '../../../workspaces/spec-prompt.mjs';
 import { landedStatus, memberPlanning, nextToPlan, planningFactsFor, specReadiness } from './readiness';
+import { nextStepsRowForPackage } from './next-steps-store';
 import type { PackagePlanningPlan } from './launch-handoff';
 import type { LaunchPreview, LaunchResult } from './launch-state';
 import type { WireRecord } from './model';
@@ -80,7 +81,11 @@ export const nextPlannableMember = (
 // critique stop instead of promising Prepared.
 export const planningPlanFor = (record: WireRecord, inputPreview?: { brief?: unknown; instruction?: unknown }): PackagePlanningPlan => {
   const skill = str(record.skill);
-  if (skill === 'spec-architect-critics') return packagePlanningPlan({ proposal: true, critiqueRecommended: true }) as PackagePlanningPlan;
+  if (skill === 'spec-architect-critics') {
+    const briefText = `${str(inputPreview?.brief)}\n${str(inputPreview?.instruction)}`;
+    if (/This launch ends at the critique/i.test(briefText)) return CRITIQUE_ONLY_PLAN as PackagePlanningPlan;
+    return packagePlanningPlan({ proposal: true, critiqueRecommended: true }) as PackagePlanningPlan;
+  }
   if (skill === 'spec-write') return packagePlanningPlan({ proposal: true }) as PackagePlanningPlan;
   if (skill === 'spec-architect-initial') {
     const briefText = `${str(inputPreview?.brief)}\n${str(inputPreview?.instruction)}`;
@@ -104,7 +109,9 @@ export const planningStagesValue = (record: WireRecord, plan: PackagePlanningPla
 };
 
 export const planningStopValue = (record: WireRecord, plan: PackagePlanningPlan): string => {
+  if (plan.stop === 'critique') return 'critique.md';
   if (plan.stop === 'proposal') return 'Proposal';
+  if (plan.skill === 'spec-write') return 'Prepared spec';
   if (isConditionalInitial(record, plan)) return 'Prepared, or Proposal if critique is recommended';
   return 'Prepared';
 };
@@ -112,8 +119,34 @@ export const planningStopValue = (record: WireRecord, plan: PackagePlanningPlan)
 // Confirmed planning result stop: the retained reviewed stop plus an honest
 // planning-only bound. A prepared launch worktree may exist, so the result
 // never promises no branch; the worktree/branch facts disclose it instead.
-export const planningResultStopValue = (record: WireRecord, plan: PackagePlanningPlan): string =>
-  `${planningStopValue(record, plan)}. Planning only \u2014 no commits or pull request.`;
+// The critique and spec-write stops keep their stage name but share the same
+// no-commit/publication boundary instead of repeating the false no-branch
+// promise.
+export const planningResultStopValue = (record: WireRecord, plan: PackagePlanningPlan): string => {
+  if (plan.stop === 'critique') return 'critique.md. Planning only \u2014 no commits or pull request.';
+  if (plan.skill === 'spec-write') return 'Prepared spec, ready to implement. Planning only \u2014 no commits or pull request.';
+  return `${planningStopValue(record, plan)}. Planning only \u2014 no commits or pull request.`;
+};
+
+// The stage-specific Next steps planning results (critique-only and spec-write)
+// make the exact assignment the primary destination; the ordinary epic-planning
+// result keeps its existing epic-first ordering.
+export const stageSpecificPlanningResult = (record: WireRecord, plan: PackagePlanningPlan): boolean =>
+  plan.stop === 'critique' || str(record.skill) === 'spec-write';
+
+// Observed Inputs from the live Next steps scan: each watched file renders its
+// name and the exact time the scan observed it written. Only the live scan row
+// named by the package is read; when no row or watched files exist, the
+// critics-only and spec-write stages fall back to the filenames the stage
+// consumes, and every other plan omits the fact.
+export const observedInputsValue = (packageRef: string, plan: PackagePlanningPlan): string => {
+  const row = nextStepsRowForPackage(packageRef);
+  const observed = row?.observed_files ?? [];
+  if (observed.length) return observed.map(file => `${str(file.name)} · written ${time(file.written_at)}`).join(' · ');
+  if (plan.stop === 'critique') return 'proposal.md';
+  if (plan.skill === 'spec-write') return 'proposal.md · critique.md';
+  return '';
+};
 
 // Honest execution host from recorded facts only. The resolved preview
 // record carries no host field in the workspace/launch observation contract,
@@ -215,6 +248,7 @@ export function PackageContract(props: {
   const planningPlan = () => planningPlanFor(record(), props.preview.inputPreview);
   const prerequisiteValue = () => prerequisiteValueFor(canonical());
   const preparationValue = () => preparationValueFor(snapshot(), canonical()?.member ?? null);
+  const inputsValue = () => observedInputsValue(props.packageRef, planningPlan());
   const modelValue = () => {
     const provider = str(record().provider);
     const model = str(record().model);
@@ -232,6 +266,7 @@ export function PackageContract(props: {
       ...(branch ? [{ key: 'branch', label: 'Worktree branch', value: branch }] : []),
       { key: 'prerequisite', label: 'Prerequisite', value: prerequisiteValue() },
       { key: 'preparation', label: 'Preparation', value: preparationValue() },
+      ...(inputsValue() ? [{ key: 'inputs', label: 'Inputs', value: inputsValue() }] : []),
       plan
         ? { key: 'stages', label: 'Stages', value: planningStagesValue(record(), bound) }
         : { key: 'workflow', label: 'Workflow', value: str(record().skill) || IMPLEMENTATION_SKILL },
@@ -349,18 +384,26 @@ export function PackageResult(props: {
   records?: WireRecord[];
   epics?: WireRecord[];
   assignments?: WireRecord[];
+  // Optional origin return action for the bound result. Launch supplies the
+  // remembered-route label and navigation; when absent the result keeps its
+  // existing actions only.
+  returnLabel?: string;
+  onReturn?: () => void;
 }) {
   const record = () => props.preview.record;
   const plan = () => props.kind === 'plan';
   const planningPlan = () => planningPlanFor(record(), props.preview.inputPreview);
+  const stageSpecific = () => plan() && stageSpecificPlanningResult(record(), planningPlan());
   // Next-outcome guidance from the same retained reviewed plan as facts:
   // a proposal stop never promises specification completion, and the fresh
   // architecture conditional keeps its critique branch instead of assuming
   // the Prepared stop.
   const planningCompletes = () => {
     const bound = planningPlan();
+    if (bound.stop === 'critique') return <>When critique.md is written. The package returns to Next steps with <StatusText tone="info">Write spec</StatusText>.</>;
     if (bound.stop === 'proposal') return <>At the proposal. Critique and specification wait for a later launch.</>;
     if (isConditionalInitial(record(), bound)) return <>At Prepared, or at Proposal when architecture recommends critique. The member then shows <StatusText tone="info">Ready to implement</StatusText> or <StatusText tone="neutral">Prepared · waiting</StatusText>.</>;
+    if (str(record().skill) === 'spec-write' && bound.stop === 'prepared') return <>At a prepared spec, ready to implement. The package returns to Next steps with <StatusText tone="info">Implement spec</StatusText>.</>;
     return <>When the package reports Prepared. The member then shows <StatusText tone="info">Ready to implement</StatusText> or <StatusText tone="neutral">Prepared · waiting</StatusText>.</>;
   };
   const startedValue = () => {
@@ -419,9 +462,12 @@ export function PackageResult(props: {
       </dl>
       <ActionBar variant="inline">
         <Show when={plan()} fallback={<a id="launch-result-open-spec" class="ds-btn ds-btn--primary" href={props.specHref}>Open spec</a>}>
-          <a id="launch-result-open-epic" class="ds-btn ds-btn--primary" href={props.epicHref}>Open epic</a>
+          <a id="launch-result-open-epic" class={stageSpecific() ? 'ds-btn' : 'ds-btn ds-btn--primary'} href={props.epicHref}>Open epic</a>
         </Show>
-        <a id="launch-result-open-agent" class="ds-btn" href={props.agentHref}>Open agent</a>
+        <a id="launch-result-open-agent" class={stageSpecific() ? 'ds-btn ds-btn--primary' : 'ds-btn'} href={props.agentHref}>Open agent</a>
+        <Show when={props.onReturn}>
+          <button id="launch-result-return" class="ds-btn" type="button" onClick={props.onReturn}>{props.returnLabel || 'Return to agents'}</button>
+        </Show>
       </ActionBar>
       <section class="section launch-result-next" aria-labelledby="launch-result-next-heading">
         <div class="section-heading">

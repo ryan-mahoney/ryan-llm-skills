@@ -3,6 +3,7 @@ import type { AgentCoverage } from '../agent-state';
 import type { Envelope, Observer, WireRecord } from '../model';
 import type { Destination, RouteState } from '../route';
 import type { CatalogEntry } from '../scope';
+import NextStepsDestination from './next-steps';
 import SpecsDestination from './specs';
 import EpicsDestination from './epics';
 import AgentsDestination from './agents';
@@ -75,11 +76,11 @@ export type DestinationEntry = {
   render: Component<DestinationProps>;
 };
 
-// Rail order reserves 0 for the unrendered Next steps entry; primary
-// destinations therefore start at 10 and continue in tens through 60.
+// Rail order starts at 0 for Next steps, then primary destinations in tens.
 // Workspaces takes 70 and Models takes 80.
 export function destinationEntries(): DestinationEntry[] {
   return [
+    { dest: 'next-steps', label: 'Next steps', order: 0, nav: 'primary', render: NextStepsDestination },
     { dest: 'specs', label: 'Specs', order: 10, nav: 'primary', render: SpecsDestination },
     { dest: 'epics', label: 'Epics', order: 20, nav: 'primary', render: EpicsDestination },
     { dest: 'agents', label: 'Agents', order: 30, nav: 'primary', render: AgentsDestination },

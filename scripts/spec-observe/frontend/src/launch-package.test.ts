@@ -12,6 +12,7 @@ import {
   planningStopValue,
   preparationValueFor,
   prerequisiteValueFor,
+  stageSpecificPlanningResult,
 } from './launch-package';
 import type { WireRecord } from './model';
 
@@ -114,6 +115,11 @@ test('F3: proposal-only briefs stay at Proposal and critics/write keep their res
   assert.deepEqual(critics.stages, ['spec-architect-critics', 'spec-write']);
   const writer = planningPlanFor({ skill: 'spec-write' });
   assert.deepEqual(writer.stages, ['spec-write']);
+  assert.equal(planningStopValue({ skill: 'spec-write' }, writer), 'Prepared spec');
+
+  const criticsOnly = planningPlanFor({ skill: 'spec-architect-critics' }, { brief: 'This launch ends at the critique.', instruction: '' });
+  assert.deepEqual(criticsOnly, { skill: 'spec-architect-critics', stages: ['spec-architect-critics'], stop: 'critique' });
+  assert.equal(planningStopValue({ skill: 'spec-architect-critics' }, criticsOnly), 'critique.md');
 });
 
 // Focused unit coverage for the step-010 bound result corrections (F1-F4).
@@ -131,6 +137,28 @@ test('step-010 F1: confirmed planning stop is planning-only and never promises n
   const proposalStop = planningResultStopValue({ skill: 'spec-architect-initial' }, proposal);
   assert.match(proposalStop, /^Proposal\./);
   assert.doesNotMatch(proposalStop, /Prepared/);
+
+  const criticsOnly = planningPlanFor({ skill: 'spec-architect-critics' }, { brief: 'This launch ends at the critique.', instruction: '' });
+  const criticsStop = planningResultStopValue({ skill: 'spec-architect-critics' }, criticsOnly);
+  assert.equal(criticsStop, 'critique.md. Planning only \u2014 no commits or pull request.');
+  assert.doesNotMatch(criticsStop, /No branch/);
+  const writer = planningPlanFor({ skill: 'spec-write' });
+  const writerStop = planningResultStopValue({ skill: 'spec-write' }, writer);
+  assert.equal(writerStop, 'Prepared spec, ready to implement. Planning only \u2014 no commits or pull request.');
+  assert.doesNotMatch(writerStop, /No branch/);
+});
+
+test('F2: only the critique-only and spec-write results make the assignment primary', () => {
+  const criticsOnly = planningPlanFor({ skill: 'spec-architect-critics' }, { brief: 'This launch ends at the critique.', instruction: '' });
+  assert.equal(stageSpecificPlanningResult({ skill: 'spec-architect-critics' }, criticsOnly), true);
+  const writer = planningPlanFor({ skill: 'spec-write' });
+  assert.equal(stageSpecificPlanningResult({ skill: 'spec-write' }, writer), true);
+  const initial = planningPlanFor({ skill: 'spec-architect-initial' }, { brief: '/spec-architect-initial Plan x.', instruction: '' });
+  assert.equal(stageSpecificPlanningResult({ skill: 'spec-architect-initial' }, initial), false);
+  const criticsResume = planningPlanFor({ skill: 'spec-architect-critics' });
+  assert.equal(stageSpecificPlanningResult({ skill: 'spec-architect-critics' }, criticsResume), false);
+  const proposalOnly = planningPlanFor({ skill: 'spec-architect-initial' }, { brief: 'Stop here. This launch ends at the proposal; critique waits.', instruction: '' });
+  assert.equal(stageSpecificPlanningResult({ skill: 'spec-architect-initial' }, proposalOnly), false);
 });
 
 test('step-010 F2: confirmed launch identity is excluded so the next independent member is offered', () => {

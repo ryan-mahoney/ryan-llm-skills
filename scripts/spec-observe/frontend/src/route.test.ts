@@ -36,16 +36,27 @@ test('route round trip preserves every supported field including encoded slash, 
   assert.deepEqual(parseHash('#/specs?q=&id='), { dest: 'specs', id: '', q: '' });
 });
 
-test('unknown destinations and parameters canonicalize to the Specs landing route', () => {
-  assert.deepEqual(parseHash(''), { dest: 'specs' });
-  assert.deepEqual(parseHash('#/'), { dest: 'specs' });
-  assert.deepEqual(parseHash('#/unknown?id=7&ws=alpha'), { dest: 'specs' });
+test('unknown destinations and parameters canonicalize to the Next steps landing route', () => {
+  assert.deepEqual(parseHash(''), { dest: 'next-steps' });
+  assert.deepEqual(parseHash('#/'), { dest: 'next-steps' });
+  assert.deepEqual(parseHash('#/unknown?id=7&ws=alpha'), { dest: 'next-steps' });
   assert.deepEqual(parseHash('#/specs?zoom=2&id=fixture%2Fbrowser'), { dest: 'specs', id: 'fixture/browser' });
-  assert.equal(formatHash({ dest: 'unknown' } as unknown as RouteState), '#/specs');
+  assert.equal(formatHash({ dest: 'unknown' } as unknown as RouteState), '#/next-steps');
   assert.equal(formatHash({ dest: 'specs', zoom: '2' } as unknown as RouteState), '#/specs');
   assert.equal(formatHash({ dest: 'specs', id: undefined }), '#/specs');
   assert.equal(formatHash({ dest: 'specs', q: '' }), '#/specs?q=');
   assert.equal(formatHash(parseHash('#/specs?zoom=2&id=fixture%2Fbrowser')), '#/specs?id=fixture%2Fbrowser');
+});
+
+test('valid destinations and scope/query parameters keep their behavior despite the Next steps fallback', () => {
+  assert.deepEqual(parseHash('#/specs?ws=alpha&filter=attention'), { dest: 'specs', ws: 'alpha', filter: 'attention' });
+  const nextSteps: RouteState = { dest: 'next-steps', ws: 'alpha', filter: 'critique', q: 'needle' };
+  const nextStepsHash = '#/next-steps?ws=alpha&filter=critique&q=needle';
+  assert.deepEqual(parseHash(nextStepsHash), nextSteps);
+  assert.equal(formatHash(nextSteps), nextStepsHash);
+  assert.equal(formatHash(parseHash(nextStepsHash)), nextStepsHash);
+  assert.equal(formatHash({ dest: 'next-steps', ws: 'alpha' }), '#/next-steps?ws=alpha');
+  assert.deepEqual(parseHash('#/unknown?ws=alpha'), { dest: 'next-steps' });
 });
 
 test('history policy pushes deliberate field changes and replaces query, filter, equal and fallback selections', () => {
@@ -139,18 +150,18 @@ test('native hash and popstate inputs normalize unknown destinations and unsuppo
   try {
     dom.location.hash = '#/unknown?id=7&ws=fixture';
     dom.dispatch('hashchange');
-    assert.deepEqual(dom.replaced, ['#/specs']);
-    assert.equal(dom.location.hash, '#/specs');
-    assert.deepEqual(observed.at(-1), { dest: 'specs' });
+    assert.deepEqual(dom.replaced, ['#/next-steps']);
+    assert.equal(dom.location.hash, '#/next-steps');
+    assert.deepEqual(observed.at(-1), { dest: 'next-steps' });
 
     dom.location.hash = '#/epics?ws=fixture&id=second&unsupported=1';
     dom.dispatch('popstate');
-    assert.deepEqual(dom.replaced, ['#/specs', '#/epics?ws=fixture&id=second']);
+    assert.deepEqual(dom.replaced, ['#/next-steps', '#/epics?ws=fixture&id=second']);
     assert.deepEqual(observed.at(-1), { dest: 'epics', ws: 'fixture', id: 'second' });
 
     dom.location.hash = '#/specs?ws=fixture&id=first';
     dom.dispatch('popstate');
-    assert.deepEqual(dom.replaced, ['#/specs', '#/epics?ws=fixture&id=second']);
+    assert.deepEqual(dom.replaced, ['#/next-steps', '#/epics?ws=fixture&id=second']);
     assert.deepEqual(observed.at(-1), { dest: 'specs', ws: 'fixture', id: 'first' });
   } finally {
     unsubscribe();
@@ -254,6 +265,28 @@ test('launch destination round-trips its context, step and assignment fields', (
     tab: 'review',
     id: 'assignment-1',
   });
+});
+
+test('launch route carries the planning stop through hash round trip, history pushes and scope clearing', () => {
+  const route: RouteState = {
+    dest: 'launch',
+    ws: 'fixture',
+    tab: 'review',
+    thread: 'thread-1',
+    target: 'repo-a',
+    package: 'fixture/pkg',
+    skill: 'spec-architect-critics',
+    stop: 'critique',
+  };
+  assert.deepEqual(parseHash(formatHash(route)), route);
+  assert.equal(
+    formatHash(route),
+    '#/launch?ws=fixture&tab=review&thread=thread-1&target=repo-a&package=fixture%2Fpkg&skill=spec-architect-critics&stop=critique',
+  );
+  assert.equal(routeHistoryMode(route, { ...route, stop: 'prepared' }), 'push');
+  assert.equal(routeHistoryMode(route, { ...route }), 'replace');
+  assert.deepEqual(clearIncompatibleFields(route), { dest: 'launch', ws: 'fixture', tab: 'brief' });
+  assert.deepEqual(withWorkspace(route, 'other'), { dest: 'launch', ws: 'other', tab: 'brief' });
 });
 
 test('launch requires a workspace and scope changes clear context back to the brief', () => {

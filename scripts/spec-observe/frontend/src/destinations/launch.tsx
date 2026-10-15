@@ -7,6 +7,11 @@ export default function LaunchDestination(props: DestinationProps) {
     const entry = props.catalog.find(item => String(item.id) === String(props.route.ws));
     return String(entry?.name || entry?.id || props.route.ws || '');
   };
+  const workspaceDirectory = () => {
+    const entry = props.catalog.find(item => String(item.id) === String(props.route.ws));
+    const directory = entry?.directory;
+    return typeof directory === 'string' && directory ? directory : undefined;
+  };
   return (
     <Launch
       route={props.route}
@@ -15,6 +20,7 @@ export default function LaunchDestination(props: DestinationProps) {
       workspace={props.workspace}
       workspaceError={props.workspaceError}
       workspaceName={workspaceName()}
+      workspaceDirectory={workspaceDirectory()}
       assignments={props.assignments}
       records={props.records}
       observationLoaded={props.payload != null}

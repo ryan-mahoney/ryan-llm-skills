@@ -1,8 +1,8 @@
 // Isolated integration fixture: real dashboard HTTP/file routes, fake discussion workers.
 import {createServer} from 'node:http';
-import {mkdtemp,realpath,mkdir,readFile,writeFile,rm,rename,access} from 'node:fs/promises';
+import {mkdtemp,realpath,mkdir,readFile,writeFile,rm,rename,access,opendir,stat,utimes} from 'node:fs/promises';
 import {tmpdir,hostname} from 'node:os';
-import {join} from 'node:path';
+import {dirname,join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
 import {execFileSync,spawn} from 'node:child_process';
@@ -21,11 +21,17 @@ const epicPlanning=process.env.SENTINEL_EPIC_PLANNING==='1';
 const filesFixture=process.env.SENTINEL_REPOSITORY_FILES==='1';
 const modelsFixture=process.env.SENTINEL_MODELS==='1';
 const handoffIntegration=process.env.SENTINEL_HANDOFF_INTEGRATION==='1'&&(plannedLaunch||specsReadiness||epicPlanning);
+const nextSteps=process.env.SENTINEL_NEXT_STEPS==='1';
+// EV-7 runs the next-steps fixture over the real discussion service; that
+// composition additionally seeds one package whose catalog kit id differs from
+// its storage directory basename so the ordinary cold route proves the
+// catalog-to-snapshot identity adapter rather than a same-name coincidence.
+const nextStepsColdAlias=nextSteps&&handoffIntegration;
 const root=await realpath(process.env.SENTINEL_FIXTURE_ROOT??await mkdtemp(join(tmpdir(),'sentinel-solid-browser-')));
 // Real final-integration resolution reads HOME and PATH: isolate both to this
 // fixture root so the real catalog sees root/.agents skills and the fake pi
 // file, never the live operator home.
-if(handoffIntegration||modelsFixture){process.env.HOME=root;process.env.PATH=`${root}:${process.env.PATH??''}`;}
+if(handoffIntegration||modelsFixture||nextSteps){process.env.HOME=root;process.env.PATH=`${root}:${process.env.PATH??''}`;}
 const storage=join(root,'storage');await setupStorage(storage);
 // Models fixture (gated by SENTINEL_MODELS=1)
 let modelsReadAt=Date.now();
@@ -39,7 +45,7 @@ if(modelsFixture){
  await writeFile(join(prefDir,'preferred-models.json'),modelsPreferredSeed);
 }
 const workspace=await createWorkspace(storage,{id:'fixture',name:'Browser fixture'});
-await createWorkspace(storage,{id:'other',name:'Other workspace'});
+const otherWorkspace=await createWorkspace(storage,{id:'other',name:'Other workspace'});
 const mismatchDirectory=await createWorkspace(storage,{id:'physical',name:'Physical directory'});
 const neighborDirectory=await createWorkspace(storage,{id:'alpha',name:'Neighbor alpha'});
 await writeFile(join(mismatchDirectory.directory,'kit.yaml'),'version: 1\nid: alpha\nname: Alpha kit\nrepositories: []\n');
@@ -89,8 +95,11 @@ const fixtureCatalog={
   return {state:'ready',host:'fixture-host',read_at:new Date(modelsReadAt).toISOString(),providers:new Set(models.map(m=>m.provider)).size,models};
  }
 };
-// Real spec-worktree preparation needs a base commit in each isolated repo.
-if(plannedLaunch)for(const directory of [checkout,secondCheckout])execFileSync('git',['-C',directory,'-c','user.name=Browser fixture','-c','user.email=fixture@example.invalid','commit','--quiet','--allow-empty','-m','Initialize fixture repository'],{stdio:'ignore'});
+// Real spec-worktree preparation needs a base commit in each isolated repo;
+// the Next steps mode uses the same owned checkout so its real spec-target
+// resolution has the same starting point.
+const baseCommitDirectories=plannedLaunch?[checkout,secondCheckout]:nextSteps?[checkout]:[];
+for(const directory of baseCommitDirectories)execFileSync('git',['-C',directory,'-c','user.name=Browser fixture','-c','user.email=fixture@example.invalid','commit','--quiet','--allow-empty','-m','Initialize fixture repository'],{stdio:'ignore'});
 // Checkout-scoped suggestion target: visible only when file suggestions are
 // requested for the fixture-repo target, never from the whole workspace.
 await writeFile(join(checkout,'fixture-repo-plan.md'),'# Fixture repository plan\nCheckout-scoped suggestion target.\n');
@@ -208,11 +217,95 @@ await writeFile(join(designDir,'design.json'),JSON.stringify({schema_version:1,d
 const observerDir=join(root,'agent','spec-sentinel','a'.repeat(64),'observers');await mkdir(observerDir,{recursive:true});
 const observerFile=join(observerDir,'a.json');
 const mismatchObserverFile=join(observerDir,'b.json');
-const skillPath=(plannedLaunch||handoffIntegration)?join(root,'.agents','skills','spec-end-to-end','SKILL.md'):join(root,'skills','fixture-skill','SKILL.md');await mkdir(join(skillPath,'..'),{recursive:true});
-await writeFile(skillPath,plannedLaunch?'---\nname: spec-end-to-end\ndescription: Implement a spec package end to end.\n---\n# Spec end to end fixture\nUse the attached brief and the referenced package.\n':'---\nname: fixture-skill\ndescription: Plan work from the chosen brief.\n---\n# Fixture skill\nApply the selected workflow and read references relative to this skill directory.\n');
+// --- Opt-in Next steps filesystem/snapshot fixture -------------------------
+// SENTINEL_NEXT_STEPS=1 keeps the real dashboard and /api/next-steps scan route
+// and seeds an isolated catalog tree whose watched package files drive the list
+// states. The mode owns one dedicated snapshot; the ordinary default snapshot
+// and the mismatch observer are never published here. All package facts come
+// from fixture-owned files; only the running and recent-completion records are
+// snapshot-only observations.
+const nextStepsWatched=['proposal.md','critique.md','spec.md','work-tour.html'];
+const nextStepsPackages=new Map();
+const nextStepsDynamicDirs=new Set();
+const nextStepsInitialFiles=new Map();
+const nextStepsEpicDir=join(storage,'projects','fixture','epics','new-epic');
+const nextStepsEpicPath=join(nextStepsEpicDir,'epic.json');
+let nextStepsScanFail=false,nextStepsScanDelayMs=0,nextStepsArrivals=0,nextStepsLastMutation=null,nextStepsPublishChain=Promise.resolve();
+const nextStepsExists=async path=>{try{await access(path);return true;}catch{return false;}};
+const nextStepsStat=async path=>{try{const info=await stat(path);return {path,exists:true,mtimeMs:info.mtimeMs,mtimeIso:new Date(info.mtimeMs).toISOString(),size:info.size};}catch{return {path,exists:false};}};
+const nextStepsMeta=async()=>{const packages={};for(const [slug,item] of nextStepsPackages){const files={};for(const name of nextStepsWatched)files[name]=await nextStepsStat(join(item.dir,name));packages[slug]={workspace:item.workspace,workspaceId:item.wsId,packageRef:item.packageRef,dir:item.dir,files};}return {storage,packages,epic:await nextStepsStat(nextStepsEpicPath),scan:{fail:nextStepsScanFail,delayMs:nextStepsScanDelayMs},lastMutation:nextStepsLastMutation};};
+const nextStepsRemember=async path=>{try{nextStepsInitialFiles.set(path,{bytes:await readFile(path),mtimeMs:(await stat(path)).mtimeMs});}catch{}};
+const nextStepsWrite=async(dir,name,content,mtimeMs)=>{const path=join(dir,name);await writeFile(path,content);if(mtimeMs!==undefined)await utimes(path,new Date(mtimeMs),new Date(mtimeMs));await nextStepsRemember(path);return path;};
+const nextStepsProposal=(verdict,critique,summary)=>`---\nverdict: ${verdict}\ncritique_recommended: ${critique?'true':'false'}\n---\n\n# Proposal\n\n## Summary\n\n${summary}\n\n## Verdict\n\n${verdict==='INCOMPATIBLE'?'The approach does not fit the observed workspace.':'The recorded verdict and its caveats.'}\n\n- A storage-layout caveat.\n- A reader-contract caveat.\n`;
+const nextStepsCritique='# Critique\n\n## Recommendations\n\n### Must Address\n\n1. **Keep the reader contract stable.** The shared reader semantics stay unchanged.\n2. **Preserve prepared steps.** Existing prepared steps remain valid.\n\n### Should Address\n\n1. **Name the owning surface.** The step names the surface it changes.\n\n### Consider\n\n**C1 — Fold the optional follow-up into a later pass.**\n\n## Assessment\n\nThe architecture is sound; fold in the must-address items before specification.\n';
+const nextStepsSteps=count=>JSON.stringify({schema_version:1,steps:Array.from({length:count},(_,index)=>({step:index+1,name:`Fixture step ${index+1}`,description:`Complete fixture step ${index+1}.`,difficulty:'easy',visualDesign:false,evidence:[],repository:'fixture-repo'}))},null,2);
+async function makeNextStepsSnapshot(){
+ const now=new Date().toISOString();
+ let snapshot;
+ try{snapshot=await collectWorkspace({storageRoot:storage,agentDir:join(root,'agent'),skipManagedIndex:true,assignmentProbes:{tmuxRun:handoffTmuxRun,psRun:handoffPsRun}});}
+ catch(error){snapshot={workspace:'fixture',coverage:{state:'unavailable',observed_at:now,reasons:[`collect-workspace: ${error?.message??error}`]},runs:[],recently_completed:[],assignments:[],assignment_coverage:{state:'unavailable',reasons:[]},epics:[],planned_packages:[]};}
+ // Package-local target aliases keep the canonical primary the resolver matches;
+ // the id is deliberately distinct from every workspace repository alias.
+ snapshot.planned_packages=(snapshot.planned_packages??[]).map(row=>{const slug=String(row.package_ref??'').split('/').pop()||'package';return {...row,name:row.name??slug,targets:(row.targets??[]).map(target=>({id:`${slug}-local`,primary:target.primary}))};});
+ const running=nextStepsPackages.get('running'),landed=nextStepsPackages.get('landed');
+ const runningAssignment='11111111-2222-4333-8444-555555555555';
+ // Snapshot-only lifecycle observations: the owned files cannot record a live
+ // worker or a landed merge, so one running record plus the real assignment row
+ // the Agents surface keys by, and one recent completion, are injected here.
+ // Every other package fact comes from collectWorkspace over the fixture files.
+ if(running)snapshot.runs=[...(snapshot.runs??[]),{workspace:'fixture',package:running.dir,package_ref:running.packageRef,assignment_id:runningAssignment,workflow_id:'fixture-workflow',execution:'running',workflow_state:'waiting-worker',is_current_assignment:true,activity:'Reviewing the observed proposal',obligation:'Observe the running assignment',observed_at:now,coverage:{state:'complete',reasons:[]},timing:{started_at:now,attempts:[]}}];
+ if(landed)snapshot.recently_completed=[...(snapshot.recently_completed??[]),{workspace:'fixture',package:landed.dir,package_ref:landed.packageRef,assignment_id:'99999999-8888-4777-8666-555555555555',workflow_id:'fixture-workflow',execution:'completed',workflow_state:'complete',is_current_assignment:false,completion_basis:'merged-pr',completed_at:now,observed_at:now,coverage:{state:'complete',reasons:[]}}];
+ if(running)snapshot.assignments=[...(snapshot.assignments??[]),{assignment_id:runningAssignment,workspace_id:'fixture',workspace:'fixture',spec_package:running.dir,package_ref:running.packageRef,workflow_id:'fixture-workflow',display:'live',state:'live',skill:'spec-end-to-end',executionDir:checkout,terminal:'fixture',coverage:{state:'complete',reasons:[]},task_activity:{state:'idle',reason:'The fixture assignment is waiting for input.'},nextAction:'Attach to the terminal'}];
+ snapshot.assignment_coverage=snapshot.assignment_coverage??{state:'complete',reasons:[]};
+ return {schema_version:1,observer_id:'fixture-next-steps',state:'observing',published_at:now,snapshot};
+}
+function publishNextStepsSnapshot(){const run=async()=>{const wrapper=await makeNextStepsSnapshot();const temporary=`${observerFile}.publishing`;await writeFile(temporary,JSON.stringify(wrapper));await rename(temporary,observerFile);return wrapper;};const result=nextStepsPublishChain.then(run);nextStepsPublishChain=result.then(()=>undefined,()=>undefined);return result;}
+const nextStepsOtherKit=async()=>{await writeFile(join(otherWorkspace.directory,'kit.yaml'),`version: 1\nid: other\nname: Other workspace\nexecution_host: ${hostname()}\nrepositories:\n  - id: other-alias\n    path: ${checkout}\n    role: Discussion alias\n`);};
+if(nextSteps){
+ try{
+ await nextStepsOtherKit();
+ for(const wsDir of [workspace.directory,otherWorkspace.directory,mismatchDirectory.directory,neighborDirectory.directory]){
+  const specsDir=join(wsDir,'specs');let handle;try{handle=await opendir(specsDir);}catch{continue;}
+  for await(const entry of handle){if(!entry.isDirectory())continue;for(const name of nextStepsWatched)await rm(join(specsDir,entry.name,name),{force:true});}
+ }
+ const addPackage=async(slug,wsId,targetId)=>{const created=await newPackage({root:storage,workspace:wsId,slug,targets:[{id:targetId}]});if(!created.ok)throw new Error(`Next steps fixture package setup failed: ${created.code} ${created.message}`);const item={slug,workspace:wsId,wsId,dir:join(storage,'projects',wsId,'specs',slug),packageRef:`${wsId}/${slug}`};nextStepsPackages.set(slug,item);return item;};
+ for(const slug of ['recommended','direct','critiqued','ready','waiting','running','markup','landed','tour','epic-first','epic-second'])await addPackage(slug,'fixture','fixture-repo');
+ await addPackage('incompatible','other','other-alias');
+ const base=Date.now(),ago=ms=>base-ms,pick=slug=>nextStepsPackages.get(slug);
+ await nextStepsWrite(pick('recommended').dir,'proposal.md',nextStepsProposal('COMPATIBLE_WITH_CAVEATS',true,'The proposal covers the storage layout and the reader contract.\n\nA second summary line keeps the excerpt multi-line.'),ago(1200000));
+ await nextStepsWrite(pick('direct').dir,'proposal.md',nextStepsProposal('COMPATIBLE',false,'The proposal is compatible and needs no critique before its specification.'),ago(1100000));
+ await nextStepsWrite(pick('incompatible').dir,'proposal.md',nextStepsProposal('INCOMPATIBLE',false,'The proposal conflicts with the observed storage contract.'),ago(1000000));
+ await nextStepsWrite(pick('critiqued').dir,'proposal.md',nextStepsProposal('COMPATIBLE_WITH_CAVEATS',true,'The proposal is compatible with caveats.'),ago(900000));
+ await nextStepsWrite(pick('critiqued').dir,'critique.md',nextStepsCritique,ago(600000));
+ await nextStepsWrite(pick('ready').dir,'spec.md','# Ready fixture specification\n',ago(500000));
+ await writeFile(join(pick('ready').dir,'spec-steps.json'),nextStepsSteps(3));
+ await writeFile(join(pick('ready').dir,'spec-prepare.md'),'# Preparation report\n\noutcome: prepared\n');
+ await nextStepsWrite(pick('waiting').dir,'spec.md','# Waiting fixture specification\n',ago(450000));
+ await nextStepsWrite(pick('tour').dir,'work-tour.html','<html><body><h1>Fixture work tour</h1></body></html>',ago(400000));
+ await writeFile(join(pick('tour').dir,'work-tour.json'),JSON.stringify({schema_version:1,verdict:'ready',gaps:['One tour gap is recorded.','A second follow-up remains open.'],commit:'abcdef1234567890',title:'Observed work tour',summary:'The work tour records ready merge evidence for the observed package.'}));
+ await writeFile(join(pick('tour').dir,'pr-url.json'),JSON.stringify({targets:{'fixture-repo':{url:'https://github.com/adjacent-storage/agents/pull/10'}}}));
+ await nextStepsWrite(pick('running').dir,'proposal.md',nextStepsProposal('COMPATIBLE_WITH_CAVEATS',true,'A running assignment owns this package.'),ago(300000));
+ await nextStepsWrite(pick('markup').dir,'proposal.md',nextStepsProposal('COMPATIBLE',false,'Literal <img src=x onerror="window.__fixtureInjected=true"> summary text stays text.'),ago(200000));
+ await nextStepsWrite(pick('landed').dir,'proposal.md',nextStepsProposal('COMPATIBLE',false,'This package already landed and must be omitted from the list.'),ago(100000));
+ await mkdir(nextStepsEpicDir,{recursive:true});
+ await writeFile(nextStepsEpicPath,JSON.stringify({schema_version:1,epic:'new-epic',title:'New epic',state:'planned',created_at:'2026-10-12T00:00:00.000Z',packages:[{package:'epic-first'},{package:'epic-second',requires:['epic-first']}]}));
+ await utimes(nextStepsEpicPath,new Date(ago(1250000)),new Date(ago(1250000)));
+ await nextStepsRemember(nextStepsEpicPath);
+ if(nextStepsColdAlias){
+  // The catalog kit id stays 'alpha' while the storage directory is
+  // 'physical'; the declared repository makes the package resolvable like a
+  // real workspace so the cold route can reach the review surface.
+  await writeFile(join(mismatchDirectory.directory,'kit.yaml'),`version: 1\nid: alpha\nname: Alpha kit\nexecution_host: ${hostname()}\nrepositories:\n  - id: fixture-repo\n    path: ${checkout}\n    role: Catalog id/directory mismatch alias\n`);
+  const alias=await addPackage('kit-alias','physical','fixture-repo');
+  await nextStepsWrite(alias.dir,'proposal.md',nextStepsProposal('COMPATIBLE_WITH_CAVEATS',true,'The alias workspace proposal records a recommended critique that is not written.'),ago(950000));
+ }
+ }catch(error){await rm(root,{recursive:true,force:true});throw error;}
+}
+const skillPath=(plannedLaunch||handoffIntegration||nextSteps)?join(root,'.agents','skills','spec-end-to-end','SKILL.md'):join(root,'skills','fixture-skill','SKILL.md');await mkdir(join(skillPath,'..'),{recursive:true});
+await writeFile(skillPath,(plannedLaunch||nextSteps)?'---\nname: spec-end-to-end\ndescription: Implement a spec package end to end.\n---\n# Spec end to end fixture\nUse the attached brief and the referenced package.\n':'---\nname: fixture-skill\ndescription: Plan work from the chosen brief.\n---\n# Fixture skill\nApply the selected workflow and read references relative to this skill directory.\n');
 // Bound plan/review fixture skills plus the generic fallback live under the
 // fake home so the real resolver can find each requested skill file.
-if(plannedLaunch||handoffIntegration)for(const skillName of ['spec-architect-initial','spec-architect-critics','spec-write','fixture-skill']){const boundSkillPath=join(root,'.agents','skills',skillName,'SKILL.md');await mkdir(join(boundSkillPath,'..'),{recursive:true});await writeFile(boundSkillPath,`---\nname: ${skillName}\ndescription: Bound package review fixture.\n---\n# ${skillName} fixture\n`);}
+if(plannedLaunch||handoffIntegration||nextSteps)for(const skillName of ['spec-architect-initial','spec-architect-critics','spec-write','fixture-skill']){const boundSkillPath=join(root,'.agents','skills',skillName,'SKILL.md');await mkdir(join(boundSkillPath,'..'),{recursive:true});await writeFile(boundSkillPath,`---\nname: ${skillName}\ndescription: Bound package review fixture.\n---\n# ${skillName} fixture\n`);}
 const piPath=join(root,'pi');await writeFile(piPath,'#!/bin/sh\nexit 0\n',{mode:0o755});
 const referenceCatalog=createReferenceCatalog({home:root,agentDir:join(root,'agent'),skillLoader:()=>({skills:[{name:plannedLaunch?'spec-end-to-end':'fixture-skill',description:plannedLaunch?'Implement a spec package end to end.':'Plan work from the chosen brief.',filePath:skillPath,baseDir:join(skillPath,'..'),sourceInfo:{scope:'user'}}],diagnostics:[]})});
 // --- Opt-in real final-integration boundary --------------------------------
@@ -226,6 +319,9 @@ const referenceCatalog=createReferenceCatalog({home:root,agentDir:join(root,'age
 const handoffSessions=new Map();
 const handoffTmuxCalls=[];
 let handoffNewSessions=0;
+// Final-adapter failure control for the real launch composition: the service
+// still publishes, claims and reconciles, while the fake tmux pane start refuses.
+let handoffTmuxFail=false;
 function endHandoffSession(session){if(!session||session.ended)return;session.ended=true;try{session.dummy.kill('SIGKILL');}catch{}}
 function handoffTargetName(rest){const index=rest.indexOf('-t');if(index!==-1)return String(rest[index+1]??'').replace(/^=/,'').replace(/:$/,'');const candidate=rest.find(token=>typeof token==='string'&&token.startsWith('='));return candidate?candidate.replace(/^=/,'').replace(/:$/,''):null;}
 async function handoffTmuxRun(socketPath,args){
@@ -239,6 +335,7 @@ async function handoffTmuxRun(socketPath,args){
   const [command,...rest]=segment;
   if(command==='start-server'||command==='set-option'||command==='list-clients'||command==='list-panes')continue;
   if(command==='new-session'){
+   if(handoffTmuxFail)return {ok:false,code:1,stdout:'',stderr:'fixture tmux pane refused',message:'fixture-tmux-refused'};
    const nameIndex=rest.indexOf('-s');const name=nameIndex!==-1?rest[nameIndex+1]:null;
    const marker=rest.find(token=>typeof token==='string'&&token.startsWith('ADJACENT_ASSIGNMENT_ID='));
    const assignmentId=marker?marker.slice('ADJACENT_ASSIGNMENT_ID='.length):null;
@@ -456,7 +553,7 @@ async function fixtureAssignmentTarget(threadId){
  return matches[0];
 }
 const fixtureDiscussion={
- async prepareSpecTarget(input){posts.push({name:'prepareSpecTarget',input});const directTarget=typeof input.repository_id==='string'&&dispatchRepos.some(repo=>repo.id===input.repository_id)?input.repository_id:null;return prepareAssignmentSpecTarget({storageRoot:storage,workspace_id:input.workspace_id,target:directTarget??await fixtureAssignmentTarget(input.thread_id),specPackage:input.spec_package});},
+ async prepareSpecTarget(input){const entry={name:'prepareSpecTarget',input};posts.push(entry);try{const directTarget=typeof input.repository_id==='string'&&dispatchRepos.some(repo=>repo.id===input.repository_id)?input.repository_id:null;const result=await prepareAssignmentSpecTarget({storageRoot:storage,workspace_id:input.workspace_id,target:directTarget??await fixtureAssignmentTarget(input.thread_id),specPackage:input.spec_package});entry.result=result;return result;}catch(error){entry.error={code:error?.code??null,message:error?.message??String(error)};throw error;}},
  async suggestions(input){posts.push({name:'suggestions',input});if(delaySuggestions)await new Promise(r=>setTimeout(r,650));const thread=threads.find(item=>item.thread_id===input.thread_id);if(!thread)throw Object.assign(new Error('Thread not found'),{code:'thread-not-found'});const target=thread.target&&typeof thread.target==='object'?thread.target:{};let executionDir=workspace.directory;if(target.kind==='repository'){const match=dispatchRepos.find(repo=>repo.id===target.repository_id);if(match)executionDir=await realpath(match.path);}else if(target.kind==='worktree'&&typeof target.path==='string'){executionDir=await realpath(target.path);}return referenceCatalog.suggest({workspace:{...workspace,repositories:dispatchRepos.map(repo=>({id:repo.id,path:repo.path}))},executionDir,kind:input.kind,query:input.query});},
  async list({workspace_id}){if(holdThreads&&(!holdThreadsWorkspace||workspace_id===holdThreadsWorkspace))await waitForRelease(threadWaiters);if(failThreads)throw Object.assign(new Error('Fixture thread list unavailable'),{code:'service-closed'});return {threads:workspace_id==='fixture'?copied(threads):[],invalid:workspace_id==='fixture'&&invalidRecords?[{reason:'invalid-json'},{reason:'fixture-secret-token'}]:[]};},
  async history({before}){if(before)return {entries:[{id:'entry-old',message:{role:'user',content:'Older message'}}],truncated:false,incomplete_tail:false};if(longHistory)return {entries:Array.from({length:48},(_,index)=>({id:`entry-long-${index+1}`,timestamp:new Date(Date.now()-index*60000).toISOString(),message:{role:index%2?'assistant':'user',content:`Long history message ${index+1}. Fixture transcript line for the retained reading position. A second sentence keeps each row tall enough to scroll.`}})),truncated:true,incomplete_tail:false};return {entries:copied(entries),truncated:true,incomplete_tail:incompleteTail};},
@@ -528,7 +625,7 @@ for(const row of snapshot.planned_packages??[]){
 }
 return {schema_version:1,observer_id:'fixture',state:'observing',published_at:now,snapshot};};
 const makeMismatchSnapshot=()=>{const now=new Date().toISOString();const run=(workspaceName,packagePath,packageRef,activity)=>({workspace:workspaceName,package:packagePath,package_ref:packageRef,assignment_id:'mismatch-run',workflow_id:'mismatch-workflow',execution:'running',workflow_state:'waiting-external',is_current_assignment:true,activity,obligation:activity,observed_at:now,coverage:{state:'complete',reasons:[]},spec_progress:{current_position:1,total_steps:2,current_name:'Mismatch step'},timing:{started_at:now,attempts:[]}});return {schema_version:1,observer_id:'mismatch-fixture',state:'observing',published_at:now,snapshot:{workspace:'physical',coverage:{state:'complete',observed_at:now,reasons:[]},runs:[run('physical',alphaKitPackage,'alpha/alpha-kit','Alpha kit run'),run('alpha',physicalKitPackage,'physical/physical-kit','Neighbor physical run')],recently_completed:[],assignments:[{assignment_id:'alpha-assignment',workspace_id:'alpha',workspace:'physical',spec_package:'alpha/alpha-kit',workflow_id:'mismatch-workflow',display:'live',state:'live',executionDir:root,coverage:{state:'complete',reasons:[]},task_activity:{state:'idle',reason:'Waiting for mismatch review.'},nextAction:'Review mismatch assignment'},{assignment_id:'physical-assignment',workspace_id:'physical',workspace:'alpha',spec_package:'physical/physical-kit',workflow_id:'mismatch-workflow',display:'live',state:'live',executionDir:root,coverage:{state:'complete',reasons:[]},task_activity:{state:'idle',reason:'Waiting for mismatch review.'},nextAction:'Review mismatch assignment'}],assignment_coverage:{state:'complete',reasons:[]},epics:[{workspace:'physical',epic:'alpha-kit-epic',title:'Alpha kit epic',state:'active',members:[{name:'alpha-kit',package:'alpha-kit',workspace:'physical',status:'in-progress',waiting_on:[],attention:false}],summary:{total:1,merged:0,complete:0,attention:0},next:'alpha-kit',coverage:{state:'complete',reasons:[]}},{workspace:'alpha',epic:'physical-neighbor-epic',title:'Neighbor physical epic',state:'active',members:[{name:'physical-kit',package:'physical-kit',workspace:'alpha',status:'in-progress',waiting_on:[],attention:false}],summary:{total:1,merged:0,complete:0,attention:0},next:'physical-kit',coverage:{state:'complete',reasons:[]}}]}};};
-if(!handoffIntegration)await writeFile(mismatchObserverFile,JSON.stringify(makeMismatchSnapshot()));
+if(!handoffIntegration&&!nextSteps)await writeFile(mismatchObserverFile,JSON.stringify(makeMismatchSnapshot()));
 let sessionEnded=false,sessionEndFails=false,sessionIdentity='fixture-identity';
 const sessionControl={
  async describe(id){return {assignment_id:id,identity:sessionIdentity,state:sessionEnded?'ended':'open',can_end:!sessionEnded,reason:sessionEnded?'Session has ended. Saved files and transcript remain available.':'Terminal session is open.',attach_command:sessionEnded?null:"ssh -t operator@host 'tmux -S /tmp/fixture.sock attach-session -t =fixture'",local_command:sessionEnded?null:'tmux -S /tmp/fixture.sock attach-session -t =fixture'};},
@@ -593,7 +690,8 @@ async function handleTerminalRequest(req,res,url,assetMatch){
  if(terminalFailAsset===kind||terminalFailAsset==='both'){send(503,{error:'Fixture player asset failure.'});return;}
  send(200,kind==='styles'?TERMINAL_STUB_STYLES:TERMINAL_STUB_SCRIPT,kind==='styles'?'text/css; charset=utf-8':'text/javascript; charset=utf-8');
 }
-if(handoffIntegration)await publishIntegrationSnapshot();
+if(nextSteps)await publishNextStepsSnapshot();
+else if(handoffIntegration)await publishIntegrationSnapshot();
 else await writeFile(observerFile,JSON.stringify(makeSnapshot()));
 const dashboard=createDashboardServer({...modelsFixture?{modelCatalog:fixtureCatalog}:{},agentDir:join(root,'agent'),storageRoot:storage,publicHost:'dashboard.example',discussion,sessionControl});
 const server=createServer(async(req,res)=>{
@@ -604,6 +702,15 @@ const server=createServer(async(req,res)=>{
   if(handoffIntegration&&action==='handoff-complete-planning')try{controlResult=await completeHandoffPlanning(url);}catch(error){controlResult={control:'handoff-complete-planning',error:String(error?.message??error)};}
   if(handoffIntegration&&action==='handoff-write-receipt')try{controlResult=await writeHandoffReceipt(url);}catch(error){controlResult={control:'handoff-write-receipt',error:String(error?.message??error)};}
   if(action==='observer')observerMode=url.searchParams.get('value')==='true';
+  if(nextSteps&&action==='next-arrive'){try{const slug=`arrive-${++nextStepsArrivals}`;const created=await newPackage({root:storage,workspace:'fixture',slug,targets:[{id:'fixture-repo'}]});if(!created.ok)throw new Error(`${created.code}: ${created.message}`);const item={slug,workspace:'fixture',wsId:'fixture',dir:join(storage,'projects','fixture','specs',slug),packageRef:`fixture/${slug}`};nextStepsPackages.set(slug,item);nextStepsDynamicDirs.add(item.dir);const path=await nextStepsWrite(item.dir,'proposal.md',nextStepsProposal('COMPATIBLE_WITH_CAVEATS',true,`Arrived proposal ${slug} for the fixture workspace.`),Date.now());nextStepsLastMutation={action:'next-arrive',at:Date.now(),slug,package:item.dir,file:await nextStepsStat(path)};await publishNextStepsSnapshot();controlResult={control:'next-arrive',...(nextStepsLastMutation??{})};}catch(error){controlResult={control:'next-arrive',error:String(error?.message??error)};}}
+  if(nextSteps&&action==='next-critique'){try{const item=nextStepsPackages.get('recommended');if(!item)throw new Error('recommended package is absent');const path=join(item.dir,'critique.md');await writeFile(path,nextStepsCritique);await utimes(path,new Date(),new Date());nextStepsLastMutation={action:'next-critique',at:Date.now(),slug:'recommended',package:item.dir,file:await nextStepsStat(path)};await publishNextStepsSnapshot();controlResult={control:'next-critique',...(nextStepsLastMutation??{})};}catch(error){controlResult={control:'next-critique',error:String(error?.message??error)};}}
+  if(nextSteps&&action==='next-remove'){const slug=url.searchParams.get('slug')||'recommended';const item=nextStepsPackages.get(slug);const removed=[];if(item)for(const name of nextStepsWatched){const path=join(item.dir,name);if(await nextStepsExists(path)){await rm(path,{force:true});removed.push(path);}}nextStepsLastMutation={action:'next-remove',at:Date.now(),slug,package:item?.dir??null,removed,stats:item?await Promise.all(nextStepsWatched.map(name=>nextStepsStat(join(item.dir,name)))):[]};await publishNextStepsSnapshot();controlResult={control:'next-remove',...(nextStepsLastMutation??{})};}
+  if(nextSteps&&action==='next-empty'){const removed=[];for(const pkgItem of nextStepsPackages.values())for(const name of nextStepsWatched){const path=join(pkgItem.dir,name);if(await nextStepsExists(path)){await rm(path,{force:true});removed.push(path);}}const epicRemoved=await nextStepsExists(nextStepsEpicPath);await rm(nextStepsEpicDir,{recursive:true,force:true});nextStepsLastMutation={action:'next-empty',at:Date.now(),removed,epicRemoved};await publishNextStepsSnapshot();controlResult={control:'next-empty',...(nextStepsLastMutation??{})};}
+  if(nextSteps&&action==='next-partial-zero'){for(const pkgItem of nextStepsPackages.values())for(const name of nextStepsWatched)await rm(join(pkgItem.dir,name),{force:true});await rm(nextStepsEpicDir,{recursive:true,force:true});await applyCatalogMode('partial');nextStepsLastMutation={action:'next-partial-zero',at:Date.now(),catalogMode:'partial'};await publishNextStepsSnapshot();controlResult={control:'next-partial-zero',...(nextStepsLastMutation??{})};}
+  if(nextSteps&&action==='next-reset'){await restoreHealthyWorkspace();await nextStepsOtherKit();for(const pkgItem of nextStepsPackages.values())for(const name of nextStepsWatched)await rm(join(pkgItem.dir,name),{force:true});for(const [slug,pkgItem] of [...nextStepsPackages])if(nextStepsDynamicDirs.has(pkgItem.dir))nextStepsPackages.delete(slug);for(const path of [...nextStepsInitialFiles.keys()])for(const dir of nextStepsDynamicDirs)if(path.startsWith(dir)){nextStepsInitialFiles.delete(path);break;}for(const dir of nextStepsDynamicDirs)await rm(dir,{recursive:true,force:true});nextStepsDynamicDirs.clear();for(const [path,stored] of nextStepsInitialFiles){await mkdir(dirname(path),{recursive:true});await writeFile(path,stored.bytes);await utimes(path,new Date(stored.mtimeMs),new Date(stored.mtimeMs));}nextStepsLastMutation={action:'next-reset',at:Date.now(),restored:nextStepsInitialFiles.size};await publishNextStepsSnapshot();controlResult={control:'next-reset',...(nextStepsLastMutation??{})};}
+  if(nextSteps&&action==='next-local')localOperator=url.searchParams.get('value')==='true';
+  if(nextSteps&&action==='next-scan-fail')nextStepsScanFail=url.searchParams.get('value')==='true';
+  if(nextSteps&&action==='next-scan-delay-ms')nextStepsScanDelayMs=numberValue(url.searchParams.get('value'),0,15000);
   if(action==='session-end-fails')sessionEndFails=url.searchParams.get('value')==='true';
   if(action==='session-identity'){const next=url.searchParams.get('value');sessionIdentity=next?next:'fixture-identity';}
   if(action==='terminal-state')terminalState=url.searchParams.get('value')||'none';
@@ -648,6 +755,7 @@ const server=createServer(async(req,res)=>{
   if(action==='review-release-preview'){holdDispatchPreview=false;releaseWaiters(dispatchPreviewWaiters);}
   if(action==='review-hold-launch')holdDispatchLaunch=url.searchParams.get('value')==='true';
   if(action==='review-release-launch'){holdDispatchLaunch=false;releaseWaiters(dispatchLaunchWaiters);}
+  if(action==='integration-tmux-fail')handoffTmuxFail=url.searchParams.get('value')==='true';
   if(action==='review-holding-run'){const value=url.searchParams.get('value')||'';reviewHoldingRun=value?{workspace:'fixture',package:pkg,package_ref:'fixture/browser',assignment_id:value,workflow_id:'workflow-1',execution:'running',workflow_state:'waiting-worker',is_current_assignment:true,activity:'Holding fixture/browser',obligation:'Finish before another review',observed_at:new Date().toISOString(),coverage:{state:'complete',reasons:[]}}:null;}
   if(action==='publish-assignment'){const id=url.searchParams.get('value')||'';const skill=url.searchParams.get('skill')||'';const specPackage=url.searchParams.get('package')||'fixture/browser';if(id){launchedAssignments.set(id,{assignment_id:id,workspace_id:'fixture',spec_package:specPackage,workflow_id:'workflow-1',display:'live',state:'live',executionDir:root,terminal:'fixture',coverage:{state:'complete',reasons:[]},task_activity:{state:'idle',reason:'Fixture assignment is waiting for input.'},nextAction:'Attach to the terminal',...(skill?{skill}:{})});await writeFile(observerFile,JSON.stringify(makeSnapshot()));}}
   if(action==='clear-launch-publications')launchedAssignments.clear();
@@ -697,7 +805,7 @@ const server=createServer(async(req,res)=>{
   if(modelsFixture&&action==='models-preferences-empty')await writeFile(join(root,'agent','spec-sentinel','preferred-models.json'),url.searchParams.get('value')==='true'?`{"version":1,"preferred":[],"updated_at":"2026-10-14T14:31:00.000Z"}`:modelsPreferredSeed);
   if(modelsFixture&&action==='models-catalog-drop')modelsCatalogDrop=url.searchParams.get('value')||'';
   const modelsState=modelsFixture?{catalogFail:modelsCatalogFail,drop:modelsCatalogDrop,readAt:new Date(modelsReadAt).toISOString(),stale:Date.now()-modelsReadAt>24*60*60*1000}:null;
-  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({...packageIdentity,posts,resolverDiagnostics,threads,createdThreads,modelRpcCalls,modelTmuxCalls:handoffTmuxCalls,tick,boundary,threadControls:{holdThreads,holdThreadsWorkspace,failThreads,longHistory,incompleteTail,invalidRecords,listFailStatus,historyFailStatus,responseState},subscribedThreadIds:[...new Set([...subscribers].map(item=>item.thread_id))],createControls:{delayCreate,failCreate},session:{identity:sessionIdentity,ended:sessionEnded},terminal:{state:terminalState,delayMs:terminalDelayMs,openDelayMs:terminalOpenDelayMs,failAsset:terminalFailAsset,assignment:terminalAssignment,counts:terminalCounts},review:{holdDispatchPreview,holdDispatchLaunch,dispatchPreviewRefusal,dispatchLaunchRefusal,staleLaunch,holdingRun:reviewHoldingRun?.assignment_id??null},launch:{outcome:dispatchLaunchOutcome,published:[...launchedAssignments.keys()]},diagnostics:{resolvers:resolverDiagnostics},boundaryLog:boundaryLog.slice(-60),active:[...activeBoundary.values()],launchResolutions:Object.fromEntries(launchResolutions),briefWritesPending,completedBriefWrites,integration:handoffIntegration?{enabled:true,processStarts:handoffNewSessions,sessions:[...handoffSessions.values()].map(session=>({session:session.name,socket:session.socketPath,assignment_id:session.assignmentId,ended:session.ended})),tmuxCalls:handoffTmuxCalls.length}:{enabled:false},models:modelsState,...(controlResult??{})}));return;
+  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({...packageIdentity,local:localOperator,posts,resolverDiagnostics,threads,createdThreads,modelRpcCalls,modelTmuxCalls:handoffTmuxCalls,tick,boundary,threadControls:{holdThreads,holdThreadsWorkspace,failThreads,longHistory,incompleteTail,invalidRecords,listFailStatus,historyFailStatus,responseState},subscribedThreadIds:[...new Set([...subscribers].map(item=>item.thread_id))],createControls:{delayCreate,failCreate},session:{identity:sessionIdentity,ended:sessionEnded},terminal:{state:terminalState,delayMs:terminalDelayMs,openDelayMs:terminalOpenDelayMs,failAsset:terminalFailAsset,assignment:terminalAssignment,counts:terminalCounts},review:{holdDispatchPreview,holdDispatchLaunch,dispatchPreviewRefusal,dispatchLaunchRefusal,staleLaunch,holdingRun:reviewHoldingRun?.assignment_id??null},launch:{outcome:dispatchLaunchOutcome,published:[...launchedAssignments.keys()]},diagnostics:{resolvers:resolverDiagnostics},boundaryLog:boundaryLog.slice(-60),active:[...activeBoundary.values()],launchResolutions:Object.fromEntries(launchResolutions),briefWritesPending,completedBriefWrites,integration:handoffIntegration?{enabled:true,processStarts:handoffNewSessions,sessions:[...handoffSessions.values()].map(session=>({session:session.name,socket:session.socketPath,assignment_id:session.assignmentId,ended:session.ended})),tmuxCalls:handoffTmuxCalls.length}:{enabled:false},models:modelsState,...(nextSteps?{nextSteps:await nextStepsMeta()}:{}),...(controlResult??{})}));return;
  }
  const terminalAsset=/^\/api\/assignment-terminal\/([^/]+)\/([^/]+)$/.exec(url.pathname);
  if(url.pathname==='/api/assignment-terminal/open'||terminalAsset){await handleTerminalRequest(req,res,url,terminalAsset);return;}
@@ -712,7 +820,10 @@ const server=createServer(async(req,res)=>{
   if(status){res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify({error:threadRead==='threads'?'Fixture thread list unavailable':'Fixture transcript read unavailable'}));return;}
  }
  if(url.pathname==='/api/models/preferred'&&req.method==='POST')modelsPreferencePosts+=1;
- if(!readKind){dashboard.emit('request',req,res);return;}
+ if(!readKind){
+  if(nextSteps&&url.pathname==='/api/next-steps'&&(nextStepsScanFail||nextStepsScanDelayMs>0)){const attempt=startBoundary('next-steps','scan');if(nextStepsScanDelayMs>0)await new Promise(resolve=>setTimeout(resolve,nextStepsScanDelayMs));if(nextStepsScanFail){finishBoundary(attempt,'fail');res.writeHead(503,{'Content-Type':'application/json'});res.end(JSON.stringify({error:'fixture-next-steps-failure'}));return;}finishBoundary(attempt,'complete');}
+  dashboard.emit('request',req,res);return;
+ }
  const id=url.searchParams.get('id')??'';
  const attempt={
   fail:readKind==='catalog'?boundary.catalogFail:readKind==='detail'?boundary.detailFail:boundary.stateFail,
@@ -759,10 +870,11 @@ server.on('upgrade',(req,socket,head)=>{
 });
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const timer=setInterval(()=>{
+ if(nextSteps){tick++;void publishNextStepsSnapshot();return;}
  if(handoffIntegration){void publishIntegrationSnapshot().catch(()=>{});return;}
  tick++;void writeFile(observerFile,JSON.stringify(makeSnapshot()));void writeFile(mismatchObserverFile,JSON.stringify(makeMismatchSnapshot()));
 },1000);
-console.log(JSON.stringify({url:`http://127.0.0.1:${server.address().port}`,root,checkout,secondCheckout,otherPackage:otherPkg,...packageIdentity,thread1,thread2,thread3,worktreeTarget:docsCheckout,integration:handoffIntegration}));
+console.log(JSON.stringify({url:`http://127.0.0.1:${server.address().port}`,root,checkout,secondCheckout,otherPackage:otherPkg,...packageIdentity,thread1,thread2,thread3,worktreeTarget:docsCheckout,integration:handoffIntegration,nextSteps:nextSteps?await nextStepsMeta():undefined}));
 async function close(){
  clearInterval(timer);
  if(handoffIntegration||modelsFixture){
@@ -770,6 +882,7 @@ async function close(){
   if(handoffService)await handoffService.close().catch(()=>{});
   for(const session of handoffSessions.values())endHandoffSession(session);
  }
+ if(nextSteps)await nextStepsPublishChain.catch(()=>{});
  const drained=dashboard.closeTerminalViews();
  server.closeAllConnections();await new Promise(r=>server.close(r));await drained.catch(()=>{});await rm(root,{recursive:true,force:true});process.exit(0);
 }

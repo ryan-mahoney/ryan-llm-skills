@@ -1,0 +1,154 @@
+// Sole Next steps scan transport and lifetime owner. api.ts:getJson is the
+// only transport; this module owns the request generation, abort controller,
+// deadline and polling interval. A failed or invalid load retains the last
+// successful scan; late or stopped generations never settle shared signals
+// and no other module may fetch or poll the scan route.
+import { createSignal } from 'solid-js';
+import { getJson } from './api';
+import type { NextStepsFileRow, NextStepsScan } from './destinations/next-steps-state';
+
+const URL = '/api/next-steps';
+const POLL_MS = 30000;
+const DEADLINE_MS = 10000;
+
+const [scan, setScan] = createSignal<NextStepsScan | null>(null);
+const [scanError, setScanError] = createSignal('');
+const [pending, setPending] = createSignal(false);
+
+export { pending, scan, scanError };
+
+// One owned lifetime: active flag, request generation, in-flight controller,
+// polling interval and request deadline.
+let active = false;
+let generation = 0;
+let controller: AbortController | null = null;
+let interval: ReturnType<typeof setInterval> | null = null;
+let deadline: ReturnType<typeof setTimeout> | null = null;
+
+// Conservative wire guard: only the schema the destination understands is
+// accepted, and anything else keeps the previous successful scan. Coverage
+// discriminants, coverage counts and every row field public readers consume
+// are validated so malformed version-1 data never replaces retained data.
+const COVERAGE_STATES = ['complete', 'partial', 'unavailable'];
+const ROW_KINDS = ['package', 'epic'];
+const ROW_STAGES = ['proposal', 'critique', 'spec', 'work-tour', 'epic'];
+const SIGNAL_STATES = ['ok', 'unreadable', 'unparsed'];
+
+const wireRecord = (value: unknown): Record<string, unknown> | null =>
+  value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+const stringList = (value: unknown): boolean => Array.isArray(value) && value.every(entry => typeof entry === 'string');
+const oneOf = (value: unknown, allowed: readonly string[]): boolean => typeof value === 'string' && allowed.includes(value);
+
+function isNextStepsRow(value: unknown): value is NextStepsFileRow {
+  const row = wireRecord(value);
+  const signal = row ? wireRecord(row.signal) : null;
+  return row !== null
+    && typeof row.key === 'string'
+    && oneOf(row.kind, ROW_KINDS)
+    && typeof row.workspace_id === 'string'
+    && typeof row.workspace === 'string'
+    && typeof row.workspace_name === 'string'
+    && typeof row.slug === 'string'
+    && (row.package === undefined || typeof row.package === 'string')
+    && oneOf(row.stage, ROW_STAGES)
+    && typeof row.file === 'string'
+    && typeof row.path === 'string'
+    && typeof row.written_at === 'string'
+    && Array.isArray(row.observed_files)
+    && row.observed_files.every(file => {
+      const observed = wireRecord(file);
+      return observed !== null && typeof observed.name === 'string'
+        && typeof observed.stage === 'string' && typeof observed.written_at === 'string';
+    })
+    && signal !== null
+    && oneOf(signal.state, SIGNAL_STATES);
+}
+
+function isNextStepsScan(value: unknown): value is NextStepsScan {
+  const candidate = wireRecord(value);
+  const coverage = candidate ? wireRecord(candidate.coverage) : null;
+  const workspaces = coverage ? wireRecord(coverage.workspaces) : null;
+  return candidate !== null
+    && candidate.schema_version === 1
+    && typeof candidate.scanned_at === 'string'
+    && typeof candidate.window_ms === 'number'
+    && coverage !== null
+    && oneOf(coverage.state, COVERAGE_STATES)
+    && stringList(coverage.reasons)
+    && workspaces !== null
+    && typeof workspaces.read === 'number'
+    && (workspaces.total === null || typeof workspaces.total === 'number')
+    && Array.isArray(coverage.unread)
+    && coverage.unread.every(entry => {
+      const unread = wireRecord(entry);
+      return unread !== null && typeof unread.workspace === 'string' && typeof unread.reason === 'string';
+    })
+    && Array.isArray(candidate.rows)
+    && candidate.rows.every(isNextStepsRow);
+}
+
+export async function loadNextSteps(): Promise<void> {
+  if (!active) return;
+  const request = ++generation;
+  // A new active load aborts and replaces the older owned generation.
+  if (controller) controller.abort();
+  const current = new AbortController();
+  controller = current;
+  if (deadline !== null) clearTimeout(deadline);
+  deadline = setTimeout(() => current.abort(), DEADLINE_MS);
+  setPending(true);
+  try {
+    const value = await getJson<unknown>(URL, current.signal);
+    if (request !== generation || !active) return;
+    if (!isNextStepsScan(value)) {
+      setScanError('Next steps scan could not be read.');
+      return;
+    }
+    setScan(value);
+    setScanError('');
+  } catch {
+    // Failure retains the last successful scan; superseded or stopped
+    // rejections stay silent.
+    if (request === generation && active) setScanError('Could not refresh next steps. Retry to reconnect.');
+  } finally {
+    if (request === generation) {
+      if (deadline !== null) {
+        clearTimeout(deadline);
+        deadline = null;
+      }
+      setPending(false);
+    }
+  }
+}
+
+export function startNextStepsPolling(): void {
+  if (active) return;
+  active = true;
+  void loadNextSteps();
+  interval = setInterval(() => { void loadNextSteps(); }, POLL_MS);
+}
+
+export function stopNextStepsPolling(): void {
+  active = false;
+  generation += 1;
+  if (controller) {
+    controller.abort();
+    controller = null;
+  }
+  if (interval !== null) {
+    clearInterval(interval);
+    interval = null;
+  }
+  if (deadline !== null) {
+    clearTimeout(deadline);
+    deadline = null;
+  }
+  setPending(false);
+}
+
+// Exact package lookup over the current scan; step 6 consumes this as the
+// Inputs observation lookup.
+export function nextStepsRowForPackage(packagePath: string): NextStepsFileRow | null {
+  if (!packagePath) return null;
+  return scan()?.rows.find(row => row.package === packagePath) ?? null;
+}

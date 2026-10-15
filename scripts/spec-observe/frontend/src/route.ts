@@ -1,4 +1,5 @@
 export type Destination =
+  | 'next-steps'
   | 'specs'
   | 'epics'
   | 'agents'
@@ -24,12 +25,14 @@ export type RouteState = {
   target?: string;
   package?: string;
   skill?: string;
+  stop?: string;
 };
 
 export type RouteMode = 'push' | 'replace';
 export type RouteListener = (route: RouteState) => void;
 
 export const DESTINATIONS: readonly Destination[] = [
+  'next-steps',
   'specs',
   'epics',
   'agents',
@@ -41,10 +44,10 @@ export const DESTINATIONS: readonly Destination[] = [
   'models',
 ];
 
-export const SUPPORTED_PARAMS = ['ws', 'id', 'tab', 'source', 'path', 'filter', 'q', 'thread', 'target', 'package', 'skill'] as const;
+export const SUPPORTED_PARAMS = ['ws', 'id', 'tab', 'source', 'path', 'filter', 'q', 'thread', 'target', 'package', 'skill', 'stop'] as const;
 export type SupportedParam = (typeof SUPPORTED_PARAMS)[number];
 
-const HISTORY_FIELDS: readonly (keyof RouteState)[] = ['dest', 'ws', 'id', 'tab', 'source', 'path', 'thread', 'target', 'package', 'skill'];
+const HISTORY_FIELDS: readonly (keyof RouteState)[] = ['dest', 'ws', 'id', 'tab', 'source', 'path', 'thread', 'target', 'package', 'skill', 'stop'];
 
 const isDestination = (value: unknown): value is Destination =>
   typeof value === 'string' && (DESTINATIONS as readonly string[]).includes(value);
@@ -53,7 +56,8 @@ export function parseHash(hash: string): RouteState {
   const fragment = (typeof hash === 'string' ? hash : '').replace(/^#/, '');
   const queryIndex = fragment.indexOf('?');
   const destPart = (queryIndex === -1 ? fragment : fragment.slice(0, queryIndex)).replace(/^\/+|\/+$/g, '');
-  if (!isDestination(destPart)) return { dest: 'specs' };
+  // Unknown or empty hashes land on the Next steps portfolio; valid destinations and their scope/query params keep their behavior.
+  if (!isDestination(destPart)) return { dest: 'next-steps' };
   const route: RouteState = { dest: destPart };
   if (queryIndex === -1) return route;
   const params = new URLSearchParams(fragment.slice(queryIndex + 1));
@@ -64,7 +68,7 @@ export function parseHash(hash: string): RouteState {
 }
 
 export function formatHash(route: RouteState): string {
-  const dest = isDestination(route?.dest) ? route.dest : 'specs';
+  const dest = isDestination(route?.dest) ? route.dest : 'next-steps';
   const params = new URLSearchParams();
   for (const name of SUPPORTED_PARAMS) {
     const value = route?.[name];

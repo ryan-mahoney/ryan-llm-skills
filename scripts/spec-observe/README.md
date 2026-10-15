@@ -402,6 +402,42 @@ example `systemctl --user restart spec-sentinel`) and reads
 pending restory-box restart/read procedure is not run by merge verification and
 never restarts a live host without explicit operator authority.
 
+### Next steps
+
+`GET|HEAD /api/next-steps` runs the bounded cross-workspace written-file scan in
+`next-steps.mjs` and returns one JSON document (`schema_version: 1`, server
+`scanned_at`, `window_ms: 604800000`, `coverage`, `rows`). HEAD executes the scan
+and returns headers only. The route answers `503` with the same JSON when the
+storage root is unavailable (no rows are invented); a truncated catalog, failed
+read or skipped candidate keeps the useful rows in a `200` response whose
+`coverage.state` is `partial`.
+
+Each row is one package subject (or an eligible planned epic) with its newest
+watched file: `proposal.md`, `critique.md`, `spec.md` and `work-tour.html`, in
+lifecycle order `work-tour > spec > critique > proposal` for equal mtimes. A file
+exactly seven days old (`now - 604800000 ms`, inclusive) is included; one
+millisecond older is omitted. Candidates are sorted newest-first by
+`written_at` and `key`, then the newest 200 are retained before any package
+signal is read; truncation is a partial reason. Planned-epic `epic.json`
+eligibility reads necessarily run during candidate collection, before that
+selection, and share the same signal budget. Traversal is capped at 500 package
+directories and 50 epics per catalog workspace and never follows symlinked
+directories or files. Signal reads share a 16 MiB aggregate budget: Markdown,
+`epic.json` and `pr-url.json` are bounded at 64 KiB; `work-tour.json` is bounded
+at 512 KiB; `work-tour.html` is never read. Excerpts are 400 characters and
+lists carry at most six titles. Proposal verdicts accept only `COMPATIBLE`,
+`COMPATIBLE_WITH_CAVEATS` and `INCOMPATIBLE`; a critique without the required
+`Recommendations`, `Must Address` or `Should Address` structure is `unparsed`;
+a missing or malformed required `work-tour.json` is `unreadable`. Planned epics
+appear only when every member directory was checked and holds no regular
+watched file; absent member directories are empty, while an unreadable member
+check omits eligibility and reports a scoped partial reason.
+The scan traverses at most 100 valid catalog workspaces (the shared catalog row
+ceiling) and reports an explicit partial reason when the catalog publishes more;
+`listWorkspaces` keeps its independent default 400-entry/4 MiB catalog budget.
+`coverage.workspaces.total` is `null` when the shared catalog budget or that row
+ceiling prevents a complete workspace count.
+
 ### Designs
 
 The workspace detail lists the workspace's design packages

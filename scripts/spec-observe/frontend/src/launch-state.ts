@@ -9,7 +9,7 @@ import { createSignal } from 'solid-js';
 import { HttpError } from './api';
 import type { BriefReference, InputPreview } from './composerTypes';
 import { previewLaunchAssignment, saveLaunchBrief, submitLaunchAssignment } from './launch-client';
-import type { LaunchContext, LaunchPreview, LaunchReply } from './launch-client';
+import type { LaunchContext, LaunchPreview, LaunchReply, LaunchStop } from './launch-client';
 import type { WireRecord } from './model';
 import type { ModelChoice } from './models-state';
 import { sameChoice } from './models-state';
@@ -85,9 +85,19 @@ export type LaunchStore = {
   beginCorrectedAttempt: (context: LaunchContext) => LaunchResult | undefined;
 };
 
-// The editable target is deliberately not part of the identity tuple.
+// A caller-supplied stop is a distinct launch identity only for the
+// critics-only critique run: `skill === 'spec-architect-critics'` with
+// `stop === 'critique'`. Every other value (proposal, prepared, unknown) is
+// presentation-only and shares the absent-stop identity, so a seed cannot
+// mint an entry the route consumer reading only the URL cannot reach.
+export const normalizeLaunchStop = (value: unknown, skill?: string): LaunchStop | undefined =>
+  skill === 'spec-architect-critics' && value === 'critique' ? 'critique' : undefined;
+
+// The editable target is deliberately not part of the identity tuple; the
+// normalized critique stop is, so a critique-only draft and an epic
+// critics-then-spec draft for the same package keep separate entries.
 export const contextKey = (context: LaunchContext): string =>
-  JSON.stringify([context.ws, context.thread ?? null, context.package ?? null, context.skill ?? null]);
+  JSON.stringify([context.ws, context.thread ?? null, context.package ?? null, context.skill ?? null, normalizeLaunchStop(context.stop, context.skill) ?? null]);
 
 const sameReferenceIdentities = (a: readonly BriefReference[], b: readonly BriefReference[]): boolean =>
   a.length === b.length && a.every((reference, index) => reference.kind === b[index].kind && reference.id === b[index].id);

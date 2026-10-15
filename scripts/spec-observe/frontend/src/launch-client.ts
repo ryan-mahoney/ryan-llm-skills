@@ -9,7 +9,8 @@ import type { WireRecord } from './model';
 
 import type { ModelChoice } from './models-state';
 
-export type LaunchContext = { ws: string; thread?: string; target?: string | null; package?: string; skill?: string; authority?: 'none' | 'draft-pr'; model?: ModelChoice | null };
+export type LaunchStop = 'critique' | 'proposal' | 'prepared';
+export type LaunchContext = { ws: string; thread?: string; target?: string | null; package?: string; skill?: string; authority?: 'none' | 'draft-pr'; model?: ModelChoice | null; stop?: LaunchStop };
 export type LaunchPreview = { record: WireRecord; contractDigest: string; inputPreview?: InputPreview };
 export type LaunchReply = { assignment: WireRecord; observation: WireRecord };
 export const FIXED_INSTRUCTION = 'Perform the attached assignment brief.';

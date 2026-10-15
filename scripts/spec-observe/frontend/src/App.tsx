@@ -1,14 +1,16 @@
 import { For, Show, Switch, Match, createSignal, createMemo, createEffect, on, onMount, onCleanup } from 'solid-js';
 import { getJson } from './api';
+import { scan, scanError, startNextStepsPolling, stopNextStepsPolling } from './next-steps-store';
 import { str, base, time, packageFilterMatches, setClock, tickClock, serverNow, stale, statusMarkdown } from './format';
 import { catalog as modelsCatalog, loadCatalog as loadModelsCatalog } from './models-state';
 import { normalizeEnvelope, authoritativeObservers, collectRecords, packageSummaries, collectAssignments, collectEpics, type Envelope, type WireRecord } from './model';
-import Shell from './Shell';
+import Shell, { type ShellNavEntry } from './Shell';
 import type { StatusTone } from './primitives';
 import { parseHash, subscribeRoute, navigate, routeHistoryMode, type Destination, type RouteState } from './route';
 import { clearIncompatibleFields, firstUnmatchedTargetId, inWorkspaceScope, needsWorkspacePicker, requiresWorkspace, scopeLabel, withWorkspace, type CatalogEntry } from './scope';
 import { visibleSpecs } from './spec-state';
 import { destinationEntries, type DestinationProps } from './destinations';
+import { nextStepRows, railCount } from './destinations/next-steps-state';
 import { WorkspacePicker } from './destinations/workspaces';
 import { catalogRead, type WorkspaceCatalog } from './destinations/workspace-state';
 import { memberRecords, visibleEpics as sharedVisibleEpics } from './destinations/epic-state';
@@ -22,17 +24,15 @@ type Catalog = WorkspaceCatalog;
 const liveBrowser = () => location.protocol !== 'file:';
 
 const registry = destinationEntries();
-const adapterDest = (dest: Destination) => registry.find(e => e.dest === dest)!.render;
-const SpecsAdapter = adapterDest('specs');
-const EpicsAdapter = adapterDest('epics');
-const AgentsAdapter = adapterDest('agents');
-const ConversationsAdapter = adapterDest('conversations');
-const FilesAdapter = adapterDest('files');
-const DesignsAdapter = adapterDest('designs');
-const WorkspacesAdapter = adapterDest('workspaces');
-const LaunchAdapter = adapterDest('launch');
-const ModelsAdapter = adapterDest('models');
-const primaryNav = registry.filter(entry => entry.nav === 'primary').sort((a, b) => a.order - b.order).map(entry => ({ dest: entry.dest, label: entry.label }));
+// Destinations render by registry lookup so adding a rail entry can never
+// shift a positional binding onto a sibling adapter.
+function DestinationOutlet(props: DestinationProps & { dest: Destination }) {
+  const entry = registry.find(candidate => candidate.dest === props.dest);
+  if (!entry) return null;
+  const Render = entry.render;
+  return <Render {...props} />;
+}
+const primaryNavEntries: ShellNavEntry[] = registry.filter(entry => entry.nav === 'primary').sort((a, b) => a.order - b.order).map(entry => ({ dest: entry.dest, label: entry.label }));
 const directoryNav = registry.filter(entry => entry.nav === 'directory').sort((a, b) => a.order - b.order).map(entry => ({ dest: entry.dest, label: entry.label }));
 
 export default function App() {
@@ -71,7 +71,10 @@ export default function App() {
 
   const live = () => liveBrowser() && !imported();
   const scopeWs = () => route().ws;
-  const title = () => registry.find(entry => entry.dest === route().dest)?.label ?? 'Specs';
+  const routeTitle = () => registry.find(entry => entry.dest === route().dest)?.label ?? 'Specs';
+  // The shell h1 follows the reference for Next steps while the rail and
+  // breadcrumb keep the registry label.
+  const title = () => route().dest === 'next-steps' ? 'New files waiting for a next step' : routeTitle();
   const currentDestination = () => registry.find(entry => entry.dest === route().dest)?.parent ?? route().dest;
   const catalogEntries = () => catalog()?.valid ?? [];
   const records = createMemo(() => collectRecords(payload()));
@@ -128,6 +131,29 @@ export default function App() {
       ? 'Reconnect to the live dashboard before starting a conversation.'
       : '';
   const completionToken = () => live() && !error() ? payload()?.action_token : undefined;
+  // Rail waiting badge: only a trustworthy live scan in the current scope with
+  // a positive count shows one; imported, offline, errored or unread scans
+  // show none, and query/stage filters never change the count.
+  const nextStepsWaitingCount = createMemo<number | undefined>(() => {
+    if (!live() || imported() || scanError() !== '' || scan() === null) return undefined;
+    const rows = nextStepRows(scan(), {
+      records: records(),
+      assignments: assignments(),
+      epics: epics(),
+      catalog: catalogEntries(),
+      scope: scopeWs(),
+      token: completionToken() ?? null,
+      live: live(),
+      connectionFailed: Boolean(error()),
+      now: serverNow(),
+    });
+    const count = railCount(rows);
+    return count > 0 ? count : undefined;
+  });
+  const primaryNav = createMemo<ShellNavEntry[]>(() => {
+    const count = nextStepsWaitingCount();
+    return primaryNavEntries.map(entry => entry.dest === 'next-steps' && count !== undefined ? { ...entry, count } : entry);
+  });
   const observers = createMemo(() => authoritativeObservers(payload()?.observers ?? []));
   const scopedObservers = createMemo(() => observers().filter(observer => inWorkspaceScope({ workspace: str(observer.snapshot?.workspace) || str(observer.observer_id) || str(observer.source) || 'unknown' }, 'run', scopeWs(), catalogEntries())));
   const freshObservers = () => observers().filter(observer => observer.state === 'observing' && !stale(observer.published_at));
@@ -142,7 +168,7 @@ export default function App() {
   const portfolioTargetId = () => firstUnmatchedTargetId(records(), 'run', catalogEntries())
     ?? firstUnmatchedTargetId(assignments(), 'assignment', catalogEntries())
     ?? firstUnmatchedTargetId(epics(), 'epic', catalogEntries());
-  const crumbs = () => [scopeLabel(scopeWs(), catalogEntries(), scopeWs() ? undefined : portfolioTargetId()), title()];
+  const crumbs = () => [scopeLabel(scopeWs(), catalogEntries(), scopeWs() ? undefined : portfolioTargetId()), routeTitle()];
   const packageFilesRoute = () => route().dest === 'files' && route().source === 'package' && Boolean(route().id);
   const pickerRequired = () => needsWorkspacePicker(route()) && !packageFilesRoute();
   // Workspaces, the workspace-required destinations and Epics keep the current
@@ -364,6 +390,7 @@ export default function App() {
       stateGeneration++;
       catalogGeneration++;
       workspaceGeneration++;
+      stopNextStepsPolling();
       workspaceBusyId = null;
       clearTimeout(catalogTimer);
       clearTimeout(workspaceTimer);
@@ -407,7 +434,7 @@ export default function App() {
     const out: string[] = [];
     // Workspaces, Epics, Specs and Agents own their connection/coverage and freshness
     // recovery in the destination, so the global strip must not duplicate or shift it.
-    const destinationNotes = ['workspaces', 'epics', 'specs', 'agents'].includes(route().dest) || pickerRequired();
+    const destinationNotes = ['workspaces', 'epics', 'specs', 'agents', 'next-steps'].includes(route().dest) || pickerRequired();
     if (error() && !destinationNotes) out.push(error());
     if (payload()?.truncated) out.push('Snapshot read budget reached; some observations are unavailable.');
     for (const e of payload()?.errors ?? []) out.push(`${e.source ? str(e.source) + ': ' : ''}${str(e.message)}`);
@@ -557,6 +584,13 @@ export default function App() {
     if (id && id !== previous && live()) void loadWorkspace(id);
   }));
 
+  // The scan store owns the single /api/next-steps transport and lifetime;
+  // live transitions start it and import/offline transitions stop it.
+  createEffect(() => {
+    if (live()) startNextStepsPolling();
+    else stopNextStepsPolling();
+  });
+
   onMount(() => {
     const unsubscribe = subscribeRoute(setRoute);
     navigate(parseHash(location.hash), 'replace');
@@ -578,6 +612,7 @@ export default function App() {
       stateGeneration++;
       catalogGeneration++;
       workspaceGeneration++;
+      stopNextStepsPolling();
     });
   });
 
@@ -634,12 +669,13 @@ export default function App() {
     <Shell
       route={route()}
       currentDestination={currentDestination()}
-      primaryNav={primaryNav}
+      primaryNav={primaryNav()}
       directoryNav={directoryNav}
       workspaceOptions={workspaceOptions()}
       scope={scopeWs()}
       onScopeChange={chooseScope}
       onDestination={goDestination}
+      home={!imported() && scopeWs() === undefined ? 'next-steps' : 'specs'}
       crumbs={crumbs()}
       title={title()}
       headerActions={route().dest === 'launch'
@@ -652,6 +688,8 @@ export default function App() {
               ? <><button id="launch-agent-action" class="ds-btn ds-btn--primary" type="button" onClick={prepareAgentAssignment}>Launch agent</button><button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button></>
               : route().dest === 'conversations'
                 ? <><button id="thread-new-action" class="ds-btn ds-btn--primary" type="button" disabled={!live() || !token()} title={newThreadUnavailableReason()} aria-describedby={!live() || !token() ? 'thread-new-action-reason' : undefined} onClick={() => go({ ...route(), tab: 'new' })}>New thread</button><Show when={!live() || !token()}><span id="thread-new-action-reason" class="sr-only">{newThreadUnavailableReason()}</span></Show><button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button></>
+                : route().dest === 'next-steps'
+                  ? undefined
                 : <button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button>}
       connection={{ label: connectionLabel(), tone: connectionTone() }}
       observedAt={observedAt()}
@@ -665,15 +703,16 @@ export default function App() {
         when={pickerRequired()}
         fallback={
           <Switch>
-            <Match when={route().dest === 'specs'}><SpecsAdapter {...outletProps} /></Match>
-            <Match when={route().dest === 'epics'}><EpicsAdapter {...outletProps} /></Match>
-            <Match when={route().dest === 'agents'}><AgentsAdapter {...outletProps} /></Match>
-            <Match when={route().dest === 'conversations'}><ConversationsAdapter {...outletProps} /></Match>
-            <Match when={route().dest === 'files'}><FilesAdapter {...outletProps} /></Match>
-            <Match when={route().dest === 'designs'}><DesignsAdapter {...outletProps} /></Match>
-            <Match when={route().dest === 'workspaces'}><WorkspacesAdapter {...outletProps} /></Match>
-            <Match when={route().dest === 'launch'}><LaunchAdapter {...outletProps} /></Match>
-            <Match when={route().dest === 'models'}><ModelsAdapter {...outletProps} /></Match>
+            <Match when={route().dest === 'next-steps'}><DestinationOutlet dest="next-steps" {...outletProps} /></Match>
+            <Match when={route().dest === 'specs'}><DestinationOutlet dest="specs" {...outletProps} /></Match>
+            <Match when={route().dest === 'epics'}><DestinationOutlet dest="epics" {...outletProps} /></Match>
+            <Match when={route().dest === 'agents'}><DestinationOutlet dest="agents" {...outletProps} /></Match>
+            <Match when={route().dest === 'conversations'}><DestinationOutlet dest="conversations" {...outletProps} /></Match>
+            <Match when={route().dest === 'files'}><DestinationOutlet dest="files" {...outletProps} /></Match>
+            <Match when={route().dest === 'designs'}><DestinationOutlet dest="designs" {...outletProps} /></Match>
+            <Match when={route().dest === 'workspaces'}><DestinationOutlet dest="workspaces" {...outletProps} /></Match>
+            <Match when={route().dest === 'launch'}><DestinationOutlet dest="launch" {...outletProps} /></Match>
+            <Match when={route().dest === 'models'}><DestinationOutlet dest="models" {...outletProps} /></Match>
           </Switch>
         }
       >

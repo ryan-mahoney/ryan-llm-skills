@@ -7,22 +7,23 @@
 // through the store, never posts, previews or launches on its own, and takes
 // the route navigator from the caller so it stays testable without a DOM.
 import {
-  changeLaunchTarget, contextKey, getLaunchDraft, saveLaunchDraft, seedLaunchDraft,
+  changeLaunchTarget, contextKey, getLaunchDraft, normalizeLaunchStop, saveLaunchDraft, seedLaunchDraft,
 } from './launch-state';
 import type { LaunchContext, LaunchDraft, LaunchDraftError } from './launch-state';
 import type { WireRecord } from './model';
 import { subscribeRoute } from './route';
 import type { RouteMode, RouteState } from './route';
 import {
-  implementationBriefContent, implementationBriefTitle, packagePlanningPlan, planningBriefContent, planningBriefTitle,
+  CRITIQUE_ONLY_PLAN, implementationBriefContent, implementationBriefTitle, packagePlanningPlan, planningBriefContent, planningBriefTitle,
 } from '../../../workspaces/spec-prompt.mjs';
+import type { PlanningFacts } from './readiness';
 
 export type HandoffKind = 'plan' | 'implement';
 
 export type PackagePlanningPlan = {
   skill: 'spec-architect-initial' | 'spec-architect-critics' | 'spec-write';
   stages: string[];
-  stop: 'proposal' | 'prepared';
+  stop: 'proposal' | 'critique' | 'prepared';
 };
 
 export type PlannedTarget = {
@@ -56,7 +57,7 @@ export type HandoffPresentation = {
   skill: string;
   authority: 'none' | 'draft-pr';
   stages: string[];
-  stop?: 'proposal' | 'prepared' | 'draft-pr';
+  stop?: 'proposal' | 'critique' | 'prepared' | 'draft-pr';
 };
 
 export type HandoffStage = 'brief' | 'review' | 'result';
@@ -90,6 +91,84 @@ const IMPLEMENTATION_SKILL = 'spec-end-to-end';
 export function publicationAuthorityForSkill(skill: string | undefined): 'none' | 'draft-pr' | undefined {
   if (skill !== undefined && PLANNING_SKILLS.includes(skill)) return 'none';
   return skill === IMPLEMENTATION_SKILL ? 'draft-pr' : undefined;
+}
+
+// Route identity for the launch surface: the one mapping every launch
+// consumer uses to read its store entry. The stop is normalized through the
+// same skill-aware owner as contextKey, so a seeded draft and its route
+// consumer always meet on one identity.
+export function launchContextForRoute(route: RouteState, ws: string): LaunchContext {
+  const authority = route.package ? publicationAuthorityForSkill(route.skill) : undefined;
+  const stop = normalizeLaunchStop(route.stop, route.skill);
+  return {
+    ws,
+    ...(route.thread ? { thread: route.thread } : {}),
+    target: route.target ?? null,
+    ...(route.package ? { package: route.package } : {}),
+    ...(route.skill ? { skill: route.skill } : {}),
+    ...(authority ? { authority } : {}),
+    ...(stop ? { stop } : {}),
+  };
+}
+
+// Cold planning-plan selection. The explicit route stops are validated first;
+// the derived branch keeps the conservative stage rules (an unknown critique
+// recommendation and an unknown recommended-critique outcome refuse instead
+// of coercing a spec-write or critics stage). Only the critics-only critique
+// stop is identity-bearing, so an explicit spec skip and every ordinary stop
+// keep the ordinary context.
+export function coldPlanningPlan(
+  skill: string | undefined,
+  routeStop: string | undefined,
+  facts: PlanningFacts | null,
+): { ok: true; plan: PackagePlanningPlan } | { ok: false; reason: string } {
+  if (!facts || facts.proposal === null) {
+    return { ok: false, reason: 'The package proposal presence is not observed; inspect the package files before preparing this planning hand-off.' };
+  }
+  if (skill === 'spec-architect-critics' && normalizeLaunchStop(routeStop, skill) === 'critique') {
+    // Explicit critique-only entry: the route declares the one-stage critics
+    // run. A positively observed proposal is required, but the reviewed
+    // recommendation only suggests that action and never forbids it.
+    if (facts.proposal !== true) {
+      return { ok: false, reason: 'A critique-only launch requires a positively observed proposal; inspect the proposal before preparing this hand-off.' };
+    }
+    if (facts.critique === null) {
+      return { ok: false, reason: 'The recommended critique outcome is not observed; inspect the proposal and package files before preparing this planning hand-off.' };
+    }
+    if (facts.critique === true) {
+      return { ok: false, reason: 'A critique is already written for this package; the next planning stage is the specification.' };
+    }
+    return { ok: true, plan: CRITIQUE_ONLY_PLAN as PackagePlanningPlan };
+  }
+  if (skill === 'spec-write' && routeStop === 'prepared') {
+    // Explicit spec skip: the operator declared the proposal settled, so only
+    // proposal presence gates this path (FH-4).
+    if (facts.proposal !== true) {
+      return { ok: false, reason: 'The requested specification stage does not match the observed package stage; inspect the package before preparing this hand-off.' };
+    }
+    return { ok: true, plan: packagePlanningPlan({ proposal: true }) as PackagePlanningPlan };
+  }
+  // The same conservative stage rules as normal entry: an unknown critique
+  // recommendation and an unknown recommended-critique outcome refuse instead
+  // of coercing a spec-write or critics stage.
+  if (facts.proposal === true && facts.critiqueRecommended === null) {
+    return { ok: false, reason: 'The proposal does not record whether critique is recommended; inspect the proposal and package files before preparing this planning hand-off.' };
+  }
+  if (facts.critiqueRecommended === true && facts.critique === null) {
+    return { ok: false, reason: 'The recommended critique outcome is not observed; inspect the proposal and package files before preparing this planning hand-off.' };
+  }
+  const plan = packagePlanningPlan({
+    proposal: facts.proposal === true,
+    critiqueRecommended: facts.critiqueRecommended === true,
+    critique: facts.critique === true,
+  }) as PackagePlanningPlan;
+  if (plan.skill !== skill) {
+    return { ok: false, reason: 'The requested planning skill does not match the observed package stage; inspect the package before preparing this hand-off.' };
+  }
+  if (routeStop !== undefined && routeStop !== plan.stop) {
+    return { ok: false, reason: 'The requested planning stop does not match the observed package stage; inspect the package before preparing this hand-off.' };
+  }
+  return { ok: true, plan };
 }
 
 // The passed planning plan is the observed resolved fact; the default is the
@@ -218,19 +297,28 @@ const prepareBoundSeed = (kind: HandoffKind, input: HandoffInput): PreparedBound
     skill: presentation.skill,
     authority: presentation.authority,
   };
+  // Only the critics-only critique stop is a launch identity; a plain
+  // proposal/prepared stop stays a presentation fact and never enters the
+  // context, so the cold consumer finds the draft this seed stored.
+  const stop = normalizeLaunchStop(presentation.stop, presentation.skill);
+  if (kind === 'plan' && stop) context.stop = stop;
   return { ok: true, context, presentation, choices };
 };
 
-const launchRouteFor = (context: LaunchContext, stage: HandoffStage, resultId?: string): RouteState => ({
-  dest: 'launch',
-  ws: context.ws,
-  tab: stage,
-  ...(stage === 'result' && resultId ? { id: resultId } : {}),
-  ...(context.thread ? { thread: context.thread } : {}),
-  ...(context.target ? { target: context.target } : {}),
-  ...(context.package ? { package: context.package } : {}),
-  ...(context.skill ? { skill: context.skill } : {}),
-});
+const launchRouteFor = (context: LaunchContext, stage: HandoffStage, resultId?: string): RouteState => {
+  const stop = normalizeLaunchStop(context.stop, context.skill);
+  return {
+    dest: 'launch',
+    ws: context.ws,
+    tab: stage,
+    ...(stage === 'result' && resultId ? { id: resultId } : {}),
+    ...(context.thread ? { thread: context.thread } : {}),
+    ...(context.target ? { target: context.target } : {}),
+    ...(context.package ? { package: context.package } : {}),
+    ...(context.skill ? { skill: context.skill } : {}),
+    ...(stop ? { stop } : {}),
+  };
+};
 
 // A retained draft's own state decides where repeat entry lands: a recorded
 // outcome owns the result surface, a saved/reviewed or resolving entry owns

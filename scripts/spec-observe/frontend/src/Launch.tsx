@@ -15,13 +15,12 @@ import {
 } from './launch-state';
 import { CapturedInput, PackageContract, PackageDenied, PackageResult, packageReviewKind } from './launch-package';
 import {
-  plannedTargetChoices, publicationAuthorityForSkill, seedColdHandoff,
+  coldPlanningPlan, handoffReturn, launchContextForRoute, plannedTargetChoices, seedColdHandoff,
   type HandoffInput, type HandoffKind, type PackagePlanningPlan, type PlannedTarget,
 } from './launch-handoff';
 import ModelPicker from './ModelPicker';
 import { availabilityMessage, catalog, formatModelChoice, type ModelChoice } from './models-state';
 import { observedSpecReadiness } from './readiness';
-import { packagePlanningPlan } from '../../../workspaces/spec-prompt.mjs';
 import type { BriefReference } from './composerTypes';
 import type { WireRecord } from './model';
 import type { RouteState } from './route';
@@ -35,6 +34,9 @@ export type LaunchProps = {
   workspace?: WireRecord;
   workspaceError?: string;
   workspaceName: string;
+  // Observed workspace directory (snapshot rows carry its basename); the route
+  // carries the kit id, and the two can differ.
+  workspaceDirectory?: string;
   assignments?: WireRecord[];
   // Observed snapshot rows for the bound package review's statuses and links;
   // they never supply execution, authority or model facts.
@@ -154,6 +156,10 @@ function PreviousReviewedFacts(props: { preview: LaunchPreview }) {
 
 type ReviewView = 'resolving' | 'dispatching' | 'current' | 'stale' | 'denied' | 'error' | 'result' | 'inspection' | 'saved' | 'unsaved';
 
+// Snapshot rows carry the workspace directory basename while the route carries
+// the kit id; both identify the same workspace for the cold seed lookup.
+const directoryBasename = (value: string | undefined): string => (value ?? '').split('/').filter(Boolean).pop() ?? '';
+
 export default function Launch(props: LaunchProps) {
   let heading: HTMLHeadingElement | undefined;
   let titleInput: HTMLInputElement | undefined;
@@ -168,19 +174,9 @@ export default function Launch(props: LaunchProps) {
   let threadGeneration = 0;
 
   const ws = () => props.route.ws ?? '';
-  const context = (): LaunchContext => {
-    // Bound package authority is derived from the route's hand-off skill by the
-    // owning derivation; a generic or absent skill keeps the ordinary body.
-    const authority = props.route.package ? publicationAuthorityForSkill(props.route.skill) : undefined;
-    return {
-      ws: ws(),
-      ...(props.route.thread ? { thread: props.route.thread } : {}),
-      target: props.route.target ?? null,
-      ...(props.route.package ? { package: props.route.package } : {}),
-      ...(props.route.skill ? { skill: props.route.skill } : {}),
-      ...(authority ? { authority } : {}),
-    };
-  };
+  // The shared route identity owns the bound authority and the normalized
+  // stop, so this surface reads exactly the entry its seed wrote.
+  const context = (): LaunchContext => launchContextForRoute(props.route, ws());
   const draft = createMemo(() => (ws() ? getLaunchDraft(context()) : undefined));
   const title = () => draft()?.title ?? '';
   const content = () => draft()?.content ?? '';
@@ -201,8 +197,36 @@ export default function Launch(props: LaunchProps) {
   const packageKind = () => (props.route.package ? packageReviewKind(previewSkill()) : null);
   const bound = () => packageKind() !== null;
   const packageRef = () => props.route.package ?? '';
-  const launchLabel = () => packageKind() === 'plan' ? 'Start planning' : packageKind() === 'implement' ? 'Start implementation' : 'Launch agent';
-  const startingLabel = () => packageKind() === 'plan' ? 'Starting planning…' : packageKind() === 'implement' ? 'Starting implementation…' : 'Starting agent…';
+  // The resolved planning skill selects the commitment wording: critics and
+  // specification stages name their own start, while generic, initial and
+  // implementation entries keep the shared labels. Resolution falls back to
+  // the requested route skill before the preview arrives.
+  const launchLabel = () => packageKind() === 'implement'
+    ? 'Start implementation'
+    : packageKind() === 'plan'
+      ? previewSkill() === 'spec-architect-critics' ? 'Start critique' : previewSkill() === 'spec-write' ? 'Start spec' : 'Start planning'
+      : 'Launch agent';
+  const startingLabel = () => packageKind() === 'implement'
+    ? 'Starting implementation…'
+    : packageKind() === 'plan'
+      ? previewSkill() === 'spec-architect-critics' ? 'Starting critique…' : previewSkill() === 'spec-write' ? 'Starting spec…' : 'Starting planning…'
+      : 'Starting agent…';
+  // Origin return for bound flows reuses the shared remembered-route owner:
+  // the label names the remembered destination, and an unknown or absent
+  // route falls back to the existing Agents return.
+  const packageReturn = () => handoffReturn(packageKind() ?? 'plan', context());
+  const returnLabel = () => {
+    const dest = packageReturn().dest;
+    return dest === 'next-steps' ? 'Return to next steps'
+      : dest === 'epics' ? 'Return to epic'
+        : dest === 'specs' ? 'Return to specs'
+          : 'Return to agents';
+  };
+  const goReturn = () => {
+    const route = packageReturn();
+    if (route.dest === 'next-steps' || route.dest === 'epics' || route.dest === 'specs') props.onNavigate?.(route);
+    else props.onReturnToAgents();
+  };
   const editLabel = () => bound() ? 'Edit brief' : 'Edit assignment';
   const savedCurrent = () => {
     const value = saved();
@@ -336,7 +360,8 @@ export default function Launch(props: LaunchProps) {
     if (!ws() || !props.live) return 'waiting';
     const records = props.records ?? [];
     if (!records.length && !props.observationLoaded) return 'waiting';
-    const record = records.find(item => str(item.workspace) === ws()
+    const directory = directoryBasename(props.workspaceDirectory);
+    const record = records.find(item => (str(item.workspace) === ws() || (directory !== '' && str(item.workspace) === directory))
       && [str(item.package), str(item.package_ref), str(item.package_path)].some(value => value === routePackage));
     if (!record) return { reason: 'The requested package is not observed in this workspace; inspect the package before preparing this hand-off.' };
     const choices = plannedTargetChoices(Array.isArray(record.targets) ? record.targets as PlannedTarget[] : []);
@@ -370,26 +395,9 @@ export default function Launch(props: LaunchProps) {
     const facts = observedSpecReadiness(record, props.epics ?? [], props.assignments ?? []).facts;
     let plan: PackagePlanningPlan | null = null;
     if (kind === 'plan') {
-      if (!facts || facts.proposal === null) {
-        return { reason: 'The package proposal presence is not observed; inspect the package files before preparing this planning hand-off.' };
-      }
-      // The same conservative stage rules as normal entry: an unknown critique
-      // recommendation and an unknown recommended-critique outcome refuse
-      // instead of coercing a spec-write or critics stage.
-      if (facts.proposal === true && facts.critiqueRecommended === null) {
-        return { reason: 'The proposal does not record whether critique is recommended; inspect the proposal and package files before preparing this planning hand-off.' };
-      }
-      if (facts.critiqueRecommended === true && facts.critique === null) {
-        return { reason: 'The recommended critique outcome is not observed; inspect the proposal and package files before preparing this planning hand-off.' };
-      }
-      plan = packagePlanningPlan({
-        proposal: facts.proposal === true,
-        critiqueRecommended: facts.critiqueRecommended === true,
-        critique: facts.critique === true,
-      }) as PackagePlanningPlan;
-      if (plan.skill !== props.route.skill) {
-        return { reason: 'The requested planning skill does not match the observed package stage; inspect the package before preparing this hand-off.' };
-      }
+      const selection = coldPlanningPlan(props.route.skill, props.route.stop, facts);
+      if (!selection.ok) return { reason: selection.reason };
+      plan = selection.plan;
     }
     return {
       kind,
@@ -486,6 +494,7 @@ export default function Launch(props: LaunchProps) {
       ...(current.target ? { target: current.target } : {}),
       ...(current.package ? { package: current.package } : {}),
       ...(current.skill ? { skill: current.skill } : {}),
+      ...(current.stop ? { stop: current.stop } : {}),
     });
   }, { defer: true }));
   // A recorded result opens its own result route so the URL carries the
@@ -505,6 +514,7 @@ export default function Launch(props: LaunchProps) {
       ...(current.target ? { target: current.target } : {}),
       ...(current.package ? { package: current.package } : {}),
       ...(current.skill ? { skill: current.skill } : {}),
+      ...(current.stop ? { stop: current.stop } : {}),
     });
   }, { defer: true }));
   createEffect(on(saveFailure, failure => {
@@ -638,6 +648,7 @@ export default function Launch(props: LaunchProps) {
       ...(props.route.target ? { target: props.route.target } : {}),
       ...(props.route.package ? { package: props.route.package } : {}),
       ...(props.route.skill ? { skill: props.route.skill } : {}),
+      ...(props.route.stop ? { stop: props.route.stop } : {}),
     });
   }
 
@@ -817,6 +828,7 @@ export default function Launch(props: LaunchProps) {
                       <button id="launch-assignment-launch" class="ds-btn ds-btn--primary" type="button" disabled={!canLaunch()} onClick={launch}>{launchLabel()}</button>
                       <button id="launch-assignment-review" class="ds-btn" type="button" disabled={!canReview()} onClick={review}>Review assignment</button>
                       <button id="launch-assignment-edit" class="ds-btn" type="button" onClick={editAssignment}>{editLabel()}</button>
+                      <Show when={bound()}><button id="launch-return-origin" class="ds-btn" type="button" onClick={goReturn}>{returnLabel()}</button></Show>
                     </ActionBar>
                     <p class="contract-note">{bound()
                       ? packageKind() === 'plan'
@@ -835,6 +847,7 @@ export default function Launch(props: LaunchProps) {
                     <ActionBar variant="inline">
                       <button id="launch-assignment-review" class="ds-btn ds-btn--primary" type="button" disabled={!canReview()} onClick={review}>Review assignment</button>
                       <button id="launch-assignment-edit" class="ds-btn" type="button" onClick={editAssignment}>{editLabel()}</button>
+                      <Show when={bound()}><button id="launch-return-origin" class="ds-btn" type="button" onClick={goReturn}>{returnLabel()}</button></Show>
                     </ActionBar>
                   </Match>
                   <Match when={reviewView() === 'denied'}>
@@ -872,6 +885,7 @@ export default function Launch(props: LaunchProps) {
                     <ActionBar variant="inline">
                       <button id="launch-assignment-review" class="ds-btn ds-btn--primary" type="button" disabled={!canReview()} onClick={review}>Review assignment</button>
                       <button id="launch-assignment-edit" class="ds-btn" type="button" onClick={editAssignment}>{editLabel()}</button>
+                      <Show when={bound()}><button id="launch-return-origin" class="ds-btn" type="button" onClick={goReturn}>{returnLabel()}</button></Show>
                     </ActionBar>
                   </Match>
                   <Match when={reviewView() === 'error'}>
@@ -886,6 +900,7 @@ export default function Launch(props: LaunchProps) {
                         <button id="launch-assignment-review" class="ds-btn ds-btn--primary" type="button" disabled={!canReview()} onClick={review}>Review assignment</button>
                       </Show>
                       <button id="launch-assignment-edit" class="ds-btn" type="button" onClick={editAssignment}>{editLabel()}</button>
+                      <Show when={bound()}><button id="launch-return-origin" class="ds-btn" type="button" onClick={goReturn}>{returnLabel()}</button></Show>
                     </ActionBar>
                   </Match>
                   <Match when={reviewView() === 'result'}>
@@ -904,6 +919,8 @@ export default function Launch(props: LaunchProps) {
                               records={props.records}
                               epics={props.epics}
                               assignments={props.assignments}
+                              onReturn={goReturn}
+                              returnLabel={returnLabel()}
                             />
                           )}
                         </Show>
