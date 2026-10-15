@@ -1,6 +1,6 @@
 import { createSentinelDashboard } from './sentinel-dashboard.mjs';
 import { Type } from '@earendil-works/pi-ai';
-import { getAgentDir } from '@earendil-works/pi-coding-agent';
+import { getAgentDir, compact, SettingsManager } from '@earendil-works/pi-coding-agent';
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { randomUUID, createHash } from 'node:crypto';
 import { join, resolve, realpathSync } from 'node:path';
@@ -17,6 +17,7 @@ import { createSentinelControl } from './sentinel-control.mjs';
 import { installProgressContext, recordCheckpoint, refreshProgress } from './completion.mjs';
 import { metrics, formatMetrics } from './metrics.mjs';
 import { installContextBudget } from '../context-budget/policy.mjs';
+import { createWorkflowContinuation } from './workflow-continuation.mjs';
 
 const result = (value: unknown, isError = false) => ({ content: [{ type: 'text', text: JSON.stringify(value) }], details: value, isError });
 const optional = (description: string) => Type.Optional(Type.String({ description }));
@@ -93,7 +94,8 @@ function realpathStep(step: string): string {
 }
 
 export default function (pi: any) {
-  installContextBudget(pi);
+  installContextBudget(pi, { compact,
+    retrySettings: () => SettingsManager.inMemory(pi.getSettings()).getRetrySettings() });
   const role = process.env.SPEC_RUNTIME_ROLE;
   if (role) {
     const record = JSON.parse(readFileSync(process.env.SPEC_RUNTIME_RECORD!, 'utf8'));
@@ -195,6 +197,10 @@ export default function (pi: any) {
     return;
   }
   const progress = installProgressContext(pi);
+  const ownedWorkflow = createWorkflowContinuation(pi);
+  pi.on('session_start', (_event: any, ctx: any) => ownedWorkflow.restore(ctx));
+  pi.on('session_tree', (_event: any, ctx: any) => ownedWorkflow.restore(ctx));
+  pi.on('context', (event: any) => ownedWorkflow.context(event));
   const monitor = createMonitor();
   pi.registerTool({ name: 'spec_checkpoint', label: 'Record workflow decision', description: 'Record the current stage, next action and material decisions in the managed workflow ledger. Runtime records worker/check/review-arrival facts automatically; do not transcribe those. Complete is a coordinator assessment backed by artifact references, never inferred from worker exit. Known skill stage names are normalized (spec-run to implementation, spec-pr to publication). Complete implementation/publication requires finished workers and complete handoffs; use publication-draft for a draft checkpoint, never ready publication. Preserve human holds and unresolved obligations.',
     parameters: Type.Object({ package: Type.String(), stage: Type.String(), status: Type.Union(['pending', 'running', 'complete', 'blocked'].map(v => Type.Literal(v))), next: Type.String(), decisions: Type.Array(Type.String()), artifacts: Type.Array(Type.String({ description: 'Existing package-relative or absolute artifact paths; future session/evidence paths are not evidence' })) }),
@@ -282,6 +288,24 @@ export default function (pi: any) {
   });
   pi.on('ui_prompt_start', () => { inputGuard = observeInput(inputGuard, { type: 'prompt_start' }); });
   pi.on('ui_prompt_end', () => { inputGuard = observeInput(inputGuard, { type: 'prompt_end' }); });
+  pi.registerTool({ name: 'spec_workflow', label: 'Retain end-to-end workflow',
+    description: 'Register the explicitly requested whole-workflow objective and authority limits for this coordinator. Retains that obligation across steps, compaction and resume, and continues premature completed responses at an idle safe boundary. Does not enable Sentinel, recover failed requests, override holds, reset retry budgets or grant publication authority. Call once after registering the workflow checkpoint, before the first dispatch. Repeated identical calls are idempotent.',
+    parameters: Type.Object({ package: Type.String(), workflow_id: Type.String(),
+      objective: Type.String({ minLength: 1, maxLength: 2000, description: 'User-requested final outcome, including local/draft/ready publication limits' }),
+      completion_stage: Type.Union(['implementation', 'work-tour', 'publication'].map(v => Type.Literal(v))),
+    }),
+    async execute(_id: string, args: any, _signal: AbortSignal, _update: any, ctx: any) {
+      return serializeWorkflow(async () => {
+        try {
+          const packagePath = await packageDirOf(args.package);
+          const checkpoint = readCheckpointRecord(packagePath, args.workflow_id);
+          if (!checkpoint || checkpoint.coordinator_session !== coordinatorIdentity(ctx)
+            || checkpoint.input_revision !== inputGuard.input_revision)
+            throw new Error('Register and reconcile this coordinator\'s workflow checkpoint before retaining its objective');
+          return result(ownedWorkflow.register(checkpoint, args.objective, args.completion_stage));
+        } catch (error: any) { return result({ error: error.message }, true); }
+      });
+    } });
   // Coordinator-only checkpoint registration. Identity comes from the live
   // session manager and a checkout already bound by a prior checkpoint or a real
   // Runtime dispatch receipt; the model supplies neither. A runtime return is
@@ -570,15 +594,14 @@ export default function (pi: any) {
         });
       }).catch(() => { /* Diagnosis/cancellation failure never affects the lifecycle. */ });
   }
-  // Bounded continuation: only a live armed authority with an exact scope is
-  // consulted, through the shared workflow serialization. A requested identity is
-  // held only until the immediately accepted continuation turn starts or the
-  // session settles without it (delivery only, never acceptance).
+  // Serialize the two separate continuation contracts: explicitly armed Sentinel
+  // first, then a coordinator's own registered workflow. Only Sentinel retains an
+  // intervention identity until delivery; neither path implies acceptance.
   pi.on('agent_before_settle', (event: any) => {
     lastBoundary = event;
     return serializeWorkflow(() => continueAtBoundary(event));
   });
-  async function continueAtBoundary(event: any) {
+  async function continueAtBoundary(event: any, allowOwned = true) {
     const entries = [...knownWorkflows.values()].reverse().map(runtimeAuthorityFor).filter(Boolean);
     if (sentinelAuthority && sentinelScope) entries.push({ authority: sentinelAuthority, scope: sentinelScope });
     for (const entry of entries) {
@@ -592,6 +615,11 @@ export default function (pi: any) {
         } });
       if (continued) return continued;
     }
+    if (allowOwned && sessionCtx) return ownedWorkflow.beforeSettle(event, {
+      coordinator_session: coordinatorIdentity(sessionCtx), inputGuard,
+      activeManaged: runtime.active.size > 0,
+      notify: (message: string) => sessionCtx?.ui?.notify(message, 'warning'),
+    });
     return undefined;
   }
   function resumeIdleCoordinator() {
@@ -601,7 +629,7 @@ export default function (pi: any) {
       if (!lastBoundary || lastBoundary.outcome !== 'completed' || !sessionCtx?.isIdle?.()
         || sessionCtx.hasPendingMessages?.() !== false || pendingContinuation) return;
       const continued = await continueAtBoundary({ ...lastBoundary, entries: [],
-        context: { ...lastBoundary.context, pendingMessages: [] } });
+        context: { ...lastBoundary.context, pendingMessages: [] } }, false);
       if (!continued?.continue || !pendingContinuation) return;
       const message = continued.entries?.find((item: any) => item.customType === 'spec-sentinel');
       if (!message) return;

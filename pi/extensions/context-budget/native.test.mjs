@@ -11,7 +11,7 @@ const root = process.env.SPEC_PI_SDK;
 const sdk = root ? await import(pathToFileURL(join(root, 'dist/index.js'))) : null;
 const skip = sdk ? false : 'Set SPEC_PI_SDK to the installed Pi package for native boundary checks';
 
-async function fixture(t, { compaction = true, seed, toolTurn = false, toolInput = 70000, toolOutput = 30, thinking = '', toolText = 'Pending: retain the source change and evidence.' } = {}) {
+async function fixture(t, { compaction = true, seed, toolTurn = false, toolInput = 70000, toolOutput = 30, thinking = '', toolText = 'Pending: retain the source change and evidence.', providerName = 'budget-fixture', summaryStop = 'stop' } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'context-native-'));
   const requests = [];
   const server = createServer(async (req, res) => {
@@ -20,20 +20,21 @@ async function fixture(t, { compaction = true, seed, toolTurn = false, toolInput
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     const text = 'Goal: preserve input. Constraints: no publication. Pending: implement the assigned fixture; retain existing evidence.';
     const toolCall = toolTurn && requests.length === 1;
+    const isSummary = JSON.stringify(payload.messages[0]).includes('context summarization assistant');
     const chunk = { id: 'fixture', object: 'chat.completion.chunk', created: 1, model: 'large', choices: [{ index: 0, delta: toolCall ? { ...(thinking ? { reasoning_content: thinking } : {}), tool_calls: [{ index: 0, id: 'call_fixture', type: 'function', function: { name: 'fixture_read', arguments: '{}' } }] } : { content: text }, finish_reason: null }] };
     res.write(`data: ${JSON.stringify(chunk)}\n\n`);
-    res.write(`data: ${JSON.stringify({ ...chunk, choices: [{ index: 0, delta: {}, finish_reason: toolCall ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: toolCall ? toolInput : 100, completion_tokens: toolCall ? toolOutput : 30, total_tokens: toolCall ? toolInput + toolOutput : 130 } })}\n\n`);
+    res.write(`data: ${JSON.stringify({ ...chunk, choices: [{ index: 0, delta: {}, finish_reason: toolCall ? 'tool_calls' : isSummary ? summaryStop : 'stop' }], usage: { prompt_tokens: toolCall ? toolInput : 100, completion_tokens: toolCall ? toolOutput : 30, total_tokens: toolCall ? toolInput + toolOutput : 130 } })}\n\n`);
     res.end('data: [DONE]\n\n');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const provider = { api: 'openai-completions', baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: 'local-fixture',
-    models: [{ id: 'large', name: 'Large fixture', reasoning: true, input: ['text'], contextWindow: 1048576, maxTokens: 65536, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] };
+    models: [{ id: 'large', name: 'Large fixture', reasoning: true, input: ['text'], contextWindow: 1048576, maxTokens: 65536, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, ...(providerName === 'deepseek' ? { compat: { thinkingFormat: 'deepseek', supportsReasoningEffort: true } } : {}) }] };
   const runtime = await sdk.ModelRuntime.create({ modelsPath: null, allowModelNetwork: false, refreshOnCreate: false });
-  runtime.registerProvider('budget-fixture', provider);
+  runtime.registerProvider(providerName, provider);
   const settings = sdk.SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: compaction } });
   const loader = new sdk.DefaultResourceLoader({ cwd: dir, agentDir: dir, settingsManager: settings,
     noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
-    systemPrompt: 'Keep all constraints and pending work.', extensionFactories: [pi => { pi.registerProvider('budget-fixture', provider); installContextBudget(pi);
+    systemPrompt: 'Keep all constraints and pending work.', extensionFactories: [pi => { pi.registerProvider(providerName, provider); installContextBudget(pi, { compact: sdk.compact, retrySettings: () => settings.getRetrySettings() });
       if (toolTurn) pi.registerTool({ name: 'fixture_read', label: 'Fixture', description: 'Read fixture', parameters: { type: 'object', properties: {} },
         execute: async () => ({ content: [{ type: 'text', text: toolText }], details: {} }) });
     }, pi => installContextBudget(pi)] });
@@ -42,7 +43,7 @@ async function fixture(t, { compaction = true, seed, toolTurn = false, toolInput
   seed?.(manager);
   const { session } = await sdk.createAgentSession({ cwd: dir, agentDir: dir, modelRuntime: runtime, settingsManager: settings,
     resourceLoader: loader, sessionManager: manager, tools: [] });
-  await session.setModel(runtime.getModel('budget-fixture', 'large'));
+  await session.setModel(runtime.getModel(providerName, 'large'));
   await session.bindExtensions({ mode: 'rpc', onError: error => { throw new Error(error.error); } });
   t.after(async () => { session.dispose(); await new Promise(resolve => server.close(resolve)); rmSync(dir, { recursive: true, force: true }); });
   return { session, manager, requests, runtime };
@@ -126,4 +127,52 @@ test('55k input plus a reasoning and tool burst compacts before the request guar
     { role: 'tool', content: 'source '.repeat(1700), tool_call_id: 'call_fixture' }] };
   assert.ok(estimatePayload(uncompacted) >= 90000, 'without compaction this burst would hit the guard');
   t.diagnostic(JSON.stringify({ uncompacted_estimate: estimatePayload(uncompacted), first_estimate: estimatePayload(f.requests[0]), final_estimate: estimatePayload(f.requests.at(-1)), http_requests: f.requests.length }));
+});
+
+// Run alone: node --test --test-name-pattern='DeepSeek summary' pi/extensions/context-budget/native.test.mjs
+function summaryHistory(manager) {
+  for (let i = 0; i < 8; i++) {
+    manager.appendMessage({ role: 'user', content: 'Completed investigation ' + 'old source '.repeat(1200), timestamp: Date.now() });
+    manager.appendMessage({ role: 'assistant', content: [{ type: 'text', text: 'Recorded in artifacts. No publication; implement the assigned fixture.' }],
+      api: 'openai-completions', provider: 'deepseek', model: 'large', stopReason: 'stop',
+      usage: { input: 10000, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 10005, cost: {} }, timestamp: Date.now() });
+  }
+}
+
+test('DeepSeek summary keeps obligations and selected reasoning through native persistence and continuation', { skip, timeout: 15000 }, async t => {
+  const f = await fixture(t, { providerName: 'deepseek', seed: summaryHistory });
+  f.session.setThinkingLevel('high');
+  await f.session.compact('Preserve the unresolved security review.');
+  const entry = f.manager.getEntries().find(e => e.type === 'compaction');
+  assert.ok(entry, 'native Pi persists the complete summary');
+  assert.match(entry.summary, /no publication/);
+  assert.match(entry.summary, /assigned fixture/);
+  assert.ok(f.requests.length >= 1);
+  for (const request of f.requests) {
+    assert.match(JSON.stringify(request.messages[0]), /Replace completed investigation/);
+    assert.equal(request.reasoning_effort, 'high');
+    assert.equal(request.thinking.type, 'enabled');
+  }
+  assert.match(JSON.stringify(f.requests[0]), /unresolved security review/);
+  assert.equal(f.session.thinkingLevel, 'high');
+  assert.equal(f.session.model.maxTokens, 65536);
+  await f.session.prompt('Continue the assigned fixture.');
+  assert.equal(f.requests.at(-1).reasoning_effort, 'high');
+  assert.doesNotMatch(JSON.stringify(f.requests.at(-1).messages[0]), /Replace completed investigation/);
+  const usage = f.manager.getEntries().find(e => e.customType === 'context-budget' && e.data.event === 'summary_usage');
+  assert.equal(usage.data.stop_reason, 'stop');
+});
+
+test('DeepSeek summary truncation preserves history and does not retry the default summarizer', { skip, timeout: 15000 }, async t => {
+  const f = await fixture(t, { providerName: 'deepseek', summaryStop: 'length', seed: summaryHistory });
+  f.session.setThinkingLevel('high');
+  const before = f.manager.getBranch().filter(e => e.type === 'message').map(e => e.id);
+  await assert.rejects(f.session.compact(), /cancelled/i);
+  const entries = f.manager.getEntries();
+  assert.equal(entries.some(e => e.type === 'compaction'), false, 'partial summary cannot become a checkpoint');
+  assert.deepEqual(f.manager.getBranch().filter(e => e.type === 'message').map(e => e.id), before);
+  assert.equal(f.requests.length, 1, 'no hidden retry through the original summarizer');
+  assert.equal(f.session.thinkingLevel, 'high');
+  assert.ok(entries.some(e => e.customType === 'context-budget' && e.data.event === 'summary_usage' && e.data.stop_reason === 'length'));
+  assert.ok(entries.some(e => e.customType === 'context-budget' && e.data.event === 'compaction_failed'));
 });

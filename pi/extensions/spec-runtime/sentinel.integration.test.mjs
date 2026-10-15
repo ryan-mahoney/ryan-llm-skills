@@ -1322,6 +1322,43 @@ test('sentinel policy: disable and off revoke at command entry behind pending wo
 // through the registered production spec_sentinel_checkpoint tool at native input revision
 // 0, and all model prompts use {source:'extension'} so the native input guard
 // stays exactly reconciled.
+// Run alone: node --test --test-name-pattern='owned workflow: native' pi/extensions/spec-runtime/sentinel.integration.test.mjs
+test('owned workflow: native coordinator continues a whole-package objective without enabling Sentinel', { skip: sdkSkip, timeout: 20000 }, async t => {
+  const dir = sandbox(t);
+  const { repo } = primary(dir, 'owned-workflow-repo');
+  commit(repo);
+  const packagePath = pack(repo);
+  mkdirSync(join(packagePath, 'inbox'), { recursive: true });
+  mkdirSync(join(packagePath, 'processed'), { recursive: true });
+  writeFileSync(join(packagePath, 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1 }, { step: 2 }] }));
+  const run = await loadExtension(t, { dir, providerFactory: continuationProvider });
+  const manager = run.sessionManager;
+  const identity = manager.getSessionFile() || manager.getSessionId();
+  const checkpoint = recordCheckpoint({ package: packagePath, workflow_id: 'owned-workflow', expected_revision: 0,
+    state: 'ready', obligation: { key: 'implementation:step-2', stage: 'implementation', summary: 'Implement remaining step', artifacts: [] },
+    workers: [], inbox: { items: [] }, reconciles_input_revision: 0, coordinator_session: identity, checkout: repo });
+  const tools = new Map(run.loader.getExtensions().extensions.flatMap(extension => [...extension.tools.entries()]));
+  const tool = tools.get('spec_workflow');
+  assert.ok(tool, 'the actual coordinator extension exposes the workflow tool');
+  const result = await tool.definition.execute('register-workflow', { package: packagePath, workflow_id: 'owned-workflow',
+    objective: 'Implement both steps and finish the local work tour; no publication.', completion_stage: 'work-tour' },
+    undefined, undefined, { sessionManager: manager });
+  assert.equal(result.isError, false, JSON.stringify(result.details));
+  await run.session.prompt('Continue the registered workflow.', { source: 'extension' });
+  assert.equal(run.requests.length, 3, 'two bounded continuations follow the premature final response');
+  const retained = manager.getBranch().filter(e => e.type === 'custom' && e.customType === 'spec-workflow-continuation');
+  assert.equal(retained.at(-1).data.nudges, 2);
+  assert.equal(retained.at(-1).data.stalled_notice, true);
+  assert.match(retained.at(-1).data.objective, /no publication/);
+  assert.equal(existsSync(join(packagePath, 'runtime/sentinel/owned-workflow/authority/grant.json')), false);
+  assert.equal(existsSync(join(packagePath, 'runtime/sentinel/owned-workflow/intents')), false);
+  recordCheckpoint({ ...checkpoint, expected_revision: checkpoint.revision, state: 'user-held', reconciles_input_revision: 0,
+    obligation: { key: 'implementation:hold', stage: 'implementation', summary: 'User paused work', artifacts: [] } });
+  await run.session.prompt('Report the recorded hold.', { source: 'extension' });
+  assert.equal(run.requests.length, 4, 'a hold prevents continuation even on a fresh obligation');
+  assert.deepEqual(run.errors, []);
+});
+
 async function continuationFixture(t, { mode = 'recover', actions = ['continue'], factories = [] } = {}) {
   const dir = sandbox(t);
   const { repo } = primary(dir, 'continuation-repo');

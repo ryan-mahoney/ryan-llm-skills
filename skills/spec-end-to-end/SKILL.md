@@ -69,6 +69,18 @@ not register sentinel workflow ownership. Consume returned checkpoint revisions 
 completion. The handwritten stage ledger remains the fallback only outside managed Pi;
 do not keep a second ledger inside it.
 
+After registering the checkpoint, call `spec_workflow` once with the same `package`
+and `workflow_id`, the user's whole-workflow `objective` including publication limits,
+and `completion_stage` (`publication` for a requested PR, `work-tour` for an explicitly
+local outcome). This retains the coordinator's own obligation across compaction and
+premature final responses; it does not enable Sentinel observation or intervention.
+Reuse that objective on resume. Do not register a step-sized objective for a package run.
+The runtime continues only at a completed idle boundary with reconciled input and no
+hold, pending message or active worker. Two nudges without a new obligation expose a
+stall instead of retrying indefinitely. Failures and aborts still need their specific
+recovery. Record real blockers and explicit user holds in the workflow checkpoint;
+never label the whole workflow complete because one step or review finished.
+
 Trust the receipt's mechanical checks for that launch. Do not re-check Git paths,
 model availability, installed profiles or nesting without a specific error
 or changed input. Owners read their card and applicable implementation policy.

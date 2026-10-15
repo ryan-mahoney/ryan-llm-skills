@@ -547,6 +547,26 @@ remaining judgment-bearing stage status, next action, decisions and canonical ar
 Stage receipts live in `runtime/stages/`; preserve explicit holds/authority there or in their
 referenced canonical records. Artifact presence is not a passing review. The existing
 `run-ledger.md`, if present, remains a legacy source and is not overwritten.
+Completing implementation or publication also requires successful handoffs for every
+prepared step in `spec-steps.json`, including steps with no attempted run yet.
+
+An explicitly started end-to-end coordinator registers `spec_workflow` after its workflow
+checkpoint, with the user's whole objective, authority limits and final stage
+(`implementation`, `work-tour` or `publication`). A native session entry retains this
+contract across compaction and resume. At a completed, idle response boundary, unfinished
+work receives a continuation only when the same coordinator has reconciled current input,
+the inbox is clear, all declared workers are terminal, and its checkpoint is ready or
+prematurely complete. Holds, blockers, errors, aborts and pending input prevent continuation.
+Final completion requires all prepared step handoffs and a complete final-stage receipt;
+publication additionally requires a recorded PR URL for every target. These facts preserve
+the existing review and acceptance responsibilities; they do not certify those judgments.
+
+At most two continuations are allowed per unchanged obligation revision. The allowance
+persists through resume and repeated registration. A repeated stall produces a visible
+warning while retaining the unfinished objective. This is the coordinator continuing its
+own work: it does not activate Sentinel observation, diagnosis or recovery, grant publication
+authority, restart a closed process, or recover failed requests. Sentinel activation cannot
+trigger this separate continuation path. Ordinary unregistered sessions remain unchanged.
 
 Recording `spec_checkpoint` with stage `publication` (including the `spec-pr` alias) and status
 `complete` also closes the package's sentinel workflows. For each workflow this coordinator
@@ -570,8 +590,10 @@ predecessor, so compaction cannot remove the source of that reminder. Coordinato
 persisted as Pi custom entries and restored on session resume. This is not a sentinel, daemon,
 auto-restart loop, or guarantee that a closed session continues running.
 
-Existing live Pi processes keep their loaded extension. Use a fresh/reloaded idle coordinator and
-new assignments to pick up the tools; do not restart active work solely for these bookkeeping changes.
+Existing live Pi processes keep their loaded extension, and a reload can retain imported
+module code. A fresh coordinator process and new assignments reliably load these changes;
+verify the registered tools and retained workflow contract before claiming continuation is
+active. Do not restart an active writer to pick up bookkeeping or continuation changes.
 
 ### Recent activity and public sentinel snapshots
 

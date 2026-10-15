@@ -31,6 +31,7 @@ test('installed Pi loads completion/checkpoint tools and restores obligation hoo
     const ext = loaded.extensions[0]; extensions.push(ext);
     assert.equal(ext.tools.has('spec_complete'), role === 'owner');
     assert.equal(ext.tools.has('spec_checkpoint'), !role);
+    assert.equal(ext.tools.has('spec_workflow'), !role);
     assert.equal(ext.tools.has('spec_sentinel_checkpoint'), !role);
     assert.ok(ext.handlers.has('context'));
     if (!role) {

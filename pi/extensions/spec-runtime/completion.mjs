@@ -283,6 +283,17 @@ export function watchProgress(packagePath, onError = () => {}, onFresh = () => {
 const stageAliases = { 'spec-run': 'implementation', 'spec-step-run': 'implementation', 'spec-pr': 'publication',
   'spec-prepare': 'preparation', 'spec-write': 'preparation', 'spec-architect-initial': 'architecture',
   'spec-branch-refine': 'review', 'spec-work-tour': 'work-tour' };
+export function unfinishedPreparedSteps(packagePath, progress) {
+  const steps = read(join(packagePath, 'spec-steps.json')).steps;
+  if (!Array.isArray(steps) || !steps.length || steps.some(s => !Number.isInteger(s.step) || s.step < 1))
+    throw new Error('Prepared step index is missing or invalid; cannot establish package completion');
+  const latest = new Map();
+  for (const run of progress.runs) latest.set(Number(basename(run.step).match(/^step-(\d+)-subspec\.md$/)?.[1]), run);
+  return steps.filter(step => {
+    const run = latest.get(step.step);
+    return !run || run.execution !== 'completed' || run.handoff?.status !== 'recorded' || !completeOutcomes.has(run.handoff.outcome);
+  }).map(step => step.step);
+}
 export function recordCheckpoint(packagePath, input) {
   input = { ...input, stage: stageAliases[input.stage] || input.stage };
   if (!/^[a-z][a-z0-9-]{0,63}$/.test(input.stage) || !['pending', 'running', 'complete', 'blocked'].includes(input.status)) throw new Error('Invalid stage or status');
@@ -292,6 +303,8 @@ export function recordCheckpoint(packagePath, input) {
   if (input.status === 'complete' && !input.artifacts.length) throw new Error('A complete stage must reference its actual artifacts');
   if (input.status === 'complete' && ['implementation', 'publication'].includes(input.stage)) {
     const progress = read(join(packagePath, 'runtime/progress.json'));
+    const unfinished = unfinishedPreparedSteps(packagePath, progress);
+    if (unfinished.length) throw new Error(`Unfinished prepared steps: ${unfinished.join(', ')}; attempted steps alone do not establish package completion`);
     const latest = new Map();
     for (const r of progress.runs) latest.set(r.step, r);
     if ([...latest.values()].some(r => r.execution !== 'completed' || r.handoff.status !== 'recorded' || !completeOutcomes.has(r.handoff.outcome))) throw new Error('Unfinished worker/handoff obligations remain; preserve them before closing this stage');

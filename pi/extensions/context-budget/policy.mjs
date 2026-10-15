@@ -7,6 +7,21 @@ import { randomUUID } from 'node:crypto';
 export const POLICY = Object.freeze({ contextWindow: 76000,
   requestEstimateLimit: 90000, toolTextChars: 12000 });
 const installed = new WeakSet();
+// Native update summaries otherwise accumulate completed history on every pass.
+// Keep obligations intact, but make their durable artifacts carry the detail.
+const SUMMARY_FOCUS = `Write a compact working handoff, aiming for at most 8000 characters.
+Preserve the user's goal and authority limits, active constraints, unresolved decisions,
+known failures, pending implementation/review/evidence obligations, current revisions,
+and the next action. Preserve artifact paths needed to recover supporting detail.
+Replace completed investigation and execution narratives with their outcome and artifact
+reference. Consolidate repeated facts and remove superseded plans. Do not copy the
+previous summary wholesale or preserve obsolete detail merely because it was summarized
+before. Never drop an unresolved obligation to meet the length target. The retained
+transcript and canonical artifacts remain available for targeted retrieval.
+For completed work, the default preserve-all wording means preserve its outcome and
+recovery pointer, not every prior detail. Use only a few lines for completed steps;
+omit tool-call inventories, resolved errors, repeated paths and receipt-by-receipt
+history. Do not copy credentials or launch/lease tokens; reference their owning record.`;
 
 export function budgetModel(model) {
   if (!model || !Number.isFinite(model.contextWindow) || model.contextWindow <= 0) return model;
@@ -44,7 +59,7 @@ export function boundedToolContent(content, artifact) {
     ...content.filter(block => block.type !== 'text')];
 }
 
-export function installContextBudget(pi) {
+export function installContextBudget(pi, { compact, retrySettings } = {}) {
   if (installed.has(pi)) return;
   installed.add(pi);
   // Pi gives each extension a different API object. Elect one installer on its
@@ -73,7 +88,7 @@ export function installContextBudget(pi) {
   pi.on('session_start', apply);
   pi.on('model_select', apply);
   pi.on('before_agent_start', apply);
-  pi.on('session_before_compact', (event, ctx) => {
+  pi.on('session_before_compact', async (event, ctx) => {
     const p = event.preparation;
     const estimate = estimatePayload({ messages: p.messagesToSummarize,
       prefix: p.turnPrefixMessages, summary: p.previousSummary,
@@ -84,6 +99,43 @@ export function installContextBudget(pi) {
       const message = 'Context budget refused an oversized compaction request. Resume in a fresh session from canonical artifacts and a bounded handoff; preserve the original transcript.';
       ctx.ui?.notify(message, 'error');
       process.stderr.write(`${message}\n`);
+      ctx.abort();
+      return { cancel: true };
+    }
+    // Scope this intervention to the provider observed accumulating summaries until
+    // they exhaust the native output budget. Keep its model and reasoning selection.
+    if (!compact || ctx.model?.provider !== 'deepseek') return;
+    const guard = new AbortController();
+    const signal = AbortSignal.any([event.signal, guard.signal]);
+    const streamSummary = async (model, context, options) => {
+      const stream = ctx.modelRegistry.streamSimple(model,
+        { ...context, systemPrompt: `${context.systemPrompt || ''}\n\n${SUMMARY_FOCUS}` },
+        { ...options, signal, onPayload: payload => {
+          const estimate = estimatePayload(payload);
+          record({ event: 'summary_request', provider: model.provider, model: model.id,
+            estimated_input_tokens: estimate, blocked: estimate >= POLICY.requestEstimateLimit });
+          if (estimate >= POLICY.requestEstimateLimit) guard.abort();
+        } });
+      const response = await stream.result();
+      record({ event: 'summary_usage', provider: response.provider, model: response.model,
+        input_tokens: inputTokens(response.usage), output_tokens: response.usage?.output ?? null,
+        reasoning_tokens: response.usage?.reasoning ?? null, stop_reason: response.stopReason,
+        usage_available: inputTokens(response.usage) > 0 });
+      return stream;
+    };
+    try {
+      const result = await compact(p, ctx.model, undefined, undefined,
+        [SUMMARY_FOCUS, event.customInstructions].filter(Boolean).join('\n\n'),
+        signal, pi.getThinkingLevel(), streamSummary,
+        undefined, retrySettings?.());
+      signal.throwIfAborted();
+      return { compaction: result };
+    } catch (error) {
+      // Pi swallows hook exceptions and would then retry the unmodified native
+      // summary. Explicit cancellation preserves the history and stops that loop.
+      record({ event: 'summary_failed', reason: signal.aborted ? 'aborted' :
+        /token cap|incomplete/.test(error?.message || '') ? 'length' : 'error' });
+      ctx.ui?.notify('Context summary failed; original history is preserved. Inspect context-budget summary telemetry before recovery.', 'error');
       ctx.abort();
       return { cancel: true };
     }
@@ -113,6 +165,9 @@ export function installContextBudget(pi) {
   pi.on('session_compact', event => record({ event: 'compaction',
     input_tokens: inputTokens(event.compactionEntry?.usage),
     output_tokens: event.compactionEntry?.usage?.output ?? null }));
+  pi.on('session_compact_failed', event => record({ event: 'compaction_failed',
+    trigger: event.reason, aborted: event.aborted, from_extension: event.fromExtension,
+    reason: /token cap|incomplete/.test(event.errorMessage || '') ? 'length' : 'error' }));
   pi.on('tool_result', (event, ctx) => {
     const content = event.content;
     if (!Array.isArray(content) || content.reduce((n, b) => n + (b.type === 'text' ? b.text.length : 0), 0) <= POLICY.toolTextChars) return;

@@ -62,6 +62,22 @@ a durable summary. It makes additional model calls. Existing Pi compaction setti
 still apply: disabling compaction or setting a large retained tail can lead to a budget
 stop instead. Use the native defaults above. This extension does not overwrite settings.
 
+DeepSeek compaction uses Pi's native summarization, cut points and persistence with
+an added working-handoff instruction. It aims for 8,000 characters, replacing completed
+investigation narratives with outcomes and artifact references while preserving active
+constraints, authority, revisions, known failures and pending obligations. This is a
+prompt target, not truncation or an acceptance waiver. Both history and split-turn
+summaries receive it. The provider, selected reasoning level, native output budgets
+and configured transient retry policy remain unchanged.
+
+This intervention addresses an observed run whose saved summaries grew from 7,502 to
+40,992 characters before repeated summary truncations. It is scoped to DeepSeek;
+other providers retain their native summary path. The wrapper uses the configured
+registry transport and guards the actual summary payload as well as its preflight
+estimate. A failed or truncated summary cancels compaction, preserves original history,
+and stops the current turn instead of falling back to the unchanged failing prompt.
+It does not automatically resume a stopped coordinator.
+
 The provider hook estimates the entire serialized payload, including tools, system
 instructions and cached/replayed conversation. It uses UTF-8 bytes / 3 plus 1,024 tokens
 and 4,096 per recognized image; this is **not an exact tokenizer or a guaranteed 100k
@@ -92,6 +108,10 @@ usage and policy changes.
 They are not added to model context and contain no prompt bodies. Native timestamps
 provide ordering. Actual input is input + cacheRead + cacheWrite. Zero reported usage on
 an error means billing is unknown; it does not prove a free request.
+`summary_request` and `summary_usage` retain DeepSeek summary request estimates and
+stop reasons, including failed calls. `summary_failed` and `compaction_failed` record
+failure categories without prompt bodies. Successful summary usage also appears in
+the native compaction entry; do not count those two records twice.
 
 Compare similar completed steps: input p50/p95/max, requests above 100k, response p50/p95,
 error rate, total input/output and compaction usage, elapsed time and acceptance/rework.
@@ -114,7 +134,9 @@ The final-review/editor/diagnostic profile declarations are checked through the 
 builder; their full workflows and paid provider behavior are not exercised here.
 
 Run `~/.agents/sync.sh` to register the extension and sync instruction changes. New Pi
-processes load it. Sessions holding the previous 12k session-local model copy must safely
+processes load it. A live `/reload` can retain imported module code; confirm `summary_request`
+telemetry and `fromHook: true` on a subsequent compaction before claiming the new wrapper
+is active. Sessions holding the previous 12k session-local model copy must safely
 restart or reselect the model from the registry to restore its output allowance; merely
 reloading extensions can retain that copy. Do not interrupt an active writer to activate it.
 Tests use a local HTTP provider and synthetic usage with Pi 1.2.0; they establish request/lifecycle behavior, not production latency or cost savings.

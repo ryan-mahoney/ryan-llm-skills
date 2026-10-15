@@ -18,6 +18,7 @@ async function fixture(t) {
   const recorded = await setWorktree(base.ref, 'repo', root, base.location);
   assert.equal(recorded.ok, true);
   mkdirSync(join(pkg, 'runtime/runs'), { recursive: true });
+  writeFileSync(join(pkg, 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1 }] }));
   mkdirSync(join(pkg, 'evidence')); writeFileSync(join(pkg, 'spec.md'), '# Spec');
   const gate = { id: 'EV-1', ownerStep: 1, required: true, phase: 'merge', rejects: ['FH-1'], artifact: 'evidence/check.txt' };
   writeFileSync(join(pkg, 'evidence-plan.json'), JSON.stringify({ gates: [gate] }));
@@ -168,6 +169,18 @@ test('coordinator decisions survive reconstruction while artifact presence is ne
   assert.equal(ledger.stages[0].next, 'Finish step 1');
   assert.throws(() => recordCheckpoint(f.pkg, { stage: 'implementation', status: 'complete', next: 'Publish', decisions: [], artifacts: ['spec.md'] }), /Unfinished/);
   assert.throws(() => recordCheckpoint(f.pkg, { stage: 'publication', status: 'complete', next: 'Done', decisions: [], artifacts: [] }), /actual artifacts/);
+});
+
+// Run alone: node --test --test-name-pattern='unattempted prepared steps' pi/extensions/spec-runtime/completion.test.mjs
+test('unattempted prepared steps prevent implementation and publication completion', async t => {
+  const f = await fixture(t);
+  submitCompletion(f.r, f.input);
+  writeFileSync(join(f.pkg, 'runtime/runs/attempt-1.json'), JSON.stringify({ ...f.r, state: 'completed' }));
+  writeFileSync(join(f.pkg, 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1 }, { step: 2 }] }));
+  await refreshProgress(f.pkg);
+  for (const stage of ['implementation', 'publication']) {
+    assert.throws(() => recordCheckpoint(f.pkg, { stage, status: 'complete', next: 'Done', decisions: [], artifacts: ['spec.md'] }), /Unfinished prepared steps: 2/);
+  }
 });
 
 
