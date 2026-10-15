@@ -948,3 +948,60 @@ test('wave overlay: phase attempt bindings are injective for delimiter-containin
   assert.notEqual(attempts[2], attempts[0], 'distinct operations must bind to distinct attempts');
   assert.equal(attempts[1], attempts[0], 'the exact operation must bind identically');
 });
+
+test('wave overlay: probe permission diagnostics naming the fixture path never authorize fallback', () => {
+  const collect = { exitCode: 0, signal: null, stdout: JSON.stringify({ fstype: 'overlay', options: 'rw,redirect_dir=nofollow,uuid=on,userxattr', copyUp: true, deletion: true }), stderr: '' };
+  const result = interpretProbeResult({
+    collect,
+    verify: { exitCode: 2, signal: null, stdout: '', stderr: 'wave-overlay-probe: 35: cannot create /tmp/wave-overlay-probe-X/merged/wave-probe-copy-up.txt: Permission denied' },
+  });
+  assert.equal(result.status, 'blocked', JSON.stringify(result));
+  assert.equal(result.reason, 'unknown-effect');
+  assert.equal(result.remedy, null);
+  assert.equal(result.fallbackEligible, false);
+});
+
+test('wave overlay: unknown stdout beside a bubblewrap mount diagnostic never authorizes fallback', () => {
+  const collect = { exitCode: 0, signal: null, stdout: JSON.stringify({ fstype: 'overlay', options: 'rw,redirect_dir=nofollow,uuid=on,userxattr', copyUp: true, deletion: true }), stderr: '' };
+  const result = interpretProbeResult({
+    collect,
+    verify: { exitCode: 1, signal: null, stdout: 'fatal: Read-only file system after partial copy-up', stderr: 'bwrap: mount: Permission denied' },
+  });
+  assert.equal(result.status, 'blocked', JSON.stringify(result));
+  assert.equal(result.reason, 'unknown-effect');
+  assert.equal(result.remedy, null);
+  assert.equal(result.fallbackEligible, false);
+});
+
+test('wave overlay: a longer option token than the overlay option is not absent-option unavailability', () => {
+  const collectOk = { exitCode: 0, signal: null, stdout: JSON.stringify({ fstype: 'overlay', options: 'rw', copyUp: true, deletion: true }), stderr: '' };
+  const verifyOk = { exitCode: 0, signal: null, stdout: JSON.stringify({ fstype: 'overlay', options: 'rw', retainedWrite: true, retainedDeletion: true }), stderr: '' };
+  const failure = { exitCode: 1, signal: null, stdout: '', stderr: 'bwrap: Unknown option --overlay-unrelated' };
+  for (const [label, record] of [['collect', { collect: failure, verify: verifyOk }], ['verify', { collect: collectOk, verify: failure }]]) {
+    const result = interpretProbeResult(record);
+    assert.equal(result.status, 'blocked', label);
+    assert.equal(result.reason, 'unknown-effect', label);
+    assert.equal(result.remedy, null, label);
+    assert.equal(result.fallbackEligible, false, label);
+  }
+});
+
+test('wave overlay: genuine bubblewrap unavailability diagnostics still authorize fallback', () => {
+  const collectOk = { exitCode: 0, signal: null, stdout: JSON.stringify({ fstype: 'overlay', options: 'rw', copyUp: true, deletion: true }), stderr: '' };
+  const verifyOk = { exitCode: 0, signal: null, stdout: JSON.stringify({ fstype: 'overlay', options: 'rw', retainedWrite: true, retainedDeletion: true }), stderr: '' };
+  const cases = [
+    ['overlay-options-absent', 'bwrap: Unknown option --overlay'],
+    ['userns-denied', 'bwrap: unshare failed: Operation not permitted'],
+    ['mount-denied', 'bwrap: mount: Permission denied'],
+  ];
+  for (const [reason, stderr] of cases) {
+    const verify = interpretProbeResult({ collect: collectOk, verify: { exitCode: 1, signal: null, stdout: '', stderr } });
+    assert.equal(verify.status, 'unavailable', reason);
+    assert.equal(verify.reason, reason);
+    assert.equal(verify.fallbackEligible, true, reason);
+    assert.ok(verify.remedy, reason);
+    const collect = interpretProbeResult({ collect: { exitCode: 1, signal: null, stdout: '', stderr }, verify: verifyOk });
+    assert.equal(collect.reason, reason);
+    assert.equal(collect.fallbackEligible, true, reason);
+  }
+});

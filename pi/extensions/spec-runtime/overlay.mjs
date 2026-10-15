@@ -346,14 +346,14 @@ const PROBE_REMEDIES = Object.freeze({
   'filesystem-unsupported': 'place retained overlay layers on a local filesystem supporting kernel OverlayFS',
 });
 
-// Only a positively observed unsupported-option diagnostic counts as the
-// enumerated overlay-options-absent unavailability: a single bounded
-// diagnostic naming the overlay option itself as the rejected option (either
-// word order, optionally quoted). The pattern never spans a line break and
-// never glues an unrelated unknown-option diagnostic to a later --overlay
-// mention, so failures that merely mention --overlay (I/O errors, exhaustion,
-// signals) are not diagnostics about absent options and must stay blocked.
-const PROBE_OPTION_PATTERN = /(?:unknown|unrecognized|invalid)[ \t-]+option\b[\t :='"|,]*--overlay(?:-src)?\b|--overlay(?:-src)?\b[\t :='"|,]*(?:unknown|unrecognized|invalid)[ \t-]+option\b/i;
+// Eligibility is a positively identified bubblewrap diagnostic, never a bare
+// phrase: a diagnostic line must carry the bwrap prefix and be bounded in
+// length, the overlay option must be the exact rejected token (a longer token
+// such as --overlay-unrelated is a different, unrecognized effect), and the
+// pattern never spans a line break, so a failure that merely mentions
+// --overlay next to some other diagnostic stays blocked.
+const PROBE_DIAGNOSTIC_PREFIX = /^[ \t]*bwrap:/;
+const PROBE_OPTION_PATTERN = /(?:unknown|unrecognized|invalid)[ \t-]+option\b[\t :='"|,]*--overlay(?![-\w])|--overlay(?![-\w])[\t :='"|,]*(?:unknown|unrecognized|invalid)[ \t-]+option\b/i;
 // Exhaustion, I/O and corruption diagnostics mean unknown side effects: they
 // block before any diagnostic-based fallback eligibility (INV-4).
 const PROBE_EFFECT_PATTERN = /\bno space left|input\/output error|\bi\/o error|write failed|\bENOSPC\b|\bEIO\b/i;
@@ -450,13 +450,23 @@ function classifyProbeFailure(record) {
   if (PROBE_EFFECT_PATTERN.test(`${stdout}\n${stderr}`)) {
     return capability('blocked', 'unknown-effect', null, false);
   }
-  if (PROBE_OPTION_PATTERN.test(stderr)) {
+  // A genuine pre-launch bubblewrap failure writes nothing to stdout: any
+  // stdout on a failed phase is an unrecognized effect and must block before
+  // every eligibility branch.
+  if (stdout.trim() !== '') {
+    return capability('blocked', 'unknown-effect', null, false);
+  }
+  // Eligibility requires a positively identified bubblewrap diagnostic line of
+  // bounded length; the probe script's own shell and fixture messages never
+  // qualify.
+  const diagnostics = stderr.split('\n').filter(line => line.length <= 200 && PROBE_DIAGNOSTIC_PREFIX.test(line));
+  if (diagnostics.some(line => PROBE_OPTION_PATTERN.test(line))) {
     return capability('unavailable', 'overlay-options-absent', PROBE_REMEDIES['overlay-options-absent'], true);
   }
-  if (PROBE_PERMISSION_PATTERN.test(stderr) && PROBE_USERNS_PATTERN.test(stderr)) {
+  if (diagnostics.some(line => PROBE_PERMISSION_PATTERN.test(line) && PROBE_USERNS_PATTERN.test(line))) {
     return capability('unavailable', 'userns-denied', PROBE_REMEDIES.userns, true);
   }
-  if (PROBE_PERMISSION_PATTERN.test(stderr) && PROBE_MOUNT_PATTERN.test(stderr)) {
+  if (diagnostics.some(line => PROBE_PERMISSION_PATTERN.test(line) && PROBE_MOUNT_PATTERN.test(line))) {
     return capability('unavailable', 'mount-denied', PROBE_REMEDIES.userns, true);
   }
   return capability('blocked', 'unknown-effect', null, false);
