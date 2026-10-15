@@ -16,7 +16,8 @@ import { execFileSync } from 'node:child_process';
 import { createOverlayPhases, interpretProbeResult } from './overlay.mjs';
 import { createOwnership } from './ownership.mjs';
 import {
-  importSealedHead, prepareCandidateWorkspace, prepareStepWorkspace, remountRetainedWorkspace, resolveBackend, workspacePath,
+  importSealedHead, prepareCandidateWorkspace, prepareStepWorkspace, remountRetainedWorkspace, resolveBackend, setupIdentity,
+  stagingDigest, workspacePath,
 } from './step-workspaces.mjs';
 
 const GIT = { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] };
@@ -518,5 +519,103 @@ test('wave workspaces: setup identity and freeze receipts fail closed', async t 
     baseCommit: target.c1,
     preparationReceipt: { ok: true, drain: 'confirmed', baseCommit: target.c1, trackedClean: true },
   })));
+});
+
+// A staging input as a Runtime preparation would hand it over: the prepared
+// source tree at baseCommit plus the prepared dependency output. The fixture
+// materializes it; prepare never executes the declared command (step 6 owns
+// contained setup execution).
+function stagePreparedInput(t, target, baseCommit) {
+  const root = freshRoot(t, 'wave-workspaces-staging-input');
+  const source = join(root, 'source');
+  const dependencies = join(root, 'dependencies');
+  mkdirSync(source, { recursive: true });
+  mkdirSync(dependencies, { recursive: true });
+  const archive = execFileSync('git', ['-C', target.worktree, 'archive', baseCommit]);
+  execFileSync('tar', ['-x', '-C', source], { input: archive });
+  return { source, dependencies };
+}
+
+test('wave workspaces: staged prepared dependency output reaches the frozen lower', async t => {
+  const target = makeTargetRepo(t, 'wave-workspaces-staged-target');
+  const waveRoot = freshRoot(t, 'wave-workspaces-staged-root');
+  const ownership = makeOwnership(t, 'wave-workspaces-staged');
+  const baseCommit = target.c2;
+  const declaration = { command: 'npm ci --ignore-scripts', lockfiles: [], environment: [] };
+  const staging = stagePreparedInput(t, target, baseCommit);
+  mkdirSync(join(staging.dependencies, 'node_modules', 'leftpad'), { recursive: true });
+  writeFileSync(join(staging.dependencies, 'node_modules', 'leftpad', 'index.js'), 'module.exports = 1;\n');
+  const { snapshotId } = setupIdentity({ baseCommit, setup: declaration, targetRoot: target.worktree });
+  const preparationReceipt = {
+    ok: true, drain: 'confirmed', baseCommit, trackedClean: true,
+    snapshotId, stagingDigest: stagingDigest(staging),
+  };
+
+  const record = await prepareStepWorkspace({
+    ...workspaceOptions({
+      target, waveRoot, ownership, packageId: 'wave-staged', label: 'staged', attemptId: 'attempt-staged-1', baseCommit,
+      mode: 'overlayfs', setup: declaration, env: { HOME: process.env.HOME, PATH: process.env.PATH }, preparationReceipt,
+    }),
+    staging,
+  });
+
+  const artifact = join(record.lower, 'node_modules', 'leftpad', 'index.js');
+  assert.equal(existsSync(artifact), true, 'staged prepared dependency output reaches the frozen lower');
+  assert.equal(readFileSync(artifact, 'utf8'), 'module.exports = 1;\n', 'the validated staged contents are frozen verbatim');
+  assert.equal(existsSync(join(record.lower, 'README.md')), true, 'the prepared source tree at baseCommit is frozen in the lower');
+  assert.equal(record.snapshotId, snapshotId);
+  assert.throws(
+    () => git(target.worktree, ['cat-file', '-e', `${baseCommit}:node_modules/leftpad/index.js`]),
+    'the source commit does not contain the dependency artifact',
+  );
+  assert.equal(existsSync(join(target.worktree, 'node_modules')), false, 'the live checkout is never used as the lower');
+});
+
+test('wave workspaces: preparation receipts bind identity and validated staging input', async t => {
+  const target = makeTargetRepo(t, 'wave-workspaces-bind-target');
+  const waveRoot = freshRoot(t, 'wave-workspaces-bind-root');
+  const ownership = makeOwnership(t, 'wave-workspaces-bind');
+  const baseCommit = target.c2;
+  const declaration = { command: 'npm ci --ignore-scripts', lockfiles: [], environment: [] };
+  const staging = stagePreparedInput(t, target, baseCommit);
+  writeFileSync(join(staging.dependencies, 'dep.js'), 'module.exports = 2;\n');
+  const { snapshotId } = setupIdentity({ baseCommit, setup: declaration, targetRoot: target.worktree });
+  const digest = stagingDigest(staging);
+  const bound = { ok: true, drain: 'confirmed', baseCommit, trackedClean: true, snapshotId, stagingDigest: digest };
+  const options = (attemptId, receipt, stagingInput = staging) => ({
+    ...workspaceOptions({
+      target, waveRoot, ownership, packageId: 'wave-bind', label: 'bind', attemptId, baseCommit,
+      mode: 'overlayfs', setup: declaration, env: { HOME: process.env.HOME, PATH: process.env.PATH }, preparationReceipt: receipt,
+    }),
+    staging: stagingInput,
+  });
+
+  // A receipt that does not bind the identity is refused before anything exists.
+  await assertRefusalAsync('receipt-identity-mismatch', () => prepareStepWorkspace(options('attempt-bind-1', {
+    ok: true, drain: 'confirmed', baseCommit, trackedClean: true,
+  })));
+  assert.equal(existsSync(join(waveRoot, 'snapshots', snapshotId)), false, 'an unbound receipt publishes no lower');
+  assert.equal(existsSync(join(waveRoot, 'attempts', 'attempt-bind-1')), false, 'an unbound receipt creates no attempt directory');
+
+  await assertRefusalAsync('receipt-identity-mismatch', () => prepareStepWorkspace(options('attempt-bind-2', {
+    ...bound, snapshotId: '0'.repeat(64),
+  })));
+
+  await assertRefusalAsync('receipt-identity-mismatch', () => prepareStepWorkspace(options('attempt-bind-3', {
+    ...bound, stagingDigest: '0'.repeat(64),
+  })));
+
+  // A bound receipt still requires the staging input itself.
+  await assertRefusalAsync('staging-invalid', () => prepareStepWorkspace(options('attempt-bind-4', bound, null)));
+
+  // An incomplete staging input: the prepared source tree is missing a tracked path.
+  rmSync(join(staging.source, 'README.md'));
+  await assertRefusalAsync('staging-invalid', () => prepareStepWorkspace(options('attempt-bind-5', bound)));
+  assert.equal(existsSync(join(waveRoot, 'snapshots', snapshotId)), false, 'an invalid staging input publishes no lower');
+  writeFileSync(join(staging.source, 'README.md'), 'base\n');
+
+  const record = await prepareStepWorkspace(options('attempt-bind-6', bound));
+  assert.equal(record.snapshotId, snapshotId, 'a correctly bound receipt is accepted');
+  assert.equal(readFileSync(join(record.lower, 'dep.js'), 'utf8'), 'module.exports = 2;\n');
 });
 

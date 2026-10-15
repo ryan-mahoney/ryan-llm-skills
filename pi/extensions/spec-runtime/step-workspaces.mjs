@@ -14,7 +14,8 @@
 // by a positive unavailable classification whose fallbackEligible flag is true.
 import { createHash } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
 import { createOverlayPhases, retainLayer, validateLayers } from './overlay.mjs';
 
@@ -242,6 +243,148 @@ function normalizeSetup(setup) {
   return { command, lockfiles: normalizedPaths, environment: names };
 }
 
+// The setup identity covers exactly what the frozen snapshot is bound to: the
+// base commit plus the declared command plus the resolved lockfile paths with
+// their bytes plus the environment names. `prepare` computes its snapshotId
+// through this helper and a preparation receipt binds to the identical value,
+// so the receipt cannot attest a different identity than the snapshot uses.
+// normalizeSetup is idempotent, so re-consuming the declaration here never
+// changes what the identity covers or which refusals fire first.
+export function setupIdentity({ baseCommit, setup, targetRoot }) {
+  const declared = normalizeSetup(setup);
+  const lockfiles = declared.lockfiles.map(filePath => ({
+    path: filePath,
+    sha256: hashFileBytes(join(targetRoot, filePath)),
+  }));
+  const identity = {
+    baseCommit,
+    setup: {
+      command: declared.command,
+      lockfiles: [...lockfiles].sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0)),
+      environment: [...declared.environment].sort(),
+    },
+  };
+  return { identity, snapshotId: createHash('sha256').update(canonicalJson(identity)).digest('hex') };
+}
+
+// A validated staging input carries the prepared source tree at baseCommit
+// plus the prepared dependency output. The frozen lower is always produced
+// from a staging input - never by archiving the source commit straight into
+// the final snapshot directory - so dependency-setup output has a path into
+// the lower and the staged contents are validated and bound to the receipt
+// before anything is published. The declared command is never executed here:
+// step 6 owns contained setup execution; this run only accepts, validates and
+// consumes the staging input.
+function stagingEntries(root, prefix = '') {
+  const entries = [];
+  for (const entry of readdirSync(join(root, prefix), { withFileTypes: true })) {
+    const path = prefix === '' ? entry.name : `${prefix}/${entry.name}`;
+    if (path.split('/').includes('.git')) {
+      refuse('staging-invalid', `staging input must carry no .git metadata: ${path}`);
+    }
+    const absolute = join(root, path);
+    if (entry.isDirectory()) {
+      entries.push(...stagingEntries(root, path));
+    } else if (entry.isSymbolicLink()) {
+      entries.push({ path, kind: 'link', target: readlinkSync(absolute) });
+    } else if (entry.isFile()) {
+      entries.push({ path, kind: 'file', mode: lstatSync(absolute).mode, bytes: readFileSync(absolute) });
+    } else {
+      refuse('staging-invalid', `staging input carries an unsupported entry: ${path}`);
+    }
+  }
+  return entries;
+}
+
+function gitBlobSha1(bytes) {
+  return createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
+}
+
+function validateStagingInput({ staging, baseCommit, targetRoot }) {
+  if (!staging || typeof staging !== 'object' || Array.isArray(staging)) {
+    refuse('staging-invalid', 'a staged preparation must supply its staging input');
+  }
+  for (const field of ['source', 'dependencies']) {
+    const value = staging[field];
+    if (typeof value !== 'string' || !isAbsolute(value) || !existsSync(value) || !statSync(value).isDirectory()) {
+      refuse('staging-invalid', `staging input ${field} must be an existing absolute directory`);
+    }
+  }
+  const stagedSource = stagingEntries(staging.source);
+  stagingEntries(staging.dependencies);
+
+  let listing;
+  try {
+    listing = execFileSync('git', ['-C', targetRoot, 'ls-tree', '-r', '-z', baseCommit], { maxBuffer: 64 * 1024 * 1024 });
+  } catch {
+    refuse('staging-invalid', `staging input cannot be validated against base commit ${baseCommit}`);
+  }
+  const tracked = new Map();
+  for (const record of listing.toString('utf8').split('\0')) {
+    if (record === '') continue;
+    const tab = record.indexOf('\t');
+    const [mode, type, sha] = record.slice(0, tab).split(' ');
+    const path = record.slice(tab + 1);
+    if (type !== 'blob') refuse('staging-invalid', `base commit carries an unsupported tree entry: ${path}`);
+    tracked.set(path, { mode, sha });
+  }
+  const staged = new Map(stagedSource.map(entry => [entry.path, entry]));
+  if (staged.size !== tracked.size) {
+    refuse('staging-invalid', 'staging input source must be exactly the prepared source tree at baseCommit');
+  }
+  for (const [path, entry] of tracked) {
+    const found = staged.get(path);
+    if (!found) refuse('staging-invalid', `staging input source is incomplete, missing tracked path: ${path}`);
+    const bytes = found.kind === 'link' ? Buffer.from(found.target) : found.bytes;
+    if (gitBlobSha1(bytes) !== entry.sha) {
+      refuse('staging-invalid', `staging input source does not match base commit bytes: ${path}`);
+    }
+    if (entry.mode === '120000' && found.kind !== 'link') {
+      refuse('staging-invalid', `staging input source must preserve symlinks: ${path}`);
+    }
+    if (entry.mode !== '120000' && found.kind !== 'file') {
+      refuse('staging-invalid', `staging input source carries an unexpected link: ${path}`);
+    }
+    if (found.kind === 'file' && (entry.mode === '100755') !== Boolean(found.mode & 0o111)) {
+      refuse('staging-invalid', `staging input source does not preserve the executable bit: ${path}`);
+    }
+  }
+  return { source: staging.source, dependencies: staging.dependencies };
+}
+
+// The receipt binds the validated staged contents themselves, not merely a
+// path: the digest covers every staged file's bytes and every link target,
+// across both the prepared source tree and the prepared dependency output.
+export function stagingDigest(staging) {
+  const entries = [];
+  for (const [label, root] of [['source', staging.source], ['dependencies', staging.dependencies]]) {
+    for (const entry of stagingEntries(root)) {
+      const bytes = entry.kind === 'link' ? Buffer.from(`link:${entry.target}`) : entry.bytes;
+      entries.push([`${label}/${entry.path}`, createHash('sha256').update(bytes).digest('hex')]);
+    }
+  }
+  entries.sort((left, right) => (left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0));
+  return createHash('sha256').update(canonicalJson(entries)).digest('hex');
+}
+
+function copyTreeInto(from, to) {
+  for (const entry of readdirSync(from, { withFileTypes: true })) {
+    const sourcePath = join(from, entry.name);
+    const destinationPath = join(to, entry.name);
+    if (entry.isSymbolicLink()) {
+      symlinkSync(readlinkSync(sourcePath), destinationPath);
+    } else if (entry.isDirectory()) {
+      mkdirSync(destinationPath, { recursive: true });
+      copyTreeInto(sourcePath, destinationPath);
+    } else if (entry.isFile()) {
+      copyFileSync(sourcePath, destinationPath);
+      chmodSync(destinationPath, lstatSync(sourcePath).mode & 0o777);
+    } else {
+      refuse('staging-invalid', `staging input carries an unsupported entry: ${sourcePath}`);
+    }
+  }
+}
+
 function receiptConfirmed(receipt, baseCommit) {
   return Boolean(receipt)
     && typeof receipt === 'object'
@@ -325,7 +468,7 @@ function extractCommitTree({ source, baseCommit, destination }) {
 // One snapshot per setup identity is created once and then reused read-only: a
 // recorded identity that no longer matches the computed one is refused, never
 // repaired in place, so no attempt can observe a lower it did not freeze.
-async function ensureSnapshot({ snapshotRoot, snapshotId, lower, identity, source, baseCommit }) {
+async function ensureSnapshot({ snapshotRoot, snapshotId, lower, identity, source, baseCommit, staging }) {
   if (existsSync(snapshotRoot)) {
     const stored = readSnapshotRecord(snapshotRoot);
     const matches = stored
@@ -338,11 +481,30 @@ async function ensureSnapshot({ snapshotRoot, snapshotId, lower, identity, sourc
   }
   mkdirSync(snapshotRoot, { recursive: true });
   mkdirSync(lower, { recursive: true });
-  await extractCommitTree({ source, baseCommit, destination: lower });
-  writeFileSync(
-    join(snapshotRoot, SNAPSHOT_RECORD),
-    `${JSON.stringify({ version: SNAPSHOT_VERSION, snapshotId, identity }, null, 2)}\n`,
-  );
+  // The frozen lower is produced from a staging input, never by archiving the
+  // source commit straight into the final snapshot directory: a caller-
+  // supplied input carries the prepared source tree at baseCommit plus the
+  // prepared dependency output, and the default input stages the commit
+  // archive first. Both are consumed through the same copy path, so prepared
+  // dependency output has a route into the frozen lower while the snapshot
+  // directory is still written directly (unchanged this run).
+  const ownedStaging = staging ? null : mkdtempSync(join(tmpdir(), 'wave-lower-staging-'));
+  try {
+    const input = staging ?? { source: join(ownedStaging, 'source'), dependencies: join(ownedStaging, 'dependencies') };
+    if (ownedStaging) {
+      mkdirSync(input.source, { recursive: true });
+      mkdirSync(input.dependencies, { recursive: true });
+      await extractCommitTree({ source, baseCommit, destination: input.source });
+    }
+    copyTreeInto(input.source, lower);
+    copyTreeInto(input.dependencies, lower);
+    writeFileSync(
+      join(snapshotRoot, SNAPSHOT_RECORD),
+      `${JSON.stringify({ version: SNAPSHOT_VERSION, snapshotId, identity }, null, 2)}\n`,
+    );
+  } finally {
+    if (ownedStaging) rmSync(ownedStaging, { recursive: true, force: true });
+  }
 }
 // ---------------------------------------------------------------------------
 // Private Git metadata
@@ -364,10 +526,10 @@ function dropAlternates(gitDir) {
 // Attempt provisioning
 // ---------------------------------------------------------------------------
 
-async function provisionOverlay({ kind, snapshotId, baseCommit, target, waveRoot, attemptId, setup, ownership, packageId, coordinator, phaseToken, identity, attemptRoot }) {
+async function provisionOverlay({ kind, snapshotId, baseCommit, target, waveRoot, attemptId, setup, ownership, packageId, coordinator, phaseToken, identity, attemptRoot, staging }) {
   const snapshotRoot = join(waveRoot, 'snapshots', snapshotId);
   const lower = join(snapshotRoot, 'lower');
-  await ensureSnapshot({ snapshotRoot, snapshotId, lower, identity, source: target.worktree, baseCommit });
+  await ensureSnapshot({ snapshotRoot, snapshotId, lower, identity, source: target.worktree, baseCommit, staging });
 
   const upper = join(attemptRoot, 'upper');
   const work = join(attemptRoot, 'work');
@@ -462,10 +624,11 @@ async function prepare(kind, options = {}) {
   // attempt directory is created and before any phase claim is requested.
   // Lockfiles resolve against the accepted base target root, never the
   // caller's CWD, and the resolved file's bytes feed the identity.
-  const lockfiles = setup.lockfiles.map(filePath => ({
-    path: filePath,
-    sha256: hashFileBytes(join(target.worktree, filePath)),
-  }));
+  // The snapshot identity is computed through the exported helper so a
+  // preparation receipt can bind to the identical snapshotId; the helper
+  // re-resolves the declared lockfiles against the accepted base target root
+  // exactly as before, so refusal order and identity contents are unchanged.
+  const { identity, snapshotId } = setupIdentity({ baseCommit, setup: options.setup, targetRoot: target.worktree });
   for (const name of setup.environment) {
     if (!(name in environment)) refuse('env-missing', `declared environment variable is absent: ${name}`);
   }
@@ -476,6 +639,25 @@ async function prepare(kind, options = {}) {
   if (!receiptConfirmed(options.preparationReceipt, baseCommit)) {
     refuse('receipt-invalid', 'preparation receipt must record a confirmed, tracked-clean base');
   }
+
+  // A staged preparation must be bound end to end before anything is created:
+  // the receipt is checked against the identical setup identity the snapshot
+  // uses, the staging input is validated, and the receipt must bind the
+  // validated staged contents. Every refusal here fires before any attempt
+  // directory or phase claim is created.
+  const receipt = options.preparationReceipt;
+  let stagingInput;
+  const staged = Boolean(options.staging)
+    || Boolean(receipt && (receipt.snapshotId !== undefined || receipt.stagingDigest !== undefined));
+  if (staged) {
+    if (!receipt || receipt.snapshotId !== snapshotId) {
+      refuse('receipt-identity-mismatch', 'preparation receipt must bind the identical setup snapshot identity');
+    }
+    stagingInput = validateStagingInput({ staging: options.staging, baseCommit, targetRoot: target.worktree });
+    if (receipt.stagingDigest !== stagingDigest(stagingInput)) {
+      refuse('receipt-identity-mismatch', 'preparation receipt must bind the validated staging input contents');
+    }
+  }
   requireStableBase({ worktree: target.worktree, baseCommit });
 
   const attemptRoot = join(waveRoot, 'attempts', attemptId);
@@ -485,15 +667,8 @@ async function prepare(kind, options = {}) {
     refuse('canonical-worktree-is-not-a-workspace', 'the attempt workspace would resolve inside the canonical worktree');
   }
 
-  const identity = {
-    baseCommit,
-    setup: {
-      command: setup.command,
-      lockfiles: [...lockfiles].sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0)),
-      environment: [...setup.environment].sort(),
-    },
-  };
-  const snapshotId = createHash('sha256').update(canonicalJson(identity)).digest('hex');
+  // The identity and snapshotId come from setupIdentity above, the same
+  // values the preparation receipt binds; they are not recomputed here.
   const declared = frozenSetup(setup);
 
   if (backend.backend === 'worktree') {
@@ -513,6 +688,7 @@ async function prepare(kind, options = {}) {
     phaseToken: options.phaseToken ?? `phase-${attemptId}`,
     identity,
     attemptRoot,
+    staging: stagingInput,
   });
 }
 
