@@ -3,6 +3,7 @@ name: spec-sentinel-diagnostician
 description: Diagnoses one bounded incident from an explicitly supplied packet; no tools, commands, edits or network.
 inheritProjectContext: false
 inheritSkills: false
+subagentOnlyExtensions: ~/.agents/pi/extensions/context-budget/index.ts
 allowNestedSubagents: false
 tools:
 ---

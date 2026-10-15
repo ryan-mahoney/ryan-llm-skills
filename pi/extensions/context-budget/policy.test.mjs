@@ -7,8 +7,10 @@ import { POLICY, budgetModel, estimatePayload, inputTokens, installContextBudget
 
 test('working cap preserves provider identity and smaller native limits; cached input counts toward budget', () => {
   const original = { id: 'model', provider: 'provider', contextWindow: 1048576, maxTokens: 65536, cost: { input: 1 } };
-  assert.deepEqual(budgetModel(original), { ...original, contextWindow: 76000, maxTokens: 12000 });
+  assert.deepEqual(budgetModel(original), { ...original, contextWindow: 76000 });
   assert.equal(original.contextWindow, 1048576);
+  assert.equal(budgetModel(original).maxTokens, 65536);
+  assert.equal(budgetModel({ ...original, maxTokens: 0 }).maxTokens, 0);
   assert.equal(budgetModel({ ...original, contextWindow: 32000, maxTokens: 4096 }).contextWindow, 32000);
   assert.equal(inputTokens({ input: 1000, cacheRead: 98000, cacheWrite: 2000, output: 999 }), 101000);
   assert.ok(estimatePayload({ messages: [{ content: '界'.repeat(90000) }] }) > POLICY.requestEstimateLimit);

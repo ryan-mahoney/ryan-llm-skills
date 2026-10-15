@@ -5,13 +5,13 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { createServer } from 'node:http';
-import { installContextBudget } from './policy.mjs';
+import { installContextBudget, estimatePayload } from './policy.mjs';
 
 const root = process.env.SPEC_PI_SDK;
 const sdk = root ? await import(pathToFileURL(join(root, 'dist/index.js'))) : null;
 const skip = sdk ? false : 'Set SPEC_PI_SDK to the installed Pi package for native boundary checks';
 
-async function fixture(t, { compaction = true, seed, toolTurn = false } = {}) {
+async function fixture(t, { compaction = true, seed, toolTurn = false, toolInput = 70000, toolOutput = 30, thinking = '', toolText = 'Pending: retain the source change and evidence.' } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'context-native-'));
   const requests = [];
   const server = createServer(async (req, res) => {
@@ -20,9 +20,9 @@ async function fixture(t, { compaction = true, seed, toolTurn = false } = {}) {
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     const text = 'Goal: preserve input. Constraints: no publication. Pending: implement the assigned fixture; retain existing evidence.';
     const toolCall = toolTurn && requests.length === 1;
-    const chunk = { id: 'fixture', object: 'chat.completion.chunk', created: 1, model: 'large', choices: [{ index: 0, delta: toolCall ? { tool_calls: [{ index: 0, id: 'call_fixture', type: 'function', function: { name: 'fixture_read', arguments: '{}' } }] } : { content: text }, finish_reason: null }] };
+    const chunk = { id: 'fixture', object: 'chat.completion.chunk', created: 1, model: 'large', choices: [{ index: 0, delta: toolCall ? { ...(thinking ? { reasoning_content: thinking } : {}), tool_calls: [{ index: 0, id: 'call_fixture', type: 'function', function: { name: 'fixture_read', arguments: '{}' } }] } : { content: text }, finish_reason: null }] };
     res.write(`data: ${JSON.stringify(chunk)}\n\n`);
-    res.write(`data: ${JSON.stringify({ ...chunk, choices: [{ index: 0, delta: {}, finish_reason: toolCall ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: toolCall ? 70000 : 100, completion_tokens: 30, total_tokens: toolCall ? 70030 : 130 } })}\n\n`);
+    res.write(`data: ${JSON.stringify({ ...chunk, choices: [{ index: 0, delta: {}, finish_reason: toolCall ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: toolCall ? toolInput : 100, completion_tokens: toolCall ? toolOutput : 30, total_tokens: toolCall ? toolInput + toolOutput : 130 } })}\n\n`);
     res.end('data: [DONE]\n\n');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -35,7 +35,7 @@ async function fixture(t, { compaction = true, seed, toolTurn = false } = {}) {
     noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
     systemPrompt: 'Keep all constraints and pending work.', extensionFactories: [pi => { pi.registerProvider('budget-fixture', provider); installContextBudget(pi);
       if (toolTurn) pi.registerTool({ name: 'fixture_read', label: 'Fixture', description: 'Read fixture', parameters: { type: 'object', properties: {} },
-        execute: async () => ({ content: [{ type: 'text', text: 'Pending: retain the source change and evidence.' }], details: {} }) });
+        execute: async () => ({ content: [{ type: 'text', text: toolText }], details: {} }) });
     }, pi => installContextBudget(pi)] });
   await loader.reload(); assert.deepEqual(loader.getExtensions().errors, []);
   const manager = sdk.SessionManager.inMemory(dir);
@@ -57,6 +57,7 @@ test('native Pi compacts retained history before the next response without chang
     }
   } });
   assert.equal(f.session.model.contextWindow, 76000);
+  assert.equal(f.session.model.maxTokens, 65536, 'provider output allowance is preserved');
   assert.equal(f.runtime.getModel('budget-fixture', 'large').contextWindow, 1048576);
   await f.session.prompt('Continue. Preserve input; no publication; implement the assigned fixture.');
   assert.ok(f.manager.getEntries().some(e => e.type === 'compaction'), 'native durable compaction happened');
@@ -101,4 +102,28 @@ test('native Pi compacts between tool calls and retains the pending obligation',
   assert.match(JSON.stringify(f.requests.at(-1)), /evidence/);
   const requests = f.manager.getEntries().filter(e => e.customType === 'context-budget' && e.data.event === 'request');
   assert.equal(requests.length, 2, 'two installers produce only one guard per ordinary request');
+});
+
+
+test('55k input plus a reasoning and tool burst compacts before the request guard', { skip, timeout: 15000 }, async t => {
+  const f = await fixture(t, { toolTurn: true, toolInput: 55000, toolOutput: 12000,
+    thinking: 'thinking '.repeat(6000), toolText: 'source '.repeat(1700), seed: manager => {
+      for (let i = 0; i < 12; i++) {
+        manager.appendMessage({ role: 'user', content: 'source '.repeat(2600), timestamp: Date.now() });
+        manager.appendMessage({ role: 'assistant', content: [{ type: 'text', text: 'Recorded' }], api: 'openai-completions', provider: 'budget-fixture', model: 'large', stopReason: 'stop', usage: { input: 50000, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 50005, cost: {} }, timestamp: Date.now() });
+      }
+    }
+  });
+  f.session.setActiveToolsByName(['fixture_read']);
+  await f.session.prompt('Read the fixture. Preserve the evidence.');
+  const entries = f.manager.getEntries();
+  assert.ok(entries.some(e => e.type === 'compaction'));
+  assert.ok(!entries.some(e => e.customType === 'context-budget' && e.data.blocked));
+  assert.ok(f.requests.length >= 3);
+  assert.ok(estimatePayload(f.requests.at(-1)) < 90000);
+  const uncompacted = { ...f.requests[0], messages: [...f.requests[0].messages,
+    { role: 'assistant', reasoning_content: 'thinking '.repeat(6000) },
+    { role: 'tool', content: 'source '.repeat(1700), tool_call_id: 'call_fixture' }] };
+  assert.ok(estimatePayload(uncompacted) >= 90000, 'without compaction this burst would hit the guard');
+  t.diagnostic(JSON.stringify({ uncompacted_estimate: estimatePayload(uncompacted), first_estimate: estimatePayload(f.requests[0]), final_estimate: estimatePayload(f.requests.at(-1)), http_requests: f.requests.length }));
 });

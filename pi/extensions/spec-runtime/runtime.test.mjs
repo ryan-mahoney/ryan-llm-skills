@@ -907,3 +907,29 @@ test('editor packets use separate durable sessions while preserving checkout cha
   assert.deepEqual(JSON.parse(readFileSync(join(f.packagePath, 'runtime/runs', `${record.id}-editor-sessions.json`), 'utf8')), sessions);
   await runtime.cancel(f.packagePath, undefined, 1000);
 });
+
+
+for (const content of [[], [{ type: 'text', text: 'Partially implemented; pending evidence.' }]]) {
+  test(`length-limited final response is incomplete even with ${content.length ? 'partial text' : 'no text'} and exit zero`, async t => {
+    const f = await fixture(t, `console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'length',content:${JSON.stringify(content)}}}));`);
+    await new Runtime(f.options).start(f.input);
+    const outcome = await f.finished;
+    assert.equal(outcome.state, 'failed');
+    assert.match(outcome.error, /length limit; packet is incomplete/);
+    assert.equal(outcome.stop_reason, 'length');
+    assert.match(outcome.next, /partial work.*bounded continuation/);
+    assert.equal(readFileSync(outcome.full_result_path, 'utf8'), content[0]?.text || '');
+  });
+}
+
+test('native recovery after a length stop can finish without inheriting the earlier failure', async t => {
+  const f = await fixture(t, `
+    console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'length',content:[{type:'text',text:'Partial'}]}}));
+    console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'Recovered'}]}}));
+  `);
+  await new Runtime(f.options).start(f.input);
+  const outcome = await f.finished;
+  assert.equal(outcome.state, 'completed');
+  assert.equal(outcome.error, undefined);
+  assert.equal(outcome.result, 'Recovered');
+});

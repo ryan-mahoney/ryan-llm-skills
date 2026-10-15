@@ -151,8 +151,8 @@ export function summary(record) {
     owner_model: record.owner_model, editor_model: record.editor_model, routing_reason: record.routing_reason,
     environment: record.environment,
     handoff: record.handoff || completionStatus(record), progress: join(record.package, 'runtime/progress.json'),
-    result: record.result, result_truncated: record.result_truncated, full_result_path: record.full_result_path, error: record.error,
-    next: record.handoff?.status === 'handoff_incomplete' ? 'Repair the structured handoff only; preserve code and prior checks. Review/fix remains required.' : record.state === 'running' ? 'await completion event; do not poll' : record.state === 'blocked' ? 'resolve worker termination before another writer' : 'evaluate result; independent step review remains required' };
+    result: record.result, stop_reason: record.stop_reason, result_truncated: record.result_truncated, full_result_path: record.full_result_path, error: record.error,
+    next: record.state === 'failed' && record.stop_reason === 'length' ? 'Inspect preserved partial work and assign a bounded continuation; the packet did not complete. Do not repeat the same assignment unchanged.' : record.handoff?.status === 'handoff_incomplete' ? 'Repair the structured handoff only; preserve code and prior checks. Review/fix remains required.' : record.state === 'running' ? 'await completion event; do not poll' : record.state === 'blocked' ? 'resolve worker termination before another writer' : 'evaluate result; independent step review remains required' };
 }
 // A run holds the writer role while its own record is running (or blocked on a live
 // process group) and nothing has revoked it. Revocation is a marker file so a worker
@@ -318,7 +318,9 @@ export function launch(record, role, prompt, options = {}) {
           finalText = (value.message.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n');
           // A later successful final response can recover a transient provider error.
           // Keep every event in the stream, but classify the final attempt's outcome.
-          failure = lastStop === 'error' || lastStop === 'aborted' ? value.message.errorMessage || lastStop : undefined;
+          failure = lastStop === 'length'
+            ? 'Model response reached its length limit; packet is incomplete. Preserve changes, inspect the partial result, and assign a bounded continuation. Do not treat partial text as completion or retry unchanged.'
+            : lastStop === 'error' || lastStop === 'aborted' ? value.message.errorMessage || lastStop : undefined;
         }
       } catch { /* preserve non-JSON diagnostics on disk */ }
     }
@@ -335,7 +337,7 @@ export function launch(record, role, prompt, options = {}) {
         const truncated = finalText.length > 8000;
         const notice = `\n[Result truncated. Read the needed portion of ${fullResultPath}; do not repeat the assignment.]`;
         resolveDone({ code, signal, result: truncated ? finalText.slice(0, Math.max(0, 8000 - notice.length)) + notice : finalText,
-          result_truncated: truncated, full_result_path: fullResultPath, stream, errors, error, configuration_failure: configurationFailure(error) || (error ? configurationFailure(stderr) : undefined) });
+          result_truncated: truncated, stop_reason: lastStop, full_result_path: fullResultPath, stream, errors, error, configuration_failure: configurationFailure(error) || (error ? configurationFailure(stderr) : undefined) });
       } catch (cause) {
         resolveDone({ code, signal, stream, errors, error: `Cannot preserve full result: ${cause.message}${error ? `; ${error}` : ''}` });
       }
@@ -452,7 +454,7 @@ export class Runtime {
     if (activeGroups(record).length || (record.pid && this.isAlive(record.pid))) {
       record.state = 'blocked'; record.error = 'A managed process group is still alive; the run stays active.';
     } else {
-      record.state = result.error ? 'failed' : 'completed'; record.error = result.error; record.result = result.result;
+      record.state = result.error ? 'failed' : 'completed'; record.error = result.error; record.result = result.result; record.stop_reason = result.stop_reason;
       record.handoff = completionStatus(record, { checkHead: true });
       record.result_truncated = result.result_truncated; record.full_result_path = result.full_result_path; record.finished_at = timestamp();
     }

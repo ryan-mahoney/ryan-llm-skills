@@ -4,14 +4,15 @@ import { randomUUID } from 'node:crypto';
 
 // Working limits, not provider capabilities or prices. Leave headroom below the
 // operator's 100k input ceiling for schemas, token-estimation error and tool bursts.
-export const POLICY = Object.freeze({ contextWindow: 76000, maxTokens: 12000,
+export const POLICY = Object.freeze({ contextWindow: 76000,
   requestEstimateLimit: 90000, toolTextChars: 12000 });
 const installed = new WeakSet();
 
 export function budgetModel(model) {
   if (!model || !Number.isFinite(model.contextWindow) || model.contextWindow <= 0) return model;
-  return { ...model, contextWindow: Math.min(model.contextWindow, POLICY.contextWindow),
-    maxTokens: Math.min(model.maxTokens || POLICY.maxTokens, POLICY.maxTokens) };
+  // Output and thinking budgets have different semantics across providers. This
+  // policy controls retained input; preserve the selected model's output limit.
+  return { ...model, contextWindow: Math.min(model.contextWindow, POLICY.contextWindow) };
 }
 
 // Full provider payload: system prompt, cached conversation, tools and reasoning
@@ -103,7 +104,8 @@ export function installContextBudget(pi) {
   pi.on('message_end', (event) => {
     if (event.message?.role !== 'assistant') return;
     const usage = event.message.usage;
-    record({ event: 'usage', input_tokens: inputTokens(usage), output_tokens: usage?.output ?? null,
+    record({ event: 'usage', provider: event.message.provider, model: event.message.model,
+      input_tokens: inputTokens(usage), output_tokens: usage?.output ?? null,
       cache_read_tokens: usage?.cacheRead ?? null, reasoning_tokens: usage?.reasoning ?? null,
       estimated_input_tokens: lastEstimate, stop_reason: event.message.stopReason,
       usage_available: inputTokens(usage) > 0 });
