@@ -393,3 +393,22 @@ test('createPreferredModels: identifier guard', async t => {
   assert.equal(r.state, 'failed');
   assert.equal(existsSync(join(agentDir, 'spec-sentinel', 'preferred-models.json')), false);
 });
+
+// node --test --test-name-pattern='serialized UTF-8' scripts/spec-observe/model-routes.test.mjs
+test('createPreferredModels: serialized UTF-8 capacity preserves readable data and removal', async t => {
+  const agentDir = mkdtempSync(join(tmpdir(), 'model-routes-test-'));
+  t.after(() => rmSync(agentDir, { recursive: true, force: true }));
+  const dir = join(agentDir, 'spec-sentinel');
+  mkdirSync(dir);
+  const file = join(dir, 'preferred-models.json');
+  const preferred = Array.from({ length: 79 }, (_, i) => ({ provider: 'é'.repeat(100), model: `${i}`.padEnd(300, 'é') }));
+  const content = JSON.stringify({ version: 1, preferred, updated_at: new Date(1000).toISOString() });
+  writeFileSync(file, content);
+  const store = createPreferredModels({ agentDir, now: () => 1000 });
+  assert.equal((await store.read()).state, 'ready');
+  const result = await store.setPreference({ provider: 'é'.repeat(100), model: 'x'.padEnd(300, 'é'), preferred: true });
+  assert.equal(result.reason, 'preference-limit');
+  assert.equal(readFileSync(file, 'utf8'), content);
+  assert.equal((await store.read()).state, 'ready');
+  assert.equal((await store.setPreference({ ...preferred[0], preferred: false })).preferred.length, 78);
+});

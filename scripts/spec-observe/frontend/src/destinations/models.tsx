@@ -23,7 +23,7 @@ import {
   loadCatalog,
   setPreference
 } from '../models-state';
-import { StateNotice, RegionalSkeleton, EmptyState } from '../primitives';
+import { StateNotice, RegionalSkeleton } from '../primitives';
 
 export default function ModelsDestination(props: DestinationProps) {
   const [query, setQuery] = createSignal<string>(props.route.q ?? '');
@@ -139,6 +139,7 @@ export default function ModelsDestination(props: DestinationProps) {
       type="button"
       class="chip"
       aria-pressed={pressed}
+      disabled={catalog().status !== 'ready'}
       onClick={() => setter(!pressed)}
     >
       {label}
@@ -255,20 +256,17 @@ export default function ModelsDestination(props: DestinationProps) {
 
   const providerDetails = (group: CatalogGroup): JSX.Element => {
     const providerKey = group.provider;
-    const expanded = () => providerOverrides()[providerKey] ?? projection().expanded.includes(providerKey);
+    const expanded = () => hasActiveFilter() || (providerOverrides()[providerKey] ?? projection().expanded.includes(providerKey));
     const preferredCount = preferred().filter(p => p.provider === providerKey).length;
-    const ref = (el: HTMLDetailsElement | null) => {
-      if (el) { const value = expanded(); if (value !== el.open) el.open = value; }
-    };
 
     return (
-      <details ref={ref} class="prov-group" onToggle={(e) => {
-        const target = e.currentTarget as HTMLDetailsElement;
-        setProviderOverrides(prev => ({ ...prev, [providerKey]: target.open }));
-      }}>
-        <summary>
+      <details open={expanded()} class="prov-group">
+        <summary onClick={e => {
+          e.preventDefault();
+          if (!hasActiveFilter()) setProviderOverrides(prev => ({ ...prev, [providerKey]: !expanded() }));
+        }}>
           <span class="pname">{group.provider}</span>
-          <span class="pcount">{group.rows.length} models</span>
+          <span class="pcount">{group.rows.length} {group.rows.length === 1 ? 'model' : 'models'}{hasActiveFilter() ? ' match' : ''}</span>
           <Show when={preferredCount > 0}>
             <span class="ppref">{preferredCount} preferred</span>
           </Show>
@@ -300,11 +298,27 @@ export default function ModelsDestination(props: DestinationProps) {
   return (
     <div class="full-page">
       <div class="ms">
+        <Show when={catalog().status === 'failed' && preferencesError() === null}>
+          <StateNotice tone="error" title="Catalog not read.">
+            Availability is unknown until the catalog is read.
+            <button
+              class="ds-btn"
+              type="button"
+              onClick={() => loadCatalog(true)}
+              disabled={catalog().refreshing}
+              aria-busy={catalog().refreshing}
+            >
+              Retry catalog
+            </button>
+          </StateNotice>
+        </Show>
+
         <div class="ms-toolbar">
           <input
             id="find-model"
             class="ds-input"
             type="search"
+            disabled={catalog().status !== 'ready'}
             placeholder="Find model or provider"
             value={query()}
             onInput={(e) => { setQuery(e.currentTarget.value); props.onQuery(e.currentTarget.value); }}
@@ -315,13 +329,11 @@ export default function ModelsDestination(props: DestinationProps) {
         </div>
 
         <p class="ms-meta" id="catalog-meta">
-          <strong>{catalog().models.length} models</strong> from{' '}
-          <strong>{providerCount()}</strong> on{' '}
-          <strong>{catalog().host ?? 'unknown'}</strong> · catalog read{' '}
-          <strong>{formatTime(catalog().read_at)}</strong>
-          {hasActiveFilter() && (
-            <> · <strong>{matchedCount()}</strong> matched</>
-          )}
+          <Show when={catalog().read_at} fallback="No catalog read in this session">
+            <Show when={hasActiveFilter()} fallback={<><strong>{catalog().models.length} models</strong> from <strong>{providerCount()} providers</strong> on <strong>{catalog().host}</strong></>}>
+              <strong>{matchedCount()} models</strong> in <strong>{groups().length} providers</strong> match{query() ? ` “${query()}”` : ' these filters'}
+            </Show> · catalog read <strong>{formatTime(catalog().read_at)}</strong>
+          </Show>
         </p>
 
         <Show when={preferencesError() !== null}>
@@ -332,21 +344,6 @@ export default function ModelsDestination(props: DestinationProps) {
               onClick={() => loadPreferences()}
             >
               Retry preferences
-            </button>
-          </StateNotice>
-        </Show>
-
-        <Show when={catalog().status === 'failed' && preferencesError() === null}>
-          <StateNotice tone="error" title="Catalog load failed.">
-            Catalog unavailable. The provider section shows unavailable states.
-            <button
-              class="ds-btn"
-              type="button"
-              onClick={() => loadCatalog(true)}
-              disabled={catalog().refreshing}
-              aria-busy={catalog().refreshing}
-            >
-              Retry catalog
             </button>
           </StateNotice>
         </Show>
@@ -382,59 +379,34 @@ export default function ModelsDestination(props: DestinationProps) {
           </StateNotice>
         </Show>
 
-        <Show
-          when={prefsLoaded() && preferencesError() === null && preferred().length === 0 && catalog().status === 'ready' && !hasActiveFilter()}
-          fallback={
-            <Show when={hasActiveFilter() && matchedCount() === 0}>
-              <div class="empty-inline">
-                <div>
-                  <strong>No models match this search.</strong>
-                  <p>Try clearing your filters to see all available models.</p>
-                </div>
-                <button
-                  class="ds-btn"
-                  type="button"
-                  onClick={clearFilters}
-                >
-                  Clear search
-                </button>
-              </div>
-            </Show>
-          }
-        >
-          <EmptyState
-            title="No preferred models yet"
-            action={
-              <button
-                class="ds-btn"
-                type="button"
-                onClick={() => document.getElementById('find-model')?.focus()}
-              >
-                Find model
-              </button>
-            }
-          />
+        <Show when={hasActiveFilter() && matchedCount() === 0}>
+          <div class="empty-inline">
+            <div><strong>No models match this search.</strong><p>Try clearing your filters to see all available models.</p></div>
+            <button class="ds-btn" type="button" onClick={clearFilters}>Clear search</button>
+          </div>
         </Show>
 
         <Show when={!hasActiveFilter() || preferredRows().length > 0}>
           <section class="ms-section">
             <div class="section-heading">
-              <h2>Preferred · {preferredRows().length}</h2>
+              <h2>Preferred · {preferredRows().length}{hasActiveFilter() ? ' match' : ''}</h2>
               <span class="muted">Offered in thread and assignment pickers, A–Z</span>
             </div>
-            <Show when={catalog().status === 'loading'}>
-              <div class="ds-callout">Availability unknown; catalog not read</div>
-              <RegionalSkeleton variant="table" rows={preferredRows().length || 3} />
+            <Show when={catalog().status !== 'ready'}>
+              <div class="ds-callout" role="status">Availability unknown until the catalog is read.</div>
             </Show>
-            <Show when={catalog().status !== 'loading'}>
-              {renderPreferredTable()}
+            <Show when={prefsLoaded() && preferencesError() === null && preferred().length === 0 && !hasActiveFilter()} fallback={renderPreferredTable()}>
+              <div class="empty-inline">
+                <div><strong>No preferred models yet</strong><p>Thread and assignment pickers offer only Pi default. Find a model to add it here.</p></div>
+                <button class="ds-btn" type="button" disabled={catalog().status !== 'ready'} onClick={() => document.getElementById('find-model')?.focus()}>Find model</button>
+              </div>
             </Show>
           </section>
         </Show>
 
         <section class="ms-section">
           <div class="section-heading">
-            <h2>All providers · {providerCount()}</h2>
+            <h2>{hasActiveFilter() ? 'Matching providers' : 'All providers'} · {hasActiveFilter() ? groups().length : providerCount()}</h2>
             <span class="muted">Alphabetical</span>
           </div>
           <Show when={catalog().status === 'loading'}>

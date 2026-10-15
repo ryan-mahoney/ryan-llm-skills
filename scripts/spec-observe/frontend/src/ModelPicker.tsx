@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For, Show } from 'solid-js';
+import { createEffect, createSignal, onCleanup, For, Show } from 'solid-js';
 import type { ModelChoice } from './models-state';
 import { pickerOptions, catalog, loadPreferences, loadCatalog, preferred, availabilityMessage } from './models-state';
 
@@ -12,6 +12,7 @@ type Props = {
 };
 
 export default function ModelPicker(props: Props) {
+  let field: HTMLDivElement | undefined;
   const [open, setOpen] = createSignal(false);
   const [activeId, setActiveId] = createSignal('');
   const [typeaheadBuffer, setTypeaheadBuffer] = createSignal('');
@@ -177,6 +178,26 @@ export default function ModelPicker(props: Props) {
     }
   });
 
+  createEffect(() => {
+    if (!open()) return;
+    const dismiss = (event: Event) => {
+      if (!field?.contains(event.target as Node)) closeList();
+    };
+    document.addEventListener('pointerdown', dismiss);
+    document.addEventListener('focusin', dismiss);
+    onCleanup(() => {
+      document.removeEventListener('pointerdown', dismiss);
+      document.removeEventListener('focusin', dismiss);
+    });
+  });
+
+  createEffect(() => {
+    const id = activeId();
+    if (!open()) return;
+    const frame = requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ block: 'nearest' }));
+    onCleanup(() => cancelAnimationFrame(frame));
+  });
+
   const catalogView = () => catalog();
 
   // availabilityMessage is the shared availability-copy owner used by the
@@ -186,7 +207,14 @@ export default function ModelPicker(props: Props) {
   const errorHost = () => catalogView().host ?? 'catalog';
 
   return (
-    <div class="field mfield">
+    <div class="field mfield" ref={field} onKeyDown={e => {
+      if (open() && e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        closeList();
+        document.getElementById(props.id)?.focus();
+      }
+    }}>
       <label id={props.id + '-label'} for={props.id}>Model</label>
       <button
         type="button"
@@ -228,6 +256,7 @@ export default function ModelPicker(props: Props) {
                   aria-selected={opt.selected}
                   aria-disabled={opt.disabled}
                   class={opt.disabled ? 'mopt' : 'mopt ' + ((props.id + '-opt-' + i()) === activeId() ? 'active' : '') + (opt.choice === null ? ' default' : '')}
+                  onMouseDown={e => e.preventDefault()}
                   onClick={() => {
                     if (!opt.disabled) {
                       props.onChange(opt.choice);

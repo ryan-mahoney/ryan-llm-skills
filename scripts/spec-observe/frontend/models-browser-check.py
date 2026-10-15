@@ -21,6 +21,7 @@ import subprocess
 import threading
 import time
 import traceback
+import tempfile
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -147,11 +148,21 @@ def run(url, page):
         cap(page, 'ideal')
         passed('ideal')
 
+        deepseek = page.locator('details.prov-group').filter(has=page.locator('summary .pname', has_text='deepseek'))
+        if deepseek.get_attribute('open') is not None:
+            deepseek.locator('summary').click()
+        page.locator('#find-model').fill('deepseek')
+        expect(deepseek.locator('tbody tr')).to_have_count(2)
+        expect(deepseek).to_have_attribute('open', '')
+        page.locator('#find-model').fill('')
+        expect(deepseek).not_to_have_attribute('open', '')
+        passed('search expands collapsed providers and clearing restores disclosure')
+
         # 2. search+chips: query and capability filters
         page.locator('#find-model').fill('claude')
         page.wait_for_timeout(100)
         meta_text = page.locator('#catalog-meta').text_content()
-        assert 'matched' in meta_text.lower()
+        assert 'match' in meta_text.lower()
         assert page.locator('mark').count() >= 1
         thinking_chip = page.locator('button.chip', has_text='Thinking')
         thinking_chip.click()
@@ -189,9 +200,9 @@ def run(url, page):
         if page.locator('.prefcell button:has-text("Remove preference")').count() > 0:
             page.locator('.prefcell button:has-text("Remove preference")').first.click()
             page.wait_for_timeout(400)
-        expect(page.locator('.empty h2:has-text("No preferred models yet")')).to_be_visible()
-        expect(page.locator('.empty button:has-text("Find model")')).to_be_visible()
-        page.locator('.empty button:has-text("Find model")').click()
+        expect(page.locator('.empty-inline strong:has-text("No preferred models yet")')).to_be_visible()
+        expect(page.locator('.empty-inline button:has-text("Find model")')).to_be_visible()
+        page.locator('.empty-inline button:has-text("Find model")').click()
         page.wait_for_timeout(100)
         expect(page.locator('#find-model')).to_be_focused()
         cap(page, 'empty')
@@ -246,7 +257,7 @@ def run(url, page):
         # 8. catalog error: failed catalog
         control('models-catalog-fail', 'true')
         reload(page)
-        expect(page.locator('.ds-callout:has-text("Catalog load failed")').first).to_be_visible()
+        expect(page.locator('.ds-callout:has-text("Catalog not read")').first).to_be_visible()
         expect(page.locator('.ds-callout button:has-text("Retry catalog")').first).to_be_visible()
         cap(page, 'catalog-error')
         control('models-catalog-fail', 'false')
@@ -275,6 +286,7 @@ def run(url, page):
         reload(page)
         expect(page.locator('.ds-callout:has-text("Connection unavailable")').first).to_be_visible()
         expect(page.locator('.ds-callout button:has-text("Retry connection")').first).to_be_visible()
+        expect(page.get_by_role('button', name='Refresh catalog', exact=True)).to_have_count(0)
         cap(page, 'offline')
         page.unroute('**/api/state*')
         passed('offline')
@@ -418,39 +430,8 @@ def run(url, page):
         assert not report['pageErrors']
         report['status'] = 'passed'
 
-    finally:
-        if held_routes:
-            for r in held_routes:
-                try:
-                    r.abort()
-                except:
-                    pass
-        if reference_server:
-            reference_server.shutdown()
-        if context:
-            context.close()
-        if browser:
-            browser.close()
-        if fixture:
-            try:
-                fixture.terminate()
-                for _ in range(10):
-                    if fixture.poll() is not None:
-                        break
-                    time.sleep(0.5)
-                if fixture.poll() is None:
-                    fixture.kill()
-            except:
-                pass
-        cleanup['fixtureTerminated'] = True
-        cleanup['browserClosed'] = True
-        if fixture_info.get('root'):
-            try:
-                shutil.rmtree(fixture_info['root'])
-                cleanup['temporaryFixtureRootRemoved'] = fixture_info['root']
-            except:
-                pass
-
+    except Exception:
+        raise
 
 def pick_option_label(opt) -> str:
     model = opt.locator('.mid').text_content().strip()
@@ -552,6 +533,9 @@ def run_picker(url, page):
         page.wait_for_timeout(100)
         active = active_option(page)
         assert active.locator('.mid').text_content().strip() == 'k3', 'expected k3 after End'
+        assert active.evaluate("el => { const r=el.getBoundingClientRect(), list=el.closest('ul').getBoundingClientRect(), d=el.closest('dialog').getBoundingClientRect(); return r.top >= Math.max(0,list.top,d.top) && r.bottom <= Math.min(innerHeight,list.bottom,d.bottom); }")
+        assert page.locator('#thread-create').evaluate("el => { const r=el.getBoundingClientRect(), d=el.closest('dialog').getBoundingClientRect(); return r.top >= d.top && r.bottom <= Math.min(innerHeight,d.bottom); }")
+
         page.keyboard.press('Enter')
         page.wait_for_timeout(300)
         expect(page.locator('#thread-new-model')).to_contain_text('k3')
@@ -589,11 +573,24 @@ def run_picker(url, page):
         cap_picker(page, 'typeahead')
         passed('typeahead')
 
+        page.locator('#thread-new-model').click()
+        page.keyboard.press('Tab')
+        expect(page.locator('#thread-new-model-manage')).to_be_focused()
+        page.keyboard.press('Escape')
+        expect(dialog).to_be_visible()
+        expect(page.locator('#thread-new-model')).to_be_focused()
+        expect(page.locator('#thread-new-model-list')).to_have_count(0)
+        page.locator('#thread-new-model').click()
+        dialog.locator('h2').click()
+        expect(page.locator('#thread-new-model-list')).to_have_count(0)
+        passed('footer Escape and outside click dismiss only the picker')
+
         # d. mouse
         pick_close(page)
         page.locator('#thread-new-model').click()
         page.wait_for_selector('#thread-new-model-list')
         glm_opt = page.locator('#thread-new-model-list [role="option"]').filter(has_text='glm-5.3')
+        expect(glm_opt).to_have_attribute('aria-disabled', 'false')
         glm_opt.click()
         page.wait_for_timeout(300)
         expect(page.locator('#thread-new-model')).to_contain_text('glm-5.3')
@@ -658,7 +655,7 @@ def run_picker(url, page):
         page.wait_for_selector('#thread-new-model-list')
         retired = page.locator('#thread-new-model-list [role="option"]').filter(has_text='retired-model')
         assert retired.get_attribute('aria-disabled') == 'true'
-        assert retired.locator('.why').text_content().strip() == 'Not in fixture-host catalog'
+        expect(retired.locator('.why')).to_have_text('Not in fixture-host catalog')
         trigger_text = page.locator('#thread-new-model').text_content().strip()
         retired.dispatch_event('click')
         page.wait_for_timeout(300)
@@ -672,6 +669,7 @@ def run_picker(url, page):
         page.locator('#thread-new-model').click()
         page.wait_for_selector('#thread-new-model-list')
         glm_opt = page.locator('#thread-new-model-list [role="option"]').filter(has_text='glm-5.3')
+        expect(glm_opt).to_have_attribute('aria-disabled', 'false')
         glm_opt.click()
         page.wait_for_timeout(300)
         expect(page.locator('#thread-new-model')).to_contain_text('glm-5.3')
@@ -686,7 +684,7 @@ def run_picker(url, page):
         expect(page.locator('#thread-new-model')).to_contain_text('zai')
         glm_opt = page.locator('#thread-new-model-list [role="option"]').filter(has_text='glm-5.3')
         assert glm_opt.get_attribute('aria-disabled') == 'true'
-        assert glm_opt.locator('.why').text_content().strip() == 'Not in fixture-host catalog'
+        expect(glm_opt.locator('.why')).to_have_text('Not in fixture-host catalog')
         assert error_loc.first.text_content().strip().count('is not in the fixture-host catalog') >= 1
         assert error_loc.first.text_content().strip().count('manage preferred models') >= 1
         cap_picker(page, 'selected-unavailable')
@@ -763,38 +761,6 @@ def run_picker(url, page):
             'error': str(error),
             'traceback': traceback.format_exc(),
         })
-    finally:
-        for r in held_routes:
-            try:
-                r.abort()
-            except:
-                pass
-        if reference_server:
-            reference_server.shutdown()
-        if context:
-            context.close()
-        if browser:
-            browser.close()
-        if fixture:
-            try:
-                fixture.terminate()
-                for _ in range(10):
-                    if fixture.poll() is not None:
-                        break
-                    time.sleep(0.5)
-                if fixture.poll() is None:
-                    fixture.kill()
-            except:
-                pass
-        cleanup['fixtureTerminated'] = True
-        cleanup['browserClosed'] = True
-        if fixture_info.get('root'):
-            try:
-                shutil.rmtree(fixture_info['root'])
-                cleanup['temporaryFixtureRootRemoved'] = fixture_info['root']
-            except:
-                pass
-
 
 def run_conversation(url, page):
     global reference_server
@@ -822,6 +788,7 @@ def run_conversation(url, page):
     def choose(model):
         page.locator('#thread-new-model').click()
         page.wait_for_selector('#thread-new-model-list')
+        expect(page.locator('#thread-new-model-list [role="option"]').filter(has_text=model).first).to_have_attribute('aria-disabled', 'false')
         page.locator('#thread-new-model-list [role="option"]').filter(has_text=model).first.click()
         page.wait_for_timeout(200)
 
@@ -938,6 +905,7 @@ def run_conversation(url, page):
         cap_conv('unavailable')
         control('models-catalog-drop', '')
         open_picker()
+        expect(page.locator('#thread-new-model-list [role="option"]').filter(has_text='Pi default').first).to_have_attribute('aria-disabled', 'false')
         page.locator('#thread-new-model-list [role="option"]').filter(has_text='Pi default').first.click()
         expect(page.locator('.mfield .field-error')).to_have_count(0)
         passed('catalog removal before create refuses and preserves the draft')
@@ -995,33 +963,6 @@ def run_conversation(url, page):
             'error': str(error),
             'traceback': traceback.format_exc(),
         })
-    finally:
-        if reference_server:
-            reference_server.shutdown()
-        if context:
-            context.close()
-        if browser:
-            browser.close()
-        if fixture:
-            try:
-                fixture.terminate()
-                for _ in range(10):
-                    if fixture.poll() is not None:
-                        break
-                    time.sleep(0.5)
-                if fixture.poll() is None:
-                    fixture.kill()
-            except:
-                pass
-        cleanup['fixtureTerminated'] = True
-        cleanup['browserClosed'] = True
-        if fixture_info.get('root'):
-            try:
-                shutil.rmtree(fixture_info['root'])
-                cleanup['temporaryFixtureRootRemoved'] = fixture_info['root']
-            except:
-                pass
-
 
 def run_assignment(url, page):
     global reference_server
@@ -1044,6 +985,7 @@ def run_assignment(url, page):
     def choose(page, model):
         page.locator('#launch-model').click()
         page.wait_for_selector('#launch-model-list')
+        expect(page.locator('#launch-model-list [role="option"]').filter(has_text=model).first).to_have_attribute('aria-disabled', 'false')
         page.locator('#launch-model-list [role="option"]').filter(has_text=model).first.click()
         page.wait_for_timeout(200)
 
@@ -1172,6 +1114,7 @@ def run_assignment(url, page):
         cap_assignment(page, 'unavailable')
         page.locator('#launch-model').click()
         page.wait_for_selector('#launch-model-list')
+        expect(page.locator('#launch-model-list [role="option"]').filter(has_text='Pi default').first).to_have_attribute('aria-disabled', 'false')
         page.locator('#launch-model-list [role="option"]').filter(has_text='Pi default').first.click()
         expect(page.locator('.mfield .field-error')).to_have_count(0)
         expect(page.locator('#launch-model')).to_contain_text('Pi default')
@@ -1240,92 +1183,78 @@ def run_assignment(url, page):
             'error': str(error),
             'traceback': traceback.format_exc(),
         })
-    finally:
-        if reference_server:
-            reference_server.shutdown()
-        if context:
-            context.close()
-        if browser:
-            browser.close()
-        if fixture:
-            try:
-                fixture.terminate()
-                for _ in range(10):
-                    if fixture.poll() is not None:
-                        break
-                    time.sleep(0.5)
-                if fixture.poll() is None:
-                    fixture.kill()
-            except:
-                pass
-        cleanup['fixtureTerminated'] = True
-        cleanup['browserClosed'] = True
-        if fixture_info.get('root'):
-            try:
-                shutil.rmtree(fixture_info['root'])
-                cleanup['temporaryFixtureRootRemoved'] = fixture_info['root']
-            except:
-                pass
-
 
 def main():
     global fixture, reference_server, browser, context, fixture_info
-    if case == 'host-parser':
-        run_host_parser()
-        return
-    fixture = subprocess.Popen(
-        ['node', str(root / 'browser-fixture.mjs')],
-        env={**os.environ, 'SENTINEL_MODELS': '1', **planned_env},
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True
-    )
-    start = time.monotonic()
-    fixture_url = None
-    while fixture.poll() is None and time.monotonic() - start < 10:
-        ready, _, _ = select.select([fixture.stdout], [], [], 1)
-        if ready:
-            line = fixture.stdout.readline()
-            if line.startswith('{'):
-                fixture_info = json.loads(line)
-                fixture_url = fixture_info.get('url')
-                break
-    if not fixture_url:
-        report['status'] = 'failed'
-        report['fixture'] = {'error': 'fixture did not start'}
-        write_receipt()
-        return
-    report['fixture'] = {'url': fixture_url, 'root': fixture_info.get('root')}
-
-    git_output = subprocess.run(['git', '-C', str(checkout), 'rev-parse', 'HEAD'], capture_output=True, text=True)
-    report['observedCommit'] = git_output.stdout.strip() if git_output.returncode == 0 else None
-    git_dirty = subprocess.run(['git', '-C', str(checkout), 'status', '--porcelain'], capture_output=True, text=True)
-    report['dirty'] = bool(git_dirty.stdout.strip())
-
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch()
-            context = browser.new_context(viewport={'width': 1280, 'height': 900})
-            page = context.new_page()
-            page.on('pageerror', lambda e: report['pageErrors'].append(str(e)))
-            page.on('console', lambda c: report['consoleErrors'].append(c.text) if c.type == 'error' else None)
-            page.on('requestfailed', lambda r: report['requestFailures'].append(r.url))
-            if case == 'integrated':
-                run_integrated(fixture_url, page)
-            else:
-                run_conversation(fixture_url, page) if case == 'conversation' else run_picker(fixture_url, page) if case == 'picker' else run_assignment(fixture_url, page) if case == 'assignment' else run(fixture_url, page)
+        if case == 'host-parser':
+            run_host_parser()
+        else:
+            fixture_info = {'root': tempfile.mkdtemp(prefix='sentinel-solid-browser-')}
+            fixture = subprocess.Popen(
+                ['node', str(root / 'browser-fixture.mjs')],
+                env={**os.environ, 'SENTINEL_MODELS': '1', 'SENTINEL_FIXTURE_ROOT': fixture_info['root'], **planned_env},
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            )
+            deadline = time.monotonic() + 10
+            fixture_url = None
+            while fixture.poll() is None and time.monotonic() < deadline:
+                ready, _, _ = select.select([fixture.stdout], [], [], 1)
+                if ready:
+                    line = fixture.stdout.readline()
+                    if line.startswith('{'):
+                        fixture_info = json.loads(line)
+                        fixture_url = fixture_info.get('url')
+                        break
+            if not fixture_url:
+                raise RuntimeError('fixture did not start')
+            report['fixture'] = {'url': fixture_url, 'root': fixture_info.get('root')}
+            report['observedCommit'] = subprocess.run(['git', '-C', str(checkout), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+            report['dirty'] = bool(subprocess.run(['git', '-C', str(checkout), 'status', '--porcelain'], capture_output=True, text=True).stdout.strip())
+            with sync_playwright() as p:
+                try:
+                    browser = p.chromium.launch()
+                    context = browser.new_context(viewport={'width': 1280, 'height': 900})
+                    page = context.new_page()
+                    page.on('pageerror', lambda e: report['pageErrors'].append(str(e)))
+                    page.on('console', lambda c: report['consoleErrors'].append(c.text) if c.type == 'error' else None)
+                    page.on('requestfailed', lambda r: report['requestFailures'].append(r.url))
+                    runners = {'models': run, 'picker': run_picker, 'conversation': run_conversation, 'assignment': run_assignment, 'integrated': run_integrated}
+                    runners[case](fixture_url, page)
+                finally:
+                    if context:
+                        context.close()
+                    if browser:
+                        browser.close()
+                    cleanup['browserClosed'] = True
+    except Exception as error:
+        report['status'] = 'failed'
+        report.setdefault('failures', []).append({'error': str(error), 'traceback': traceback.format_exc()})
     finally:
+        if reference_server:
+            reference_server.shutdown()
+            reference_server.server_close()
+        if fixture:
+            fixture.terminate()
+            try:
+                fixture.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                fixture.kill()
+                fixture.wait(timeout=5)
+            cleanup['fixtureTerminated'] = fixture.poll() is not None
+        if fixture_info.get('root'):
+            shutil.rmtree(fixture_info['root'], ignore_errors=True)
+            cleanup['temporaryFixtureRootRemoved'] = fixture_info['root']
         report['cleanup'] = cleanup
-        if case in ('models', 'picker', 'assignment', 'conversation'):
+        if case == 'integrated':
+            update_step10_receipt('integrated', report.copy())
+        elif case == 'host-parser':
+            if report['status'] != 'passed':
+                update_step10_receipt('hostParser', report.copy())
+        else:
             write_receipt()
-        print(json.dumps({
-            'status': report['status'],
-            'elapsed_seconds': round(time.monotonic() - started, 3),
-            'scenarios': report['scenarios'],
-            'captures': report['captures'],
-            'receipt_path': str(receipt_path),
-            'dirty': report['dirty'],
-        }, indent=2))
+        print(json.dumps({'status': report['status'], 'elapsed_seconds': round(time.monotonic() - started, 3), 'scenarios': report['scenarios'], 'receipt_path': str(receipt_path)}, indent=2))
+    return 0 if report['status'] == 'passed' else 1
 
 
 def run_host_parser():
@@ -1408,6 +1337,7 @@ import { createModelCatalog } from "__ROUTES_PATH__";
         'status': data.get('status', 'failed')
     }
     update_step10_receipt('hostParser', payload)
+    report['status'] = payload['status']
 
 
 def run_integrated(url, page):
@@ -1437,12 +1367,14 @@ def run_integrated(url, page):
     def choose(model):
         page.locator('#thread-new-model').click()
         page.wait_for_selector('#thread-new-model-list')
+        expect(page.locator('#thread-new-model-list [role="option"]').filter(has_text=model).first).to_have_attribute('aria-disabled', 'false')
         page.locator('#thread-new-model-list [role="option"]').filter(has_text=model).first.click()
         page.wait_for_timeout(200)
 
     def choose_launch(model):
         page.locator('#launch-model').click()
         page.wait_for_selector('#launch-model-list')
+        expect(page.locator('#launch-model-list [role="option"]').filter(has_text=model).first).to_have_attribute('aria-disabled', 'false')
         page.locator('#launch-model-list [role="option"]').filter(has_text=model).first.click()
         page.wait_for_timeout(200)
 
@@ -1468,14 +1400,6 @@ def run_integrated(url, page):
 
     def model_fact():
         return page.locator('#launch-review .launch-contract [data-fact=model] dd')
-
-    def cap_assignment(name):
-        for width in (1280, 1600):
-            page.set_viewport_size({'width': width, 'height': 900})
-            page.wait_for_timeout(200)
-            path = browser_evidence / f'assignment-{name}@{width}.png'
-            page.screenshot(path=str(path))
-            report['captures'].append(str(path))
 
     def fill_and_save(title, content):
         page.locator('#launch-brief-title').fill(title)
@@ -1516,13 +1440,9 @@ def run_integrated(url, page):
             reference_server.shutdown()
         return reference_captures
 
-    reference_captures = capture_references()
-    scenarios_passed = True
-
-    # Disable stale-launch so the reviewed launch can succeed
-    control('stale-launch', 'false')
-
     try:
+        reference_captures = capture_references()
+        control('stale-launch', 'false')
         # 1. preference-enable
         page.goto(url + '/#/models', wait_until='domcontentloaded')
         zai_switch = page.locator('input.switch[aria-label="Preferred: glm-4.7 via zai"]')
@@ -1563,12 +1483,18 @@ def run_integrated(url, page):
             page.locator('#thread-create').click()
         assert response.value.ok
         created = posts_of('create')[-1]
-        assert created['input'].get('model') == {'provider': 'zai', 'model': 'glm-4.7'}
+        assert created['input'].get('model') == {'provider': 'zai', 'model': 'glm-4.7'}, created['input']
         assert control('')['createdThreads'][-1]['model'] == {'provider': 'zai', 'model': 'glm-4.7'}
         created_id = created['result']['thread_id']
         page.wait_for_url(re.compile(r'#/conversations\?ws=fixture&id=' + re.escape(created_id)))
         page.wait_for_selector('.model-line')
         assert 'glm-4.7' in model_line() and 'zai' in model_line()
+        page.locator('#thread-draft').fill('Fixture model handoff')
+        page.locator('#thread-send').click()
+        page.wait_for_timeout(300)
+        rpc = control('')['modelRpcCalls'][-1]['args']
+        assert rpc[rpc.index('--provider') + 1] == 'zai'
+        assert rpc[rpc.index('--model') + 1] == 'glm-4.7'
         cap_integrated('created-header')
         passed('create-explicit')
 
@@ -1634,6 +1560,12 @@ def run_integrated(url, page):
         assert last_launch['input'].get('provider') == 'zai' and last_launch['input'].get('model') == 'glm-4.7'
         entry = next((d for d in control('')['resolverDiagnostics'] if d.get('name') == 'dispatchLaunch'), None)
         assert entry is not None and entry.get('matched') is True
+        assert last_launch['persisted']['provider'] == 'zai'
+        assert last_launch['persisted']['model'] == 'glm-4.7'
+        launch_args = next(c['args'] for c in reversed(control('')['modelTmuxCalls']) if 'new-session' in c['args'])
+        assert launch_args[launch_args.index('--provider') + 1] == 'zai'
+        assert launch_args[launch_args.index('--model') + 1] == 'glm-4.7'
+
         cap_integrated('assignment-launched')
         passed('assignment-launch')
 
@@ -1664,6 +1596,7 @@ def run_integrated(url, page):
         # 11. selected-missing
         page.locator('#thread-new-model').click()
         page.wait_for_selector('#thread-new-model-list')
+        expect(page.locator('#thread-new-model-list [role="option"]').filter(has_text='deepseek-v4-pro').first).to_have_attribute('aria-disabled', 'false')
         page.locator('#thread-new-model-list [role="option"]').filter(has_text='deepseek-v4-pro').first.click()
         page.wait_for_timeout(200)
         control('models-catalog-drop', 'deepseek|deepseek-v4-pro')
@@ -1713,41 +1646,6 @@ def run_integrated(url, page):
             'traceback': traceback.format_exc(),
         })
 
-    finally:
-        # Cleanup matching run_conversation
-        for r in held_routes:
-            try:
-                r.abort()
-            except:
-                pass
-        if reference_server:
-            reference_server.shutdown()
-        if context:
-            context.close()
-        if browser:
-            browser.close()
-        if fixture:
-            try:
-                fixture.terminate()
-                for _ in range(10):
-                    if fixture.poll() is not None:
-                        break
-                    time.sleep(0.5)
-                if fixture.poll() is None:
-                    fixture.kill()
-            except:
-                pass
-        cleanup['fixtureTerminated'] = True
-        cleanup['browserClosed'] = True
-        if fixture_info.get('root'):
-            try:
-                shutil.rmtree(fixture_info['root'])
-                cleanup['temporaryFixtureRootRemoved'] = fixture_info['root']
-            except:
-                pass
-        report['cleanup'] = cleanup
-        update_step10_receipt('integrated', report.copy())
-
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

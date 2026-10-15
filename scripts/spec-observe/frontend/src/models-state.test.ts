@@ -364,3 +364,26 @@ test('store projection: a retained preference stays unknown while the catalog re
   assert.equal(store.catalog().status, 'failed');
   assert.equal(failedProjection.preferred[0].availability, 'unknown');
 });
+
+// node --import tsx --test --test-name-pattern='refresh failure' src/models-state.test.ts
+test('store: refresh failure disables retained choices until recovery', async () => {
+  const transport = new FakeTransport();
+  const store = createModelsStore({ transport, now: clock });
+  const choice = { provider: 'P1', model: 'M1' };
+  const reply = { host: 'fixture', read_at: fixedDate.toISOString(), models: [{ ...choice, context: '1M', max_out: '8K', thinking: true, images: false }] };
+  let pending = store.loadCatalog();
+  transport.resolveGetJson(reply);
+  await pending;
+  assert.equal(availabilityOf(choice, store.catalog()), 'available');
+  pending = store.loadCatalog(true);
+  assert.equal(availabilityOf(choice, store.catalog()), 'unknown');
+  assert.equal(pickerOptions({ preferred: [choice], selected: choice, catalog: store.catalog() })[1].disabled, true);
+  transport.rejectGetJson(new Error('catalog-unavailable'));
+  await pending;
+  assert.equal(store.catalog().status, 'failed');
+  assert.equal(availabilityOf(choice, store.catalog()), 'unknown');
+  pending = store.loadCatalog(true);
+  transport.resolveGetJson(reply);
+  await pending;
+  assert.equal(availabilityOf(choice, store.catalog()), 'available');
+});

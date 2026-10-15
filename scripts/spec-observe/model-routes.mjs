@@ -42,19 +42,13 @@ function validateYesNo(value) {
 export function parseModelCatalog(text) {
   const lines = text.split(/\r?\n/);
   const nonBlankLines = [];
-  let headerFound = false;
 
   for (const line of lines) {
     if (line.trim().length === 0) continue;
-    if (!headerFound) {
-      headerFound = true;
-      nonBlankLines.push(line);
-    } else {
-      nonBlankLines.push(line);
-    }
+    nonBlankLines.push(line);
   }
 
-  if (!headerFound || nonBlankLines.length === 0) {
+  if (nonBlankLines.length === 0) {
     throw new Error('Missing header');
   }
 
@@ -305,6 +299,9 @@ export function createPreferredModels({ agentDir, now } = {}) {
     try {
       await mkdir(dir, { recursive: true, mode: 0o700 });
       const content = JSON.stringify({ version: 1, preferred: newPreferred, updated_at: nowIso });
+      if (Buffer.byteLength(content, 'utf8') > PREFERRED_LIMITS.bytes) {
+        return { state: 'failed', reason: 'preference-limit' };
+      }
       await writeFileAtomic(file, content);
     } catch {
       return { state: 'failed', reason: 'preferences-unavailable' };
@@ -343,7 +340,7 @@ async function boundedBodyReader(stream, maxBytes) {
         stream.off('data', onData);
         stream.off('end', end);
         stream.off('error', end);
-        stream.destroy();
+        stream.resume();
         resolve({ error: 'oversize' });
       } else {
         chunks.push(Buffer.from(chunk));

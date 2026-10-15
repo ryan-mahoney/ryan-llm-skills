@@ -647,7 +647,7 @@ export default function App() {
         : route().dest === 'workspaces'
           ? <button class="ds-btn" type="button" aria-busy={catalogPending()} onClick={() => void loadCatalog()}>Refresh workspaces</button>
           : route().dest === 'models'
-            ? <button class="ds-btn" type="button" aria-busy={modelsCatalog().refreshing} disabled={modelsCatalog().refreshing} onClick={() => loadModelsCatalog(true)}>Refresh catalog</button>
+            ? <Show when={live() && !error() && token() && modelsCatalog().status === 'ready' && !modelsCatalog().stale}><button class="ds-btn" type="button" aria-busy={modelsCatalog().refreshing} disabled={modelsCatalog().refreshing} onClick={() => loadModelsCatalog(true)}>Refresh catalog</button></Show>
             : route().dest === 'agents'
               ? <><button id="launch-agent-action" class="ds-btn ds-btn--primary" type="button" onClick={prepareAgentAssignment}>Launch agent</button><button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button></>
               : route().dest === 'conversations'

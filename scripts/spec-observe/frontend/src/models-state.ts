@@ -396,23 +396,7 @@ export function createModelsStore(options?: { transport?: ModelsTransport; now?:
     if (loadCatalogPromise) return loadCatalogPromise;
 
     const currentCatalog = catalog();
-    if (!currentCatalog.read_at) {
-      setCatalog({
-        status: 'loading',
-        host: null,
-        read_at: null,
-        failed_at: null,
-        stale: false,
-        refreshing: true,
-        error: null,
-        models: []
-      });
-    } else {
-      setCatalog({
-        ...currentCatalog,
-        refreshing: true
-      });
-    }
+    setCatalog({ ...currentCatalog, status: 'loading', refreshing: true, error: null });
 
     const url = refresh ? '/api/models/catalog?refresh=1' : '/api/models/catalog';
     loadCatalogPromise = transport.getJson<CatalogReply>(url)
@@ -420,21 +404,13 @@ export function createModelsStore(options?: { transport?: ModelsTransport; now?:
         setCatalog(catalogFromReply(result, now()));
       })
       .catch(err => {
-        setCatalog(prev => {
-          if (prev.status === 'ready') {
-            return { ...prev, refreshing: false, error: err instanceof Error ? err.message : String(err) };
-          }
-          return {
-            status: 'failed',
-            host: null,
-            read_at: null,
-            failed_at: now().toISOString(),
-            stale: false,
-            refreshing: false,
-            error: err instanceof Error ? err.message : String(err),
-            models: []
-          };
-        });
+        setCatalog(prev => ({
+          ...prev,
+          status: 'failed',
+          failed_at: now().toISOString(),
+          refreshing: false,
+          error: err instanceof Error ? err.message : String(err)
+        }));
       })
       .finally(() => {
         loadCatalogPromise = null;

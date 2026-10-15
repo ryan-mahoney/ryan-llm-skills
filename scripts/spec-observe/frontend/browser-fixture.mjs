@@ -3,6 +3,7 @@ import {createServer} from 'node:http';
 import {mkdtemp,realpath,mkdir,readFile,writeFile,rm,rename,access} from 'node:fs/promises';
 import {tmpdir,hostname} from 'node:os';
 import {join} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
 import {execFileSync,spawn} from 'node:child_process';
 import {createDashboardServer} from '../dashboard.mjs';
@@ -20,11 +21,11 @@ const epicPlanning=process.env.SENTINEL_EPIC_PLANNING==='1';
 const filesFixture=process.env.SENTINEL_REPOSITORY_FILES==='1';
 const modelsFixture=process.env.SENTINEL_MODELS==='1';
 const handoffIntegration=process.env.SENTINEL_HANDOFF_INTEGRATION==='1'&&(plannedLaunch||specsReadiness||epicPlanning);
-const root=await realpath(await mkdtemp(join(tmpdir(),'sentinel-solid-browser-')));
+const root=await realpath(process.env.SENTINEL_FIXTURE_ROOT??await mkdtemp(join(tmpdir(),'sentinel-solid-browser-')));
 // Real final-integration resolution reads HOME and PATH: isolate both to this
 // fixture root so the real catalog sees root/.agents skills and the fake pi
 // file, never the live operator home.
-if(handoffIntegration){process.env.HOME=root;process.env.PATH=`${root}:${process.env.PATH??''}`;}
+if(handoffIntegration||modelsFixture){process.env.HOME=root;process.env.PATH=`${root}:${process.env.PATH??''}`;}
 const storage=join(root,'storage');await setupStorage(storage);
 // Models fixture (gated by SENTINEL_MODELS=1)
 let modelsReadAt=Date.now();
@@ -290,8 +291,15 @@ async function handoffTmuxRun(socketPath,args){
  return {ok:true,code:0,stdout,stderr:''};
 }
 const handoffPsRun=()=>({stdout:'',complete:true});
-const integrationCatalog=handoffIntegration?createReferenceCatalog({home:root,agentDir:join(root,'agent')}):null;
-const handoffService=handoffIntegration?createDiscussionService({root:storage,agentDir:join(root,'agent'),referenceCatalog:integrationCatalog,assignmentAdapters:{tmuxRun:handoffTmuxRun,observationProbes:{tmuxRun:handoffTmuxRun,psRun:handoffPsRun}}}):null;
+const integrationCatalog=(handoffIntegration||modelsFixture)?createReferenceCatalog({home:root,agentDir:join(root,'agent')}):null;
+const modelRpcCalls=[];
+const modelSpawn=(command,args,options)=>{
+ if(command!=='pi')return spawn(command,args,options);
+ modelRpcCalls.push({command,args:[...args]});
+ const child=spawn(process.execPath,[fileURLToPath(new URL('../../workspaces/fixtures/fake-pi-rpc.mjs',import.meta.url)),...args],options);
+ return child;
+};
+const handoffService=(handoffIntegration||modelsFixture)?createDiscussionService({...modelsFixture?{spawn:modelSpawn}:{},root:storage,agentDir:join(root,'agent'),referenceCatalog:modelsFixture?referenceCatalog:integrationCatalog,assignmentAdapters:{tmuxRun:handoffTmuxRun,observationProbes:{tmuxRun:handoffTmuxRun,psRun:handoffPsRun}}}):null;
 const integrationSessionControl=handoffIntegration?createSessionControl({storageRoot:storage,transport:{run:handoffTmuxRun}}):null;
 let integrationPublishChain=Promise.resolve();
 function publishIntegrationSnapshot(){
@@ -355,6 +363,7 @@ const thread1='11111111-1111-4111-8111-111111111111',thread2='22222222-2222-4222
 // thread3 stores a worktree path that maps to the fixture-docs checkout and is
 // displayed as the stored path, never as an inferred repository id.
 let threads=[{thread_id:thread1,workspace_id:'fixture',title:'Discussion one',state:'idle',queue:[],attention:null,queue_paused:false,history_only:false,generation:1,updated_at:new Date().toISOString(),target:{kind:'repository',repository_id:'fixture-repo'}},{thread_id:thread2,workspace_id:'fixture',title:'Discussion two',state:'idle',queue:[],attention:null,queue_paused:false,history_only:false,generation:1,target:{kind:'workspace'}},{thread_id:thread3,workspace_id:'fixture',title:'Discussion worktree',state:'idle',queue:[],attention:null,queue_paused:false,history_only:false,generation:1,target:{kind:'worktree',path:docsCheckout}}];
+if(modelsFixture)threads=await Promise.all(threads.map(({title,target})=>handoffService.create({workspace_id:'fixture',title,target})));
 let entries=[{id:'entry-1',timestamp:new Date().toISOString(),message:{role:'assistant',content:[{type:'text',text:'Ready to discuss. <script>unsafe()</script>'}]}}];
 let localOperator=false;
 let tick=0,staleLaunch=!plannedLaunch,failSend=false,delaySend=false,delayBrief=false,delayDispatchBrief=false,failDispatchBrief=false,delayDispatchSuggestions=false;
@@ -469,7 +478,20 @@ const fixtureDiscussion={
  subscribe({thread_id},callback){subscribers.add({thread_id,callback});const current=()=>threads.find(t=>t.thread_id===thread_id);const timer=setInterval(()=>callback({type:'state',event:copied(current()??{}),workspace_id:'fixture',thread_id,generation:1}),700);return ()=>{clearInterval(timer);for(const item of subscribers)if(item.callback===callback)subscribers.delete(item);};},
 };
 const observedDispatch=name=>async input=>{const entry={name,input};posts.push(entry);try{const result=await handoffService[name](input);entry.result=result;return result;}catch(error){entry.error={code:error?.code??null,message:error?.message??String(error)};throw error;}};
-const discussion=handoffIntegration?{...fixtureDiscussion,list:observedDispatch('list'),prepareSpecTarget:observedDispatch('prepareSpecTarget'),dispatchSuggestions:observedDispatch('dispatchSuggestions'),dispatchSaveBrief:observedDispatch('dispatchSaveBrief'),dispatchPreview:observedDispatch('dispatchPreview'),dispatchLaunch:observedDispatch('dispatchLaunch')}:fixtureDiscussion;
+const observedModel=name=>async input=>{
+ const entry={name,input};posts.push(entry);
+ try{
+  const result=await handoffService[name](input);entry.result=result;
+  if(name==='create')createdThreads.push(JSON.parse(await readFile(join(workspace.directory,'threads',`${result.thread_id}.json`),'utf8')));
+  if(name==='dispatchLaunch'){
+   const record=JSON.parse(await readFile(join(workspace.directory,'assignments',`${input.assignment_id}.json`),'utf8'));
+   entry.persisted=record;
+   resolverDiagnostics.push({name,matched:record.contract_digest===input.expectedDigest,record});
+  }
+  return result;
+ }catch(error){entry.error={code:error?.code??null,message:error?.message??String(error)};throw error;}
+};
+const discussion=modelsFixture?{...handoffService,...Object.fromEntries(['create','send','dispatchSuggestions','dispatchSaveBrief','dispatchPreview','dispatchLaunch','prepareSpecTarget'].map(name=>[name,observedModel(name)]))}:handoffIntegration?{...fixtureDiscussion,list:observedDispatch('list'),prepareSpecTarget:observedDispatch('prepareSpecTarget'),dispatchSuggestions:observedDispatch('dispatchSuggestions'),dispatchSaveBrief:observedDispatch('dispatchSaveBrief'),dispatchPreview:observedDispatch('dispatchPreview'),dispatchLaunch:observedDispatch('dispatchLaunch')}:fixtureDiscussion;
 // Result-case epic inventory: the bound planning result returns to this epic
 // and offers the next independent member while its launch runs.
 const plannedEpic={workspace:'fixture',epic:'demo',title:'Demo epic',state:'active',next:'other-browser',members:[{name:'base',package:'base',workspace:'fixture',status:specsReadiness?'merged':'prepared',requires:[],waiting_on:[],attention:false,planning:{prepared:true,step_count:2,preparation:{outcome:'prepared',reported_at:'2026-10-09T12:00:00Z',source:'spec-prepare.md',read:'ok',bytes:80},decision:null,receipts:[]}},{name:'browser',package:'browser',workspace:'fixture',status:'prepared',requires:['base'],waiting_on:[],attention:false,planning:{prepared:true,step_count:3,preparation:{outcome:'prepared',reported_at:'2026-10-10T12:00:00Z',source:'spec-prepare.md',read:'ok',bytes:120},decision:null,receipts:[]}},{name:'other-browser',package:'other-browser',workspace:'fixture',status:'proposed',requires:[],waiting_on:[],attention:false,planning:{proposal:false,prepared:false,step_count:0,preparation:{outcome:'missing'},decision:null,receipts:[]}}],summary:{total:3,merged:0,complete:0,attention:0},coverage:{state:'complete',reasons:[]}};
@@ -675,7 +697,7 @@ const server=createServer(async(req,res)=>{
   if(modelsFixture&&action==='models-preferences-empty')await writeFile(join(root,'agent','spec-sentinel','preferred-models.json'),url.searchParams.get('value')==='true'?`{"version":1,"preferred":[],"updated_at":"2026-10-14T14:31:00.000Z"}`:modelsPreferredSeed);
   if(modelsFixture&&action==='models-catalog-drop')modelsCatalogDrop=url.searchParams.get('value')||'';
   const modelsState=modelsFixture?{catalogFail:modelsCatalogFail,drop:modelsCatalogDrop,readAt:new Date(modelsReadAt).toISOString(),stale:Date.now()-modelsReadAt>24*60*60*1000}:null;
-  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({...packageIdentity,posts,resolverDiagnostics,threads,createdThreads,tick,boundary,threadControls:{holdThreads,holdThreadsWorkspace,failThreads,longHistory,incompleteTail,invalidRecords,listFailStatus,historyFailStatus,responseState},subscribedThreadIds:[...new Set([...subscribers].map(item=>item.thread_id))],createControls:{delayCreate,failCreate},session:{identity:sessionIdentity,ended:sessionEnded},terminal:{state:terminalState,delayMs:terminalDelayMs,openDelayMs:terminalOpenDelayMs,failAsset:terminalFailAsset,assignment:terminalAssignment,counts:terminalCounts},review:{holdDispatchPreview,holdDispatchLaunch,dispatchPreviewRefusal,dispatchLaunchRefusal,staleLaunch,holdingRun:reviewHoldingRun?.assignment_id??null},launch:{outcome:dispatchLaunchOutcome,published:[...launchedAssignments.keys()]},diagnostics:{resolvers:resolverDiagnostics},boundaryLog:boundaryLog.slice(-60),active:[...activeBoundary.values()],launchResolutions:Object.fromEntries(launchResolutions),briefWritesPending,completedBriefWrites,integration:handoffIntegration?{enabled:true,processStarts:handoffNewSessions,sessions:[...handoffSessions.values()].map(session=>({session:session.name,socket:session.socketPath,assignment_id:session.assignmentId,ended:session.ended})),tmuxCalls:handoffTmuxCalls.length}:{enabled:false},models:modelsState,...(controlResult??{})}));return;
+  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({...packageIdentity,posts,resolverDiagnostics,threads,createdThreads,modelRpcCalls,modelTmuxCalls:handoffTmuxCalls,tick,boundary,threadControls:{holdThreads,holdThreadsWorkspace,failThreads,longHistory,incompleteTail,invalidRecords,listFailStatus,historyFailStatus,responseState},subscribedThreadIds:[...new Set([...subscribers].map(item=>item.thread_id))],createControls:{delayCreate,failCreate},session:{identity:sessionIdentity,ended:sessionEnded},terminal:{state:terminalState,delayMs:terminalDelayMs,openDelayMs:terminalOpenDelayMs,failAsset:terminalFailAsset,assignment:terminalAssignment,counts:terminalCounts},review:{holdDispatchPreview,holdDispatchLaunch,dispatchPreviewRefusal,dispatchLaunchRefusal,staleLaunch,holdingRun:reviewHoldingRun?.assignment_id??null},launch:{outcome:dispatchLaunchOutcome,published:[...launchedAssignments.keys()]},diagnostics:{resolvers:resolverDiagnostics},boundaryLog:boundaryLog.slice(-60),active:[...activeBoundary.values()],launchResolutions:Object.fromEntries(launchResolutions),briefWritesPending,completedBriefWrites,integration:handoffIntegration?{enabled:true,processStarts:handoffNewSessions,sessions:[...handoffSessions.values()].map(session=>({session:session.name,socket:session.socketPath,assignment_id:session.assignmentId,ended:session.ended})),tmuxCalls:handoffTmuxCalls.length}:{enabled:false},models:modelsState,...(controlResult??{})}));return;
  }
  const terminalAsset=/^\/api\/assignment-terminal\/([^/]+)\/([^/]+)$/.exec(url.pathname);
  if(url.pathname==='/api/assignment-terminal/open'||terminalAsset){await handleTerminalRequest(req,res,url,terminalAsset);return;}
@@ -743,7 +765,7 @@ const timer=setInterval(()=>{
 console.log(JSON.stringify({url:`http://127.0.0.1:${server.address().port}`,root,checkout,secondCheckout,otherPackage:otherPkg,...packageIdentity,thread1,thread2,thread3,worktreeTarget:docsCheckout,integration:handoffIntegration}));
 async function close(){
  clearInterval(timer);
- if(handoffIntegration){
+ if(handoffIntegration||modelsFixture){
   await integrationPublishChain.catch(()=>{});
   if(handoffService)await handoffService.close().catch(()=>{});
   for(const session of handoffSessions.values())endHandoffSession(session);
