@@ -250,7 +250,7 @@ export function resolveEffectiveUserBusEnvironment(options = {}) {
   } else {
     const parsed = parseUnixPathAddress(explicitBus);
     if (parsed === null) {
-      return refusal('refused', 'invalid-address', `DBUS_SESSION_BUS_ADDRESS=${explicitBus} is not a supported unix:path=... address; fix or unset it so unix:path=${join(xdgPath, 'bus')} is derived`, {
+      return refusal('refused', 'invalid-address', `explicit DBUS_SESSION_BUS_ADDRESS is not a supported unix:path=... address; fix or unset it so unix:path=${join(xdgPath, 'bus')} is derived`, {
         uid,
         xdgRuntimeDir: { path: xdgPath, source: xdgSource },
       });
@@ -264,11 +264,13 @@ export function resolveEffectiveUserBusEnvironment(options = {}) {
     const remedy =
       busSource === 'derived'
         ? `user session bus ${busPath} is ${BUS_ISSUES[socket.reason]}; ensure the user systemd instance is running (loginctl enable-linger) before launching contained workers`
-        : `DBUS_SESSION_BUS_ADDRESS=${busValue} does not resolve to a usable same-user socket (${socket.reason}); fix or unset it so unix:path=${join(xdgPath, 'bus')} is derived`;
+        : `explicit DBUS_SESSION_BUS_ADDRESS does not resolve to a usable same-user socket (${socket.reason}); fix or unset it so unix:path=${join(xdgPath, 'bus')} is derived`;
     return refusal(status, socket.reason, remedy, {
       uid,
       xdgRuntimeDir: { path: xdgPath, source: xdgSource },
-      dbusSessionBusAddress: { value: busValue, source: busSource, socketPath: busPath },
+      dbusSessionBusAddress: busSource === 'explicit'
+        ? { source: busSource }
+        : { value: busValue, source: busSource, socketPath: busPath },
     });
   }
 

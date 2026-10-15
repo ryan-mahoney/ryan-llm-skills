@@ -590,6 +590,22 @@ test('wave resources: host check never reports passed bus credentials', { timeou
   assert.equal(Object.hasOwn(result.bus.dbusSessionBusAddress, 'value'), false);
 });
 
+for (const [label, address, reason] of [
+  ['malformed address', 'unix:abstract=REVIEW_SECRET_NOT_FOR_STATUS', 'invalid-address'],
+  ['unusable explicit socket', 'unix:path=/REVIEW_SECRET_NOT_FOR_STATUS/bus', 'missing'],
+]) {
+  test(`wave resources: host refusal never reports credentials from ${label}`, { timeout: CASE_TIMEOUT_MS }, async t => {
+    const fixture = await hostFixture(t);
+    const env = { XDG_RUNTIME_DIR: fixture.runtimeDir, DBUS_SESSION_BUS_ADDRESS: address };
+    const result = await checkRuntimeHost(hostOptions(fixture, hostTransport(fixture).run, { env }));
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 'refused');
+    assert.equal(result.reason, `bus-${reason}`);
+    assert.equal(result.bus.reason, reason);
+    assert.equal(JSON.stringify(result).includes('REVIEW_SECRET_NOT_FOR_STATUS'), false);
+  });
+}
+
 test('wave resources: setup installs the owned policy and slice atomically and verifies the slice', { timeout: CASE_TIMEOUT_MS }, async t => {
   const fixture = await hostFixture(t);
   const { run, calls } = hostTransport(fixture, { bwrapAvailable: false });
