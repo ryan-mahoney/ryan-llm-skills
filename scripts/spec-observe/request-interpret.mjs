@@ -62,7 +62,7 @@ function isPlainObject(value) {
 // A well-formed typed ref: one known type, a non-empty payload, and never a
 // path form (no absolute paths, '..', backslash, '~' or drive letters).
 // material: refs fix their payload to plans/<name>.md.
-function isTypedRef(value) {
+export function isTypedRef(value) {
   if (typeof value !== "string" || value === "" || CONTROL.test(value)) return false;
   const colon = value.indexOf(":");
   if (colon <= 0) return false;
@@ -79,7 +79,7 @@ const refType = (value) => (typeof value === "string" ? value.slice(0, value.ind
 
 // Input validation, in request-actions.mjs refusal style: static reasons, no
 // echo of the offending value, and always before any spawn.
-function canonicalIdentifier(value, label) {
+export function canonicalIdentifier(value, label) {
   if (typeof value !== "string" || value.trim() === "") throw invalid(`A canonical ${label} is required.`);
   if (value.length > 200) throw invalid(`A canonical ${label} is too long.`);
   if (CONTROL.test(value)) throw invalid(`A canonical ${label} must not contain control characters.`);
