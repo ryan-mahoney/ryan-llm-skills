@@ -853,3 +853,121 @@ test('wave workspaces: worktree fallback attempts hold ownership before any work
   assert.equal(digestTree(attemptRoot), dirty, 'the replay recreated the fallback worktree');
 });
 
+test('wave workspaces: an attempt cannot change backend after it is written', async t => {
+  const target = makeTargetRepo(t, 'wave-workspaces-conv-target');
+  const waveRoot = freshRoot(t, 'wave-workspaces-conv-root');
+  const ownership = makeOwnership(t, 'wave-workspaces-conv');
+  const attemptId = 'attempt-conv';
+  const common = {
+    target, waveRoot, ownership, packageId: 'wave-conv', attemptId, baseCommit: target.c2,
+    label: 'conv', mode: 'overlayfs', capability: supportedCapability(),
+  };
+  const holder = await prepareStepWorkspace(workspaceOptions(common));
+  assert.equal(holder.backend, 'overlayfs');
+  writeFileSync(join(holder.upper, 'dirty.txt'), 'kept\n');
+  const attemptRoot = join(waveRoot, 'attempts', attemptId);
+  const before = { upper: digestTree(holder.upper), attempt: digestTree(attemptRoot) };
+
+  // The written attempt's own holder re-prepares the same attemptId as an
+  // explicit worktree request while the overlay claim is still live. The
+  // conversion is prohibited: it refuses before any worktree is created and
+  // before any dirty state is touched.
+  await assertRefusalAsync('backend-conversion-prohibited', () => prepareStepWorkspace(workspaceOptions({
+    ...common,
+    mode: 'worktree',
+  })));
+  assert.equal(readFileSync(join(holder.upper, 'dirty.txt'), 'utf8'), 'kept\n', 'the dirty upper bytes survive the refused conversion');
+  assert.equal(digestTree(holder.upper), before.upper, 'the refused conversion left the dirty upper byte-identical');
+  assert.equal(digestTree(attemptRoot), before.attempt, 'the refused conversion left the attempt state byte-identical');
+  assert.equal(pathExists(join(attemptRoot, 'worktree')), false, 'the refused conversion created no fallback worktree');
+
+  // The retained record is unchanged: a replay under the original backend
+  // still returns the identical durable retained identity.
+  const replayed = await prepareStepWorkspace(workspaceOptions(common));
+  assert.equal(replayed.backend, 'overlayfs');
+  assert.deepEqual(replayed.retained, holder.retained, 'the retained record is unchanged after the refused conversion');
+});
+
+test('wave workspaces: automatic selection cannot convert a written attempt', async t => {
+  const target = makeTargetRepo(t, 'wave-workspaces-autoconv-target');
+  const waveRoot = freshRoot(t, 'wave-workspaces-autoconv-root');
+  const ownership = makeOwnership(t, 'wave-workspaces-autoconv');
+  const attemptId = 'attempt-autoconv';
+  const common = {
+    target, waveRoot, ownership, packageId: 'wave-autoconv', attemptId, baseCommit: target.c2,
+    label: 'autoconv', mode: 'overlayfs', capability: supportedCapability(),
+  };
+  const holder = await prepareStepWorkspace(workspaceOptions(common));
+  assert.equal(holder.backend, 'overlayfs');
+  writeFileSync(join(holder.upper, 'dirty.txt'), 'kept\n');
+  const attemptRoot = join(waveRoot, 'attempts', attemptId);
+  const before = { upper: digestTree(holder.upper), attempt: digestTree(attemptRoot) };
+
+  // With the overlay backend unavailable an automatic request would silently
+  // select the worktree fallback; the written attempt must refuse the
+  // conversion identically instead of converting behind its dirty upper.
+  await assertRefusalAsync('backend-conversion-prohibited', () => prepareStepWorkspace(workspaceOptions({
+    ...common,
+    mode: 'auto',
+    capability: fallbackCapability(),
+  })));
+  assert.equal(readFileSync(join(holder.upper, 'dirty.txt'), 'utf8'), 'kept\n', 'the attached upper survives the refused automatic conversion');
+  assert.equal(digestTree(holder.upper), before.upper, 'the refused conversion left the dirty upper byte-identical');
+  assert.equal(digestTree(attemptRoot), before.attempt, 'the refused conversion left the attempt state byte-identical');
+  assert.equal(pathExists(join(attemptRoot, 'worktree')), false, 'no fallback worktree was silently selected');
+});
+
+test('wave workspaces: backend provenance records requested selection and remedy', async t => {
+  const target = makeTargetRepo(t, 'wave-workspaces-prov-target');
+  const waveRoot = freshRoot(t, 'wave-workspaces-prov-root');
+  const ownership = makeOwnership(t, 'wave-workspaces-prov');
+  const baseCommit = target.c2;
+
+  const provenanceOf = record => ({
+    requestedBackend: record.requestedBackend,
+    selectedBackend: record.selectedBackend,
+    backendReason: record.backendReason,
+    backendRemedy: record.backendRemedy,
+    capability: record.capability,
+  });
+  const assertProvenance = (record, expected, attemptId, label) => {
+    assert.equal(record.backend, expected.selectedBackend, `${label}: backend still reads the selected backend`);
+    assert.equal(record.requestedBackend, expected.requestedBackend, `${label}: the requested backend is recorded truthfully`);
+    assert.equal(record.selectedBackend, expected.selectedBackend, `${label}: the selected backend is recorded truthfully`);
+    assert.equal(typeof record.backendReason, 'string', `${label}: the classification reason is a string`);
+    assert.ok(record.backendReason.length > 0, `${label}: the classification reason is non-empty`);
+    assert.equal(typeof record.backendRemedy, 'string', `${label}: the remedy is a string`);
+    assert.ok(record.backendRemedy.length > 0, `${label}: the remedy is non-empty`);
+    assert.ok(record.capability && typeof record.capability === 'object', `${label}: the classified capability is carried`);
+    assert.ok(record.retained, `${label}: the record carries a retained identity`);
+    assert.deepEqual(provenanceOf(record.retained), provenanceOf(record), `${label}: the retained record carries the same provenance`);
+    const durable = JSON.parse(readFileSync(join(waveRoot, 'attempts', `${attemptId}.workspace-identity.json`), 'utf8'));
+    assert.deepEqual(provenanceOf(durable), provenanceOf(record), `${label}: the durable attempt record carries the same provenance`);
+    assert.equal(durable.backend, expected.selectedBackend, `${label}: the durable record keeps the selected backend`);
+    assert.equal(durable.attemptId, attemptId, `${label}: the durable record binds the attempt identity`);
+  };
+
+  // An explicit worktree request records requested and selected as worktree.
+  const explicit = await prepareStepWorkspace(workspaceOptions({
+    target, waveRoot, ownership, packageId: 'wave-prov', attemptId: 'attempt-prov-worktree', baseCommit,
+    label: 'prov-worktree', mode: 'worktree', capability: supportedCapability(),
+  }));
+  assertProvenance(explicit, { requestedBackend: 'worktree', selectedBackend: 'worktree' }, 'attempt-prov-worktree', 'explicit worktree');
+
+  // An automatic request with the overlay backend unavailable records
+  // requested auto, selected worktree, a non-empty reason and a non-empty
+  // remedy (and the capability), while backend still reads worktree.
+  const automatic = await prepareStepWorkspace(workspaceOptions({
+    target, waveRoot, ownership, packageId: 'wave-prov', attemptId: 'attempt-prov-auto', baseCommit,
+    label: 'prov-auto', mode: 'auto', capability: fallbackCapability(),
+  }));
+  assertProvenance(automatic, { requestedBackend: 'auto', selectedBackend: 'worktree' }, 'attempt-prov-auto', 'auto fallback');
+
+  // A supported automatic selection is recorded just as truthfully.
+  const overlay = await prepareStepWorkspace(workspaceOptions({
+    target, waveRoot, ownership, packageId: 'wave-prov', attemptId: 'attempt-prov-overlay', baseCommit,
+    label: 'prov-overlay', mode: 'auto', capability: supportedCapability(),
+  }));
+  assertProvenance(overlay, { requestedBackend: 'auto', selectedBackend: 'overlayfs' }, 'attempt-prov-overlay', 'auto overlayfs');
+});
+

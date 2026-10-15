@@ -181,6 +181,114 @@ export function resolveBackend({ mode = 'auto', capability } = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// Attempt backend provenance (F5, F8)
+// ---------------------------------------------------------------------------
+
+const ATTEMPT_RECORD_VERSION = 1;
+
+// Provenance is carried truthfully on the returned and the durable workspace
+// identity: the requested mode, the selected backend, the classification
+// reason, and the remedy (with the classified capability) that justified the
+// selection. Existing record fields keep their names and meanings.
+function backendProvenance(backend) {
+  return Object.freeze({
+    requestedBackend: backend.mode,
+    selectedBackend: backend.backend,
+    backendReason: backend.reason,
+    backendRemedy: backend.backend === 'worktree' ? 'linked-git-worktree' : 'overlayfs-mount',
+    capability: Object.freeze({ ...backend.capability }),
+  });
+}
+
+function attemptRecordPath(waveRoot, attemptId) {
+  return join(waveRoot, 'attempts', `${attemptId}.workspace-identity.json`);
+}
+
+function readAttemptRecord(recordPath) {
+  if (!existsSync(recordPath)) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(recordPath, 'utf8'));
+  } catch {
+    refuse('layer-identity-mismatch', `attempt identity record is unreadable: ${recordPath}`);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    refuse('layer-identity-mismatch', `attempt identity record is malformed: ${recordPath}`);
+  }
+  return parsed;
+}
+
+// The backend of a written or live attempt is observed without touching its
+// state: the persisted record is authoritative and a recordless attempt is
+// classified from its durable directories. Nothing here deletes, converts or
+// ignores the attempt's state.
+function writtenBackendOf(attemptRoot, record) {
+  if (record && typeof record.backend === 'string' && record.backend.length > 0) return record.backend;
+  if (existsSync(join(attemptRoot, 'worktree'))) return 'worktree';
+  for (const directory of ['upper', 'merged', 'work', 'git']) {
+    if (existsSync(join(attemptRoot, directory))) return 'overlayfs';
+  }
+  return null;
+}
+
+// The backend plus the full attempt identity are persisted before the
+// workspace is provisioned and are validated on every preparation of the
+// attempt (F5): a written or live attempt never changes backend - a caller
+// that needs a different backend provisions a distinct authorized attempt
+// instead. The record is created exactly once and never overwritten; every
+// mismatch refuses before any layer, worktree or private Git state is created
+// or changed, so dirty state is never deleted, converted or ignored.
+function reconcileAttemptRecord({ attemptRoot, waveRoot, attemptId, kind, packageId, baseCommit, snapshotId, target, selection, setup }) {
+  const recordPath = attemptRecordPath(waveRoot, attemptId);
+  const identity = {
+    version: ATTEMPT_RECORD_VERSION,
+    kind,
+    packageId,
+    attemptId,
+    baseCommit,
+    snapshotId,
+    waveRoot,
+    targetWorktree: target.worktree,
+  };
+  const validate = prior => {
+    const priorBackend = writtenBackendOf(attemptRoot, prior);
+    if (priorBackend !== null && priorBackend !== selection.selectedBackend) {
+      refuse(
+        'backend-conversion-prohibited',
+        `attempt ${attemptId} is already written as ${priorBackend}; converting it to ${selection.selectedBackend} is prohibited, provision a distinct authorized attempt instead`,
+      );
+    }
+    if (!prior) return;
+    for (const [field, value] of Object.entries(identity)) {
+      if (prior[field] !== value) {
+        refuse('layer-identity-mismatch', `attempt identity record ${field} differs from the expected attempt identity`);
+      }
+    }
+    if (JSON.stringify(prior.setup ?? null) !== JSON.stringify(setup ?? null)) {
+      refuse('layer-identity-mismatch', 'attempt identity record setup differs from the expected attempt identity');
+    }
+  };
+  const prior = readAttemptRecord(recordPath);
+  validate(prior);
+  if (prior) return;
+  mkdirSync(dirname(recordPath), { recursive: true });
+  const record = {
+    ...identity,
+    ...selection,
+    backend: selection.selectedBackend,
+    setup: setup ?? null,
+  };
+  try {
+    writeFileSync(recordPath, `${JSON.stringify(record, null, 2)}\n`, { flag: 'wx' });
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    // A concurrent writer persisted first: its record is authoritative, so the
+    // identity is re-validated against it instead of overwriting anything.
+    validate(readAttemptRecord(recordPath));
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Setup identity and freeze checks
 // ---------------------------------------------------------------------------
 
@@ -551,7 +659,7 @@ function dropAlternates(gitDir) {
 // Attempt provisioning
 // ---------------------------------------------------------------------------
 
-async function provisionOverlay({ kind, snapshotId, baseCommit, target, waveRoot, attemptId, setup, ownership, packageId, coordinator, phaseToken, identity, attemptRoot, staging }) {
+async function provisionOverlay({ kind, selection, snapshotId, baseCommit, target, waveRoot, attemptId, setup, ownership, packageId, coordinator, phaseToken, identity, attemptRoot, staging }) {
   const upper = join(attemptRoot, 'upper');
   const work = join(attemptRoot, 'work');
   const merged = join(attemptRoot, 'merged');
@@ -571,8 +679,12 @@ async function provisionOverlay({ kind, snapshotId, baseCommit, target, waveRoot
   if (phase.status === 'refused') refuse('upper-held', `upper already holds a phase claim: ${upper}`);
   const claim = Object.freeze({ token: phase.claim.token, epoch: phase.claim.epoch });
   try {
+    // The backend plus the full attempt identity are persisted and validated
+    // before any workspace is provisioned (F5), so this claim can never be
+    // used to convert a written or live attempt between backends.
+    reconcileAttemptRecord({ attemptRoot, waveRoot, attemptId, kind, packageId, baseCommit, snapshotId, target, selection, setup });
     return await provisionOverlayWorkspace({
-      kind, snapshotId, baseCommit, target, waveRoot, attemptId, setup, packageId, identity, staging, upper, work, merged, gitDir, claim,
+      kind, selection, snapshotId, baseCommit, target, waveRoot, attemptId, setup, packageId, identity, staging, upper, work, merged, gitDir, claim,
     });
   } catch (error) {
     if (phase.status === 'permitted') {
@@ -584,7 +696,7 @@ async function provisionOverlay({ kind, snapshotId, baseCommit, target, waveRoot
   }
 }
 
-async function provisionOverlayWorkspace({ kind, snapshotId, baseCommit, target, waveRoot, attemptId, setup, packageId, identity, staging, upper, work, merged, gitDir, claim }) {
+async function provisionOverlayWorkspace({ kind, selection, snapshotId, baseCommit, target, waveRoot, attemptId, setup, packageId, identity, staging, upper, work, merged, gitDir, claim }) {
   const snapshotRoot = join(waveRoot, 'snapshots', snapshotId);
   const lower = join(snapshotRoot, 'lower');
   await ensureSnapshot({ snapshotRoot, snapshotId, lower, identity, source: target.worktree, baseCommit, staging });
@@ -620,13 +732,16 @@ async function provisionOverlayWorkspace({ kind, snapshotId, baseCommit, target,
   dropAlternates(gitDir);
 
   const retained = Object.freeze({
+    backend: 'overlayfs',
     ...retainLayer({ lower, upper, work, merged, gitDir, baseCommit, snapshotId, upperId: attemptId }),
     packageId,
     setup,
+    ...selection,
   });
   return Object.freeze({
     kind,
     backend: 'overlayfs',
+    ...selection,
     snapshotId,
     baseCommit,
     lower,
@@ -641,7 +756,7 @@ async function provisionOverlayWorkspace({ kind, snapshotId, baseCommit, target,
   });
 }
 
-async function provisionWorktree({ kind, snapshotId, baseCommit, target, waveRoot, attemptId, setup, ownership, packageId, coordinator, phaseToken }) {
+async function provisionWorktree({ kind, selection, snapshotId, baseCommit, target, waveRoot, attemptId, setup, ownership, packageId, coordinator, phaseToken }) {
   const attemptRoot = join(waveRoot, 'attempts', attemptId);
   const worktree = join(attemptRoot, 'worktree');
   // The fallback backend reserves the attempt's ownership through the same
@@ -662,6 +777,10 @@ async function provisionWorktree({ kind, snapshotId, baseCommit, target, waveRoo
   if (phase.status === 'refused') refuse('upper-held', `attempt already holds a phase claim: ${attemptRoot}`);
   const claim = Object.freeze({ token: phase.claim.token, epoch: phase.claim.epoch });
   try {
+    // The backend plus the full attempt identity are persisted and validated
+    // before any workspace is provisioned (F5): a refused conversion creates no
+    // fallback worktree and leaves every attached byte untouched.
+    reconcileAttemptRecord({ attemptRoot, waveRoot, attemptId, kind, packageId, baseCommit, snapshotId, target, selection, setup });
     mkdirSync(dirname(worktree), { recursive: true });
     const existingHead = existsSync(worktree) ? gitMaybe(['-C', worktree, 'rev-parse', 'HEAD']) : null;
     if (existingHead === null) {
@@ -674,9 +793,25 @@ async function provisionWorktree({ kind, snapshotId, baseCommit, target, waveRoo
     if (commonDir !== realpathSync(target.gitCommonDir)) {
       throw new Error(`fallback worktree lost the canonical common dir: ${commonDir}`);
     }
+    const retained = Object.freeze({
+      backend: 'worktree',
+      lower: null,
+      upper: null,
+      work: null,
+      merged: null,
+      gitDir: null,
+      baseCommit,
+      snapshotId,
+      upperId: attemptId,
+      packageId,
+      worktree,
+      setup,
+      ...selection,
+    });
     return Object.freeze({
       kind,
       backend: 'worktree',
+      ...selection,
       snapshotId,
       baseCommit,
       lower: null,
@@ -686,7 +821,7 @@ async function provisionWorktree({ kind, snapshotId, baseCommit, target, waveRoo
       gitDir: null,
       worktree,
       claim,
-      retained: null,
+      retained,
       setup,
     });
   } catch (error) {
@@ -713,6 +848,7 @@ async function prepare(kind, options = {}) {
   const coordinator = options.coordinator;
 
   const backend = resolveBackend({ mode: options.mode ?? 'auto', capability: options.capability });
+  const selection = backendProvenance(backend);
   const setup = normalizeSetup(options.setup);
   const environment = options.env && typeof options.env === 'object' ? options.env : {};
 
@@ -770,6 +906,7 @@ async function prepare(kind, options = {}) {
   if (backend.backend === 'worktree') {
     return provisionWorktree({
       kind,
+      selection,
       snapshotId,
       baseCommit,
       target,
@@ -783,6 +920,7 @@ async function prepare(kind, options = {}) {
     });
   }
   return provisionOverlay({
+    selection,
     kind,
     snapshotId,
     baseCommit,
