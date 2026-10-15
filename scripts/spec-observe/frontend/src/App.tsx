@@ -7,7 +7,7 @@ import { normalizeEnvelope, authoritativeObservers, collectRecords, packageSumma
 import Shell, { type ShellNavEntry } from './Shell';
 import type { StatusTone } from './primitives';
 import { parseHash, subscribeRoute, navigate, routeHistoryMode, type Destination, type RouteState } from './route';
-import { clearIncompatibleFields, firstUnmatchedTargetId, inWorkspaceScope, needsWorkspacePicker, requiresWorkspace, scopeLabel, withWorkspace, type CatalogEntry } from './scope';
+import { catalogEntryForRecord, clearIncompatibleFields, firstUnmatchedTargetId, inWorkspaceScope, needsWorkspacePicker, requiresWorkspace, scopeLabel, withWorkspace, type CatalogEntry } from './scope';
 import { visibleSpecs } from './spec-state';
 import { destinationEntries, type DestinationProps } from './destinations';
 import { nextStepRows, railCount } from './destinations/next-steps-state';
@@ -179,6 +179,7 @@ export default function App() {
   // record stays optional there and never gates the route or its picker.
   const detailWorkspaceId = createMemo(() => route().dest === 'workspaces' || route().dest === 'epics'
     ? route().ws
+    : route().dest === 'specs' ? catalogEntryForRecord(record() ?? {}, 'run', catalogEntries(), route().ws)?.id
     : requiresWorkspace(route().dest) && !packageFilesRoute() ? route().ws : undefined);
 
   function go(next: RouteState, options: { keepExpected?: boolean } = {}) {

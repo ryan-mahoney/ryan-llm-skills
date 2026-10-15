@@ -29,7 +29,7 @@ from playwright.sync_api import expect, sync_playwright
 from reference_screens import reference_screens
 
 args = argparse.ArgumentParser()
-args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters', 'specs-list', 'specs-overview', 'specs-variants', 'specs-activity', 'specs-relaunch', 'files-workspace', 'files-sources', 'files-continuity', 'files-recovery', 'files-read-refresh'])
+args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters', 'specs-list', 'specs-workspace', 'specs-overview', 'specs-variants', 'specs-activity', 'specs-relaunch', 'files-workspace', 'files-sources', 'files-continuity', 'files-recovery', 'files-read-refresh'])
 case = args.parse_args().case
 root = Path(__file__).resolve().parent
 evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-route-evidence'))
@@ -3278,6 +3278,145 @@ try:
             capture_both('imported')
             report['scenarios'].append('Imported rows render fixed before-observation ages and keep mutation controls unavailable')
 
+        if case == 'specs-workspace':
+            # Real fixture catalog and detail endpoints stay in place; only the
+            # observer payload is crafted. The fixture seeds two workspaces
+            # whose kit id differs from their directory basename, so a run's
+            # workspace value resolves through its mapped catalog entry rather
+            # than being loaded as an id.
+            now = '2026-10-12T12:00:00.000Z'
+            state = {'value': None, 'active': False}
+
+            def on_state(route):
+                if state['active']:
+                    route.fulfill(json=state['value'])
+                else:
+                    route.continue_()
+
+            page.route('**/api/state**', on_state)
+            rows = page.locator('.records button.record[data-key]')
+            detail_requests = []
+
+            def observe_request(request):
+                if '/api/workspace?' in request.url:
+                    detail_requests.append(request.url)
+
+            page.on('request', observe_request)
+            errors_before = len(report['pageErrors'])
+
+            def record(workspace, slug, **extra):
+                value = {'workspace': workspace, 'package': f'/fixture/specs/{slug}', 'package_ref': f'{workspace}/{slug}',
+                         'assignment_id': f'{slug}-assignment', 'execution': 'running', 'workflow_state': 'working',
+                         'is_current_assignment': True, 'activity': f'{slug} activity', 'obligation': f'{slug} obligation',
+                         'observed_at': now, 'coverage': {'state': 'complete', 'reasons': []},
+                         'spec_progress': {'current_position': 1, 'total_steps': 2, 'current_name': 'Workspace step'}}
+                value.update(extra)
+                return value
+
+            def observer(observer_id, workspace, runs, coverage_state='complete', observed_at=now, reasons=None):
+                return {'observer_id': observer_id, 'state': 'observing', 'published_at': now,
+                        'snapshot': {'workspace': workspace,
+                                     'coverage': {'state': coverage_state, 'observed_at': observed_at, 'reasons': reasons or []},
+                                     'runs': runs, 'recently_completed': [], 'planned_packages': [],
+                                     'assignments': [], 'assignment_coverage': {'state': 'complete', 'reasons': []}, 'epics': []}}
+
+            def fixture_snapshot(runs, coverage_state='complete', observed_at=now, reasons=None):
+                return {'schema_version': 1, 'generated_at': now,
+                        'observers': [observer('workspace-fixture', 'fixture', runs, coverage_state, observed_at, reasons)]}
+
+            # The fixture maps directory basename physical -> kit id alpha and
+            # directory basename alpha -> kit id physical.
+            physical_dir_run = record('physical', 'alpha-run')
+            alpha_dir_run = record('alpha', 'physical-run')
+            unmapped_run = record('unmapped-repo', 'unmapped-run')
+            state['active'] = True
+            state['value'] = fixture_snapshot([physical_dir_run, alpha_dir_run, unmapped_run])
+            open_route('specs')
+            expect(rows).to_have_count(3)
+            # Real HTTP inventory proves each route-scope id names a real kit.
+            alpha_inventory = context.request.get(receipt['url'] + '/api/workspace?id=alpha').json()
+            assert alpha_inventory['id'] == 'alpha', alpha_inventory
+            assert alpha_inventory['directory'].rstrip('/').rsplit('/', 1)[-1] == 'physical', alpha_inventory
+            physical_inventory = context.request.get(receipt['url'] + '/api/workspace?id=physical').json()
+            assert physical_inventory['id'] == 'physical', physical_inventory
+            assert physical_inventory['directory'].rstrip('/').rsplit('/', 1)[-1] == 'alpha', physical_inventory
+            report['scenarios'].append('Real inventory confirms basename physical is kit id alpha and basename alpha is kit id physical')
+
+            # Cold scoped Specs: the route ws names the catalog id while the
+            # selected run carries the directory basename, so the request must
+            # use the route's mapped catalog id.
+            detail_requests.clear()
+            open_route('specs', ws='alpha')
+            expect(rows).to_have_count(1)
+            expect(rows.first.locator('.run-title')).to_have_text('alpha-run')
+            page.wait_for_timeout(500)
+            assert any('id=alpha' in url for url in detail_requests), detail_requests
+            rows.first.click()
+            expect(page.locator('.object-head h2')).to_have_text('alpha-run')
+            report['scenarios'].append('A scoped Spec with a differing directory basename loads the route catalog id from its mapped entry')
+
+            # All-workspaces: no route ws; the record's own directory basename
+            # resolves the sole matching catalog entry.
+            detail_requests.clear()
+            open_route('specs')
+            expect(rows).to_have_count(3)
+            rows.filter(has_text='alpha-run').first.click()
+            page.wait_for_timeout(500)
+            assert any('id=alpha' in url for url in detail_requests), detail_requests
+            assert 'ws' not in params(), params()
+            report['scenarios'].append('All-workspaces selection resolves the mapped catalog id without seeding route ws')
+
+            # Unmapped: no catalog entry matches the record workspace, so no
+            # workspace request is issued and the Spec detail stays readable.
+            detail_requests.clear()
+            rows.filter(has_text='unmapped-run').first.click()
+            page.wait_for_timeout(500)
+            expect(page.locator('.object-head h2')).to_have_text('unmapped-run')
+            assert not detail_requests, detail_requests
+            report['scenarios'].append('An unmapped record issues no workspace request and keeps the Spec detail readable')
+
+            # Delayed A -> B: hold A's response, switch scope, select B, then
+            # prove B's loaded workspace survives A's late arrival.
+            detail_requests.clear()
+            control('detail-delay-ms', 1500)
+            control('detail-delay-id', 'alpha')
+            open_route('specs', ws='alpha')
+            expect(rows).to_have_count(1)
+            page.wait_for_timeout(500)
+            alpha_requests_before = sum(1 for url in detail_requests if 'id=alpha' in url)
+            assert alpha_requests_before >= 1, detail_requests
+            # Switch to B while A's response is held. B's directory basename is
+            # alpha (its kit id is physical), so the resolved id stays physical.
+            open_route('specs', ws='physical')
+            expect(rows).to_have_count(1)
+            expect(rows.first.locator('.run-title')).to_have_text('physical-run')
+            page.wait_for_timeout(500)
+            assert any('id=physical' in url for url in detail_requests), detail_requests
+            # A's held response arrives now; B must remain the loaded record.
+            page.wait_for_timeout(1600)
+            open_route('workspaces', ws='physical')
+            page.wait_for_timeout(500)
+            expect(page.locator('.object-head p')).to_contain_text('alpha')
+            assert sum(1 for url in detail_requests if 'id=alpha' in url) == alpha_requests_before, detail_requests
+            control('detail-delay-ms', 0)
+            control('detail-delay-id', '')
+            assert len(report['pageErrors']) == errors_before, report['pageErrors'][errors_before:]
+            report['scenarios'].append("A delayed stale workspace response never replaces B's loaded record, and B's Workspaces inventory stays readable")
+
+            # Imported/offline reuses the App snapshot import path: the
+            # retained unmapped record stays readable and asks the host for no
+            # workspace detail.
+            imported = fixture_snapshot([unmapped_run])
+            page.locator('#import-file').set_input_files({'name': 'specs-workspace-import.json', 'mimeType': 'application/json', 'buffer': json.dumps(imported).encode()})
+            open_route('specs')
+            expect(rows).to_have_count(1)
+            detail_requests.clear()
+            rows.first.click()
+            page.wait_for_timeout(400)
+            expect(page.locator('.object-head h2')).to_have_text('unmapped-run')
+            assert not detail_requests, detail_requests
+            report['scenarios'].append('Imported offline snapshot keeps the unmapped Spec detail readable without workspace requests')
+
         if case == 'specs-relaunch':
             # Real fixture, App and polling stay in place; only /api/state is
             # annotated with the relaunch identity and the two relaunch endpoints
@@ -3450,7 +3589,7 @@ finally:
         fixture.kill()
         fixture.wait()
     report['elapsedSeconds'] = round(time.monotonic() - started, 3)
-    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'files-context.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'specs-list.json' if case == 'specs-list' else 'specs-variants.json' if case == 'specs-variants' else 'specs-overview.json' if case == 'specs-overview' else 'specs-activity.json' if case == 'specs-activity' else 'specs-relaunch.json' if case == 'specs-relaunch' else 'files-workspace.json' if case == 'files-workspace' else 'files-sources.json' if case == 'files-sources' else 'files-continuity.json' if case == 'files-continuity' else 'files-recovery.json' if case == 'files-recovery' else 'files-read-refresh.json' if case == 'files-read-refresh' else 'step-002-fix-browser.json'
+    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'files-context.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'specs-list.json' if case == 'specs-list' else 'specs-workspace.json' if case == 'specs-workspace' else 'specs-variants.json' if case == 'specs-variants' else 'specs-overview.json' if case == 'specs-overview' else 'specs-activity.json' if case == 'specs-activity' else 'specs-relaunch.json' if case == 'specs-relaunch' else 'files-workspace.json' if case == 'files-workspace' else 'files-sources.json' if case == 'files-sources' else 'files-continuity.json' if case == 'files-continuity' else 'files-recovery.json' if case == 'files-recovery' else 'files-read-refresh.json' if case == 'files-read-refresh' else 'step-002-fix-browser.json'
     target = evidence / filename
     temporary = target.with_name(target.name + '.tmp')
     temporary.write_text(json.dumps(report, indent=2) + '\n')
