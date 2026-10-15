@@ -13,9 +13,9 @@
 // run.json.
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inspectProcess } from '../../../scripts/spec-observe/process-identity.mjs';
 
@@ -106,6 +106,7 @@ const MUTATION_HANDLERS = {
       state: 'acquired',
       reservations: null,
       coordinator: owner,
+      worker: null,
       packagePath: typeof packagePath === 'string' ? packagePath : null,
     };
     state.claims.push(claim);
@@ -129,6 +130,7 @@ const MUTATION_HANDLERS = {
       state: 'reserved',
       reservations: null,
       coordinator: owner,
+      worker: normalizeWorker(request.args.worker),
       checkout: { gitCommonDir: identity.gitCommonDir, worktreeGitDir: identity.worktreeGitDir },
       checkoutKey: identity.key,
     };
@@ -157,6 +159,7 @@ const MUTATION_HANDLERS = {
       state: 'reserved',
       reservations,
       coordinator: owner,
+      worker: normalizeWorker(request.args.worker),
     };
     state.claims.push(claim);
     return { changed: true, result: { status: 'reserved', claim: projectClaim(claim), replayed: false } };
@@ -168,9 +171,10 @@ const MUTATION_HANDLERS = {
     if (index < 0) return { changed: false, result: { status: 'denied', reason: 'token-mismatch' } };
     const claim = state.claims[index];
     if (claim.epoch !== epoch) return { changed: false, result: { status: 'denied', reason: 'epoch-mismatch' } };
-    // Capacity slots are only returned on positive drain; timeout, dead owner,
-    // changed identity and unknown drain all leave the claim retained.
-    if (claim.kind === 'capacity' && drain !== 'confirmed') return { changed: false, result: { status: 'denied', reason: 'drain-unconfirmed' } };
+    // Claims are only returned on positive worker/descendant drain; timeout,
+    // dead owner, changed identity and unknown or omitted drain all leave the
+    // claim retained (capacity slots and checkout exclusion alike, INV-2/INV-3).
+    if (drain !== 'confirmed') return { changed: false, result: { status: 'denied', reason: 'drain-unconfirmed' } };
     state.claims.splice(index, 1);
     return { changed: true, result: { status: 'released', claim: projectClaim(claim) } };
   },
@@ -236,6 +240,7 @@ function writeRegistry(registryRoot, state) {
 
 function projectClaim(claim) {
   const liveness = observeLiveness(claim.coordinator);
+  const worker = projectWorker(claim.worker);
   return {
     kind: claim.kind,
     token: claim.token,
@@ -243,11 +248,32 @@ function projectClaim(claim) {
     packageId: claim.packageId,
     attempt: claim.attempt ?? null,
     state: claim.state,
-    running: liveness === 'alive',
+    running: worker.running,
+    workerState: worker.state,
     reservations: claim.reservations ? { memoryBytes: claim.reservations.memoryBytes, tasks: claim.reservations.tasks } : null,
     coordinator: { ...claim.coordinator },
+    worker: claim.worker ? { ...claim.worker } : null,
     liveness,
   };
+}
+
+// Worker execution state derives only from the explicit lifecycle/unit evidence
+// stored on the claim; coordinator liveness never implies a launched worker.
+// A pre-launch reservation without evidence is 'pre-launch'. Unknown evidence is
+// reported conservatively: running stays false and the state is visible as
+// 'unknown' so consumers can fail closed. A proven-dead worker process is
+// 'exited'; descendants are covered by drain-gated release, not by this flag.
+function projectWorker(evidence) {
+  if (!evidence) return { running: false, state: 'pre-launch' };
+  if (typeof evidence.pid === 'number') {
+    const observed = inspectProcess(evidence.pid);
+    if (observed.state === 'dead') return { running: false, state: 'exited' };
+    if (observed.state === 'alive' && observed.started_at === evidence.started_at) return { running: true, state: 'running' };
+    return { running: false, state: 'unknown' };
+  }
+  // Unit/InvocationID evidence proves launch intent but not execution state
+  // here; stay conservative rather than claiming running or exited.
+  return { running: false, state: 'unknown' };
 }
 
 // Mirrors scripts/spec-observe/process-identity.mjs: only a live pid with the
@@ -282,6 +308,28 @@ function normalizeCoordinator(coordinator) {
   return { session, epoch, pid, started_at };
 }
 
+// Lifecycle/unit evidence binds the worker execution identity recorded with the
+// claim: a process identity (pid + exact observed start text, mirroring the
+// coordinator rule) and/or a systemd unit/InvocationID. Absent evidence marks a
+// pre-launch reservation; a claim never invents a worker from coordinator state.
+function normalizeWorker(worker) {
+  if (worker === undefined || worker === null) return null;
+  if (typeof worker !== 'object') throw new Error('worker evidence must be an object');
+  const { unit, invocation_id, pid, started_at } = worker;
+  const normalized = { unit: null, invocation_id: null, pid: null, started_at: null };
+  if (unit !== undefined && unit !== null) normalized.unit = requireString(unit, 'worker.unit');
+  if (invocation_id !== undefined && invocation_id !== null) normalized.invocation_id = requireString(invocation_id, 'worker.invocation_id');
+  if (pid !== undefined && pid !== null) {
+    if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('worker.pid must be a positive integer');
+    normalized.pid = pid;
+    normalized.started_at = requireString(started_at, 'worker.started_at');
+  }
+  if (normalized.unit === null && normalized.pid === null) {
+    throw new Error('worker evidence must bind a process identity (pid + started_at) or a unit identity');
+  }
+  return normalized;
+}
+
 function requireReservations(unit) {
   const memoryBytes = unit ? unit.memoryBytes : undefined;
   const tasks = unit ? unit.tasks : undefined;
@@ -292,9 +340,31 @@ function requireReservations(unit) {
 
 function checkoutIdentity(checkout) {
   if (!checkout || typeof checkout !== 'object') throw new Error('checkout identity is required');
-  const gitCommonDir = resolve(requireString(checkout.gitCommonDir, 'checkout.gitCommonDir'));
-  const worktreeGitDir = resolve(requireString(checkout.worktreeGitDir, 'checkout.worktreeGitDir'));
+  const gitCommonDir = canonicalPath(requireString(checkout.gitCommonDir, 'checkout.gitCommonDir'));
+  const worktreeGitDir = canonicalPath(requireString(checkout.worktreeGitDir, 'checkout.worktreeGitDir'));
   return { gitCommonDir, worktreeGitDir, key: `${gitCommonDir}\u0000${worktreeGitDir}` };
+}
+
+// Canonicalize through the filesystem so a symlinked alias of one checkout
+// cannot hold a second claim (INV-2). A nonexistent suffix is re-appended after
+// the deepest existing ancestor's realpath, so paths that only name future
+// worktrees still get stable, alias-free keys.
+function canonicalPath(input) {
+  const absolute = resolve(input);
+  const suffix = [];
+  let current = absolute;
+  for (;;) {
+    try {
+      const real = realpathSync(current);
+      return suffix.length === 0 ? real : join(real, ...suffix);
+    } catch (error) {
+      if (!error || (error.code !== 'ENOENT' && error.code !== 'ENOTDIR')) throw error;
+      const parent = dirname(current);
+      if (parent === current) return absolute;
+      suffix.unshift(basename(current));
+      current = parent;
+    }
+  }
 }
 
 function requireString(value, label) {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -357,6 +357,43 @@ test('wave ownership: unknown drain never releases a capacity claim', async t =>
   assert.equal(retained[0].token, token);
 });
 
+test('wave ownership: unknown or omitted drain never releases a checkout claim', async t => {
+  const dir = freshRoot(t, 'wave-ownership-checkout-drain');
+  const client = createOwnership({ registryRoot: join(dir, 'registry'), budgets: GENEROUS_BUDGETS });
+  const packageId = 'package-checkout-drain';
+  const checkout = {
+    gitCommonDir: join(dir, 'repo', '.git'),
+    worktreeGitDir: join(dir, 'repo', '.git', 'worktrees', 'worker'),
+  };
+  const reserved = await client.reserveCheckout({ packageId, attempt: 'checkout-drain-1', checkout, coordinator: liveCoordinator('checkout-drain', 4) });
+  assert.equal(reserved.status, 'reserved', JSON.stringify(reserved));
+  const { token, epoch } = reserved.claim;
+
+  const unknown = await client.releaseClaim({ token, epoch, drain: 'unknown' });
+  assert.equal(unknown.status, 'denied');
+  assert.equal(unknown.reason, 'drain-unconfirmed');
+
+  const omitted = await client.releaseClaim({ token, epoch });
+  assert.equal(omitted.status, 'denied');
+  assert.equal(omitted.reason, 'drain-unconfirmed');
+
+  // Another attempt stays blocked while the release is unconfirmed.
+  const blocked = await client.reserveCheckout({ packageId, attempt: 'checkout-drain-2', checkout, coordinator: liveCoordinator('checkout-drain', 4) });
+  assert.equal(blocked.status, 'held');
+  assert.equal(blocked.claim.token, token);
+
+  const retained = (await client.inspectClaims({ packageId })).claims.filter(claim => claim.kind === 'checkout');
+  assert.equal(retained.length, 1, JSON.stringify(retained));
+  assert.equal(retained[0].token, token);
+
+  const confirmed = await client.releaseClaim({ token, epoch, drain: 'confirmed' });
+  assert.equal(confirmed.status, 'released', JSON.stringify(confirmed));
+
+  const freed = await client.reserveCheckout({ packageId, attempt: 'checkout-drain-3', checkout, coordinator: liveCoordinator('checkout-drain', 4) });
+  assert.equal(freed.status, 'reserved', JSON.stringify(freed));
+  assert.notEqual(freed.claim.token, token);
+});
+
 test('wave ownership: wrong token and epoch cannot release another claim', async t => {
   const dir = freshRoot(t, 'wave-ownership-release');
   const client = createOwnership({ registryRoot: join(dir, 'registry'), budgets: GENEROUS_BUDGETS });
@@ -432,4 +469,101 @@ test('wave ownership: replay after a crash reuses the reservation identity and r
   assert.equal(afterRecovery[0].token, token);
   assert.equal(afterRecovery[0].coordinator.session, 'survivor');
   assert.equal(afterRecovery[0].coordinator.pid, process.pid);
+  // Rebinding to a live coordinator must not report a launched worker.
+  assert.equal(afterRecovery[0].running, false);
+  assert.equal(afterRecovery[0].workerState, 'pre-launch');
+});
+
+test('wave ownership: a live coordinator pre-launch reservation is not running and recovery preserves that', async t => {
+  const dir = freshRoot(t, 'wave-ownership-prelaunch');
+  const client = createOwnership({ registryRoot: join(dir, 'registry'), budgets: GENEROUS_BUDGETS });
+  const packageId = 'package-prelaunch';
+  const reserved = await client.reserveCapacity({
+    packageId,
+    attempt: 'prelaunch-1',
+    request: { memoryBytes: 32 * MiB, tasks: 2 },
+    coordinator: liveCoordinator('prelaunch', 6),
+  });
+  assert.equal(reserved.status, 'reserved', JSON.stringify(reserved));
+  // Coordinator liveness is alive, but no worker has been launched.
+  assert.equal(reserved.claim.liveness, 'alive');
+  assert.equal(reserved.claim.running, false);
+  assert.equal(reserved.claim.workerState, 'pre-launch');
+
+  const { token, epoch } = reserved.claim;
+  const recovered = await client.recoverClaims({ token, epoch, coordinator: liveCoordinator('prelaunch-survivor', 6) });
+  assert.equal(recovered.status, 'recovered', JSON.stringify(recovered));
+  assert.equal(recovered.claim.state, 'reserved');
+  assert.equal(recovered.claim.running, false);
+  assert.equal(recovered.claim.workerState, 'pre-launch');
+});
+
+test('wave ownership: worker execution follows lifecycle evidence while coordinator liveness stays separate', async t => {
+  const dir = freshRoot(t, 'wave-ownership-worker-evidence');
+  const client = createOwnership({ registryRoot: join(dir, 'registry'), budgets: GENEROUS_BUDGETS });
+  const packageId = 'package-worker-evidence';
+
+  // Dead coordinator whose worker survives: the surviving worker's process
+  // identity is the explicit evidence, not the coordinator.
+  const reserved = await client.reserveCapacity({
+    packageId,
+    attempt: 'worker-evidence-1',
+    request: { memoryBytes: 32 * MiB, tasks: 2 },
+    coordinator: deadCoordinator('worker-evidence-owner', 8),
+    worker: { pid: process.pid, started_at: observedStart(process.pid) },
+  });
+  assert.equal(reserved.status, 'reserved', JSON.stringify(reserved));
+  assert.equal(reserved.claim.liveness, 'dead');
+  assert.equal(reserved.claim.running, true);
+  assert.equal(reserved.claim.workerState, 'running');
+
+  // Unit-only evidence proves launch intent but not execution: conservative unknown.
+  const unitOnly = await client.reserveCapacity({
+    packageId,
+    attempt: 'worker-evidence-2',
+    request: { memoryBytes: 1 * MiB, tasks: 1 },
+    coordinator: deadCoordinator('worker-evidence-owner-2', 8),
+    worker: { unit: 'pi-wave-worker-evidence-2.service', invocation_id: 'abc123' },
+  });
+  assert.equal(unitOnly.status, 'reserved', JSON.stringify(unitOnly));
+  assert.equal(unitOnly.claim.running, false);
+  assert.equal(unitOnly.claim.workerState, 'unknown');
+
+  // A worker process identity that cannot be verified is unknown, never running.
+  const unverifiable = await client.reserveCapacity({
+    packageId,
+    attempt: 'worker-evidence-3',
+    request: { memoryBytes: 1 * MiB, tasks: 1 },
+    coordinator: liveCoordinator('worker-evidence', 8),
+    worker: { pid: process.pid, started_at: 'not-the-live-process-start' },
+  });
+  assert.equal(unverifiable.status, 'reserved', JSON.stringify(unverifiable));
+  assert.equal(unverifiable.claim.running, false);
+  assert.equal(unverifiable.claim.workerState, 'unknown');
+});
+
+test('wave ownership: a symlink alias of one checkout cannot hold two claims', async t => {
+  const dir = freshRoot(t, 'wave-ownership-checkout-alias');
+  const client = createOwnership({ registryRoot: join(dir, 'registry'), budgets: GENEROUS_BUDGETS });
+  const packageId = 'package-checkout-alias';
+  const realRepo = join(dir, 'repo');
+  mkdirSync(join(realRepo, '.git', 'worktrees', 'worker'), { recursive: true });
+  symlinkSync(realRepo, join(dir, 'alias'));
+  const realCheckout = {
+    gitCommonDir: join(realRepo, '.git'),
+    worktreeGitDir: join(realRepo, '.git', 'worktrees', 'worker'),
+  };
+  const aliasCheckout = {
+    gitCommonDir: join(dir, 'alias', '.git'),
+    worktreeGitDir: join(dir, 'alias', '.git', 'worktrees', 'worker'),
+  };
+
+  const first = await client.reserveCheckout({ packageId, attempt: 'alias-1', checkout: realCheckout, coordinator: liveCoordinator('alias', 2) });
+  assert.equal(first.status, 'reserved', JSON.stringify(first));
+  const second = await client.reserveCheckout({ packageId, attempt: 'alias-2', checkout: aliasCheckout, coordinator: liveCoordinator('alias', 2) });
+  assert.equal(second.status, 'held', JSON.stringify(second));
+  assert.equal(second.claim.token, first.claim.token);
+
+  const claims = (await client.inspectClaims({ packageId })).claims.filter(claim => claim.kind === 'checkout');
+  assert.equal(claims.length, 1, JSON.stringify(claims));
 });
