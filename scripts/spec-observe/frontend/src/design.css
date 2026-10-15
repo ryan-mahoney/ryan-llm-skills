@@ -523,6 +523,19 @@ th.col-action,td.col-action{width:148px;white-space:nowrap}
 .next-steps-destination .detail-foot{flex-shrink:0;overflow-wrap:anywhere}
 .next-steps-destination .action-note{font-size:12px;color:var(--ds-muted);max-width:280px;line-height:1.5;overflow-wrap:anywhere}
 .next-steps-destination .next-steps-action-error{margin:0 28px 12px;font-size:13px;color:#fca5a5}
+/* Step-9 compact phone entry (design screen 1 .phone-head): at <=640px a
+   pinned 56px title/trigger header keeps Request work reachable above the
+   stacked rail, and the sheet opens below that header. >=641px hides it and
+   keeps the page-head trigger as the entry. */
+.phone-head{display:none}
+@media(max-width:640px){
+.phone-head{display:flex;align-items:center;justify-content:space-between;gap:8px;position:fixed;top:0;left:0;right:0;height:56px;padding:0 8px 0 16px;background:var(--ds-chrome);border-bottom:1px solid var(--ds-line-2);z-index:15}
+.phone-head .where{display:grid;font-size:12px;color:var(--ds-muted);line-height:1.3;min-width:0}
+.phone-head .where strong{color:var(--ds-ink);font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.phone-head .ds-btn{padding:0 12px;flex-shrink:0}
+.app{padding-top:56px}
+}
+
 /* Request work dialog shell (design screen 1 #cmd/.cmd-panel). Every rule is
    scoped under dialog.request-work so other dialogs and global button rules
    stay untouched. Disabled footer actions use the recorded dashed/faint
@@ -531,7 +544,7 @@ dialog.request-work{padding:0;background:var(--ds-panel);color:var(--ds-ink-2);b
 dialog.request-work[open]{display:flex;flex-direction:column}
 dialog.request-work::backdrop{background:rgba(0,0,0,.68)}
 @media(min-width:641px){dialog.request-work{position:fixed;top:0;left:0;right:0;bottom:auto;width:680px;max-width:100%;max-height:calc(100vh - 148px);margin:124px auto 0}}
-@media(max-width:640px){dialog.request-work{position:fixed;top:0;left:0;right:0;bottom:0;width:100%;height:100%;max-width:none;max-height:none;margin:0;border-radius:10px 10px 0 0;border-bottom:0}}
+@media(max-width:640px){dialog.request-work{position:fixed;top:56px;left:0;right:0;bottom:0;width:100%;height:calc(100% - 56px);max-width:none;max-height:none;margin:0;border-radius:10px 10px 0 0;border-bottom:0}}
 dialog.request-work .cmd-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px 14px 24px;border-bottom:1px solid var(--ds-line-2);flex-shrink:0}
 dialog.request-work .cmd-head h2{font-size:18px;font-weight:700;letter-spacing:-.2px;color:var(--ds-ink)}
 dialog.request-work .cmd-head h2:focus{outline:none}

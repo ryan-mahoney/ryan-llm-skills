@@ -12,10 +12,20 @@ SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 240s uv run --script \
 entry runs the step-9 request-work shell proof: the persistent
 #request-work-trigger in the page head on every real destination (including the
 hidden launch route, workspace-scoped routes and the workspace-picker state),
-the native #request-work-dialog focus lifecycle (open, Escape, Ctrl+J, Meta+J,
-the labelled close button), the existing New thread modal blocking the request
-shortcut, and the responsive sheet geometry at 320, 390 and 1280 widths. It
-writes request-dialog-<width>.png captures and browser/request-browser-entry.json.
+the compact pinned 56px phone title/trigger header entry at 390 and 320 with the
+sheet below it, the native #request-work-dialog focus lifecycle (open, Escape,
+Ctrl+J, Meta+J, the labelled close button), the existing New thread modal
+blocking the request shortcut, and the responsive sheet geometry at 320, 390 and
+1280 widths. It writes request-dialog-<width>.png,
+request-entry-closed-<width>.png, request-sheet-below-<width>.png captures and
+browser/request-browser-entry.json.
+
+scope runs the focused removal interaction on a selected spec entity: the
+request-state store initializes the route scope, Remove context falls back to
+the workspace scope, the displayed context matches it, and the removal survives
+close/reopen on the same route. It writes request-scope-entity-<width>.png and
+request-scope-removed-<width>.png captures and browser/request-browser-scope.json.
+
 With --capture-reference it also serves the reference screen from the owned
 loopback server and captures request-reference-<width>.png at the same widths.
 
@@ -42,7 +52,7 @@ from pathlib import Path
 from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--case', choices=['entry'], default='entry')
+parser.add_argument('--case', choices=['entry', 'scope'], default='entry')
 parser.add_argument('--capture-reference', default=None)
 options = parser.parse_args()
 case = options.case
@@ -357,8 +367,151 @@ def run_entry(url, thread1):
         return measurements
     run_assertion('phone-320-no-horizontal-overflow', phone_320_no_overflow)
 
+    # 4b. Compact phone entry (step-9 phone header): a pinned 56px
+    #     title/trigger header is the closed phone entry at 390 and 320 while
+    #     the stacked rail stays reachable below it.
+    def phone_header_hidden_desktop():
+        ensure_closed()
+        page.set_viewport_size({'width': 1280, 'height': 900})
+        page.goto(url + '/#/specs?ws=fixture', wait_until='domcontentloaded')
+        display = page.evaluate("() => getComputedStyle(document.querySelector('.phone-head')).display")
+        assert display == 'none', display
+        return {'display': display}
+    run_assertion('phone-header-hidden-desktop', phone_header_hidden_desktop)
+
+    def phone_compact_entry(width, height, name):
+        ensure_closed()
+        page.set_viewport_size({'width': width, 'height': height})
+        page.goto(url + '/#/specs?ws=fixture', wait_until='domcontentloaded')
+        measurements = page.evaluate("""() => {
+          const head = document.querySelector('.phone-head');
+          const headBox = head.getBoundingClientRect();
+          const trigger = document.getElementById('request-work-phone-trigger');
+          const triggerBox = trigger.getBoundingClientRect();
+          const rail = document.querySelector('.rail').getBoundingClientRect();
+          return {
+            headPosition: getComputedStyle(head).position,
+            headTop: headBox.top, headHeight: headBox.height, headBottom: headBox.bottom,
+            triggerVisible: triggerBox.width > 0 && triggerBox.height > 0,
+            triggerHeight: triggerBox.height, triggerWidth: triggerBox.width,
+            railTop: rail.top, railHeight: rail.height,
+            viewportWidth: window.innerWidth,
+            documentScrollWidth: document.documentElement.scrollWidth,
+          };
+        }""")
+        report['measurements'][f'entry{width}'] = measurements
+        assert measurements['headPosition'] == 'fixed', measurements
+        assert measurements['headTop'] == 0, measurements
+        assert measurements['headHeight'] == 56, measurements
+        assert measurements['triggerVisible'], measurements
+        assert measurements['triggerHeight'] >= 44, measurements
+        assert measurements['railHeight'] > 0, measurements
+        assert measurements['railTop'] >= measurements['headBottom'], measurements
+        assert measurements['documentScrollWidth'] <= measurements['viewportWidth'], measurements
+        capture(name)
+        return measurements
+    run_assertion('phone-compact-entry-390', lambda: phone_compact_entry(390, 900, 'request-entry-closed-390.png'))
+    run_assertion('phone-compact-entry-320', lambda: phone_compact_entry(320, 568, 'request-entry-closed-320.png'))
+
+    # 4c. The open sheet sits below the pinned header, opened from the phone
+    #     entry trigger, and Escape returns focus to that trigger.
+    def phone_sheet_below_header(width, height, name):
+        ensure_closed()
+        page.set_viewport_size({'width': width, 'height': height})
+        page.locator('#request-work-phone-trigger').click()
+        expect(page.locator('#request-work-dialog')).to_be_visible()
+        measurements = page.evaluate("""() => {
+          const head = document.querySelector('.phone-head').getBoundingClientRect();
+          const dialog = document.getElementById('request-work-dialog').getBoundingClientRect();
+          return {
+            headTop: head.top, headBottom: head.bottom, headHeight: head.height,
+            dialogTop: dialog.top, dialogBottom: dialog.bottom,
+            viewportHeight: window.innerHeight, viewportWidth: window.innerWidth,
+          };
+        }""")
+        report['measurements'][f'sheet{width}'] = measurements
+        assert measurements['headTop'] == 0 and measurements['headHeight'] == 56, measurements
+        assert measurements['dialogTop'] >= measurements['headBottom'], measurements
+        assert abs(measurements['dialogBottom'] - measurements['viewportHeight']) <= 1, measurements
+        capture(name)
+        return measurements
+    run_assertion('phone-sheet-below-header-390', lambda: phone_sheet_below_header(390, 900, 'request-sheet-below-390.png'))
+    run_assertion('phone-sheet-below-header-320', lambda: phone_sheet_below_header(320, 568, 'request-sheet-below-320.png'))
+
+    def phone_escape_returns_focus():
+        assert dialog_open(), 'dialog was not open for the phone Escape proof'
+        page.keyboard.press('Escape')
+        expect(page.locator('#request-work-dialog')).not_to_be_visible()
+        expect(page.locator('#request-work-phone-trigger')).to_be_focused()
+        return {'activeElement': active_id()}
+    run_assertion('phone-escape-returns-focus-to-phone-trigger', phone_escape_returns_focus)
+
     # 5. The default fixture flags never changed; the run also stays clean of
     #    uncaught page errors.
+    def no_page_errors():
+        assert not report['pageErrors'], report['pageErrors']
+        return {'pageErrors': len(report['pageErrors'])}
+    run_assertion('no-page-errors', no_page_errors)
+
+
+def run_scope(url):
+    """Focused removal interaction on a selected spec entity (F1 proof)."""
+    def capture(name):
+        path = browser_evidence / name
+        page.screenshot(path=str(path))
+        report['captures'].append(str(path))
+        return str(path)
+
+    def dialog_open():
+        return page.evaluate(
+            "() => { const d = document.getElementById('request-work-dialog'); return Boolean(d && d.open); }")
+
+    def ensure_closed():
+        if dialog_open():
+            page.keyboard.press('Escape')
+            expect(page.locator('#request-work-dialog')).not_to_be_visible()
+
+    def chip_text():
+        return page.locator('#request-work-dialog .cmd-context').inner_text()
+
+    def removal_fallback(width, height, trigger, name_prefix):
+        ensure_closed()
+        page.set_viewport_size({'width': width, 'height': height})
+        page.goto(url + '/#/specs?ws=fixture&id=browser', wait_until='domcontentloaded')
+        page.locator(trigger).click()
+        expect(page.locator('#request-work-dialog')).to_be_visible()
+        # The route's selected spec entity is the displayed context.
+        expect(page.locator('#request-work-dialog .cmd-context')).to_contain_text('browser')
+        expect(page.locator('#request-work-dialog .cmd-context')).to_contain_text('Spec')
+        if width == 1280:
+            capture('request-scope-entity-1280.png')
+        # Remove context falls back to the workspace scope of the same entry.
+        page.locator('#request-work-dialog button[aria-label="Remove context"]').click()
+        expect(page.locator('#request-work-dialog .cmd-context')).to_contain_text('Browser fixture')
+        expect(page.locator('#request-work-dialog .cmd-context')).to_contain_text('Workspace')
+        text = chip_text()
+        assert 'Spec' not in text and 'browser' not in text, text
+        capture(f'{name_prefix}-removed-{width}.png')
+        # The removal survives close/reopen on the same route: reopening must
+        # not re-derive the removed entity.
+        page.keyboard.press('Escape')
+        expect(page.locator('#request-work-dialog')).not_to_be_visible()
+        page.locator(trigger).click()
+        expect(page.locator('#request-work-dialog')).to_be_visible()
+        text = chip_text()
+        assert 'Browser fixture' in text and 'Workspace' in text, text
+        assert 'Spec' not in text and 'browser' not in text, text
+        if width == 1280:
+            capture('request-scope-removed-reopen-1280.png')
+        page.keyboard.press('Escape')
+        expect(page.locator('#request-work-dialog')).not_to_be_visible()
+        return {'width': width, 'chip': text}
+
+    run_assertion('remove-context-workspace-fallback-1280',
+                  lambda: removal_fallback(1280, 900, '.page-head #request-work-trigger', 'request-scope'))
+    run_assertion('remove-context-workspace-fallback-390',
+                  lambda: removal_fallback(390, 900, '#request-work-phone-trigger', 'request-scope'))
+
     def no_page_errors():
         assert not report['pageErrors'], report['pageErrors']
         return {'pageErrors': len(report['pageErrors'])}
@@ -390,7 +543,10 @@ try:
                 {'method': request.method, 'url': request.url, 'failure': str(request.failure)}))
             startup_seconds = round(time.monotonic() - started, 3)
             check_started = time.monotonic()
-            run_entry(fixture_info['url'], fixture_info['thread1'])
+            if case == 'entry':
+                run_entry(fixture_info['url'], fixture_info['thread1'])
+            else:
+                run_scope(fixture_info['url'])
             if reference_html:
                 run_assertion('reference-captures', capture_reference)
             report['status'] = ('passed' if report['assertions']
