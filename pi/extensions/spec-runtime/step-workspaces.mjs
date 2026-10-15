@@ -728,17 +728,29 @@ async function provisionOverlayWorkspace({ kind, selection, snapshotId, baseComm
   // created. Only the missing half of the private base is seeded on a
   // partially provisioned repository.
   const privateHead = gitMaybe(['-C', gitDir, 'rev-parse', '--verify', '-q', 'HEAD']);
-  const privateIndex = gitMaybe(['-C', gitDir, 'ls-files']);
-  const privateValid = privateHead !== null && privateIndex !== null;
+  const indexPath = join(gitDir, 'index');
+  let privateIndex = false;
+  if (existsSync(indexPath)) {
+    try {
+      // Successful empty output is a valid index with all paths deleted.
+      gitText(['-C', gitDir, 'ls-files']);
+      privateIndex = true;
+    } catch {
+      // Git cannot read this index; only invalid state may be reseeded.
+    }
+  }
+  const privateValid = privateHead !== null && privateIndex;
   if (!privateValid) {
     if (!existsSync(join(gitDir, 'HEAD'))) {
       execFileSync('git', ['init', '--bare', '-q', gitDir], GIT_RUN);
       gitText(['-C', gitDir, 'config', 'core.bare', 'false']);
       gitText(['-C', gitDir, 'config', 'core.worktree', merged]);
     }
+    // A corrupt index can also prevent fetch from inspecting the repository.
+    if (!privateIndex) rmSync(indexPath, { force: true });
     fetchCommitObjects({ gitDir, source: target.worktree, sha: baseCommit });
     if (privateHead === null) gitText(['-C', gitDir, 'update-ref', 'HEAD', baseCommit]);
-    if (privateIndex === null) gitText(['-C', gitDir, 'read-tree', baseCommit]);
+    if (!privateIndex) gitText(['-C', gitDir, 'read-tree', baseCommit]);
   }
   dropAlternates(gitDir);
 

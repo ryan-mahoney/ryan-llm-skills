@@ -232,6 +232,59 @@ test('wave workspaces: attempts share one frozen snapshot with independent layer
   assert.deepEqual(readdirSync(second.upper), [], 'a sibling attempt keeps its own empty layer');
 });
 
+test('wave workspaces: replay preserves a valid empty private index', async t => {
+  const target = makeTargetRepo(t, 'wave-workspaces-empty-index-target');
+  const waveRoot = freshRoot(t, 'wave-workspaces-empty-index-root');
+  const ownership = makeOwnership(t, 'wave-workspaces-empty-index');
+  const options = workspaceOptions({
+    target, waveRoot, ownership, packageId: 'wave-empty-index',
+    label: 'empty-index', attemptId: 'attempt-empty-index', baseCommit: target.c2,
+  });
+  const attempt = await prepareStepWorkspace(options);
+  git(attempt.gitDir, ['read-tree', '--empty']);
+  writeFileSync(join(attempt.merged, 'retained.txt'), 'keep worktree bytes\n');
+  const tree = git(attempt.gitDir, ['write-tree']);
+  const index = readFileSync(join(attempt.gitDir, 'index'));
+  const head = git(attempt.gitDir, ['rev-parse', 'HEAD']);
+  const worktree = treeSnapshot(attempt.merged);
+  await createOverlayPhases({ ownership }).endPhase({
+    token: attempt.claim.token, epoch: attempt.claim.epoch, drain: 'confirmed',
+  });
+  const replay = await prepareStepWorkspace(options);
+  assert.deepEqual(readFileSync(join(replay.gitDir, 'index')), index, 'empty index bytes survive replay');
+  assert.equal(git(replay.gitDir, ['ls-files']), '', 'all tracked deletions remain staged');
+  assert.equal(git(replay.gitDir, ['write-tree']), tree, 'empty index tree survives replay');
+  assert.equal(git(replay.gitDir, ['rev-parse', 'HEAD']), head, 'private HEAD survives replay');
+  assert.deepEqual(treeSnapshot(replay.merged), worktree, 'worktree survives replay');
+});
+
+test('wave workspaces: replay seeds a missing or unreadable private index', async t => {
+  for (const state of ['missing', 'unreadable']) {
+    await t.test(state, async t => {
+      const target = makeTargetRepo(t, `wave-workspaces-${state}-index-target`);
+      const waveRoot = freshRoot(t, `wave-workspaces-${state}-index-root`);
+      const ownership = makeOwnership(t, `wave-workspaces-${state}-index`);
+      const options = workspaceOptions({
+        target, waveRoot, ownership, packageId: `wave-${state}-index`,
+        label: `${state}-index`, attemptId: 'attempt-index', baseCommit: target.c2,
+      });
+      const attempt = await prepareStepWorkspace(options);
+      const indexPath = join(attempt.gitDir, 'index');
+      if (state === 'missing') rmSync(indexPath);
+      else writeFileSync(indexPath, 'invalid index bytes\n');
+      const head = git(attempt.gitDir, ['rev-parse', 'HEAD']);
+      const worktree = treeSnapshot(attempt.merged);
+      await createOverlayPhases({ ownership }).endPhase({
+        token: attempt.claim.token, epoch: attempt.claim.epoch, drain: 'confirmed',
+      });
+      const replay = await prepareStepWorkspace(options);
+      assert.equal(git(replay.gitDir, ['write-tree']), git(target.worktree, ['rev-parse', `${target.c2}^{tree}`]));
+      assert.equal(git(replay.gitDir, ['rev-parse', 'HEAD']), head);
+      assert.deepEqual(treeSnapshot(replay.merged), worktree);
+    });
+  }
+});
+
 test('wave workspaces: private Git metadata stays independent and imports exact heads', async t => {
   const target = makeTargetRepo(t, 'wave-workspaces-git-target');
   const waveRoot = freshRoot(t, 'wave-workspaces-git-root');
