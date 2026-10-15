@@ -468,3 +468,78 @@ test("a synchronous final during trailing padding succeeds", async (t) => {
   assert.ok(report.timeline.lastIndexOf("audio") > report.timeline.indexOf("final"));
   assert.deepEqual(daemon.record.closes, [{ code: 0, signal: null }]);
 });
+
+test("late-tail regression: a second-utterance final outside the old 250ms window joins full text without early shutdown", async (t) => {
+  const checkout = makeCheckout(t);
+  // Hand-derived: 8 samples in frames of 4 -> 2 input frames; padSeconds 0.005
+  // -> 80 zero samples -> 20 padding frames; 88 samples / 22 audio requests.
+  // The fixture replays the real EV-5 failure AFTER that threshold: first
+  // final + empty revision, pending revision at +900 ms, second final at
+  // +1200 ms — delays that exceed the old 250 ms window and fit the 2000 ms
+  // one. Selectable: node --test --test-name-pattern="late-tail regression:" …
+  const input = new Float32Array([0.5, -0.25, 0.125, -1, 0.75, 2, 0.5, -0.5]);
+  const daemon = fakeDaemon(checkout, "late-tail", {
+    FAKE_ASR_FINAL_AFTER_SAMPLES: String(input.length + 80),
+    FAKE_ASR_TEXT: "first sentence",
+    FAKE_ASR_TEXT_2: "second sentence",
+  });
+  const adapter = createSpeechAdapter({
+    checkout,
+    spawn: daemon.spawn,
+    chunkSamples: 4,
+    padSeconds: 0.005,
+    timeoutMs: 8000,
+    hostname: () => "test-host",
+  });
+  const started = Date.now();
+  const text = await adapter.transcribe(input);
+  const elapsed = Date.now() - started;
+  assert.equal(text, "first sentence second sentence");
+  assert.ok(elapsed < 5000, `late-tail case must stay bounded (elapsed ${elapsed})`);
+  const timeline = daemon.readReport().timeline;
+  const firstFinal = timeline.indexOf("final");
+  const firstRevision = timeline.indexOf("revision");
+  const pendingRevision = timeline.indexOf("revision", firstRevision + 1);
+  const secondFinal = timeline.lastIndexOf("final");
+  const shutdown = timeline.indexOf("shutdown");
+  assert.ok(firstFinal !== -1 && firstFinal < pendingRevision, "first final must precede the pending revision");
+  assert.ok(pendingRevision !== -1 && pendingRevision < secondFinal, "pending revision must precede the second final");
+  assert.ok(secondFinal !== -1 && secondFinal < shutdown, "second final must precede shutdown (no early shutdown)");
+  assert.deepEqual(daemon.record.closes, [{ code: 0, signal: null }]);
+});
+
+test("late-tail regression unresolved: pending second utterance without a final rejects at deadline with no partial success", async (t) => {
+  const checkout = makeCheckout(t);
+  // Same replay, unresolved: no second final ever arrives. Deadline 2800 ms;
+  // the first final must never become partial success. Selectable: node --test
+  // --test-name-pattern="late-tail regression unresolved:" …
+  const input = new Float32Array([0.5, -0.25, 0.125, -1, 0.75, 2, 0.5, -0.5]);
+  const daemon = fakeDaemon(checkout, "late-tail-unresolved", {
+    FAKE_ASR_FINAL_AFTER_SAMPLES: String(input.length + 80),
+    FAKE_ASR_TEXT: "first sentence",
+    FAKE_ASR_TEXT_2: "second sentence",
+  });
+  const adapter = createSpeechAdapter({
+    checkout,
+    spawn: daemon.spawn,
+    chunkSamples: 4,
+    padSeconds: 0.005,
+    timeoutMs: 2800,
+    hostname: () => "test-host",
+  });
+  const started = Date.now();
+  const error = await captureRejection(adapter.transcribe(input));
+  const elapsed = Date.now() - started;
+  assert.equal(error.code, "failed");
+  assert.ok(elapsed >= 2800 - 50, `deadline must govern (elapsed ${elapsed})`);
+  assert.ok(elapsed < 5000, `late-tail case must stay bounded (elapsed ${elapsed})`);
+  const timeline = daemon.readReport().timeline;
+  const firstFinal = timeline.indexOf("final");
+  const firstRevision = timeline.indexOf("revision");
+  const pendingRevision = timeline.indexOf("revision", firstRevision + 1);
+  assert.ok(firstFinal !== -1 && firstFinal < pendingRevision, "first final must precede the pending revision");
+  assert.equal(timeline.lastIndexOf("final"), firstFinal, "no second final may exist");
+  assert.equal(timeline.indexOf("shutdown"), -1, "no shutdown may be sent for unresolved text");
+  assert.deepEqual(daemon.record.kills, ["SIGTERM"]);
+  assert.equal(daemon.record.closes.length, 1);
+});

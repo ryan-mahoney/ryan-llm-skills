@@ -9,7 +9,7 @@
 //                     partial/revision/final (text) | error
 //
 // Protocol-v1 observation limitation: the protocol has NO decode-completion
-// acknowledgement for a written stream. The 250 ms text-event quiescence used
+// acknowledgement for a written stream. The 2000 ms text-event quiescence used
 // for finalization below is a bounded adapter observation, not a protocol
 // acknowledgement. A final only qualifies once every input frame has been
 // submitted (trailing padding may still be in flight, as synchronous engines
@@ -25,7 +25,12 @@ import path from "node:path";
 
 const PROTOCOL_VERSION = 1;
 const SAMPLE_RATE = 16000;
-const QUIESCENCE_MS = 250;
+// 2000 ms derivation (recorded real diagnostic: first final + empty revision
+// at 4681 ms -> next pending revision at 5540 ms = 859 ms inter-segment gap;
+// 2x859 = 1718 ms rounded up to 2000 ms, ~2.3x the observed gap). This remains
+// a deadline-bounded final/text-event observation, NOT an all-input-consumed
+// acknowledgement.
+const QUIESCENCE_MS = 2000;
 const KILL_GRACE_MS = 2000;
 const MAX_LINE_BYTES = 64 * 1024;
 const MAX_STDOUT_BYTES = 256 * 1024;

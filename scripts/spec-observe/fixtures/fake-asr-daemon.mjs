@@ -18,6 +18,11 @@
 //   sync-final-during-padding — final on the last input frame
 //                               (FAKE_ASR_INPUT_SAMPLES) then stdin pauses so
 //                               trailing padding is provably still in flight.
+//   late-tail                 — real EV-5 failure replay after the full
+//                               input/padding threshold: first genuine final +
+//                               empty revision, pending nonempty revision at
+//                               +900 ms, second genuine final at +1200 ms.
+//   late-tail-unresolved      — same replay, but no second final ever arrives.
 //   earlier-final-tail        — model-ready then earlier final on the first
 //                               audio (stdin paused 200 ms), later frames emit
 //                               a pending nonempty tail then empty clears;
@@ -47,6 +52,8 @@ const reportPath = process.env.FAKE_ASR_REPORT ?? null;
 const KNOWN_SCENARIOS = [
   "happy",
   "sync-final-during-padding",
+  "late-tail",
+  "late-tail-unresolved",
   "earlier-final-tail",
   "initially-empty-pending",
   "late-active-text",
@@ -150,6 +157,29 @@ function onAudio() {
         send({ type: "final", text: envText("FAKE_ASR_TEXT", "padding done") });
         process.stdin.pause();
         setTimeout(() => process.stdin.resume(), 200);
+      }
+      return;
+    }
+    case "late-tail":
+    case "late-tail-unresolved": {
+      const threshold = Number(process.env.FAKE_ASR_FINAL_AFTER_SAMPLES ?? 0);
+      if (state.finalSent || threshold <= 0 || state.samples.length < threshold) return;
+      // Replay the recorded EV-5 failure AFTER the full input/padding
+      // threshold: a genuine final with an empty revision in the same turn,
+      // then a pending nonempty revision 900 ms later, then — in the complete
+      // variant — a second genuine final at 1200 ms. The delays deliberately
+      // exceed the old 250 ms observation window.
+      state.finalSent = true;
+      send({ type: "final", text: envText("FAKE_ASR_TEXT", "first sentence") });
+      send({ type: "revision", text: "" });
+      setTimeout(() => {
+        send({ type: "revision", text: envText("FAKE_ASR_TEXT_2", "second sentence") });
+      }, 900);
+      if (scenario === "late-tail") {
+        setTimeout(() => {
+          send({ type: "final", text: envText("FAKE_ASR_TEXT_2", "second sentence") });
+          send({ type: "revision", text: "" });
+        }, 1200);
       }
       return;
     }
