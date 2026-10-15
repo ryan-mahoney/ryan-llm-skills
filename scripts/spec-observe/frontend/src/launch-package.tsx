@@ -119,13 +119,20 @@ export const planningStopValue = (record: WireRecord, plan: PackagePlanningPlan)
 // Confirmed planning result stop: the retained reviewed stop plus an honest
 // planning-only bound. A prepared launch worktree may exist, so the result
 // never promises no branch; the worktree/branch facts disclose it instead.
-// The critique and spec-write stops name their own boundary instead of the
-// generic planning-only sentence.
+// The critique and spec-write stops keep their stage name but share the same
+// no-commit/publication boundary instead of repeating the false no-branch
+// promise.
 export const planningResultStopValue = (record: WireRecord, plan: PackagePlanningPlan): string => {
-  if (plan.stop === 'critique') return 'critique.md. No spec, branch or pull request.';
-  if (plan.skill === 'spec-write') return 'Prepared spec, ready to implement. No branch, implementation or pull request.';
+  if (plan.stop === 'critique') return 'critique.md. Planning only \u2014 no commits or pull request.';
+  if (plan.skill === 'spec-write') return 'Prepared spec, ready to implement. Planning only \u2014 no commits or pull request.';
   return `${planningStopValue(record, plan)}. Planning only \u2014 no commits or pull request.`;
 };
+
+// The stage-specific Next steps planning results (critique-only and spec-write)
+// make the exact assignment the primary destination; the ordinary epic-planning
+// result keeps its existing epic-first ordering.
+export const stageSpecificPlanningResult = (record: WireRecord, plan: PackagePlanningPlan): boolean =>
+  plan.stop === 'critique' || str(record.skill) === 'spec-write';
 
 // Observed Inputs from the live Next steps scan: each watched file renders its
 // name and the exact time the scan observed it written. Only the live scan row
@@ -386,6 +393,7 @@ export function PackageResult(props: {
   const record = () => props.preview.record;
   const plan = () => props.kind === 'plan';
   const planningPlan = () => planningPlanFor(record(), props.preview.inputPreview);
+  const stageSpecific = () => plan() && stageSpecificPlanningResult(record(), planningPlan());
   // Next-outcome guidance from the same retained reviewed plan as facts:
   // a proposal stop never promises specification completion, and the fresh
   // architecture conditional keeps its critique branch instead of assuming
@@ -454,9 +462,9 @@ export function PackageResult(props: {
       </dl>
       <ActionBar variant="inline">
         <Show when={plan()} fallback={<a id="launch-result-open-spec" class="ds-btn ds-btn--primary" href={props.specHref}>Open spec</a>}>
-          <a id="launch-result-open-epic" class="ds-btn ds-btn--primary" href={props.epicHref}>Open epic</a>
+          <a id="launch-result-open-epic" class={stageSpecific() ? 'ds-btn' : 'ds-btn ds-btn--primary'} href={props.epicHref}>Open epic</a>
         </Show>
-        <a id="launch-result-open-agent" class="ds-btn" href={props.agentHref}>Open agent</a>
+        <a id="launch-result-open-agent" class={stageSpecific() ? 'ds-btn ds-btn--primary' : 'ds-btn'} href={props.agentHref}>Open agent</a>
         <Show when={props.onReturn}>
           <button id="launch-result-return" class="ds-btn" type="button" onClick={props.onReturn}>{props.returnLabel || 'Return to agents'}</button>
         </Show>

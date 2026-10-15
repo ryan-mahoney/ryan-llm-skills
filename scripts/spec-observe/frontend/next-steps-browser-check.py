@@ -19,9 +19,10 @@ unchanged.
 
 The launch case drives the built App through the Critique-filtered list
 hand-off, cold critics/spec entries, observed Inputs facts, the origin return
-and a failed launch over the same opt-in fixture. The final pi/tmux boundary
-is fake: no worker is started, no operator storage is touched, and the
-fixture-owned resolver/discussion service supplies every recorded fact.
+and refused/unconfirmed launches over the same opt-in fixture, composed with
+the real createDiscussionService save/preview/launch owner. Only the final
+pi/tmux process boundary is fake: no operator storage is touched, every
+resolver/store/authority fact is real, and no operator assignment starts.
 
 The landing case drives the built App at empty and unknown hashes to prove
 Next steps is the live All-workspaces landing, that the rail waiting badge
@@ -171,15 +172,16 @@ def atomic_report(report: dict, evidence: Path, name: str = "report.json") -> No
     os.replace(temporary, evidence / name)
 
 
-def attach_console_evidence(page, label: str, report: dict) -> None:
-    """Record console.error/pageerror authority evidence. Intentional HTTP 503
-    resource faults are expected and kept separate from unexpected runtime
-    errors, which still fail the case."""
+def attach_console_evidence(page, label: str, report: dict, expected_statuses: tuple[str, ...] = ("503",)) -> None:
+    """Record console.error/pageerror authority evidence. Intentional HTTP
+    resource faults whose status the case deliberately drives (503 by default,
+    409 for the stale-preview refusal) are expected and kept separate from
+    unexpected runtime errors, which still fail the case."""
     def on_console(message):
         if message.type != "error":
             return
         entry = {"page": label, "text": message.text}
-        if "Failed to load resource" in message.text and "503" in message.text:
+        if "Failed to load resource" in message.text and any(status in message.text for status in expected_statuses):
             report["expectedConsole"].append(entry)
         else:
             report["consoleErrors"].append(entry)
@@ -192,6 +194,8 @@ def write_qa(report: dict, evidence: Path, title: str = "Next steps list evidenc
     from this run's report, never hand-copied timestamps or outcomes."""
     scenarios = report.get("scenarios", [])
     captures = sorted({Path(item).name for item in report.get("captures", [])})
+    integration = (report.get("fixture") or {}).get("integration")
+    integration_on = bool(integration.get("enabled")) if isinstance(integration, dict) else bool(integration)
     lines = [
         f"# {title}",
         "",
@@ -202,6 +206,7 @@ def write_qa(report: dict, evidence: Path, title: str = "Next steps list evidenc
         "- Built dashboard from this checkout: `npm run build --prefix scripts/spec-observe/frontend`.",
         "- Opt-in fixture `SENTINEL_NEXT_STEPS=1` with isolated storage, HOME and owned process tree.",
         "- Checker controls only HTTP transport, the local assignment token and the browser clock.",
+        *(["- The fixture also runs `SENTINEL_HANDOFF_INTEGRATION=1`: save/preview/launch compose through the real discussion service and only the final tmux/pi adapters are fake."] if integration_on else []),
         "",
         "## Routes",
         "",
@@ -1507,10 +1512,13 @@ def run_launch_case(report: dict, fixture: subprocess.Popen, receipt: dict, evid
     """EV-7 bound plan/implement review and result journey.
 
     Drives the actual built App through the Critique-filtered list hand-off,
-    the cold critics/spec entries, observed Inputs facts, the origin return and
-    a failed launch over the SENTINEL_NEXT_STEPS=1 fixture and its real
-    resolver. The final pi/tmux boundary stays fake: this case starts no
-    worker and controls only fixture-owned HTTP, storage and the local token.
+    the cold critics/spec entries (including a catalog kit id that differs
+    from the storage directory basename), observed Inputs facts, the origin
+    return and refused/unconfirmed launches. The fixture runs
+    SENTINEL_NEXT_STEPS=1 over SENTINEL_HANDOFF_INTEGRATION=1, so save,
+    preview and launch compose through the real discussion service and only
+    the final tmux/pi process adapters are fake. No worker starts, no operator
+    storage is touched and no private Solid state is seeded.
     """
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -1522,7 +1530,8 @@ def run_launch_case(report: dict, fixture: subprocess.Popen, receipt: dict, evid
         page = context.new_page()
         page.set_default_timeout(15000)
         page.on("pageerror", lambda error: report["pageErrors"].append(str(error)))
-        attach_console_evidence(page, "launch", report)
+        # The real stale-preview refusal is an intentional 409 response.
+        attach_console_evidence(page, "launch", report, expected_statuses=("409", "503"))
 
         def check_deadline(label: str) -> None:
             if time.monotonic() > deadline:
@@ -1560,8 +1569,8 @@ def run_launch_case(report: dict, fixture: subprocess.Popen, receipt: dict, evid
             assert stat_entry and stat_entry.get("exists") and stat_entry.get("mtimeIso"), (slug, name, stat_entry)
             return stat_entry["mtimeIso"]
 
-        def launch_url(package: str, skill: str, stop: str | None = None, tab: str | None = None) -> str:
-            params = {"ws": "fixture", "package": package, "skill": skill}
+        def launch_url(package: str, skill: str, stop: str | None = None, tab: str | None = None, ws: str = "fixture") -> str:
+            params = {"ws": ws, "package": package, "skill": skill}
             if stop is not None:
                 params["stop"] = stop
             if tab is not None:
@@ -1614,6 +1623,13 @@ def run_launch_case(report: dict, fixture: subprocess.Popen, receipt: dict, evid
             page.locator("#launch-save").click()
             wait_for_contract()
 
+        def pane_metrics() -> dict:
+            # The bound launch surface scrolls inside .full-page; window scroll
+            # only moves the fixed-height shell and captures empty canvas.
+            return page.evaluate(
+                """() => { const pane = document.querySelector('.full-page'); if (!pane) return null; return {scrollHeight: pane.scrollHeight, clientHeight: pane.clientHeight, scrollTop: pane.scrollTop}; }"""
+            )
+
         def capture(name: str, scroll_to: str | None = None) -> None:
             for width, height in WIDTH_HEIGHTS:
                 page.set_viewport_size({"width": width, "height": height})
@@ -1621,22 +1637,45 @@ def run_launch_case(report: dict, fixture: subprocess.Popen, receipt: dict, evid
                     page.locator(scroll_to).scroll_into_view_if_needed()
                     page.wait_for_timeout(150)
                 else:
-                    page.evaluate("() => window.scrollTo(0, 0)")
+                    page.evaluate("() => { const pane = document.querySelector('.full-page'); if (pane) pane.scrollTo(0, 0); window.scrollTo(0, 0); }")
+                    page.wait_for_timeout(100)
                 path = evidence / f"production-{name}-{width}.png"
                 page.screenshot(path=str(path), full_page=False)
                 report["captures"].append(str(path))
-                report["overflow"][f"{name}-{width}"] = page.evaluate(
-                    """() => ({scrollHeight: document.documentElement.scrollHeight, clientHeight: document.documentElement.clientHeight})"""
-                )
+                report["overflow"][f"{name}-{width}"] = pane_metrics()
             page.set_viewport_size({"width": 1280, "height": 900})
+
+        def capture_scrolled(name: str) -> None:
+            # Complementary lower capture at each viewport; the caller opens the
+            # captured-input disclosures first so the image proves populated
+            # content instead of a collapsed summary row.
+            for width, height in WIDTH_HEIGHTS:
+                page.set_viewport_size({"width": width, "height": height})
+                page.evaluate("() => { const pane = document.querySelector('.full-page'); if (pane) pane.scrollTo(0, pane.scrollHeight); }")
+                page.wait_for_timeout(150)
+                path = evidence / f"production-{name}-{width}-scrolled.png"
+                page.screenshot(path=str(path), full_page=False)
+                report["captures"].append(str(path))
+                report["overflow"][f"{name}-{width}-scrolled"] = pane_metrics()
+            page.set_viewport_size({"width": 1280, "height": 900})
+
+        def capture_review(name: str) -> None:
+            # F5: the top capture preserves the review heading/package/execution
+            # facts; the scrolled companion expands the captured-input
+            # disclosure and preserves its populated content at both viewports.
+            capture(name)
+            expect(page.locator("#launch-what-pi")).to_be_visible()
+            details = page.evaluate(
+                """() => { const nodes = [...document.querySelectorAll('#launch-what-pi details')]; for (const node of nodes) node.open = true; return nodes.length; }"""
+            )
+            assert details > 0, "captured-input disclosure missing from the review"
+            capture_scrolled(name)
+            report["reviewCaptures"][name] = {"details": details, "open": details}
 
         def same_locale_time(iso: str) -> str:
             return page.evaluate("iso => new Date(iso).toLocaleString()", iso)
 
         control("next-local", True)
-        control("stale-launch", False)
-        control("dispatch-launch-outcome", "live")
-        control("review-launch-refusal", "none")
         recommended = package_dir("recommended")
         critiqued = package_dir("critiqued")
         direct = package_dir("direct")
@@ -1665,15 +1704,53 @@ def run_launch_case(report: dict, fixture: subprocess.Popen, receipt: dict, evid
         report["scenarios"].append("Cold critics entry on a package whose critique.md already exists refuses visibly with nothing saved or dispatched")
         check_deadline("cold-refusal")
 
-        submit_cold_review(critiqued, "spec-write", "prepared")
+        submit_cold_review(recommended, "spec-write", "prepared")
         expect(fact("stop")).to_have_text("Prepared spec")
         expect(fact("stages")).to_have_text("1 spec-write")
+        expect(fact("inputs")).to_contain_text("proposal.md")
+        expect(fact("inputs")).not_to_contain_text("critique.md")
         expect(page.locator("#launch-assignment-launch")).to_have_text("Start spec")
         assert len(launch_posts()) == 0
-        capture("10-spec-review", scroll_to="#launch-what-pi")
+        capture_review("10-spec-review")
         expect(page.locator("#launch-heading")).to_have_text("Review planning assignment")
-        report["scenarios"].append("Cold explicit Write spec seeds the spec-write contract at the Prepared spec stop with Start spec and no dispatch")
+        report["scenarios"].append("Cold explicit Write spec on the recommended proposal without a critique seeds the spec-write contract at the Prepared spec stop with proposal-only Inputs, Start spec and no dispatch")
         check_deadline("cold-spec")
+
+        # --- Cold entry with a catalog kit id different from the directory --- #
+        # EV-7 F4: the route carries kit id alpha while the storage directory
+        # basename is physical; only the workspaceDirectory adapter plus the
+        # basename comparison can join the route package to its snapshot row.
+        alias = package_dir("kit-alias")
+        alpha_workspace = request_json(fixture, receipt["url"], "/api/workspace", id="alpha")
+        assert alpha_workspace["id"] == "alpha", alpha_workspace
+        assert alpha_workspace["directory"].rstrip("/").rsplit("/", 1)[-1] == "physical", alpha_workspace
+        alias_saves = len(named_posts("dispatchSaveBrief"))
+        page.goto(launch_url(alias, "spec-architect-critics", "critique", ws="alpha"), wait_until="domcontentloaded")
+        expect(page.locator("#launch-cold-bound")).to_have_count(0)
+        expect(page.locator("#launch-brief-title")).not_to_have_value("")
+        page.locator("#launch-save").click()
+        wait_for_contract()
+        expect(page.locator("#launch-heading")).to_have_text("Review planning assignment")
+        expect(fact("target")).to_contain_text("fixture-repo")
+        expect(fact("stop")).to_have_text("critique.md")
+        expect(fact("authority")).to_have_text("None")
+        expect(page.locator("#launch-assignment-launch")).to_have_text("Start critique")
+        assert len(named_posts("dispatchSaveBrief")) == alias_saves + 1, named_posts("dispatchSaveBrief")
+        assert len(launch_posts()) == 0
+        report["scenarios"].append("Cold entry for kit id alpha over directory physical seeds the offered critique-only contract and resolves its real target with nothing dispatched")
+        check_deadline("cold-alias")
+
+        # A conflicting identity (route workspace other) must refuse the same
+        # package without saving, seeding a draft or dispatching. No private
+        # store state is written by the checker.
+        conflict_saves = len(named_posts("dispatchSaveBrief"))
+        page.goto(launch_url(recommended, "spec-architect-critics", "critique", ws="other"), wait_until="domcontentloaded")
+        expect(page.locator("#launch-cold-bound")).to_have_attribute("data-cold-bound", "unavailable")
+        expect(page.locator("#launch-cold-bound")).to_contain_text("not observed in this workspace")
+        assert len(named_posts("dispatchSaveBrief")) == conflict_saves, named_posts("dispatchSaveBrief")
+        assert len(launch_posts()) == 0
+        report["scenarios"].append("A cold route naming the wrong workspace for an observed package refuses visibly without saving, seeding a draft or dispatching")
+        check_deadline("cold-identity-refusal")
 
         # --- Truthful derived facts and filename-only Inputs fallback ------- #
         submit_cold_review(recommended, "spec-architect-critics")
@@ -1752,7 +1829,7 @@ def run_launch_case(report: dict, fixture: subprocess.Popen, receipt: dict, evid
         expect(fact("inputs")).to_contain_text(expected_critique_time)
         expect(page.locator("#launch-assignment-launch")).to_have_text("Start critique")
         assert len(launch_posts()) == 0, launch_posts()
-        capture("08-critique-review", scroll_to="#launch-what-pi")
+        capture_review("08-critique-review")
         assert page.locator("#launch-what-pi").is_visible()
         report["scenarios"].append("Clicking Critique proposal from the Critique-filtered list opens the resolved critic-only review with the observed Inputs time, critique.md stop, None authority and no launch dispatch")
         check_deadline("click-through")
@@ -1784,38 +1861,89 @@ def run_launch_case(report: dict, fixture: subprocess.Popen, receipt: dict, evid
         launch_id = launch_entry["assignment_id"]
         expect(page.locator("#launch-result-package")).to_contain_text(launch_id)
         expect(page.locator("#launch-result-open-agent")).to_have_attribute("href", re.compile(re.escape(launch_id)))
+        expect(page.locator("#launch-result-open-agent")).to_have_class(re.compile(r"ds-btn--primary"))
+        expect(page.locator("#launch-result-open-epic")).not_to_have_class(re.compile(r"ds-btn--primary"))
         expect(page.locator("#launch-result-return")).to_be_visible()
         brief_save = next((entry for entry in named_posts("dispatchSaveBrief") if entry.get("input", {}).get("request_id") == launch_entry.get("request_id")), None)
         assert brief_save is not None, named_posts("dispatchSaveBrief")
         content = brief_save["input"].get("content", "")
         assert "Stop at Critique" in content and "This launch ends at the critique" in content, content[:400]
-        report["scenarios"].append("Start critique records the critic-only dispatch and saved brief stop instruction and the result names the exact assignment with its Open agent href")
+        # The composed dispatch ran through the real discussion service; only
+        # the final tmux/pi boundary is fake. Verify the persisted owner facts,
+        # not just the posted request.
+        assert brief_save["result"] and brief_save["result"].get("brief"), brief_save
+        saved_brief_path = Path(receipt["root"]) / "storage" / "projects" / "fixture" / brief_save["result"]["brief"]
+        assert saved_brief_path.is_file(), saved_brief_path
+        saved_brief_text = saved_brief_path.read_text()
+        assert "This launch ends at the critique" in saved_brief_text, saved_brief_text[:400]
+        launch_result = launches[0]
+        assert launch_result.get("result"), launch_result
+        assert launch_result["result"]["assignment"]["state"] == "live", launch_result["result"]["assignment"]
+        preview_entry = next((entry for entry in named_posts("dispatchPreview") if entry.get("input", {}).get("request_id") == launch_entry.get("request_id")), None)
+        assert preview_entry is not None and preview_entry.get("result"), named_posts("dispatchPreview")
+        record_path = Path(receipt["root"]) / "storage" / "projects" / "fixture" / "assignments" / f"{launch_id}.json"
+        record = json.loads(record_path.read_text())
+        assert record["skill"] == "spec-architect-critics", record["skill"]
+        assert record["package_ref"] == "fixture/recommended", record["package_ref"]
+        assert record["spec_package"] == recommended, (record["spec_package"], recommended)
+        assert record["publication_authority"] == "none", record["publication_authority"]
+        assert record["contract_digest"] == launch_entry["expectedDigest"] == preview_entry["result"]["contractDigest"], record["contract_digest"]
+        assert record["brief"] == brief_save["result"]["brief"], record["brief"]
+        assert record["repository_id"] == "fixture-repo", record["repository_id"]
+        assert record["execution_branch"] == "spec-recommended", record["execution_branch"]
+        assert Path(record["execution_dir"]).is_dir(), record["execution_dir"]
+        workbook = request_json(fixture, receipt["url"], "/__fixture/control")
+        assert len(workbook["integration"]["sessions"]) == 1, workbook["integration"]
+        report["scenarios"].append("Start critique composes save/preview/launch through the real discussion service: the persisted assignment names the exact package, skill, None authority and digest, the result names the exact assignment and Open agent is the planning result's primary action")
         capture("09-critique-result")
         check_deadline("critique-result")
 
-        # --- A failed launch keeps the reviewed identity and offers no retry - #
-        control("dispatch-launch-outcome", "failed")
-        posts_before = len(control_state()["posts"])
+        # --- Refused and unconfirmed launches keep the reviewed contract ---- #
+        # Real stale refusal: the saved brief changes between review and
+        # submission, so the real dispatch owner refuses on digest mismatch.
+        assignments_dir = Path(receipt["root"]) / "storage" / "projects" / "fixture" / "assignments"
+        records_before = sorted(assignments_dir.glob("*.json"))
         launches_before = len(launch_posts())
-        page.goto(launch_url(critiqued, "spec-write", "prepared", tab="review"), wait_until="domcontentloaded")
-        wait_for_contract()
-        reviewed_execution = fact("execution").inner_text()
+        submit_cold_review(critiqued, "spec-write", "prepared")
+        expect(page.locator("#launch-assignment-launch")).to_have_text("Start spec")
+        stale_save = next(entry for entry in reversed(named_posts("dispatchSaveBrief")) if entry.get("input", {}).get("workspace_id") == "fixture")
+        stale_brief = Path(receipt["root"]) / "storage" / "projects" / "fixture" / stale_save["result"]["brief"]
+        assert stale_brief.is_file(), stale_brief
+        stale_brief.write_text(stale_brief.read_text() + "\nChanged after review.\n")
+        page.locator("#launch-assignment-launch").click()
+        expect(page.locator("#launch-review-error")).to_contain_text("The reviewed contract changed")
+        expect(page.locator("#launch-review-previous")).to_be_visible()
+        expect(page.locator("#launch-result-package")).to_have_count(0)
+        expect(page.locator("#launch-assignment-launch")).to_have_count(0)
+        assert len(launch_posts()) == launches_before + 1, launch_posts()
+        assert sorted(assignments_dir.glob("*.json")) == records_before, "a refused launch must publish no assignment record"
+        report["scenarios"].append("A brief change between review and submission is refused by the real dispatch owner on digest mismatch; previous reviewed facts stay visible, no assignment is published and no second launch is offered")
+        check_deadline("stale-launch")
+
+        # Real spawn failure through the fake final tmux adapter: the service
+        # still publishes and reconciles, and the unconfirmed presentation
+        # keeps the recorded identity without offering a retry.
+        control("integration-tmux-fail", True)
+        records_before = sorted(assignments_dir.glob("*.json"))
+        launches_before = len(launch_posts())
+        submit_cold_review(direct, "spec-write", "prepared")
         expect(page.locator("#launch-assignment-launch")).to_have_text("Start spec")
         page.locator("#launch-assignment-launch").click()
-        expect(page.locator("#launch-heading")).to_have_text("Agent could not start")
+        expect(page.locator("#launch-heading")).to_have_text("Launch is unconfirmed")
         expect(page.locator("#launch-result-package")).to_have_count(0)
-        assert len(launch_posts()) == launches_before + 1, launch_posts()
-        failed_id = launch_posts()[-1]["input"]["assignment_id"]
-        expect(result_fact("assignment")).to_have_text(failed_id)
-        expect(result_fact("execution")).to_have_text(reviewed_execution)
-        expect(page.locator("#launch-result-open-agent")).to_have_attribute("href", re.compile(re.escape(failed_id)))
-        expect(page.locator("#launch-result-correct")).to_be_visible()
+        launch_attempts = launch_posts()
+        assert len(launch_attempts) == launches_before + 1, launch_attempts
+        unconfirmed_id = launch_attempts[-1]["input"]["assignment_id"]
+        expect(result_fact("assignment")).to_have_text(unconfirmed_id)
+        expect(page.locator("#launch-result-open-agent")).to_have_attribute("href", re.compile(re.escape(unconfirmed_id)))
+        expect(page.locator("#launch-result-correct")).to_have_count(0)
         expect(page.locator("#launch-assignment-launch")).to_have_count(0)
-        page.wait_for_timeout(300)
-        assert len(control_state()["posts"]) == posts_before + 1, control_state()["posts"][-3:]
-        report["scenarios"].append("A failed launch keeps the reviewed execution directory and exact assignment identity, posts no second dispatch and offers no second launch control")
-        control("dispatch-launch-outcome", "live")
-        check_deadline("failed")
+        unconfirmed_record = json.loads((assignments_dir / f"{unconfirmed_id}.json").read_text())
+        assert unconfirmed_record["state"] == "launch_unknown", unconfirmed_record["state"]
+        assert len(sorted(assignments_dir.glob("*.json"))) == len(records_before) + 1, sorted(assignments_dir.glob("*.json"))
+        report["scenarios"].append("A refused fake pane start still publishes through the real service; the unconfirmed result keeps the exact assignment identity, records launch_unknown and offers no retry")
+        check_deadline("unconfirmed-launch")
+        control("integration-tmux-fail", False)
         browser.close()
 
 
@@ -1935,6 +2063,7 @@ report = {
     "expectedConsole": [],
     "errors": [],
     "overflow": {},
+    "reviewCaptures": {},
     "observedCommit": None,
     "dirty": None,
 }
@@ -1953,7 +2082,7 @@ guard.start()
 try:
     report["observedCommit"], report["dirty"] = observed_revision()
     if arguments.case == "launch":
-        fixture = spawn_fixture({"SENTINEL_NEXT_STEPS": "1"})
+        fixture = spawn_fixture({"SENTINEL_NEXT_STEPS": "1", "SENTINEL_HANDOFF_INTEGRATION": "1", "SENTINEL_PLANNED_LAUNCH": "1"})
         receipt = fixture_receipt(fixture, report, "next-steps")
         report["fixture"] = receipt
         run_launch_case(report, fixture, receipt, evidence, deadline)

@@ -22,6 +22,11 @@ const filesFixture=process.env.SENTINEL_REPOSITORY_FILES==='1';
 const modelsFixture=process.env.SENTINEL_MODELS==='1';
 const handoffIntegration=process.env.SENTINEL_HANDOFF_INTEGRATION==='1'&&(plannedLaunch||specsReadiness||epicPlanning);
 const nextSteps=process.env.SENTINEL_NEXT_STEPS==='1';
+// EV-7 runs the next-steps fixture over the real discussion service; that
+// composition additionally seeds one package whose catalog kit id differs from
+// its storage directory basename so the ordinary cold route proves the
+// catalog-to-snapshot identity adapter rather than a same-name coincidence.
+const nextStepsColdAlias=nextSteps&&handoffIntegration;
 const root=await realpath(process.env.SENTINEL_FIXTURE_ROOT??await mkdtemp(join(tmpdir(),'sentinel-solid-browser-')));
 // Real final-integration resolution reads HOME and PATH: isolate both to this
 // fixture root so the real catalog sees root/.agents skills and the fake pi
@@ -286,6 +291,14 @@ if(nextSteps){
  await writeFile(nextStepsEpicPath,JSON.stringify({schema_version:1,epic:'new-epic',title:'New epic',state:'planned',created_at:'2026-10-12T00:00:00.000Z',packages:[{package:'epic-first'},{package:'epic-second',requires:['epic-first']}]}));
  await utimes(nextStepsEpicPath,new Date(ago(1250000)),new Date(ago(1250000)));
  await nextStepsRemember(nextStepsEpicPath);
+ if(nextStepsColdAlias){
+  // The catalog kit id stays 'alpha' while the storage directory is
+  // 'physical'; the declared repository makes the package resolvable like a
+  // real workspace so the cold route can reach the review surface.
+  await writeFile(join(mismatchDirectory.directory,'kit.yaml'),`version: 1\nid: alpha\nname: Alpha kit\nexecution_host: ${hostname()}\nrepositories:\n  - id: fixture-repo\n    path: ${checkout}\n    role: Catalog id/directory mismatch alias\n`);
+  const alias=await addPackage('kit-alias','physical','fixture-repo');
+  await nextStepsWrite(alias.dir,'proposal.md',nextStepsProposal('COMPATIBLE_WITH_CAVEATS',true,'The alias workspace proposal records a recommended critique that is not written.'),ago(950000));
+ }
  }catch(error){await rm(root,{recursive:true,force:true});throw error;}
 }
 const skillPath=(plannedLaunch||handoffIntegration||nextSteps)?join(root,'.agents','skills','spec-end-to-end','SKILL.md'):join(root,'skills','fixture-skill','SKILL.md');await mkdir(join(skillPath,'..'),{recursive:true});
@@ -306,6 +319,9 @@ const referenceCatalog=createReferenceCatalog({home:root,agentDir:join(root,'age
 const handoffSessions=new Map();
 const handoffTmuxCalls=[];
 let handoffNewSessions=0;
+// Final-adapter failure control for the real launch composition: the service
+// still publishes, claims and reconciles, while the fake tmux pane start refuses.
+let handoffTmuxFail=false;
 function endHandoffSession(session){if(!session||session.ended)return;session.ended=true;try{session.dummy.kill('SIGKILL');}catch{}}
 function handoffTargetName(rest){const index=rest.indexOf('-t');if(index!==-1)return String(rest[index+1]??'').replace(/^=/,'').replace(/:$/,'');const candidate=rest.find(token=>typeof token==='string'&&token.startsWith('='));return candidate?candidate.replace(/^=/,'').replace(/:$/,''):null;}
 async function handoffTmuxRun(socketPath,args){
@@ -319,6 +335,7 @@ async function handoffTmuxRun(socketPath,args){
   const [command,...rest]=segment;
   if(command==='start-server'||command==='set-option'||command==='list-clients'||command==='list-panes')continue;
   if(command==='new-session'){
+   if(handoffTmuxFail)return {ok:false,code:1,stdout:'',stderr:'fixture tmux pane refused',message:'fixture-tmux-refused'};
    const nameIndex=rest.indexOf('-s');const name=nameIndex!==-1?rest[nameIndex+1]:null;
    const marker=rest.find(token=>typeof token==='string'&&token.startsWith('ADJACENT_ASSIGNMENT_ID='));
    const assignmentId=marker?marker.slice('ADJACENT_ASSIGNMENT_ID='.length):null;
@@ -738,6 +755,7 @@ const server=createServer(async(req,res)=>{
   if(action==='review-release-preview'){holdDispatchPreview=false;releaseWaiters(dispatchPreviewWaiters);}
   if(action==='review-hold-launch')holdDispatchLaunch=url.searchParams.get('value')==='true';
   if(action==='review-release-launch'){holdDispatchLaunch=false;releaseWaiters(dispatchLaunchWaiters);}
+  if(action==='integration-tmux-fail')handoffTmuxFail=url.searchParams.get('value')==='true';
   if(action==='review-holding-run'){const value=url.searchParams.get('value')||'';reviewHoldingRun=value?{workspace:'fixture',package:pkg,package_ref:'fixture/browser',assignment_id:value,workflow_id:'workflow-1',execution:'running',workflow_state:'waiting-worker',is_current_assignment:true,activity:'Holding fixture/browser',obligation:'Finish before another review',observed_at:new Date().toISOString(),coverage:{state:'complete',reasons:[]}}:null;}
   if(action==='publish-assignment'){const id=url.searchParams.get('value')||'';const skill=url.searchParams.get('skill')||'';const specPackage=url.searchParams.get('package')||'fixture/browser';if(id){launchedAssignments.set(id,{assignment_id:id,workspace_id:'fixture',spec_package:specPackage,workflow_id:'workflow-1',display:'live',state:'live',executionDir:root,terminal:'fixture',coverage:{state:'complete',reasons:[]},task_activity:{state:'idle',reason:'Fixture assignment is waiting for input.'},nextAction:'Attach to the terminal',...(skill?{skill}:{})});await writeFile(observerFile,JSON.stringify(makeSnapshot()));}}
   if(action==='clear-launch-publications')launchedAssignments.clear();
