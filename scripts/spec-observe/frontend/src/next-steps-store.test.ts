@@ -224,7 +224,7 @@ test('App live/import/unmount ownership invokes the scan store and keeps its sta
   assert.match(source, /const poll = setInterval\(\(\) => \{\s*void refresh\(\);\s*if \(live\(\)\) void loadCatalog\(\);\s*\}, 5000\);/);
 });
 
-test('failure retains the last successful scan, invalid schema is an error, and the 10-second deadline aborts without a real wait', async (t) => {
+test('failure retains the last successful scan, invalid schema or malformed version-1 data is an error, and the 10-second deadline aborts without a real wait', async (t) => {
   const { fetch: fetcher, timers } = scopeRuntime(t, { rejectOnAbort: true });
   startNextStepsPolling();
   fetcher.calls[0].respond(jsonResponse(200, SCAN_A));
@@ -243,6 +243,21 @@ test('failure retains the last successful scan, invalid schema is an error, and 
   await invalid;
   assert.deepEqual(scan(), SCAN_A, 'an invalid schema retains the last successful scan');
   assert.notEqual(scanError(), '');
+
+  const malformed = [
+    { label: 'coverage missing its required fields', payload: { ...SCAN_A, coverage: { state: 'complete' } } },
+    { label: 'unrecognized coverage state', payload: { ...SCAN_A, coverage: { ...SCAN_A.coverage, state: 'trusted' } } },
+    { label: 'null row', payload: { ...SCAN_A, rows: [null] } },
+    { label: 'row without a signal object', payload: { ...SCAN_A, rows: [{ ...SCAN_A.rows[0], signal: null }] } },
+  ];
+  for (const { label, payload } of malformed) {
+    const rejected = loadNextSteps();
+    fetcher.calls[fetcher.calls.length - 1].respond(jsonResponse(200, payload));
+    await rejected;
+    assert.deepEqual(scan(), SCAN_A, `a malformed version-1 scan (${label}) retains the last successful scan`);
+    assert.notEqual(scanError(), '', `a malformed version-1 scan (${label}) sets an error`);
+    assert.equal(nextStepsRowForPackage(PACKAGE_A)?.key, SCAN_A.rows[0].key, `the retained package lookup stays safe after (${label})`);
+  }
 
   const aborted = loadNextSteps();
   const abortCall = fetcher.calls[fetcher.calls.length - 1];

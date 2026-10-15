@@ -26,18 +26,65 @@ let interval: ReturnType<typeof setInterval> | null = null;
 let deadline: ReturnType<typeof setTimeout> | null = null;
 
 // Conservative wire guard: only the schema the destination understands is
-// accepted, and anything else keeps the previous successful scan.
+// accepted, and anything else keeps the previous successful scan. Coverage
+// discriminants, coverage counts and every row field public readers consume
+// are validated so malformed version-1 data never replaces retained data.
+const COVERAGE_STATES = ['complete', 'partial', 'unavailable'];
+const ROW_KINDS = ['package', 'epic'];
+const ROW_STAGES = ['proposal', 'critique', 'spec', 'work-tour', 'epic'];
+const SIGNAL_STATES = ['ok', 'unreadable', 'unparsed'];
+
+const wireRecord = (value: unknown): Record<string, unknown> | null =>
+  value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+const stringList = (value: unknown): boolean => Array.isArray(value) && value.every(entry => typeof entry === 'string');
+const oneOf = (value: unknown, allowed: readonly string[]): boolean => typeof value === 'string' && allowed.includes(value);
+
+function isNextStepsRow(value: unknown): value is NextStepsFileRow {
+  const row = wireRecord(value);
+  const signal = row ? wireRecord(row.signal) : null;
+  return row !== null
+    && typeof row.key === 'string'
+    && oneOf(row.kind, ROW_KINDS)
+    && typeof row.workspace_id === 'string'
+    && typeof row.workspace === 'string'
+    && typeof row.workspace_name === 'string'
+    && typeof row.slug === 'string'
+    && (row.package === undefined || typeof row.package === 'string')
+    && oneOf(row.stage, ROW_STAGES)
+    && typeof row.file === 'string'
+    && typeof row.path === 'string'
+    && typeof row.written_at === 'string'
+    && Array.isArray(row.observed_files)
+    && row.observed_files.every(file => {
+      const observed = wireRecord(file);
+      return observed !== null && typeof observed.name === 'string'
+        && typeof observed.stage === 'string' && typeof observed.written_at === 'string';
+    })
+    && signal !== null
+    && oneOf(signal.state, SIGNAL_STATES);
+}
+
 function isNextStepsScan(value: unknown): value is NextStepsScan {
-  if (!value || typeof value !== 'object') return false;
-  const candidate = value as Record<string, unknown>;
-  const coverage = candidate.coverage;
-  return candidate.schema_version === 1
+  const candidate = wireRecord(value);
+  const coverage = candidate ? wireRecord(candidate.coverage) : null;
+  const workspaces = coverage ? wireRecord(coverage.workspaces) : null;
+  return candidate !== null
+    && candidate.schema_version === 1
     && typeof candidate.scanned_at === 'string'
-    && Array.isArray(candidate.rows)
     && typeof candidate.window_ms === 'number'
-    && Boolean(coverage)
-    && typeof coverage === 'object'
-    && typeof (coverage as Record<string, unknown>).state === 'string';
+    && coverage !== null
+    && oneOf(coverage.state, COVERAGE_STATES)
+    && stringList(coverage.reasons)
+    && workspaces !== null
+    && typeof workspaces.read === 'number'
+    && (workspaces.total === null || typeof workspaces.total === 'number')
+    && Array.isArray(coverage.unread)
+    && coverage.unread.every(entry => {
+      const unread = wireRecord(entry);
+      return unread !== null && typeof unread.workspace === 'string' && typeof unread.reason === 'string';
+    })
+    && Array.isArray(candidate.rows)
+    && candidate.rows.every(isNextStepsRow);
 }
 
 export async function loadNextSteps(): Promise<void> {
