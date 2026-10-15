@@ -15,7 +15,7 @@ import {
 } from './launch-state';
 import { CapturedInput, PackageContract, PackageDenied, PackageResult, packageReviewKind } from './launch-package';
 import {
-  coldPlanningPlan, launchContextForRoute, plannedTargetChoices, seedColdHandoff,
+  coldPlanningPlan, handoffReturn, launchContextForRoute, plannedTargetChoices, seedColdHandoff,
   type HandoffInput, type HandoffKind, type PackagePlanningPlan, type PlannedTarget,
 } from './launch-handoff';
 import ModelPicker from './ModelPicker';
@@ -197,8 +197,36 @@ export default function Launch(props: LaunchProps) {
   const packageKind = () => (props.route.package ? packageReviewKind(previewSkill()) : null);
   const bound = () => packageKind() !== null;
   const packageRef = () => props.route.package ?? '';
-  const launchLabel = () => packageKind() === 'plan' ? 'Start planning' : packageKind() === 'implement' ? 'Start implementation' : 'Launch agent';
-  const startingLabel = () => packageKind() === 'plan' ? 'Starting planning…' : packageKind() === 'implement' ? 'Starting implementation…' : 'Starting agent…';
+  // The resolved planning skill selects the commitment wording: critics and
+  // specification stages name their own start, while generic, initial and
+  // implementation entries keep the shared labels. Resolution falls back to
+  // the requested route skill before the preview arrives.
+  const launchLabel = () => packageKind() === 'implement'
+    ? 'Start implementation'
+    : packageKind() === 'plan'
+      ? previewSkill() === 'spec-architect-critics' ? 'Start critique' : previewSkill() === 'spec-write' ? 'Start spec' : 'Start planning'
+      : 'Launch agent';
+  const startingLabel = () => packageKind() === 'implement'
+    ? 'Starting implementation…'
+    : packageKind() === 'plan'
+      ? previewSkill() === 'spec-architect-critics' ? 'Starting critique…' : previewSkill() === 'spec-write' ? 'Starting spec…' : 'Starting planning…'
+      : 'Starting agent…';
+  // Origin return for bound flows reuses the shared remembered-route owner:
+  // the label names the remembered destination, and an unknown or absent
+  // route falls back to the existing Agents return.
+  const packageReturn = () => handoffReturn(packageKind() ?? 'plan', context());
+  const returnLabel = () => {
+    const dest = packageReturn().dest;
+    return dest === 'next-steps' ? 'Return to next steps'
+      : dest === 'epics' ? 'Return to epic'
+        : dest === 'specs' ? 'Return to specs'
+          : 'Return to agents';
+  };
+  const goReturn = () => {
+    const route = packageReturn();
+    if (route.dest === 'next-steps' || route.dest === 'epics' || route.dest === 'specs') props.onNavigate?.(route);
+    else props.onReturnToAgents();
+  };
   const editLabel = () => bound() ? 'Edit brief' : 'Edit assignment';
   const savedCurrent = () => {
     const value = saved();
@@ -800,6 +828,7 @@ export default function Launch(props: LaunchProps) {
                       <button id="launch-assignment-launch" class="ds-btn ds-btn--primary" type="button" disabled={!canLaunch()} onClick={launch}>{launchLabel()}</button>
                       <button id="launch-assignment-review" class="ds-btn" type="button" disabled={!canReview()} onClick={review}>Review assignment</button>
                       <button id="launch-assignment-edit" class="ds-btn" type="button" onClick={editAssignment}>{editLabel()}</button>
+                      <Show when={bound()}><button id="launch-return-origin" class="ds-btn" type="button" onClick={goReturn}>{returnLabel()}</button></Show>
                     </ActionBar>
                     <p class="contract-note">{bound()
                       ? packageKind() === 'plan'
@@ -818,6 +847,7 @@ export default function Launch(props: LaunchProps) {
                     <ActionBar variant="inline">
                       <button id="launch-assignment-review" class="ds-btn ds-btn--primary" type="button" disabled={!canReview()} onClick={review}>Review assignment</button>
                       <button id="launch-assignment-edit" class="ds-btn" type="button" onClick={editAssignment}>{editLabel()}</button>
+                      <Show when={bound()}><button id="launch-return-origin" class="ds-btn" type="button" onClick={goReturn}>{returnLabel()}</button></Show>
                     </ActionBar>
                   </Match>
                   <Match when={reviewView() === 'denied'}>
@@ -855,6 +885,7 @@ export default function Launch(props: LaunchProps) {
                     <ActionBar variant="inline">
                       <button id="launch-assignment-review" class="ds-btn ds-btn--primary" type="button" disabled={!canReview()} onClick={review}>Review assignment</button>
                       <button id="launch-assignment-edit" class="ds-btn" type="button" onClick={editAssignment}>{editLabel()}</button>
+                      <Show when={bound()}><button id="launch-return-origin" class="ds-btn" type="button" onClick={goReturn}>{returnLabel()}</button></Show>
                     </ActionBar>
                   </Match>
                   <Match when={reviewView() === 'error'}>
@@ -869,6 +900,7 @@ export default function Launch(props: LaunchProps) {
                         <button id="launch-assignment-review" class="ds-btn ds-btn--primary" type="button" disabled={!canReview()} onClick={review}>Review assignment</button>
                       </Show>
                       <button id="launch-assignment-edit" class="ds-btn" type="button" onClick={editAssignment}>{editLabel()}</button>
+                      <Show when={bound()}><button id="launch-return-origin" class="ds-btn" type="button" onClick={goReturn}>{returnLabel()}</button></Show>
                     </ActionBar>
                   </Match>
                   <Match when={reviewView() === 'result'}>
@@ -887,6 +919,8 @@ export default function Launch(props: LaunchProps) {
                               records={props.records}
                               epics={props.epics}
                               assignments={props.assignments}
+                              onReturn={goReturn}
+                              returnLabel={returnLabel()}
                             />
                           )}
                         </Show>

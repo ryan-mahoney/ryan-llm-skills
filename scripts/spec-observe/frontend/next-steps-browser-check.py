@@ -2,23 +2,32 @@
 # requires-python = ">=3.11"
 # dependencies = ["playwright"]
 # ///
-"""Next steps list browser case (EV-4) over the opt-in filesystem fixture.
+"""Next steps browser cases (EV-4 list, EV-7 launch) over the opt-in fixture.
 
 After npm run build --prefix scripts/spec-observe/frontend:
 SENTINEL_EVIDENCE_DIR=/tmp/sentinel-next-steps-evidence uv run --script \
   scripts/spec-observe/frontend/next-steps-browser-check.py --case list
+SENTINEL_EVIDENCE_DIR=/tmp/sentinel-next-steps-evidence uv run --script \
+  scripts/spec-observe/frontend/next-steps-browser-check.py --case launch
 
 The list case drives the actual built App at #/next-steps with normal startup
 over the SENTINEL_NEXT_STEPS=1 fixture, controls only the HTTP transport, the
 local token boundary and the browser clock, and never touches private
 Solid/store state or dispatches a worker. It also starts a second fixture
 without the opt-in flag to prove the default startup/control/scan path is
-unchanged. --case landing and --case launch are explicit unimplemented gates
-for later steps; no landing or launch success is claimed here.
+unchanged.
 
-The case writes SENTINEL_EVIDENCE_DIR/report.json atomically with the observed
-revision/dirty, elapsed seconds, errors, scenarios and capture paths, even on
-failure, and stops every fixture/browser process in finally.
+The launch case drives the built App through the Critique-filtered list
+hand-off, cold critics/spec entries, observed Inputs facts, the origin return
+and a failed launch over the same opt-in fixture. The final pi/tmux boundary
+is fake: no worker is started, no operator storage is touched, and the
+fixture-owned resolver/discussion service supplies every recorded fact.
+--case landing stays an explicit unimplemented gate; no landing success is
+claimed here.
+
+Each case writes SENTINEL_EVIDENCE_DIR/report.json atomically with the
+observed revision/dirty, elapsed seconds, errors, scenarios and capture
+paths, even on failure, and stops every fixture/browser process in finally.
 """
 import argparse
 import json
@@ -58,6 +67,7 @@ REFERENCE_SCREENS = (
     "17-next-steps-offline",
     "18-next-steps-stale",
 )
+LAUNCH_REFERENCE_SCREENS = ("08-critique-review", "09-critique-result", "10-spec-review")
 # Reference height follows the design viewport; production captures use the
 # same sizes for a like-for-like comparison.
 WIDTH_HEIGHTS = ((1280, 800), (1600, 900))
@@ -171,13 +181,13 @@ def attach_console_evidence(page, label: str, report: dict) -> None:
     page.on("console", on_console)
 
 
-def write_qa(report: dict, evidence: Path) -> None:
-    """Atomic procedural walkthrough for evidence/list/qa.md. Results come
+def write_qa(report: dict, evidence: Path, title: str = "Next steps list evidence walkthrough (EV-4)") -> None:
+    """Atomic procedural walkthrough for evidence/qa.md. Results come
     from this run's report, never hand-copied timestamps or outcomes."""
     scenarios = report.get("scenarios", [])
     captures = sorted({Path(item).name for item in report.get("captures", [])})
     lines = [
-        "# Next steps list evidence walkthrough (EV-4)",
+        f"# {title}",
         "",
         "Execution metadata lives in `report.json` and in the owner's linked runtime verification artifact; no run-specific receipt id is embedded here.",
         "",
@@ -1217,6 +1227,353 @@ def run_list_case(report: dict, fixture: subprocess.Popen, receipt: dict, eviden
     check_deadline("end")
 
 
+def run_launch_case(report: dict, fixture: subprocess.Popen, receipt: dict, evidence: Path, deadline: float) -> None:
+    """EV-7 bound plan/implement review and result journey.
+
+    Drives the actual built App through the Critique-filtered list hand-off,
+    the cold critics/spec entries, observed Inputs facts, the origin return and
+    a failed launch over the SENTINEL_NEXT_STEPS=1 fixture and its real
+    resolver. The final pi/tmux boundary stays fake: this case starts no
+    worker and controls only fixture-owned HTTP, storage and the local token.
+    """
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            executable_path=shutil.which("google-chrome"),
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage"],
+        )
+        context = browser.new_context(viewport={"width": 1280, "height": 900}, device_scale_factor=1)
+        page = context.new_page()
+        page.set_default_timeout(15000)
+        page.on("pageerror", lambda error: report["pageErrors"].append(str(error)))
+        attach_console_evidence(page, "launch", report)
+
+        def check_deadline(label: str) -> None:
+            if time.monotonic() > deadline:
+                raise RuntimeError(f"launch case exceeded the {CASE_DEADLINE_SECONDS} second deadline at {label}")
+
+        def control(action=None, value=None, **extra):
+            params = {}
+            if action is not None:
+                params["action"] = action
+                params["value"] = str(value).lower() if isinstance(value, bool) else str(value)
+            params.update(extra)
+            return request_json(fixture, receipt["url"], "/__fixture/control", **params)
+
+        def control_state() -> dict:
+            return request_json(fixture, receipt["url"], "/__fixture/control")
+
+        def named_posts(name: str) -> list[dict]:
+            return [entry for entry in control_state().get("posts", []) if entry.get("name") == name]
+
+        def launch_posts() -> list[dict]:
+            return named_posts("dispatchLaunch")
+
+        def next_steps_meta() -> dict:
+            meta = control_state().get("nextSteps")
+            assert isinstance(meta, dict) and isinstance(meta.get("packages"), dict), meta
+            return meta
+
+        def package_dir(slug: str) -> str:
+            entry = next_steps_meta()["packages"].get(slug)
+            assert entry and entry.get("dir"), (slug, entry)
+            return entry["dir"]
+
+        def file_mtime_iso(slug: str, name: str) -> str:
+            stat_entry = next_steps_meta()["packages"][slug]["files"].get(name)
+            assert stat_entry and stat_entry.get("exists") and stat_entry.get("mtimeIso"), (slug, name, stat_entry)
+            return stat_entry["mtimeIso"]
+
+        def launch_url(package: str, skill: str, stop: str | None = None, tab: str | None = None) -> str:
+            params = {"ws": "fixture", "package": package, "skill": skill}
+            if stop is not None:
+                params["stop"] = stop
+            if tab is not None:
+                params["tab"] = tab
+            return receipt["url"] + "/#/launch?" + urlencode(params)
+
+        def route_parts() -> tuple[str, dict]:
+            fragment = urlparse(page.url).fragment
+            path, _, query = fragment.partition("?")
+            return path.lstrip("/"), {key: values[0] for key, values in parse_qs(query).items()}
+
+        def wait_for_route(pattern: str, label: str) -> None:
+            try:
+                expect(page).to_have_url(re.compile(pattern))
+            except Exception:
+                report["errors"].append(f"{label}: URL did not reach /{pattern}/; actual {page.url}")
+                raise
+
+        def row_key(workspace: str, kind: str, slug: str) -> str:
+            return json.dumps([workspace, kind, slug], separators=(",", ":"))
+
+        def row(slug: str, workspace: str = "fixture", kind: str = "package"):
+            return page.locator(f"tr.queue-row[data-next-step-key={json.dumps(row_key(workspace, kind, slug))}]")
+
+        def select_slug(slug: str, workspace: str = "fixture", kind: str = "package") -> None:
+            row(slug, workspace, kind).locator("a.subject").click()
+            expect(page.locator("#next-step-heading")).to_have_text(slug)
+
+        def primary_action():
+            return page.locator(".detail-actions button.ds-btn--primary, .detail-actions a.ds-btn--primary").first
+
+        def goto_next_steps(query: str = "") -> None:
+            page.goto(receipt["url"] + "/#/next-steps" + (("?" + query) if query else ""), wait_until="domcontentloaded")
+            expect(page.locator("h1")).to_have_text("New files waiting for a next step")
+            expect(page.locator("table.queue-table")).to_be_visible(timeout=20000)
+
+        def fact(key: str):
+            return page.locator(f'#launch-review .launch-contract--package [data-fact={key}] dd')
+
+        def result_fact(key: str):
+            return page.locator(f'#launch-result-facts [data-fact={key}] dd')
+
+        def wait_for_contract() -> None:
+            expect(page.locator("#launch-review .launch-contract--package")).to_be_visible(timeout=20000)
+
+        def submit_cold_review(package: str, skill: str, stop: str | None = None) -> None:
+            page.goto(launch_url(package, skill, stop), wait_until="domcontentloaded")
+            expect(page.locator("#launch-cold-bound")).to_have_count(0)
+            expect(page.locator("#launch-brief-title")).not_to_have_value("")
+            page.locator("#launch-save").click()
+            wait_for_contract()
+
+        def capture(name: str, scroll_to: str | None = None) -> None:
+            for width, height in WIDTH_HEIGHTS:
+                page.set_viewport_size({"width": width, "height": height})
+                if scroll_to:
+                    page.locator(scroll_to).scroll_into_view_if_needed()
+                    page.wait_for_timeout(150)
+                else:
+                    page.evaluate("() => window.scrollTo(0, 0)")
+                path = evidence / f"production-{name}-{width}.png"
+                page.screenshot(path=str(path), full_page=False)
+                report["captures"].append(str(path))
+                report["overflow"][f"{name}-{width}"] = page.evaluate(
+                    """() => ({scrollHeight: document.documentElement.scrollHeight, clientHeight: document.documentElement.clientHeight})"""
+                )
+            page.set_viewport_size({"width": 1280, "height": 900})
+
+        def same_locale_time(iso: str) -> str:
+            return page.evaluate("iso => new Date(iso).toLocaleString()", iso)
+
+        control("next-local", True)
+        control("stale-launch", False)
+        control("dispatch-launch-outcome", "live")
+        control("review-launch-refusal", "none")
+        recommended = package_dir("recommended")
+        critiqued = package_dir("critiqued")
+        direct = package_dir("direct")
+        check_deadline("setup")
+
+        # --- Cold critics-only contract, refusal and explicit spec entry ---- #
+        submit_cold_review(recommended, "spec-architect-critics", "critique")
+        expect(page.locator("#launch-heading")).to_have_text("Review planning assignment")
+        expect(fact("stop")).to_have_text("critique.md")
+        expect(fact("authority")).to_have_text("None")
+        expected_critique_time = same_locale_time(file_mtime_iso("recommended", "proposal.md"))
+        expect(fact("inputs")).to_contain_text("proposal.md")
+        expect(fact("inputs")).to_contain_text("written")
+        expect(fact("inputs")).to_contain_text(expected_critique_time)
+        expect(page.locator("#launch-assignment-launch")).to_have_text("Start critique")
+        assert len(launch_posts()) == 0, launch_posts()
+        report["scenarios"].append("Cold critics-only entry seeds Stops at critique.md with the observed proposal time, Start critique and no launch dispatch")
+        check_deadline("cold-critique")
+
+        saves_before = len(named_posts("dispatchSaveBrief"))
+        page.goto(launch_url(critiqued, "spec-architect-critics", "critique"), wait_until="domcontentloaded")
+        expect(page.locator("#launch-cold-bound")).to_have_attribute("data-cold-bound", "unavailable")
+        expect(page.locator("#launch-cold-bound")).to_contain_text("A critique is already written")
+        assert len(named_posts("dispatchSaveBrief")) == saves_before
+        assert len(launch_posts()) == 0
+        report["scenarios"].append("Cold critics entry on a package whose critique.md already exists refuses visibly with nothing saved or dispatched")
+        check_deadline("cold-refusal")
+
+        submit_cold_review(critiqued, "spec-write", "prepared")
+        expect(fact("stop")).to_have_text("Prepared spec")
+        expect(fact("stages")).to_have_text("1 spec-write")
+        expect(page.locator("#launch-assignment-launch")).to_have_text("Start spec")
+        assert len(launch_posts()) == 0
+        capture("10-spec-review", scroll_to="#launch-what-pi")
+        expect(page.locator("#launch-heading")).to_have_text("Review planning assignment")
+        report["scenarios"].append("Cold explicit Write spec seeds the spec-write contract at the Prepared spec stop with Start spec and no dispatch")
+        check_deadline("cold-spec")
+
+        # --- Truthful derived facts and filename-only Inputs fallback ------- #
+        submit_cold_review(recommended, "spec-architect-critics")
+        expect(fact("stages")).to_have_text("1 spec-architect-critics → 2 spec-write")
+        expect(fact("stop")).to_have_text("Prepared")
+        expect(fact("model")).to_have_text("Host default")
+        expect(fact("host")).to_have_text("Host not recorded for this assignment")
+        report["scenarios"].append("Cold critics-resume review keeps the original derived stage sequence with the Prepared stop, Host default model and unrecorded host")
+        check_deadline("truthful-plan")
+
+        control("next-scan-fail", True)
+        inputs_context = browser.new_context(viewport={"width": 1280, "height": 900}, device_scale_factor=1)
+        inputs_page = inputs_context.new_page()
+        inputs_page.set_default_timeout(15000)
+        inputs_page.on("pageerror", lambda error: report["pageErrors"].append(f"inputs: {error}"))
+        attach_console_evidence(inputs_page, "inputs", report)
+        inputs_url = receipt["url"] + "/#/launch?" + urlencode({"ws": "fixture", "package": direct, "skill": "spec-architect-critics", "stop": "critique"})
+        try:
+            inputs_page.goto(inputs_url, wait_until="domcontentloaded")
+            expect(inputs_page.locator("#launch-cold-bound")).to_have_count(0)
+            expect(inputs_page.locator("#launch-brief-title")).not_to_have_value("")
+            inputs_page.locator("#launch-save").click()
+            expect(inputs_page.locator("#launch-review .launch-contract--package")).to_be_visible(timeout=20000)
+            inputs_fact = inputs_page.locator('#launch-review .launch-contract--package [data-fact="inputs"] dd')
+            expect(inputs_fact).to_have_text("proposal.md")
+            assert "written" not in inputs_fact.inner_text()
+            control("next-scan-fail", False)
+            inputs_page.goto(receipt["url"] + "/#/next-steps", wait_until="domcontentloaded")
+            # The refresh control renders either in the normal list toolbar or
+            # in the regional StateNotice banner; wait for whichever state
+            # settles instead of branching on a pre-ready count().
+            refresh = inputs_page.locator(".list-refresh button, .full-page .ds-callout button").filter(has_text="Refresh files")
+            expect(refresh.first).to_be_visible(timeout=20000)
+            refresh.first.click()
+            expect(inputs_page.locator("table.queue-table")).to_be_visible(timeout=20000)
+            inputs_page.goto(inputs_url, wait_until="domcontentloaded")
+            # The hash-only navigation retains the saved draft, so enter the
+            # review tab explicitly; the brief's Save is correctly disabled.
+            inputs_page.goto(inputs_url + "&tab=review", wait_until="domcontentloaded")
+            expect(inputs_page.locator("#launch-review .launch-contract--package")).to_be_visible(timeout=20000)
+            expected_direct_time = inputs_page.evaluate("iso => new Date(iso).toLocaleString()", file_mtime_iso("direct", "proposal.md"))
+            expect(inputs_fact).to_contain_text("proposal.md")
+            expect(inputs_fact).to_contain_text("written")
+            expect(inputs_fact).to_contain_text(expected_direct_time)
+            report["scenarios"].append("An unavailable scan shows filename-only Inputs; restoring it and refreshing shows the observed watched-file time")
+        finally:
+            inputs_context.close()
+            control("next-scan-fail", False)
+        check_deadline("inputs")
+
+        # --- Click-through, origin return and the launched critique result -- #
+        goto_next_steps()
+        critique_tab = page.locator(".filter-strip button", has_text="Critique")
+        expect(critique_tab).to_be_visible()
+        critique_tab.click()
+        expect(row("recommended")).to_be_visible(timeout=20000)
+        select_slug("recommended")
+        expect(primary_action()).to_have_text("Critique proposal")
+        origin_dest, origin_query = route_parts()
+        assert origin_dest == "next-steps", (origin_dest, origin_query)
+        origin_ws = origin_query.get("ws")
+        origin_filter = origin_query.get("filter")
+        origin_id = origin_query.get("id")
+        primary_action().click()
+        wait_for_route(r"#/launch\?.*tab=review", "critique click-through")
+        dest, query = route_parts()
+        assert dest == "launch", (dest, query)
+        assert query.get("tab") == "review", query
+        assert query.get("package") == recommended, query
+        assert query.get("skill") == "spec-architect-critics" and query.get("stop") == "critique", query
+        wait_for_contract()
+        expect(page.locator("#launch-heading")).to_have_text("Review planning assignment")
+        expect(fact("stop")).to_have_text("critique.md")
+        expect(fact("authority")).to_have_text("None")
+        expect(fact("inputs")).to_contain_text("proposal.md")
+        expect(fact("inputs")).to_contain_text(expected_critique_time)
+        expect(page.locator("#launch-assignment-launch")).to_have_text("Start critique")
+        assert len(launch_posts()) == 0, launch_posts()
+        capture("08-critique-review", scroll_to="#launch-what-pi")
+        assert page.locator("#launch-what-pi").is_visible()
+        report["scenarios"].append("Clicking Critique proposal from the Critique-filtered list opens the resolved critic-only review with the observed Inputs time, critique.md stop, None authority and no launch dispatch")
+        check_deadline("click-through")
+
+        expect(page.locator("#launch-return-origin")).to_have_text("Return to next steps")
+        page.locator("#launch-return-origin").click()
+        wait_for_route(r"#/next-steps", "origin return")
+        dest, query = route_parts()
+        assert dest == "next-steps", (dest, query)
+        assert query.get("ws") == origin_ws, (query, origin_ws)
+        assert query.get("filter") == origin_filter, (query, origin_filter)
+        assert query.get("id") == origin_id, (query, origin_id)
+        expect(page.locator("#next-step-heading")).to_have_text("recommended")
+        expect(page.locator("tr.queue-row.selected")).to_have_count(1)
+        report["scenarios"].append("Return to next steps restores the workspace, critique filter and the selected recommended subject from the remembered origin route")
+        check_deadline("return")
+
+        select_slug("recommended")
+        primary_action().click()
+        wait_for_route(r"#/launch\?.*tab=review", "critique re-entry")
+        wait_for_contract()
+        expect(page.locator("#launch-assignment-launch")).to_be_enabled()
+        page.locator("#launch-assignment-launch").click()
+        expect(page.locator("#launch-result-package")).to_be_visible(timeout=20000)
+        launches = launch_posts()
+        assert len(launches) == 1, launches
+        launch_entry = launches[0]["input"]
+        assert launch_entry["skill"] == "spec-architect-critics", launch_entry
+        launch_id = launch_entry["assignment_id"]
+        expect(page.locator("#launch-result-package")).to_contain_text(launch_id)
+        expect(page.locator("#launch-result-open-agent")).to_have_attribute("href", re.compile(re.escape(launch_id)))
+        expect(page.locator("#launch-result-return")).to_be_visible()
+        brief_save = next((entry for entry in named_posts("dispatchSaveBrief") if entry.get("input", {}).get("request_id") == launch_entry.get("request_id")), None)
+        assert brief_save is not None, named_posts("dispatchSaveBrief")
+        content = brief_save["input"].get("content", "")
+        assert "Stop at Critique" in content and "This launch ends at the critique" in content, content[:400]
+        report["scenarios"].append("Start critique records the critic-only dispatch and saved brief stop instruction and the result names the exact assignment with its Open agent href")
+        capture("09-critique-result")
+        check_deadline("critique-result")
+
+        # --- A failed launch keeps the reviewed identity and offers no retry - #
+        control("dispatch-launch-outcome", "failed")
+        posts_before = len(control_state()["posts"])
+        launches_before = len(launch_posts())
+        page.goto(launch_url(critiqued, "spec-write", "prepared", tab="review"), wait_until="domcontentloaded")
+        wait_for_contract()
+        reviewed_execution = fact("execution").inner_text()
+        expect(page.locator("#launch-assignment-launch")).to_have_text("Start spec")
+        page.locator("#launch-assignment-launch").click()
+        expect(page.locator("#launch-heading")).to_have_text("Agent could not start")
+        expect(page.locator("#launch-result-package")).to_have_count(0)
+        assert len(launch_posts()) == launches_before + 1, launch_posts()
+        failed_id = launch_posts()[-1]["input"]["assignment_id"]
+        expect(result_fact("assignment")).to_have_text(failed_id)
+        expect(result_fact("execution")).to_have_text(reviewed_execution)
+        expect(page.locator("#launch-result-open-agent")).to_have_attribute("href", re.compile(re.escape(failed_id)))
+        expect(page.locator("#launch-result-correct")).to_be_visible()
+        expect(page.locator("#launch-assignment-launch")).to_have_count(0)
+        page.wait_for_timeout(300)
+        assert len(control_state()["posts"]) == posts_before + 1, control_state()["posts"][-3:]
+        report["scenarios"].append("A failed launch keeps the reviewed execution directory and exact assignment identity, posts no second dispatch and offers no second launch control")
+        control("dispatch-launch-outcome", "live")
+        check_deadline("failed")
+        browser.close()
+
+
+def run_launch_reference_captures(browser, report: dict, evidence: Path) -> None:
+    screens = design_screens()
+    if screens is None:
+        raise RuntimeError("reference screens unavailable at package locations; refusing to report ignored missing references")
+    context = browser.new_context(viewport={"width": 1280, "height": 800}, device_scale_factor=1)
+    page = context.new_page()
+    page.on("pageerror", lambda error: report["pageErrors"].append(f"reference: {error}"))
+    attach_console_evidence(page, "reference", report)
+    try:
+        for name in LAUNCH_REFERENCE_SCREENS:
+            target = screens / f"{name}.html"
+            if not target.is_file():
+                raise RuntimeError(f"reference screen missing: {target}")
+            for width, height in WIDTH_HEIGHTS:
+                page.set_viewport_size({"width": width, "height": height})
+                page.goto(target.as_uri(), wait_until="domcontentloaded")
+                path = evidence / f"reference-{name}-{width}.png"
+                page.screenshot(path=str(path), full_page=False)
+                report["captures"].append(str(path))
+            page.set_viewport_size({"width": 1280, "height": 800})
+            pane = page.locator(".detail-body")
+            if pane.count():
+                pane.first.evaluate("el => el.scrollTo(0, el.scrollHeight)")
+                scrolled = evidence / f"reference-{name}-1280-scrolled.png"
+                page.screenshot(path=str(scrolled), full_page=False)
+                report["captures"].append(str(scrolled))
+        report["scenarios"].append("Reference screens 8-10 captured at both production viewports with scrolled lower-input disclosure")
+    finally:
+        context.close()
+
+
 def run_reference_captures(browser, report: dict, evidence: Path) -> None:
     screens = design_screens()
     if screens is None:
@@ -1262,8 +1619,6 @@ if arguments.case not in CASES:
     raise SystemExit(f"unsupported case: {arguments.case}")
 if arguments.case == "landing":
     raise SystemExit("--case landing is not implemented in this packet; the step-7 landing/badge gate is not claimed here")
-if arguments.case == "launch":
-    raise SystemExit("--case launch is not implemented in this packet; no dispatch or worker start is claimed here")
 
 evidence = Path(os.environ.get("SENTINEL_EVIDENCE_DIR", "/tmp/sentinel-next-steps-evidence"))
 evidence.mkdir(parents=True, exist_ok=True)
@@ -1297,24 +1652,42 @@ guard = threading.Thread(target=watchdog, daemon=True)
 guard.start()
 try:
     report["observedCommit"], report["dirty"] = observed_revision()
-    run_default_mode_assertion(report)
-    fixture = spawn_fixture({"SENTINEL_NEXT_STEPS": "1"})
-    receipt = fixture_receipt(fixture, report, "next-steps")
-    report["fixture"] = receipt
-    run_list_case(report, fixture, receipt, evidence, deadline)
-    # Reference captures use a browser owned by the same playwright run above;
-    # they are produced by a dedicated short-lived run here to keep cleanup
-    # independent of a failing case.
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            executable_path=shutil.which("google-chrome"),
-            headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage"],
-        )
-        try:
-            run_reference_captures(browser, report, evidence)
-        finally:
-            browser.close()
+    if arguments.case == "launch":
+        fixture = spawn_fixture({"SENTINEL_NEXT_STEPS": "1"})
+        receipt = fixture_receipt(fixture, report, "next-steps")
+        report["fixture"] = receipt
+        run_launch_case(report, fixture, receipt, evidence, deadline)
+        # Reference captures run in a dedicated short-lived browser so cleanup
+        # stays independent of a failing launch case.
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                executable_path=shutil.which("google-chrome"),
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
+            )
+            try:
+                run_launch_reference_captures(browser, report, evidence)
+            finally:
+                browser.close()
+    else:
+        run_default_mode_assertion(report)
+        fixture = spawn_fixture({"SENTINEL_NEXT_STEPS": "1"})
+        receipt = fixture_receipt(fixture, report, "next-steps")
+        report["fixture"] = receipt
+        run_list_case(report, fixture, receipt, evidence, deadline)
+        # Reference captures use a browser owned by the same playwright run above;
+        # they are produced by a dedicated short-lived run here to keep cleanup
+        # independent of a failing case.
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                executable_path=shutil.which("google-chrome"),
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
+            )
+            try:
+                run_reference_captures(browser, report, evidence)
+            finally:
+                browser.close()
     assert not report["pageErrors"], report["pageErrors"]
     assert not report["consoleErrors"], report["consoleErrors"]
     report["status"] = "passed"
@@ -1327,7 +1700,12 @@ finally:
     report["elapsedSeconds"] = round(time.monotonic() - started, 3)
     atomic_report(report, evidence)
     atomic_report(report, evidence, f"next-steps-{arguments.case}.json")
-    write_qa(report, evidence)
+    write_qa(
+        report,
+        evidence,
+        "Next steps launch evidence walkthrough (EV-7)" if arguments.case == "launch"
+        else "Next steps list evidence walkthrough (EV-4)",
+    )
     print(json.dumps({key: report[key] for key in ("status", "case", "elapsedSeconds", "observedCommit", "dirty", "errors")}, indent=2))
 
 if report["status"] != "passed":

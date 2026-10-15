@@ -114,6 +114,11 @@ test('F3: proposal-only briefs stay at Proposal and critics/write keep their res
   assert.deepEqual(critics.stages, ['spec-architect-critics', 'spec-write']);
   const writer = planningPlanFor({ skill: 'spec-write' });
   assert.deepEqual(writer.stages, ['spec-write']);
+  assert.equal(planningStopValue({ skill: 'spec-write' }, writer), 'Prepared spec');
+
+  const criticsOnly = planningPlanFor({ skill: 'spec-architect-critics' }, { brief: 'This launch ends at the critique.', instruction: '' });
+  assert.deepEqual(criticsOnly, { skill: 'spec-architect-critics', stages: ['spec-architect-critics'], stop: 'critique' });
+  assert.equal(planningStopValue({ skill: 'spec-architect-critics' }, criticsOnly), 'critique.md');
 });
 
 // Focused unit coverage for the step-010 bound result corrections (F1-F4).
@@ -131,6 +136,17 @@ test('step-010 F1: confirmed planning stop is planning-only and never promises n
   const proposalStop = planningResultStopValue({ skill: 'spec-architect-initial' }, proposal);
   assert.match(proposalStop, /^Proposal\./);
   assert.doesNotMatch(proposalStop, /Prepared/);
+
+  const criticsOnly = planningPlanFor({ skill: 'spec-architect-critics' }, { brief: 'This launch ends at the critique.', instruction: '' });
+  assert.equal(
+    planningResultStopValue({ skill: 'spec-architect-critics' }, criticsOnly),
+    'critique.md. No spec, branch or pull request.',
+  );
+  const writer = planningPlanFor({ skill: 'spec-write' });
+  assert.equal(
+    planningResultStopValue({ skill: 'spec-write' }, writer),
+    'Prepared spec, ready to implement. No branch, implementation or pull request.',
+  );
 });
 
 test('step-010 F2: confirmed launch identity is excluded so the next independent member is offered', () => {
