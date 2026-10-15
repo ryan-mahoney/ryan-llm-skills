@@ -231,6 +231,9 @@ test('wave workspaces: private Git metadata stays independent and imports exact 
   const ownership = makeOwnership(t, 'wave-workspaces-git');
   const common = { target, waveRoot, ownership, packageId: 'wave-git', label: 'git', baseCommit: target.c2, mode: 'overlayfs' };
 
+  const canonicalHead = git(target.worktree, ['rev-parse', 'HEAD']);
+  const canonicalRefs = git(target.worktree, ['for-each-ref', '--format=%(refname) %(objectname)']);
+  const canonicalObjects = git(target.worktree, ['cat-file', '--batch-all-objects', '--batch-check=%(objectname)']).split('\n').sort().join('\n');
   const attemptA = await prepareStepWorkspace(workspaceOptions({ ...common, attemptId: 'attempt-git-a' }));
   const attemptB = await prepareStepWorkspace(workspaceOptions({ ...common, attemptId: 'attempt-git-b' }));
   assert.equal(attemptA.backend, 'overlayfs');
@@ -242,6 +245,41 @@ test('wave workspaces: private Git metadata stays independent and imports exact 
     assert.doesNotThrow(() => git(record.gitDir, ['cat-file', '-e', `${target.c1}^{commit}`]), 'reviewed-head ancestry is fetched');
   }
   assert.notEqual(attemptA.gitDir, attemptB.gitDir);
+
+  // The private base resolves to the exact base commit with the base commit's
+  // tree as its index, while nothing from the base is checked out into the
+  // attempt worktree.
+  const baseTree = git(target.worktree, ['rev-parse', `${target.c2}^{tree}`]);
+  const basePaths = git(target.worktree, ['ls-tree', '-r', '--name-only', target.c2]).split('\n');
+  for (const record of [attemptA, attemptB]) {
+    assert.equal(git(record.gitDir, ['rev-parse', 'HEAD']), target.c2, 'private HEAD resolves to the base commit');
+    assert.equal(git(record.gitDir, ['rev-parse', 'HEAD^{tree}']), baseTree, 'private HEAD carries the base tree');
+    assert.equal(git(record.gitDir, ['write-tree']), baseTree, 'the private index carries exactly the base commit tree');
+    assert.deepEqual(git(record.gitDir, ['ls-files']).split('\n'), basePaths, 'ls-files agrees with the base tree');
+    for (const path of basePaths) {
+      assert.ok(!existsSync(join(record.merged, path)), `${path} is not checked out into the attempt worktree`);
+    }
+    assert.ok(!existsSync(join(record.merged, 'README.md')), 'no base file is checked out into the attempt worktree');
+  }
+
+  // An ordinary commit in the private repository extends the base commit
+  // instead of starting unrelated history.
+  for (const record of [attemptA, attemptB]) {
+    writeFileSync(join(record.merged, 'commit-probe.txt'), 'commit probe\n');
+    execFileSync('git', ['--git-dir', record.gitDir, '--work-tree', record.merged, 'add', 'commit-probe.txt'], { cwd: record.merged, ...GIT });
+    execFileSync('git', [
+      '--git-dir', record.gitDir, '--work-tree', record.merged,
+      '-c', 'user.email=wave-editor@example.test', '-c', 'user.name=Wave Editor',
+      'commit', '-q', '-m', 'probe commit',
+    ], { cwd: record.merged, ...GIT });
+    assert.equal(git(record.gitDir, ['rev-parse', 'HEAD^']), target.c2, 'an ordinary commit has the base commit as its parent');
+    assert.equal(git(record.gitDir, ['rev-parse', 'HEAD^^{tree}']), baseTree, 'the parent commit carries the base tree');
+  }
+
+  // Private provisioning leaves the canonical repository untouched.
+  assert.equal(git(target.worktree, ['rev-parse', 'HEAD']), canonicalHead, 'canonical HEAD is untouched');
+  assert.equal(git(target.worktree, ['for-each-ref', '--format=%(refname) %(objectname)']), canonicalRefs, 'canonical refs are untouched');
+  assert.equal(git(target.worktree, ['cat-file', '--batch-all-objects', '--batch-check=%(objectname)']).split('\n').sort().join('\n'), canonicalObjects, 'canonical objects are untouched');
 
   // HEAD and index are per-attempt private state.
   const headB = readFileSync(join(attemptB.gitDir, 'HEAD'), 'utf8');

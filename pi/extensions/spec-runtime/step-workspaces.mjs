@@ -565,10 +565,29 @@ async function provisionOverlay({ kind, snapshotId, baseCommit, target, waveRoot
   const layers = validateLayers({ lower, upper, work, merged, gitDir });
   if (!layers.ok) refuse('layer-identity-mismatch', `${layers.reason}: ${layers.detail}`);
 
-  execFileSync('git', ['init', '--bare', '-q', gitDir], GIT_RUN);
-  gitText(['-C', gitDir, 'config', 'core.bare', 'false']);
-  gitText(['-C', gitDir, 'config', 'core.worktree', merged]);
-  fetchCommitObjects({ gitDir, source: target.worktree, sha: baseCommit });
+  // The private base must present the base commit as its committed parent
+  // with the base commit's tree as its index, without checking a single file
+  // out into the attempt worktree: update-ref only points HEAD and read-tree
+  // only fills the index, so an ordinary commit made here extends the base
+  // instead of starting unrelated history. When the private Git state already
+  // exists and is valid - HEAD resolves and the index carries the attempt's
+  // own staged state - it is retained exactly: no re-init, no re-pointed HEAD,
+  // no reset index, so a replay never discards private history the attempt
+  // created. Only the missing half of the private base is seeded on a
+  // partially provisioned repository.
+  const privateHead = gitMaybe(['-C', gitDir, 'rev-parse', '--verify', '-q', 'HEAD']);
+  const privateIndex = gitMaybe(['-C', gitDir, 'ls-files']);
+  const privateValid = privateHead !== null && privateIndex !== null;
+  if (!privateValid) {
+    if (!existsSync(join(gitDir, 'HEAD'))) {
+      execFileSync('git', ['init', '--bare', '-q', gitDir], GIT_RUN);
+      gitText(['-C', gitDir, 'config', 'core.bare', 'false']);
+      gitText(['-C', gitDir, 'config', 'core.worktree', merged]);
+    }
+    fetchCommitObjects({ gitDir, source: target.worktree, sha: baseCommit });
+    if (privateHead === null) gitText(['-C', gitDir, 'update-ref', 'HEAD', baseCommit]);
+    if (privateIndex === null) gitText(['-C', gitDir, 'read-tree', baseCommit]);
+  }
   dropAlternates(gitDir);
 
   const phases = createOverlayPhases({ ownership });
