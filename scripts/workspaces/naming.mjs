@@ -38,8 +38,22 @@ export function cleanTitle(reply) {
   return title === "" ? null : title;
 }
 
-export function suggestTitle(text, { spawn = nodeSpawn, timeoutMs = TITLE_TIMEOUT_MS, model = TITLE_MODEL } = {}) {
+// The shared tool-free one-shot Pi print runner. Resolves the RAW stdout on a
+// clean bounded exit (code 0, output within maxOutputBytes) — reply cleanup
+// stays in cleanTitle. Exactly one settle: the first terminal event wins, and
+// timeout or abort kills the child (SIGTERM); stdout/close listeners stay
+// attached so a late exit is drained without throwing or flipping the result.
+export function printReply({
+  text,
+  systemPrompt,
+  model = TITLE_MODEL,
+  timeoutMs = TITLE_TIMEOUT_MS,
+  maxOutputBytes = MAX_OUTPUT_BYTES,
+  spawn = nodeSpawn,
+  signal,
+} = {}) {
   if (typeof text !== "string" || text.trim() === "") return Promise.resolve(null);
+  if (signal?.aborted) return Promise.resolve(null);
   const args = [
     "--print",
     "--no-session",
@@ -52,11 +66,11 @@ export function suggestTitle(text, { spawn = nodeSpawn, timeoutMs = TITLE_TIMEOU
     model,
     "--thinking",
     "off",
-    "--system-prompt",
-    SYSTEM_PROMPT,
-    "--",
-    text.slice(0, MAX_INPUT_CHARS),
   ];
+  if (typeof systemPrompt === "string" && systemPrompt !== "") {
+    args.push("--system-prompt", systemPrompt);
+  }
+  args.push("--", text);
   return new Promise((resolvePromise) => {
     let settled = false;
     let output = "";
@@ -65,26 +79,51 @@ export function suggestTitle(text, { spawn = nodeSpawn, timeoutMs = TITLE_TIMEOU
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener("abort", abortRun);
       resolvePromise(value);
+    };
+    const abortRun = () => {
+      child?.kill("SIGTERM");
+      finish(null);
     };
     const timer = setTimeout(() => {
       child?.kill("SIGTERM");
       finish(null);
     }, timeoutMs);
+    signal?.addEventListener("abort", abortRun, { once: true });
     try {
       child = spawn("pi", args, { cwd: tmpdir(), shell: false, stdio: ["ignore", "pipe", "ignore"] });
     } catch {
       finish(null);
       return;
     }
+    if (signal?.aborted) {
+      child.kill("SIGTERM");
+      finish(null);
+      return;
+    }
     child.on("error", () => finish(null));
     child.stdout?.on("data", (chunk) => {
+      if (settled) return;
       output += chunk;
-      if (output.length > MAX_OUTPUT_BYTES) {
+      if (output.length > maxOutputBytes) {
         child.kill("SIGTERM");
         finish(null);
       }
     });
-    child.on("close", (code) => finish(code === 0 ? cleanTitle(output) : null));
+    child.on("close", (code) => finish(code === 0 ? output : null));
   });
+}
+
+// Naming delegates to printReply and cleans its raw reply; anything unusable
+// resolves null and the caller keeps its default title.
+export function suggestTitle(text, { spawn = nodeSpawn, timeoutMs = TITLE_TIMEOUT_MS, model = TITLE_MODEL } = {}) {
+  if (typeof text !== "string" || text.trim() === "") return Promise.resolve(null);
+  return printReply({
+    text: text.slice(0, MAX_INPUT_CHARS),
+    systemPrompt: SYSTEM_PROMPT,
+    model,
+    timeoutMs,
+    spawn,
+  }).then(cleanTitle);
 }
