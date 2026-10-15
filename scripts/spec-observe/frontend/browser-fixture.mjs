@@ -34,8 +34,11 @@ const nextStepsColdAlias=nextSteps&&handoffIntegration;
 // to a different physical checkout, so a recorded package target can be
 // resolved by canonical path rather than by target id. Packages are created
 // through the real lifecycle so detail scope and Files routes read real
-// locations; the default fixture is unchanged when the gate is unset.
-const specsLinks=process.env.SENTINEL_SPECS_LINKS==='1';
+// locations; the default fixture is unchanged when the gate is unset. The
+// Discuss gate (SENTINEL_SPECS_DISCUSS=1) reuses this workspace and adds an
+// ambiguous workspace whose kit binds two aliases to the same checkout.
+const specsDiscuss=process.env.SENTINEL_SPECS_DISCUSS==='1';
+const specsLinks=process.env.SENTINEL_SPECS_LINKS==='1'||specsDiscuss;
 const root=await realpath(process.env.SENTINEL_FIXTURE_ROOT??await mkdtemp(join(tmpdir(),'sentinel-solid-browser-')));
 // Real final-integration resolution reads HOME and PATH: isolate both to this
 // fixture root so the real catalog sees root/.agents skills and the fake pi
@@ -952,6 +955,7 @@ let linksFrontendPath='';
 let linksCollisionPath='';
 let linksPackage='';
 let linksOther='';
+let linksAmbiguousPackage='';
 if(specsLinks){
  const linksWorkspace=await createWorkspace(storage,{id:'links',name:'Links workspace'});
  const linksFrontend=join(root,'links-frontend');await mkdir(linksFrontend,{recursive:true});execFileSync('git',['init','--quiet',linksFrontend],{stdio:'ignore'});
@@ -967,12 +971,25 @@ if(specsLinks){
  if(!created.ok)throw new Error(`Links fixture package setup failed: ${created.code} ${created.message}`);
  linksPackage=join(linksWorkspace.directory,'specs','links-collision');
  await writeFile(join(linksPackage,'spec.md'),'# Links collision specification\n');
+ await writeFile(join(linksPackage,'preparation-report.md'),'# Links collision preparation\n\nPrepared links collision report.\n');
  const other=await newPackage({root:storage,workspace:'links',slug:'links-other',targets:[{id:'app'}]});
  if(!other.ok)throw new Error(`Links fixture package setup failed: ${other.code} ${other.message}`);
  linksOther=join(linksWorkspace.directory,'specs','links-other');
  await writeFile(join(linksOther,'spec.md'),'# Links other specification\n');
+ await writeFile(join(linksOther,'preparation-report.md'),'# Links other preparation\n\nPrepared links other report.\n');
+ if(specsDiscuss){
+  const linksAmbiguous=await createWorkspace(storage,{id:'links-ambiguous',name:'Links ambiguous workspace'});
+  await mkdir(join(linksAmbiguous.directory,'context'),{recursive:true});
+  await writeFile(join(linksAmbiguous.directory,'context','project-context.md'),'# Links ambiguous context\nBrowser context note.\n');
+  await writeFile(join(linksAmbiguous.directory,'kit.yaml'),`version: 1\nid: links-ambiguous\nname: Links ambiguous workspace\nexecution_host: ${hostname()}\nrepositories:\n  - id: frontend\n    path: ${linksFrontendPath}\n    role: Canonical frontend checkout\n  - id: mirror\n    path: ${linksFrontendPath}\n    role: Mirrored frontend checkout\ncontext:\n  - context/project-context.md\n`);
+  const ambiguous=await newPackage({root:storage,workspace:'links-ambiguous',slug:'links-ambiguous',targets:[{id:'frontend'}]});
+  if(!ambiguous.ok)throw new Error(`Links fixture package setup failed: ${ambiguous.code} ${ambiguous.message}`);
+  linksAmbiguousPackage=join(linksAmbiguous.directory,'specs','links-ambiguous');
+  await writeFile(join(linksAmbiguousPackage,'spec.md'),'# Links ambiguous specification\n');
+  await writeFile(join(linksAmbiguousPackage,'preparation-report.md'),'# Links ambiguous preparation\n\nPrepared links ambiguous report.\n');
+ }
 }
-console.log(JSON.stringify({url:`http://127.0.0.1:${server.address().port}`,root,checkout,secondCheckout,otherPackage:otherPkg,...packageIdentity,thread1,thread2,thread3,worktreeTarget:docsCheckout,integration:handoffIntegration,links:specsLinks?{workspace:'links',package:linksPackage,other:linksOther,frontend:linksFrontendPath,collision:linksCollisionPath}:undefined,nextSteps:nextSteps?await nextStepsMeta():undefined,requestFixture:requestFixture?{enabled:true,scenario:'happy',scenarioControl:'/__fixture/control?action=request-scenario',speechCheckout:requestSpeechCheckout}:{enabled:false}}));
+console.log(JSON.stringify({url:`http://127.0.0.1:${server.address().port}`,root,checkout,secondCheckout,otherPackage:otherPkg,...packageIdentity,thread1,thread2,thread3,worktreeTarget:docsCheckout,integration:handoffIntegration,links:specsLinks?{workspace:'links',package:linksPackage,other:linksOther,frontend:linksFrontendPath,collision:linksCollisionPath,ambiguousWorkspace:'links-ambiguous',ambiguousPackage:linksAmbiguousPackage}:undefined,nextSteps:nextSteps?await nextStepsMeta():undefined,requestFixture:requestFixture?{enabled:true,scenario:'happy',scenarioControl:'/__fixture/control?action=request-scenario',speechCheckout:requestSpeechCheckout}:{enabled:false}}));
 async function close(){
  clearInterval(timer);
  if(handoffIntegration||modelsFixture){

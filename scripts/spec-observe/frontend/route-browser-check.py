@@ -29,7 +29,7 @@ from playwright.sync_api import expect, sync_playwright
 from reference_screens import reference_screens
 
 args = argparse.ArgumentParser()
-args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters', 'specs-list', 'specs-workspace', 'specs-overview', 'specs-variants', 'specs-activity', 'specs-links', 'specs-relaunch', 'files-workspace', 'files-sources', 'files-continuity', 'files-recovery', 'files-read-refresh'])
+args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters', 'specs-list', 'specs-workspace', 'specs-overview', 'specs-variants', 'specs-activity', 'specs-links', 'specs-discuss', 'specs-relaunch', 'files-workspace', 'files-sources', 'files-continuity', 'files-recovery', 'files-read-refresh'])
 case = args.parse_args().case
 root = Path(__file__).resolve().parent
 evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-route-evidence'))
@@ -88,6 +88,8 @@ if case == 'context':
     fixture_env['SENTINEL_NONCANONICAL_CONTEXT'] = '1'
 if case == 'specs-links':
     fixture_env['SENTINEL_SPECS_LINKS'] = '1'
+if case == 'specs-discuss':
+    fixture_env['SENTINEL_SPECS_DISCUSS'] = '1'
 if case in ('files-workspace', 'files-sources', 'files-continuity', 'files-recovery', 'files-read-refresh'):
     fixture_env['SENTINEL_REPOSITORY_FILES'] = '1'
 fixture = subprocess.Popen(['node', str(root / 'browser-fixture.mjs')], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=fixture_env)
@@ -3720,6 +3722,190 @@ try:
             expect(publication_row('Repository').locator('a')).to_have_count(0)
             report['scenarios'].append('A record whose workspace cannot be resolved keeps its recorded label as plain text with no link')
 
+        if case == 'specs-discuss':
+            # Real fixture App, catalog, workspace store and conversations
+            # dialog; only /api/state is fulfilled. The links workspace binds
+            # alias "frontend" to the frontend checkout and alias "app" to a
+            # different checkout, so a single recorded target resolves by
+            # canonical path to the frontend alias and never by target id. The
+            # ambiguous workspace binds two aliases to the same checkout so
+            # resolution refuses instead of guessing. Discuss is the sole
+            # primary action in the decision state: it seeds the real draft
+            # owner and opens the real dialog without creating, sending or
+            # launching anything.
+            (evidence / 'step-008').mkdir(parents=True, exist_ok=True)
+            now = '2026-10-12T12:00:00.000Z'
+            links = receipt['links']
+            workspace = links['workspace']
+            package = links['package']
+            other_package = links['other']
+            frontend_checkout = links['frontend']
+            collision_checkout = links['collision']
+            ambiguous_workspace = links['ambiguousWorkspace']
+            ambiguous_package = links['ambiguousPackage']
+            specs_directory = str(Path(package).parent)
+            ghost_package = specs_directory + '/links-ghost'
+            unhealthy_package = specs_directory + '/links-unhealthy'
+            decision_key = json.dumps([workspace, package, 'planned-package', None], separators=(',', ':'))
+            other_key = json.dumps([workspace, other_package, 'planned-package', None], separators=(',', ':'))
+            ghost_key = json.dumps(['ghost-links', ghost_package, 'planned-package', None], separators=(',', ':'))
+            unhealthy_key = json.dumps([workspace, unhealthy_package, 'planned-package', None], separators=(',', ':'))
+            ambiguous_key = json.dumps([ambiguous_workspace, ambiguous_package, 'planned-package', None], separators=(',', ':'))
+            state = {'value': None}
+            posts = []
+            workspace_requests = []
+
+            def on_state(route):
+                route.fulfill(json=state['value'])
+
+            context.route('**/api/state**', on_state)
+
+            def observe_request(request):
+                if request.method == 'POST':
+                    posts.append(request.url)
+                if '/api/workspace' in request.url:
+                    workspace_requests.append(request.url)
+
+            page.on('request', observe_request)
+            errors_before = len(report['pageErrors'])
+
+            def capture(name, width):
+                page.set_viewport_size({'width': width, 'height': 900})
+                path = evidence / 'step-008' / f'{name}-{width}.png'
+                page.screenshot(path=str(path), full_page=True)
+                report.setdefault('captures', []).append(str(path))
+
+            def capture_both(name):
+                capture(name, 1280)
+                capture(name, 1600)
+
+            def target(target_id, primary):
+                return {'id': target_id, 'primary': primary}
+
+            def decision_facts(question, recommendation):
+                return {'question': question, 'recommendation': recommendation}
+
+            def planned(workspace_id, package_path, package_ref, title, targets, decision=None):
+                return {'workspace': workspace_id, 'package': package_path, 'package_ref': package_ref,
+                        'title': title, 'prepared': True, 'step_count': 3, 'total_steps': 3,
+                        'observed_at': now, 'coverage': {'state': 'complete', 'reasons': []},
+                        'targets': targets,
+                        'preparation': {'outcome': 'decision-required', 'source': package_path + '/preparation-report.md'},
+                        'decision': decision}
+
+            def envelope(planned_packages):
+                return {'schema_version': 1, 'generated_at': now,
+                        'thread_action_token': 'fixture-thread-token', 'action_token': 'fixture-action-token',
+                        'observers': [{'observer_id': 'discuss-fixture', 'state': 'observing', 'published_at': now,
+                                       'snapshot': {'workspace': workspace,
+                                                    'coverage': {'state': 'complete', 'observed_at': now, 'reasons': []},
+                                                    'runs': [], 'recently_completed': [],
+                                                    'planned_packages': list(planned_packages),
+                                                    'assignments': [],
+                                                    'assignment_coverage': {'state': 'complete', 'reasons': []},
+                                                    'epics': []}}]}
+
+            # A: one recorded target whose package-local id ("app") collides
+            # with a different checkout resolves by canonical path to the
+            # frontend alias; Discuss is the only primary action, and it opens
+            # the real unsent draft bound to that resolved alias.
+            canonical = planned(workspace, package, f'{workspace}/links-collision',
+                                'Links collision specification', [target('app', frontend_checkout)],
+                                decision_facts('Which repository should own the change?',
+                                               'Use the canonical frontend checkout.'))
+            state['value'] = envelope([canonical])
+            open_route('specs', ws=workspace, id=decision_key, filter='planned')
+            expect(page.locator('#spec-readiness')).to_have_attribute('data-state', 'decision')
+            discuss = page.locator('[data-action="discuss-decision"]')
+            expect(discuss).to_be_enabled()
+            expect(discuss).to_have_text('Discuss decision')
+            expect(page.locator('[data-action="open-preparation"]')).to_have_count(1)
+            expect(page.locator('[data-action="open-preparation"]')).to_have_text('Open preparation report')
+            expect(page.locator('[data-action-note="discuss-reason"]')).to_have_count(0)
+            assert any(urlsplit(url).path.endswith('/api/workspace') for url in workspace_requests), workspace_requests
+            capture_both('decision')
+            discuss.click()
+            expect(page.locator('h1')).to_have_text('Conversations')
+            expect(page.locator('#thread-new-dialog')).to_be_visible()
+            expect(page.locator('#thread-new-title')).to_have_text('Start conversation')
+            expect(page.locator('#thread-new-target')).to_have_value('frontend')
+            expect(page.locator('#thread-new-fields .thread-text')).to_have_text(
+                'Links collision specification needs a decision. Question: Which repository should own the change? Recommendation: Use the canonical frontend checkout.')
+            capture_both('discuss-dialog')
+            assert posts == [], posts
+            assert params()['ws'] == [workspace], page.url
+            assert params()['tab'] == ['new'], page.url
+            report['scenarios'].append('The recorded decision resolves to the frontend alias and Discuss opens the dialog with the prepared unsent draft preselected there')
+
+            # B: several distinct targets keep the no-guess behavior: the
+            # dialog opens with no repository preselection.
+            multi = planned(workspace, other_package, f'{workspace}/links-other',
+                            'Links other specification',
+                            [target('frontend', frontend_checkout), target('app', collision_checkout)],
+                            decision_facts('Which repository should own the change?',
+                                           'Use the canonical frontend checkout.'))
+            state['value'] = envelope([multi])
+            page.reload()
+            open_route('specs', ws=workspace, id=other_key, filter='planned')
+            expect(page.locator('#spec-readiness')).to_have_attribute('data-state', 'decision')
+            expect(discuss).to_be_enabled()
+            discuss.click()
+            expect(page.locator('#thread-new-dialog')).to_be_visible()
+            expect(page.locator('#thread-new-target')).to_have_value('')
+            expect(page.locator('#thread-new-fields .thread-text')).to_contain_text('needs a decision.')
+            capture_both('multi-target')
+            report['scenarios'].append('Several distinct recorded targets open the dialog without repository preselection')
+
+            # C: unavailable inventory, an unmatched target and an ambiguous
+            # binding each disable Discuss with their refusal reason.
+            unavailable = planned('ghost-links', ghost_package, 'ghost-links/links-ghost',
+                                  'Links ghost specification', [target('app', frontend_checkout)],
+                                  decision_facts('Which repository should own the change?', ''))
+            state['value'] = envelope([unavailable])
+            page.reload()
+            open_route('specs', id=ghost_key, filter='planned')
+            expect(discuss).to_be_disabled()
+            expect(page.locator('[data-action-note="discuss-reason"]')).to_contain_text('inventory is unavailable')
+            report['scenarios'].append('An unresolved workspace inventory disables Discuss with its reason')
+
+            unhealthy = planned(workspace, unhealthy_package, f'{workspace}/links-unhealthy',
+                                'Links unhealthy specification',
+                                [target('app', specs_directory + '/links-missing-checkout')],
+                                decision_facts('Which repository should own the change?', ''))
+            state['value'] = envelope([unhealthy])
+            page.reload()
+            open_route('specs', ws=workspace, id=unhealthy_key, filter='planned')
+            expect(discuss).to_be_disabled()
+            expect(page.locator('[data-action-note="discuss-reason"]')).to_contain_text('is not a healthy repository')
+            report['scenarios'].append('A target naming no healthy repository disables Discuss with its reason')
+
+            ambiguous = planned(ambiguous_workspace, ambiguous_package, f'{ambiguous_workspace}/links-ambiguous',
+                                'Links ambiguous specification', [target('frontend', frontend_checkout)],
+                                decision_facts('Which repository should own the change?', ''))
+            state['value'] = envelope([ambiguous])
+            page.reload()
+            open_route('specs', ws=ambiguous_workspace, id=ambiguous_key, filter='planned')
+            expect(discuss).to_be_disabled()
+            expect(page.locator('[data-action-note="discuss-reason"]')).to_contain_text('matches more than one repository')
+            capture_both('refused')
+            report['scenarios'].append('Two aliases of the same checkout keep Discuss disabled with the ambiguity reason')
+
+            # D: a package without a recorded decision keeps the observed
+            # readiness hierarchy: no Discuss, and the implement primary stays.
+            ready = planned(workspace, package, f'{workspace}/links-ready',
+                            'Links collision specification', [target('app', frontend_checkout)])
+            state['value'] = envelope([ready])
+            page.reload()
+            open_route('specs', ws=workspace, id=decision_key, filter='planned')
+            expect(page.locator('#spec-readiness')).to_have_attribute('data-state', 'ready')
+            expect(page.locator('[data-action="discuss-decision"]')).to_have_count(0)
+            expect(page.locator('[data-action="implement"]')).to_have_count(1)
+            capture_both('no-decision')
+            report['scenarios'].append('No recorded decision leaves the readiness hierarchy without Discuss')
+
+            assert posts == [], posts
+            assert len(report['pageErrors']) == errors_before, report['pageErrors'][errors_before:]
+
         if case == 'specs-relaunch':
             # Real fixture, App and polling stay in place; only /api/state is
             # annotated with the relaunch identity and the two relaunch endpoints
@@ -3892,7 +4078,7 @@ finally:
         fixture.kill()
         fixture.wait()
     report['elapsedSeconds'] = round(time.monotonic() - started, 3)
-    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'files-context.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'specs-list.json' if case == 'specs-list' else 'specs-workspace.json' if case == 'specs-workspace' else 'specs-variants.json' if case == 'specs-variants' else 'specs-overview.json' if case == 'specs-overview' else 'specs-activity.json' if case == 'specs-activity' else 'specs-links.json' if case == 'specs-links' else 'specs-relaunch.json' if case == 'specs-relaunch' else 'files-workspace.json' if case == 'files-workspace' else 'files-sources.json' if case == 'files-sources' else 'files-continuity.json' if case == 'files-continuity' else 'files-recovery.json' if case == 'files-recovery' else 'files-read-refresh.json' if case == 'files-read-refresh' else 'step-002-fix-browser.json'
+    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'files-context.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'specs-list.json' if case == 'specs-list' else 'specs-workspace.json' if case == 'specs-workspace' else 'specs-variants.json' if case == 'specs-variants' else 'specs-overview.json' if case == 'specs-overview' else 'specs-activity.json' if case == 'specs-activity' else 'specs-links.json' if case == 'specs-links' else 'specs-discuss.json' if case == 'specs-discuss' else 'specs-relaunch.json' if case == 'specs-relaunch' else 'files-workspace.json' if case == 'files-workspace' else 'files-sources.json' if case == 'files-sources' else 'files-continuity.json' if case == 'files-continuity' else 'files-recovery.json' if case == 'files-recovery' else 'files-read-refresh.json' if case == 'files-read-refresh' else 'step-002-fix-browser.json'
     target = evidence / filename
     temporary = target.with_name(target.name + '.tmp')
     temporary.write_text(json.dumps(report, indent=2) + '\n')

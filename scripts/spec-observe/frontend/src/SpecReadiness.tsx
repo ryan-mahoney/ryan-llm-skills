@@ -10,10 +10,11 @@ import { Portal } from 'solid-js/web';
 import { base, str, time } from './format';
 import { ActionBar, StateNotice, StatusText } from './primitives';
 import {
-  coverageConcern, observedSpecReadiness, planningFactsFor, specReadiness,
-  type PrerequisiteFact,
+  coverageConcern, observedSpecReadiness, planningFactsFor, specReadiness, usableDecision,
+  type PlanningFacts, type PrerequisiteFact,
 } from './readiness';
-import { plannedTargetChoices, specHandoffInput, startPackageHandoff, type PlannedTarget } from './launch-handoff';
+import { discussionRepositoryTarget, plannedTargetChoices, specHandoffInput, startPackageHandoff, type HandoffInput, type PackagePlanningPlan, type PlannedTarget } from './launch-handoff';
+import { seedNewThreadDraft } from './conversations-state';
 import { linkedAssignmentKey, packageRelative } from './spec-state';
 import { catalogEntryForRecord, type CatalogEntry } from './scope';
 import { formatHash } from './route';
@@ -395,11 +396,55 @@ export default function SpecReadiness(props: SpecReadinessProps) {
       </Show>
     </>
   );
+  // Discuss hands the observed Spec decision to the real conversations seed
+  // owner: prepared text (package title, question, recommendation) and the
+  // resolved repository alias travel in memory only. The route carries no text
+  // and no thread is created here. The workspace identity is the resolved
+  // props.ws, never a directory-derived basename. A refused canonical target
+  // resolution disables the action with a visible reason instead of guessing.
+  const discussTarget = () => discussionRepositoryTarget(
+    props.workspace ?? null,
+    text(props.ws),
+    Array.isArray(record().targets) ? record().targets as PlannedTarget[] : [],
+  );
+  const discussReason = (): string => {
+    const resolution = discussTarget();
+    return resolution.ok ? '' : resolution.reason;
+  };
+  const discussTitle = (): string =>
+    text(record().title) || base(text(record().package_ref) || text(record().package)) || 'This package';
+  const discussDecision = () => {
+    const ws = text(props.ws);
+    if (!ws) return;
+    const resolution = discussTarget();
+    if (!resolution.ok) return;
+    const decision = usableDecision(facts()?.decision ?? null);
+    const question = text(decision?.question);
+    const recommendation = text(decision?.recommendation);
+    const prepared = [
+      `${discussTitle()} needs a decision.`,
+      question ? `Question: ${question}` : '',
+      recommendation ? `Recommendation: ${recommendation}` : '',
+    ].filter(Boolean).join('\n');
+    seedNewThreadDraft(ws, resolution.target ? { text: prepared, target: resolution.target } : { text: prepared });
+    props.onNavigate({ dest: 'conversations', ws, tab: 'new' });
+  };
   const decisionPrimary = () => (
     <>
       <button
         type="button"
         class="ds-btn ds-btn--primary"
+        data-action="discuss-decision"
+        disabled={Boolean(discussReason())}
+        aria-describedby={discussReason() ? 'readiness-discuss-reason' : undefined}
+        onClick={discussDecision}
+      >Discuss decision</button>
+      <Show when={discussReason()}>
+        <span class="action-note" id="readiness-discuss-reason" data-action-note="discuss-reason">{discussReason()}</span>
+      </Show>
+      <button
+        type="button"
+        class="ds-btn"
         data-action="open-preparation"
         disabled={Boolean(filesGate())}
         aria-describedby={filesGate() ? 'readiness-files-reason' : undefined}
