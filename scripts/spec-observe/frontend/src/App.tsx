@@ -18,6 +18,8 @@ import { getLaunchDraft, seedLaunchDraft } from './launch-state';
 import { getConversationReturnId } from './conversations-state';
 import { armLaunchPickerIntent, cancelLaunchPickerIntent, createLaunchPickerIntent, shouldApplyPickerReset, shouldResetAcknowledgedDraft } from './launch-picker-intent';
 import { agentCoverage, effectiveAgentFilter, retainSelectedAgent, visibleAgents } from './agent-state';
+import { pageContext, changeScope, getRequest } from './request-state';
+import RequestWorkPanel, { type SpeechStatus } from './RequestWork';
 
 type Filter = 'active' | 'attention' | 'completed' | 'ready';
 type Catalog = WorkspaceCatalog;
@@ -616,6 +618,98 @@ export default function App() {
     });
   });
 
+  // Request work shell (step 9): one controlled dialog mounted beside Shell.
+  // The request-state store owns the effective scope: the route-derived page
+  // context initializes its entry once per context change, and the scope line
+  // renders the store's reactive effective scope, so Remove context
+  // (changeScope's entity-to-workspace fallback) survives close/reopen on the
+  // same route. Every close path restores focus to the persistent trigger and
+  // never touches launch drafts (INV-1).
+  const [requestWorkOpen, setRequestWorkOpen] = createSignal(false);
+  const requestContext = createMemo(() =>
+    pageContext({
+      workspace: route().ws ?? null,
+      design: route().dest === 'designs' ? route().id ?? null : null,
+      spec: route().dest === 'specs' ? route().id ?? null : null,
+      candidates: catalogEntries().map(entry => String(entry.id)),
+    })
+  );
+  let installedRequestContext = '';
+  createEffect(() => {
+    const context = requestContext();
+    const workspace = context.scope?.workspace;
+    if (!workspace) return;
+    const key = JSON.stringify(context.scope);
+    if (key === installedRequestContext) return;
+    installedRequestContext = key;
+    changeScope(workspace, context.scope);
+  });
+  const requestScope = createMemo(() => {
+    const context = requestContext();
+    const workspace = context.scope?.workspace;
+    const scope = (workspace ? getRequest(workspace)?.scope : null) ?? context.scope ?? undefined;
+    if (!scope) return undefined;
+    const entry = catalogEntries().find(item => String(item.id) === scope.workspace);
+    const label = String(entry?.name || entry?.id || scope.workspace);
+    if (scope.design) return { label: scope.design, kind: 'Design' };
+    if (scope.spec) return { label: scope.spec, kind: 'Spec' };
+    return { label, kind: 'Workspace' };
+  });
+  let requestOpener: HTMLElement | null = null;
+  const openRequestWork = (trigger?: HTMLElement) => {
+    requestOpener = trigger ?? null;
+    setRequestWorkOpen(true);
+  };
+  const closeRequestWork = () => {
+    setRequestWorkOpen(false);
+    // Focus returns to the opener when it is still shown, else the visible
+    // persistent trigger (the compact phone header entry at <=640px).
+    const candidates = [
+      requestOpener,
+      document.getElementById('request-work-phone-trigger'),
+      document.getElementById('request-work-trigger'),
+    ];
+    requestOpener = null;
+    const shown = (element: HTMLElement | null): element is HTMLElement =>
+      Boolean(element && element.getClientRects().length);
+    (candidates.find(shown) ?? document.getElementById('request-work-trigger'))?.focus({ preventScroll: true });
+  };
+  const removeRequestScope = () => {
+    const workspace = requestContext().scope?.workspace;
+    if (workspace) changeScope(workspace, null);
+  };
+
+  // Speech readiness for the request panel (step 10): one cached GET to the
+  // request route's speech probe when the panel first opens; a failed or
+  // other-state reply reads as unavailable (the panel shows the screen-18
+  // reason and keeps typing available).
+  const [speechStatus, setSpeechStatus] = createSignal<SpeechStatus>({ state: 'checking' });
+  let speechChecked = false;
+  createEffect(() => {
+    if (!requestWorkOpen() || speechChecked) return;
+    speechChecked = true;
+    getJson<{ state?: unknown; host?: unknown }>('/api/request/speech')
+      .then(reply => {
+        const host = typeof reply.host === 'string' && reply.host !== '' ? reply.host : undefined;
+        setSpeechStatus(reply.state === 'ready' ? { state: 'ready', host } : { state: 'unavailable', host });
+      })
+      .catch(() => setSpeechStatus({ state: 'unavailable' }));
+  });
+
+  onMount(() => {
+    const onShortcut = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'j') {
+        const openDialog = document.querySelector('dialog[open]');
+        if (openDialog && openDialog.id !== 'request-work-dialog') return;
+        event.preventDefault();
+        if (requestWorkOpen()) closeRequestWork();
+        else openRequestWork();
+      }
+    };
+    window.addEventListener('keydown', onShortcut);
+    onCleanup(() => window.removeEventListener('keydown', onShortcut));
+  });
+
   const outletProps: DestinationProps = {
     get route() { return route(); },
     get payload() { return payload(); },
@@ -695,6 +789,7 @@ export default function App() {
       observedAt={observedAt()}
       onRefresh={manualRefresh}
       onImport={file => void importSnapshot(file)}
+      onRequestWork={openRequestWork}
     >
       <Show when={notes().length}>
         <div id="notice" class="notice" role="status"><For each={notes()}>{note => <p innerHTML={statusMarkdown(note)} />}</For></div>
@@ -719,5 +814,15 @@ export default function App() {
         <WorkspacePicker {...outletProps} />
       </Show>
     </Shell>
+    <RequestWorkPanel
+      open={requestWorkOpen()}
+      onClose={closeRequestWork}
+      scope={requestScope()}
+      onRemoveScope={removeRequestScope}
+      workspace={requestContext().scope?.workspace ?? ''}
+      token={completionToken()}
+      live={live() && !error()}
+      speech={speechStatus()}
+    />
   </>;
 }

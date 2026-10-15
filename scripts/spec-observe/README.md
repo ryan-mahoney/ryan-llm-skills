@@ -617,6 +617,63 @@ the open page updates without a reload. A failed or slow naming call leaves
 "New thread" in place and never delays delivery. The first message's text is
 sent to that model for naming.
 
+## Request work (speech and interpretation)
+
+`createDashboardServer` registers three protected request routes alongside the
+thread routes, composed from the concrete adapters in `request-speech.mjs` and
+`request-interpret.mjs`:
+
+- `GET /api/request/speech` → `{state, host, limit_seconds: 30, sample_rate: 16000}`.
+  Locality is required (no token). `state` is `ready` or `unavailable`.
+- `POST /api/request/transcribe?request_id=<uuid>` with an
+  `application/octet-stream` body: little-endian 16 kHz mono Float32 PCM,
+  nonempty, ≤ 30 s (1,920,000 bytes), 4-byte aligned, finite samples →
+  `{request_id, text, seconds}`.
+- `POST /api/request/interpret` with an `application/json` body ≤ 16 KiB:
+  `{request_id, workspace_id, transcript, context?, resolved_refs?}` →
+  `{request_id, resolution, candidates, unresolved_references, clarification,
+  catalog: {read_at, omitted, errors}}`.
+
+Every POST requires the exact operator origin, the dashboard action token
+(`x-sentinel-token`) and its exact MIME type. Refusals are static
+`{error, reason}` bodies: `locality`/`token`/`origin`/`mime` 403,
+`invalid-request`/`input-too-long` 400, `oversize` 413,
+`workspace-unavailable` 404, `superseded`/`request-conflict` 409,
+`interpretation-failed`/`transcription-failed` 502, `no-speech` 422 and
+`unavailable` 503; exception text, child output and paths never cross the
+boundary.
+
+**Speech setup.** `SENTINEL_SPEECH_CHECKOUT` must name an absolute, existing
+Rearrange Writer checkout with provisioned ASR assets and `bun` on `PATH`.
+Unset or unusable means speech only is unavailable (`state: "unavailable"`,
+503 on transcribe) while typing still works. Each recording is uploaded once
+as ≤ 30 s of 16 kHz Float32LE and transcribed by one daemon child per clip;
+the PCM stays in memory and is never written to disk. Interpretation runs one
+tool-free `pi` print per request against the operator's configured provider —
+the transcript and bounded catalog excerpt leave the host only through that
+existing model configuration; no additional routing or storage.
+
+**Operator endpoints.** Loopback and the configured `--public-host` (HTTPS
+behind Tailscale Serve) are the authorized endpoints. Every POST needs the
+exact `Origin` (`https://<public-host>` on the public endpoint,
+`http://<host>` on loopback — no case folding), the action token and the exact
+MIME type.
+
+**Identity slots.** Each operation keeps one active slot keyed by the request
+id plus a SHA-256 fingerprint of the validated payload (audio bytes for
+transcribe; normalized workspace/transcript/context/refs for interpret). An
+identical in-flight identity joins the running response; the same id with
+different input answers `request-conflict`; a new id answers the old caller
+`superseded`, aborts its child, and starts only after the old child drains (a
+rapid A→B→C keeps C behind A even when B never starts). A settled call
+releases its slot, so a retry with the same id starts a fresh call. Nothing is
+persisted or cached.
+
+**Fixture seam.** `createDashboardServer({..., requestServices})` accepts
+optional `{speech, interpret, spawn}` overrides; `spawn` reaches only the real
+speech/printReply child boundaries. Real provider, real ASR-engine and mobile
+checks remain unassessed outside the isolated fixtures.
+
 ## Observe-only host (operator)
 
 One long-lived, authority-free host process observes every enrolled/discovered
