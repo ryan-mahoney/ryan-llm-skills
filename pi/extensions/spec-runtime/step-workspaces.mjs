@@ -552,14 +552,43 @@ function dropAlternates(gitDir) {
 // ---------------------------------------------------------------------------
 
 async function provisionOverlay({ kind, snapshotId, baseCommit, target, waveRoot, attemptId, setup, ownership, packageId, coordinator, phaseToken, identity, attemptRoot, staging }) {
-  const snapshotRoot = join(waveRoot, 'snapshots', snapshotId);
-  const lower = join(snapshotRoot, 'lower');
-  await ensureSnapshot({ snapshotRoot, snapshotId, lower, identity, source: target.worktree, baseCommit, staging });
-
   const upper = join(attemptRoot, 'upper');
   const work = join(attemptRoot, 'work');
   const merged = join(attemptRoot, 'merged');
   const gitDir = join(attemptRoot, 'git');
+
+  // The attempt's ownership is reserved through the phase registry before any
+  // workspace mutation and before the shared snapshot work: the claim needs
+  // only the computed upper path. A contender that loses the race refuses
+  // upper-held with the attempt root, the retained metadata and the canonical
+  // repository untouched. endPhase is the registry's release, so a claim this
+  // call won is returned on every later failure path and cannot leak: when a
+  // failure escapes here no worker or descendant has ever been handed the
+  // workspace, which is the positive drain the registry requires. A replayed
+  // claim belongs to an earlier call and is never released here.
+  const phases = createOverlayPhases({ ownership });
+  const phase = await phases.startPhase({ packageId, upper, work, phaseToken, coordinator });
+  if (phase.status === 'refused') refuse('upper-held', `upper already holds a phase claim: ${upper}`);
+  const claim = Object.freeze({ token: phase.claim.token, epoch: phase.claim.epoch });
+  try {
+    return await provisionOverlayWorkspace({
+      kind, snapshotId, baseCommit, target, waveRoot, attemptId, setup, packageId, identity, staging, upper, work, merged, gitDir, claim,
+    });
+  } catch (error) {
+    if (phase.status === 'permitted') {
+      await phases
+        .endPhase({ token: claim.token, epoch: claim.epoch, drain: 'confirmed' })
+        .catch(() => {});
+    }
+    throw error;
+  }
+}
+
+async function provisionOverlayWorkspace({ kind, snapshotId, baseCommit, target, waveRoot, attemptId, setup, packageId, identity, staging, upper, work, merged, gitDir, claim }) {
+  const snapshotRoot = join(waveRoot, 'snapshots', snapshotId);
+  const lower = join(snapshotRoot, 'lower');
+  await ensureSnapshot({ snapshotRoot, snapshotId, lower, identity, source: target.worktree, baseCommit, staging });
+
   for (const layer of [upper, work, merged, gitDir]) mkdirSync(layer, { recursive: true });
 
   const layers = validateLayers({ lower, upper, work, merged, gitDir });
@@ -590,10 +619,6 @@ async function provisionOverlay({ kind, snapshotId, baseCommit, target, waveRoot
   }
   dropAlternates(gitDir);
 
-  const phases = createOverlayPhases({ ownership });
-  const phase = await phases.startPhase({ packageId, upper, work, phaseToken, coordinator });
-  if (phase.status === 'refused') refuse('upper-held', `upper already holds a phase claim: ${upper}`);
-
   const retained = Object.freeze({
     ...retainLayer({ lower, upper, work, merged, gitDir, baseCommit, snapshotId, upperId: attemptId }),
     packageId,
@@ -610,41 +635,68 @@ async function provisionOverlay({ kind, snapshotId, baseCommit, target, waveRoot
     merged,
     gitDir,
     worktree: null,
-    claim: Object.freeze({ token: phase.claim.token, epoch: phase.claim.epoch }),
+    claim,
     retained,
     setup,
   });
 }
 
-async function provisionWorktree({ kind, snapshotId, baseCommit, target, waveRoot, attemptId, setup }) {
-  const worktree = join(waveRoot, 'attempts', attemptId, 'worktree');
-  mkdirSync(dirname(worktree), { recursive: true });
-  const existingHead = existsSync(worktree) ? gitMaybe(['-C', worktree, 'rev-parse', 'HEAD']) : null;
-  if (existingHead === null) {
-    execFileSync('git', ['-C', target.worktree, 'worktree', 'add', '--detach', worktree, baseCommit], GIT_RUN);
-  } else if (existingHead !== baseCommit) {
-    throw new Error(`fallback worktree already exists at a different head: ${worktree}`);
-  }
-  const declaredCommon = gitText(['-C', worktree, 'rev-parse', '--git-common-dir']);
-  const commonDir = realpathSync(isAbsolute(declaredCommon) ? declaredCommon : join(worktree, declaredCommon));
-  if (commonDir !== realpathSync(target.gitCommonDir)) {
-    throw new Error(`fallback worktree lost the canonical common dir: ${commonDir}`);
-  }
-  return Object.freeze({
-    kind,
-    backend: 'worktree',
-    snapshotId,
-    baseCommit,
-    lower: null,
-    upper: null,
-    work: null,
-    merged: null,
-    gitDir: null,
-    worktree,
-    claim: null,
-    retained: null,
-    setup,
+async function provisionWorktree({ kind, snapshotId, baseCommit, target, waveRoot, attemptId, setup, ownership, packageId, coordinator, phaseToken }) {
+  const attemptRoot = join(waveRoot, 'attempts', attemptId);
+  const worktree = join(attemptRoot, 'worktree');
+  // The fallback backend reserves the attempt's ownership through the same
+  // registry key as the overlay path - the attempt's canonical upper identity -
+  // before git worktree add or any other write, so one attempt holds at most
+  // one workspace across backends and a losing contender mutates nothing. A
+  // claim this call won is released on every later failure path exactly as the
+  // overlay path releases it; a replayed claim belongs to an earlier call and
+  // is never released here. The returned claim is the real registry claim.
+  const phases = createOverlayPhases({ ownership });
+  const phase = await phases.startPhase({
+    packageId,
+    upper: join(attemptRoot, 'upper'),
+    work: join(attemptRoot, 'work'),
+    phaseToken,
+    coordinator,
   });
+  if (phase.status === 'refused') refuse('upper-held', `attempt already holds a phase claim: ${attemptRoot}`);
+  const claim = Object.freeze({ token: phase.claim.token, epoch: phase.claim.epoch });
+  try {
+    mkdirSync(dirname(worktree), { recursive: true });
+    const existingHead = existsSync(worktree) ? gitMaybe(['-C', worktree, 'rev-parse', 'HEAD']) : null;
+    if (existingHead === null) {
+      execFileSync('git', ['-C', target.worktree, 'worktree', 'add', '--detach', worktree, baseCommit], GIT_RUN);
+    } else if (existingHead !== baseCommit) {
+      throw new Error(`fallback worktree already exists at a different head: ${worktree}`);
+    }
+    const declaredCommon = gitText(['-C', worktree, 'rev-parse', '--git-common-dir']);
+    const commonDir = realpathSync(isAbsolute(declaredCommon) ? declaredCommon : join(worktree, declaredCommon));
+    if (commonDir !== realpathSync(target.gitCommonDir)) {
+      throw new Error(`fallback worktree lost the canonical common dir: ${commonDir}`);
+    }
+    return Object.freeze({
+      kind,
+      backend: 'worktree',
+      snapshotId,
+      baseCommit,
+      lower: null,
+      upper: null,
+      work: null,
+      merged: null,
+      gitDir: null,
+      worktree,
+      claim,
+      retained: null,
+      setup,
+    });
+  } catch (error) {
+    if (phase.status === 'permitted') {
+      await phases
+        .endPhase({ token: claim.token, epoch: claim.epoch, drain: 'confirmed' })
+        .catch(() => {});
+    }
+    throw error;
+  }
 }
 // ---------------------------------------------------------------------------
 // Preparation
@@ -716,7 +768,19 @@ async function prepare(kind, options = {}) {
   const declared = frozenSetup(setup);
 
   if (backend.backend === 'worktree') {
-    return provisionWorktree({ kind, snapshotId, baseCommit, target, waveRoot, attemptId, setup: declared });
+    return provisionWorktree({
+      kind,
+      snapshotId,
+      baseCommit,
+      target,
+      waveRoot,
+      attemptId,
+      setup: declared,
+      ownership,
+      packageId,
+      coordinator,
+      phaseToken: options.phaseToken ?? `phase-${attemptId}`,
+    });
   }
   return provisionOverlay({
     kind,

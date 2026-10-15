@@ -14,6 +14,13 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createOverlayPhases, interpretProbeResult } from './overlay.mjs';
+import { createHash as newHash } from 'node:crypto';
+import {
+  existsSync as pathExists,
+  readFileSync as readFileBytes,
+  readdirSync as listDirEntries,
+  writeFileSync as writeBytes,
+} from 'node:fs';
 import { createOwnership } from './ownership.mjs';
 import {
   importSealedHead, prepareCandidateWorkspace, prepareStepWorkspace, remountRetainedWorkspace, resolveBackend, setupIdentity,
@@ -744,5 +751,105 @@ test('wave workspaces: a complete snapshot with a conflicting identity still ref
   assert.equal(existsSync(first.lower), true, 'the snapshot stays structurally complete');
 
   await assertRefusalAsync('snapshot-mismatch', () => prepareStepWorkspace(options('attempt-conflict-2')));
+});
+
+function dirEntries(dir) {
+  return listDirEntries(dir, { withFileTypes: true }).map(entry => entry.name).sort();
+}
+
+function digestTree(root) {
+  const hash = newHash('sha256');
+  const walk = dir => {
+    for (const entry of listDirEntries(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+      const full = join(dir, entry.name);
+      hash.update(`${entry.name} ${entry.isSymbolicLink() ? 'l' : entry.isDirectory() ? 'd' : 'f'}\n`);
+      if (entry.isSymbolicLink()) hash.update(readFileBytes(full, 'utf8'));
+      else if (entry.isDirectory()) walk(full);
+      else hash.update(readFileBytes(full));
+    }
+  };
+  walk(root);
+  return hash.digest('hex');
+}
+
+test('wave workspaces: a losing contender cannot mutate a held attempt', async t => {
+  const target = makeTargetRepo(t, 'loser-target');
+  const waveRoot = freshRoot(t, 'loser-wave');
+  const ownership = makeOwnership(t, 'loser');
+  const attemptId = 'attempt-loser';
+  const common = { target, waveRoot, ownership, packageId: 'wave-loser', attemptId, baseCommit: target.c2 };
+  // The holder is built through the real provision path, so the attempt holds
+  // its claim before any overlay layer or private Git config exists.
+  const holder = await prepareStepWorkspace(workspaceOptions({
+    ...common,
+    label: 'loser-holder',
+    mode: 'auto',
+    capability: fallbackCapability(),
+  }));
+  assert.equal(typeof holder.claim.token, 'string');
+  assert.equal(typeof holder.claim.epoch, 'number');
+  const attemptRoot = join(waveRoot, 'attempts', attemptId);
+  assert.deepEqual(dirEntries(attemptRoot), ['worktree']);
+  const before = { attempt: digestTree(attemptRoot), repo: digestTree(target.worktree) };
+  await assertRefusalAsync('upper-held', () => prepareStepWorkspace(workspaceOptions({ ...common, label: 'loser-contender' })));
+  assert.deepEqual(dirEntries(attemptRoot), ['worktree'], 'the refused attempt created no layer directory');
+  assert.equal(pathExists(join(attemptRoot, 'git', 'config')), false, 'the refused attempt wrote no private Git config');
+  assert.equal(digestTree(attemptRoot), before.attempt, 'the attempt root is byte-identical after the refusal');
+  assert.equal(digestTree(target.worktree), before.repo, 'the canonical repository is byte-identical after the refusal');
+  // Replay by the claim holder stays non-destructive: an existing valid
+  // worktree at the same head is retained and the held claim is reused.
+  const replayed = await prepareStepWorkspace(workspaceOptions({
+    ...common,
+    label: 'loser-holder',
+    mode: 'auto',
+    capability: fallbackCapability(),
+  }));
+  assert.equal(replayed.claim.token, holder.claim.token, 'the replay did not reuse the held claim');
+  assert.equal(replayed.worktree, holder.worktree, 'the replay recreated the worktree');
+  assert.equal(digestTree(attemptRoot), before.attempt, 'the replay recreated the held attempt state');
+  // An existing valid overlay state is likewise reused, not recreated.
+  const overlayId = 'attempt-loser-overlay';
+  const overlayOptions = workspaceOptions({ ...common, attemptId: overlayId, label: 'loser-overlay' });
+  const overlayHolder = await prepareStepWorkspace(overlayOptions);
+  writeBytes(join(overlayHolder.upper, 'dirty.txt'), 'kept\n');
+  const overlayRoot = join(waveRoot, 'attempts', overlayId);
+  const overlayDirty = digestTree(overlayRoot);
+  const overlayReplay = await prepareStepWorkspace(overlayOptions);
+  assert.equal(overlayReplay.claim.token, overlayHolder.claim.token, 'the overlay replay did not reuse the held claim');
+  assert.equal(pathExists(join(overlayHolder.upper, 'dirty.txt')), true, 'the overlay replay destroyed the held overlay state');
+  assert.equal(digestTree(overlayRoot), overlayDirty, 'the overlay replay recreated the attempt state');
+});
+
+test('wave workspaces: worktree fallback attempts hold ownership before any worktree write', async t => {
+  const target = makeTargetRepo(t, 'fallback-own-target');
+  const waveRoot = freshRoot(t, 'fallback-own-wave');
+  const ownership = makeOwnership(t, 'fallback-own');
+  const attemptId = 'attempt-fallback-own';
+  const common = {
+    target,
+    waveRoot,
+    ownership,
+    packageId: 'wave-fallback-own',
+    attemptId,
+    baseCommit: target.c2,
+    mode: 'auto',
+    capability: fallbackCapability(),
+  };
+  const holder = await prepareStepWorkspace(workspaceOptions({ ...common, label: 'fallback-own-holder' }));
+  assert.equal(typeof holder.claim.token, 'string', 'the fallback record carries a real claim token');
+  assert.equal(typeof holder.claim.epoch, 'number', 'the fallback record carries a numeric claim epoch');
+  assert.equal(Object.isFrozen(holder.claim), true);
+  const attemptRoot = join(waveRoot, 'attempts', attemptId);
+  const before = { listing: dirEntries(attemptRoot), location: digestTree(attemptRoot) };
+  await assertRefusalAsync('upper-held', () => prepareStepWorkspace(workspaceOptions({ ...common, label: 'fallback-own-contender' })));
+  assert.deepEqual(dirEntries(attemptRoot), before.listing, 'the refusal added nothing under the fallback worktree location');
+  assert.equal(digestTree(attemptRoot), before.location, 'the fallback worktree location is byte-identical after the refusal');
+  // Replay of the held attempt is non-destructive: the worktree state survives.
+  writeBytes(join(holder.worktree, 'dirty.txt'), 'kept\n');
+  const dirty = digestTree(attemptRoot);
+  const replayed = await prepareStepWorkspace(workspaceOptions({ ...common, label: 'fallback-own-holder' }));
+  assert.equal(replayed.claim.token, holder.claim.token, 'the replay did not reuse the held claim');
+  assert.equal(pathExists(join(holder.worktree, 'dirty.txt')), true, 'the replay destroyed the worktree state');
+  assert.equal(digestTree(attemptRoot), dirty, 'the replay recreated the fallback worktree');
 });
 
