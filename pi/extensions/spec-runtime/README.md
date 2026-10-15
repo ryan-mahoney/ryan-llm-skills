@@ -397,6 +397,29 @@ The existing `enable /absolute/policy.json` and `disable` interface remains supp
 scoped callers. Its file schema, eight-hour expiry and explicit scoped identity validation
 are unchanged. Those requirements do not apply to the global runtime-mode interface.
 
+## Provider recovery
+
+Managed owners and editors using the `primalabs` provider recover transient request
+failures in their existing native session. This includes the gateway's HTTP 400
+`no healthy deployments` response. Errors Pi does not recognize receive three
+retries after 5, 10 and 20 seconds. Recognized errors first use Pi's configured
+retry budget and backoff; those failed responses count toward the three retries,
+so the extension does not add a second full budget. After exhaustion, the runtime
+selects exactly `deepseek/deepseek-flash` and retains the thinking level and context
+policy. Successful responses end the failure streak.
+Authentication, billing, model configuration, context limits, aborts and failed
+verification commands do not trigger this recovery.
+
+The session records each retry and fallback; `runtime/events.jsonl` exposes them as
+`provider_recovery` events with the worker role. Raw errors remain in the transcript
+but are omitted from the next model request. Successful tool results and the original
+assignment stay in context. No replacement process or step replay is launched.
+The fallback remains selected for that retained session, including resume; it never
+cycles back to the unavailable provider. Missing fallback configuration or failure
+of the fallback stops normally. Cancellation interrupts the backoff, and writer
+lease checks run again before continuation. This policy does not enable Sentinel
+or change reviewer routing. Existing processes need a fresh launch to load it.
+
 ## Bounded continuation
 
 When explicitly enabled in recover mode, the coordinator may propose exactly one

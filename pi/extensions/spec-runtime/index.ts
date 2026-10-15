@@ -1,5 +1,6 @@
 import { createSentinelDashboard } from './sentinel-dashboard.mjs';
 import { Type } from '@earendil-works/pi-ai';
+import { isRetryableAssistantError } from '@earendil-works/pi-ai/compat';
 import { getAgentDir, compact, SettingsManager } from '@earendil-works/pi-coding-agent';
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { randomUUID, createHash } from 'node:crypto';
@@ -18,6 +19,7 @@ import { installProgressContext, recordCheckpoint, refreshProgress } from './com
 import { metrics, formatMetrics } from './metrics.mjs';
 import { installContextBudget } from '../context-budget/policy.mjs';
 import { createWorkflowContinuation } from './workflow-continuation.mjs';
+import { installProviderRecovery } from './provider-recovery.mjs';
 
 const result = (value: unknown, isError = false) => ({ content: [{ type: 'text', text: JSON.stringify(value) }], details: value, isError });
 const optional = (description: string) => Type.Optional(Type.String({ description }));
@@ -116,6 +118,11 @@ export default function (pi: any) {
       }
       pi.setActiveTools(allowed);
     });
+    if (['owner', 'editor'].includes(role)) installProviderRecovery(pi, { requestedModel: record[`${role}_model`],
+      assertActive: () => assertLease(record),
+      nativeRetryable: isRetryableAssistantError,
+      retrySettings: () => SettingsManager.inMemory(pi.getSettings()).getRetrySettings(),
+      onEvent: (data: any) => runtimeEvent(record, 'provider_recovery', { role, ...data }) });
     pi.on('tool_call', (event: any) => {
       try {
         assertLease(record);
