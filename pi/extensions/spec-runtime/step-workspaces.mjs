@@ -183,12 +183,63 @@ export function resolveBackend({ mode = 'auto', capability } = {}) {
 // Setup identity and freeze checks
 // ---------------------------------------------------------------------------
 
+const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function normalizeSetupPath(entry, index) {
+  if (typeof entry !== 'string' || entry.length === 0) {
+    refuse('setup-malformed', `lockfiles[${index}] must be a nonempty string`);
+  }
+  const normalized = [];
+  for (const segment of entry.split('/')) {
+    if (segment === '' || segment === '.' || segment === '..') {
+      refuse('setup-malformed', `lockfiles[${index}] must be a canonical target-relative path with no escape: ${entry}`);
+    }
+    if (segment === '.git') {
+      refuse('setup-malformed', `lockfiles[${index}] must not name .git: ${entry}`);
+    }
+    normalized.push(segment);
+  }
+  return normalized.join('/');
+}
+
+// Consume exactly the prepared index declaration: the literal "none" maps to
+// the empty declaration, otherwise `{command: string, lockfiles: string[],
+// environment: string[]}`. Anything else refuses with setup-malformed; no
+// field is coerced or dropped. Environment entries are names only, never values.
 function normalizeSetup(setup) {
-  const declared = setup && typeof setup === 'object' ? setup : {};
-  const command = Array.isArray(declared.command) ? declared.command.map(entry => requireString(entry, 'setup.command[]')) : [];
-  const lockfiles = Array.isArray(declared.lockfiles) ? declared.lockfiles.map(entry => requireString(entry, 'setup.lockfiles[]')) : [];
-  const env = Array.isArray(declared.env) ? declared.env.map(entry => requireString(entry, 'setup.env[]')) : [];
-  return { command, lockfiles, env };
+  if (setup === 'none') return { command: '', lockfiles: [], environment: [] };
+  if (!setup || typeof setup !== 'object' || Array.isArray(setup)) {
+    refuse('setup-malformed', 'setup must be "none" or the prepared declaration object');
+  }
+  for (const key of Object.keys(setup)) {
+    if (key !== 'command' && key !== 'lockfiles' && key !== 'environment') {
+      refuse('setup-malformed', `setup carries an unknown field: ${key}`);
+    }
+  }
+  const { command, lockfiles, environment } = setup;
+  if (typeof command !== 'string' || command.trim().length === 0) {
+    refuse('setup-malformed', 'setup.command must be a nonempty prepared shell command string');
+  }
+  if (!Array.isArray(lockfiles) || !Array.isArray(environment)) {
+    refuse('setup-malformed', 'setup.lockfiles and setup.environment must be string arrays');
+  }
+  const seenPaths = new Set();
+  const normalizedPaths = lockfiles.map((entry, index) => {
+    const path = normalizeSetupPath(entry, index);
+    if (seenPaths.has(path)) refuse('setup-malformed', `duplicate lockfile path: ${path}`);
+    seenPaths.add(path);
+    return path;
+  });
+  const seenNames = new Set();
+  const names = environment.map((entry, index) => {
+    if (typeof entry !== 'string' || !ENV_NAME_PATTERN.test(entry)) {
+      refuse('setup-malformed', `environment[${index}] must be a valid variable name, never a value`);
+    }
+    if (seenNames.has(entry)) refuse('setup-malformed', `duplicate environment variable name: ${entry}`);
+    seenNames.add(entry);
+    return entry;
+  });
+  return { command, lockfiles: normalizedPaths, environment: names };
 }
 
 function receiptConfirmed(receipt, baseCommit) {
@@ -218,11 +269,11 @@ function requireStableBase({ worktree, baseCommit }) {
   if (status !== '') refuse('tracked-base-changed', 'target repository has tracked modifications');
 }
 
-function frozenSetup({ command, lockfiles, env }) {
+function frozenSetup({ command, lockfiles, environment }) {
   return Object.freeze({
-    command: Object.freeze([...command]),
+    command,
     lockfiles: Object.freeze([...lockfiles]),
-    env: Object.freeze([...env]),
+    environment: Object.freeze([...environment]),
   });
 }
 
@@ -409,12 +460,18 @@ async function prepare(kind, options = {}) {
 
   // Freeze order: every declared-input check refuses before any snapshot or
   // attempt directory is created and before any phase claim is requested.
-  const lockfiles = setup.lockfiles.map(filePath => ({ path: filePath, sha256: hashFileBytes(filePath) }));
-  for (const name of setup.env) {
+  // Lockfiles resolve against the accepted base target root, never the
+  // caller's CWD, and the resolved file's bytes feed the identity.
+  const lockfiles = setup.lockfiles.map(filePath => ({
+    path: filePath,
+    sha256: hashFileBytes(join(target.worktree, filePath)),
+  }));
+  for (const name of setup.environment) {
     if (!(name in environment)) refuse('env-missing', `declared environment variable is absent: ${name}`);
   }
-  if (ROOT_COMMANDS.has(setup.command[0])) {
-    refuse('setup-root-command', `setup command must not invoke a root command: ${setup.command[0]}`);
+  const commandName = setup.command.trim().split(/\s+/)[0];
+  if (commandName !== '' && ROOT_COMMANDS.has(commandName)) {
+    refuse('setup-root-command', `setup command must not invoke a root command: ${commandName}`);
   }
   if (!receiptConfirmed(options.preparationReceipt, baseCommit)) {
     refuse('receipt-invalid', 'preparation receipt must record a confirmed, tracked-clean base');
@@ -430,7 +487,11 @@ async function prepare(kind, options = {}) {
 
   const identity = {
     baseCommit,
-    setup: { command: setup.command, lockfiles, env: [...setup.env].sort() },
+    setup: {
+      command: setup.command,
+      lockfiles: [...lockfiles].sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0)),
+      environment: [...setup.environment].sort(),
+    },
   };
   const snapshotId = createHash('sha256').update(canonicalJson(identity)).digest('hex');
   const declared = frozenSetup(setup);

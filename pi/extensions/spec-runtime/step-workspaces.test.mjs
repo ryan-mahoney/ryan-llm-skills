@@ -115,7 +115,7 @@ function workspaceOptions({
     target,
     waveRoot,
     baseCommit,
-    setup: setup ?? { command: ['node', '--version'], lockfiles: [], env: [] },
+    setup: setup ?? { command: 'node --version', lockfiles: [], environment: [] },
     env: env ?? { HOME: process.env.HOME, PATH: process.env.PATH },
     preparationReceipt: preparationReceipt ?? { ok: true, drain: 'confirmed', baseCommit, trackedClean: true },
     mode,
@@ -377,19 +377,85 @@ test('wave workspaces: retained remount preserves dirty state and blocks unclean
   assert.ok(existsSync(join(record.lower, 'docs', 'remove-me.txt')), 'the lower deletion source is untouched');
 });
 
+test('wave workspaces: index setup declaration preserves command and environment names', async t => {
+  const target = makeTargetRepo(t, 'wave-workspaces-index-target');
+  const waveRoot = freshRoot(t, 'wave-workspaces-index-root');
+  const ownership = makeOwnership(t, 'wave-workspaces-index');
+  writeFileSync(join(target.worktree, 'package-lock.json'), '{"lockfileVersion":3}\n');
+  const baseCommit = target.c2;
+  const declaration = { command: 'npm ci', lockfiles: ['package-lock.json'], environment: ['REQUIRED_MISSING'] };
+
+  const options = (attemptId, overrides = {}) => ({
+    ...workspaceOptions({
+      target, waveRoot, ownership, packageId: 'wave-index', label: 'index', attemptId, baseCommit,
+      mode: 'overlayfs', setup: declaration,
+      env: { HOME: process.env.HOME, PATH: process.env.PATH, REQUIRED_MISSING: 'value-never-recorded' },
+    }),
+    ...overrides,
+  });
+
+  const prepared = await prepareStepWorkspace(options('attempt-index-1'));
+  assert.equal(prepared.setup.command, 'npm ci', 'the prepared record preserves the command string');
+  assert.deepEqual([...prepared.setup.environment], ['REQUIRED_MISSING'], 'a declared variable name is recorded as a name, never a value');
+
+  await assertRefusalAsync('env-missing', () => prepareStepWorkspace(options('attempt-index-2', {
+    env: { HOME: process.env.HOME },
+  })));
+
+  const commandChanged = await prepareStepWorkspace(options('attempt-index-3', {
+    setup: { ...declaration, command: 'npm ci --ignore-scripts' },
+  }));
+  assert.notEqual(commandChanged.snapshotId, prepared.snapshotId, 'declarations differing only in the command produce different snapshot ids');
+
+  writeFileSync(join(target.worktree, 'package-lock.json'), '{"lockfileVersion":3,"changed":true}\n');
+  const lockChanged = await prepareStepWorkspace(options('attempt-index-4'));
+  assert.notEqual(lockChanged.snapshotId, prepared.snapshotId, 'a relative lockfile resolved against the accepted base feeds the snapshot identity');
+
+  const none = await prepareStepWorkspace(options('attempt-index-5', { setup: 'none' }));
+  assert.equal(none.setup.command, '', '"none" maps to the empty declaration');
+  assert.deepEqual([...none.setup.environment], []);
+});
+
+test('wave workspaces: malformed index setup declarations refuse with setup-malformed', async t => {
+  const target = makeTargetRepo(t, 'wave-workspaces-malformed-target');
+  const waveRoot = freshRoot(t, 'wave-workspaces-malformed-root');
+  const ownership = makeOwnership(t, 'wave-workspaces-malformed');
+  const baseCommit = target.c2;
+
+  const options = (attemptId, setup) => workspaceOptions({
+    target, waveRoot, ownership, packageId: 'wave-malformed', label: 'malformed', attemptId, baseCommit,
+    mode: 'overlayfs', setup,
+    env: { HOME: process.env.HOME, PATH: process.env.PATH },
+  });
+
+  const malformed = [
+    ['argv-array-command', { command: ['node', '--version'], lockfiles: [], environment: [] }],
+    ['env-key', { command: 'node --version', lockfiles: [], env: [] }],
+    ['non-string-environment-entry', { command: 'node --version', lockfiles: [], environment: [42] }],
+    ['escaping-lockfile-path', { command: 'node --version', lockfiles: ['../escape.lock'], environment: [] }],
+    ['git-lockfile-path', { command: 'node --version', lockfiles: ['pkg/.git/config'], environment: [] }],
+    ['duplicate-environment-names', { command: 'node --version', lockfiles: [], environment: ['A', 'A'] }],
+    ['duplicate-lockfile-paths', { command: 'node --version', lockfiles: ['a.lock', 'a.lock'], environment: [] }],
+    ['empty-command', { command: '', lockfiles: [], environment: [] }],
+  ];
+  for (const [label, setup] of malformed) {
+    await assertRefusalAsync('setup-malformed', () => prepareStepWorkspace(options(`attempt-malformed-${label}`, setup)));
+    assert.equal(existsSync(join(waveRoot, 'attempts', `attempt-malformed-${label}`)), false, `${label} creates no workspace`);
+  }
+});
+
 test('wave workspaces: setup identity and freeze receipts fail closed', async t => {
   const target = makeTargetRepo(t, 'wave-workspaces-freeze-target');
   const waveRoot = freshRoot(t, 'wave-workspaces-freeze-root');
   const ownership = makeOwnership(t, 'wave-workspaces-freeze');
-  const lockRoot = freshRoot(t, 'wave-workspaces-freeze-locks');
-  const lockfile = join(lockRoot, 'package-lock.json');
+  const lockfile = join(target.worktree, 'package-lock.json');
   writeFileSync(lockfile, '{"lockfileVersion":3}\n');
   const baseCommit = target.c2;
 
   const options = (attemptId, overrides = {}) => ({
     ...workspaceOptions({
       target, waveRoot, ownership, packageId: 'wave-freeze', label: 'freeze', attemptId, baseCommit,
-      mode: 'overlayfs', setup: { command: ['node', '--version'], lockfiles: [lockfile], env: [] },
+      mode: 'overlayfs', setup: { command: 'node --version', lockfiles: ['package-lock.json'], environment: [] },
       env: { HOME: process.env.HOME, PATH: process.env.PATH },
     }),
     ...overrides,
@@ -401,7 +467,7 @@ test('wave workspaces: setup identity and freeze receipts fail closed', async t 
   assert.equal(first.lower, second.lower);
 
   const commandChanged = await prepareStepWorkspace(options('attempt-freeze-3', {
-    setup: { command: ['node', '--test'], lockfiles: [lockfile], env: [] },
+    setup: { command: 'node --test', lockfiles: ['package-lock.json'], environment: [] },
   }));
   assert.notEqual(commandChanged.snapshotId, first.snapshotId, 'a changed setup command changes the snapshot identity');
 
@@ -410,25 +476,25 @@ test('wave workspaces: setup identity and freeze receipts fail closed', async t 
   assert.notEqual(lockChanged.snapshotId, first.snapshotId, 'changed lockfile bytes change the snapshot identity');
 
   await assertRefusalAsync('lockfile-missing', () => prepareStepWorkspace(options('attempt-freeze-5', {
-    setup: { command: ['node', '--version'], lockfiles: [join(lockRoot, 'absent.lock')], env: [] },
+    setup: { command: 'node --version', lockfiles: ['absent.lock'], environment: [] },
   })));
 
   await assertRefusalAsync('env-missing', () => prepareStepWorkspace(options('attempt-freeze-6', {
-    setup: { command: ['node', '--version'], lockfiles: [], env: ['WAVE_REQUIRED_ENV'] },
+    setup: { command: 'node --version', lockfiles: [], environment: ['WAVE_REQUIRED_ENV'] },
     env: { HOME: process.env.HOME },
   })));
 
   for (const rootCommand of ['sudo', 'apt-get']) {
     await assertRefusalAsync('setup-root-command', () => prepareStepWorkspace(options(`attempt-freeze-root-${rootCommand}`, {
-      setup: { command: [rootCommand, 'install'], lockfiles: [], env: [] },
+      setup: { command: `${rootCommand} install`, lockfiles: [], environment: [] },
     })));
   }
 
   const legal = await prepareCandidateWorkspace(options('attempt-freeze-legal', {
-    setup: { command: ['npm', 'ci', '--ignore-scripts'], lockfiles: [lockfile], env: [] },
+    setup: { command: 'npm ci --ignore-scripts', lockfiles: ['package-lock.json'], environment: [] },
   }));
   assert.equal(legal.kind, 'candidate');
-  assert.deepEqual(legal.setup.command, ['npm', 'ci', '--ignore-scripts'], 'the declared argv is recorded verbatim');
+  assert.equal(legal.setup.command, 'npm ci --ignore-scripts', 'the declared command string is recorded verbatim');
 
   await assertRefusalAsync('receipt-invalid', () => prepareStepWorkspace(options('attempt-freeze-7', { preparationReceipt: undefined })));
   await assertRefusalAsync('receipt-invalid', () => prepareStepWorkspace(options('attempt-freeze-8', {
