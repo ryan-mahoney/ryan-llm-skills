@@ -22,8 +22,14 @@ hand-off, cold critics/spec entries, observed Inputs facts, the origin return
 and a failed launch over the same opt-in fixture. The final pi/tmux boundary
 is fake: no worker is started, no operator storage is touched, and the
 fixture-owned resolver/discussion service supplies every recorded fact.
---case landing stays an explicit unimplemented gate; no landing success is
-claimed here.
+
+The landing case drives the built App at empty and unknown hashes to prove
+Next steps is the live All-workspaces landing, that the rail waiting badge
+matches only a trustworthy scoped scan (invariant under filters/queries,
+absent at zero/failure and after import), that import lands Specs with
+polling stopped, and that every rail entry mounts only its own adapter. It
+derives its expected badge count from raw fixture responses only; no worker
+is started and no operator storage is touched.
 
 Each case writes SENTINEL_EVIDENCE_DIR/report.json atomically with the
 observed revision/dirty, elapsed seconds, errors, scenarios and capture
@@ -1227,6 +1233,276 @@ def run_list_case(report: dict, fixture: subprocess.Popen, receipt: dict, eviden
     check_deadline("end")
 
 
+def run_landing_case(report: dict, fixture: subprocess.Popen, receipt: dict, evidence: Path, deadline: float) -> None:
+    """EV-8 landing/badge gate over the SENTINEL_NEXT_STEPS=1 fixture.
+
+    Proves the live All-workspaces landing, the raw-derived rail waiting badge
+    and its filter/query/scope invariances, scoped home, import without later
+    scan polling and rail adapter traversal. The expected badge count is
+    derived by this checker from raw fixture responses only: no production
+    railCount/nextStepRows import, no private Solid/store state, no worker.
+    """
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            executable_path=shutil.which("google-chrome"),
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage"],
+        )
+        context = browser.new_context(viewport={"width": 1280, "height": 900}, device_scale_factor=1)
+        page = context.new_page()
+        page.set_default_timeout(15000)
+        page.on("pageerror", lambda error: report["pageErrors"].append(f"landing: {error}"))
+        attach_console_evidence(page, "landing", report)
+
+        def check_deadline(label: str) -> None:
+            if time.monotonic() > deadline:
+                raise RuntimeError(f"landing case exceeded the {CASE_DEADLINE_SECONDS} second deadline at {label}")
+
+        def control(action=None, value=None, **extra):
+            params = {}
+            if action is not None:
+                params["action"] = action
+                params["value"] = str(value).lower() if isinstance(value, bool) else str(value)
+            params.update(extra)
+            return request_json(fixture, receipt["url"], "/__fixture/control", **params)
+
+        def badge():
+            return page.locator('.nav-item[data-area="next-steps"] .nav-count')
+
+        def scope_select():
+            return page.locator('select[aria-label="Workspace scope"]')
+
+        def route_hash() -> str:
+            return urlparse(page.url).fragment
+
+        def wait_for_hash(expected: str, label: str) -> None:
+            try:
+                page.wait_for_function("value => location.hash === value", arg=expected)
+            except Exception:
+                report["errors"].append(f"{label}: hash did not reach {expected}; actual {route_hash()}")
+                raise
+            assert route_hash() == expected, route_hash()
+
+        def wait_for_hash_prefix(prefix: str, label: str) -> None:
+            try:
+                page.wait_for_function("value => location.hash.startsWith(value)", arg=prefix)
+            except Exception:
+                report["errors"].append(f"{label}: hash did not reach {prefix}*; actual {route_hash()}")
+                raise
+
+        def derived_badge_count(workspace_id: str | None = None) -> int:
+            # Independent predicate: an ok-signal scan row counts unless a
+            # running current-assignment run or a recently completed record
+            # owns its slug/package identity. Never the production helpers.
+            scan_payload = request_json(fixture, receipt["url"], "/api/next-steps")
+            state_payload = request_json(fixture, receipt["url"], "/api/state")
+            excluded: set[str] = set()
+            for observer in state_payload.get("observers", []):
+                snapshot = observer.get("snapshot") or {}
+                for run in snapshot.get("runs") or []:
+                    if run.get("execution") == "running" and run.get("is_current_assignment") is True:
+                        excluded.update(str(run[field]) for field in ("package", "package_ref") if run.get(field))
+                for run in snapshot.get("recently_completed") or []:
+                    excluded.update(str(run[field]) for field in ("package", "package_ref") if run.get(field))
+            count = 0
+            for row in scan_payload.get("rows") or []:
+                if (row.get("signal") or {}).get("state") != "ok":
+                    continue
+                if workspace_id is not None and row.get("workspace_id") != workspace_id:
+                    continue
+                identities = {str(row[field]) for field in ("slug", "package", "package_ref") if row.get(field)}
+                if identities & excluded:
+                    continue
+                count += 1
+            return count
+
+        def assert_badge_count(count: int, label: str) -> None:
+            if count > 0:
+                expect(badge()).to_be_visible(timeout=20000)
+                expect(badge()).to_have_text(str(count))
+                actual = badge().get_attribute("aria-label")
+                assert actual == f"{count} waiting", (label, count, actual)
+            else:
+                actual_zero = page.locator(".nav-count").count()
+                assert actual_zero == 0, (label, actual_zero)
+
+        def refresh_files() -> None:
+            button = page.locator(".list-refresh button, .full-page .ds-callout button").filter(has_text="Refresh files")
+            expect(button.first).to_be_visible(timeout=20000)
+            button.first.click()
+
+        def wait_for_landing() -> None:
+            expect(page.locator("table.queue-table")).to_be_visible(timeout=20000)
+            expect(badge()).to_be_visible(timeout=20000)
+
+        control("next-local", True)
+        try:
+            # --- A. Landing default and valid destinations ------------------ #
+            check_deadline("landing-default")
+            page.goto(receipt["url"] + "/", wait_until="domcontentloaded")
+            wait_for_hash_prefix("#/next-steps", "empty hash")
+            assert "ws=" not in route_hash(), route_hash()
+            expect(page.locator("#main h1")).to_have_text("New files waiting for a next step")
+            assert scope_select().input_value() == "", scope_select().input_value()
+            primary_first = page.locator('nav[aria-label="Primary"] .nav-item').first
+            expect(primary_first).to_have_attribute("data-area", "next-steps")
+            expect(primary_first).to_have_attribute("aria-current", "page")
+            report["scenarios"].append("An empty hash canonicalizes to #/next-steps with the Next steps h1, an All workspaces scope and the first primary rail entry current")
+
+            page.goto(receipt["url"] + "/#/unknown?id=7&ws=fixture", wait_until="domcontentloaded")
+            wait_for_hash_prefix("#/next-steps", "unknown hash")
+            assert "ws=" not in route_hash(), route_hash()
+            expect(page.locator("#main h1")).to_have_text("New files waiting for a next step")
+            assert scope_select().input_value() == "", scope_select().input_value()
+            report["scenarios"].append("An unknown hash with id/ws parameters canonicalizes to #/next-steps and drops the parameters")
+
+            for dest, label in (("specs", "Specs"), ("epics", "Epics")):
+                page.goto(receipt["url"] + f"/#/{dest}", wait_until="domcontentloaded")
+                wait_for_hash_prefix(f"#/{dest}", f"{dest} hash visit")
+                expect(page.locator(f'.nav-item[data-area="{dest}"]')).to_have_attribute("aria-current", "page")
+                expect(page.locator("#main h1")).to_have_text(label)
+            report["scenarios"].append("Hash visits to #/specs and #/epics stay on those routes with their own rail entry current and their own adapter h1")
+
+            # --- B. Badge truth from raw responses --------------------------- #
+            check_deadline("badge-truth")
+            page.goto(receipt["url"] + "/#/next-steps", wait_until="domcontentloaded")
+            wait_for_landing()
+            all_count = derived_badge_count()
+            assert all_count > 0, all_count
+            assert_badge_count(all_count, "all workspaces")
+            report["scenarios"].append(f"The live All-workspaces rail badge equals the raw-derived count {all_count} with aria-label {all_count} waiting; running and recently completed packages are excluded")
+
+            # --- C. Filter/query invariance and non-subset ------------------- #
+            check_deadline("invariance")
+            page.locator(".filter-strip button", has_text="Critique").click()
+            page.wait_for_function("count => document.querySelectorAll('tr.queue-row').length < count", arg=all_count)
+            visible_after_filter = page.locator("tr.queue-row").count()
+            assert_badge_count(all_count, "critique filter")
+            page.locator(".filter-strip button", has_text="All").click()
+            page.wait_for_function("count => document.querySelectorAll('tr.queue-row').length > count", arg=visible_after_filter)
+            assert_badge_count(all_count, "all filter restore")
+            page.locator("#next-steps-find").fill("markup")
+            page.wait_for_function("count => document.querySelectorAll('tr.queue-row').length < count", arg=all_count)
+            visible_after_query = page.locator("tr.queue-row").count()
+            assert_badge_count(all_count, "markup query")
+            page.locator("#next-steps-find").fill("")
+            page.wait_for_function("count => document.querySelectorAll('tr.queue-row').length > count", arg=visible_after_query)
+            assert_badge_count(all_count, "query restore")
+            report["scenarios"].append(f"The badge stays at {all_count} while the Critique filter shrinks the visible rows to {visible_after_filter} and the markup query to {visible_after_query}, so it is neither the visible nor the searched subset")
+
+            # --- D. Scope respect and scoped home ---------------------------- #
+            check_deadline("scope-home")
+            other_count = derived_badge_count("other")
+            scope_select().select_option("other")
+            page.wait_for_function("() => location.hash.includes('ws=other')")
+            assert_badge_count(other_count, "other scope")
+            report["scenarios"].append(f"Selecting the other workspace shows the raw-derived in-scope badge {other_count} ({other_count} waiting)")
+
+            fixture_count = derived_badge_count("fixture")
+            scope_select().select_option("fixture")
+            page.wait_for_function("() => location.hash.includes('ws=fixture')")
+            assert_badge_count(fixture_count, "fixture scope")
+            page.locator(".brand").click()
+            wait_for_hash_prefix("#/specs?ws=fixture", "scoped brand")
+            assert "ws=fixture" in route_hash(), route_hash()
+            expect(page.locator('.nav-item[data-area="specs"]')).to_have_attribute("aria-current", "page")
+            assert page.locator("table.queue-table").count() == 0, "next-steps table must be absent on scoped Specs home"
+            report["scenarios"].append("With workspace fixture the brand opens #/specs?ws=fixture, marks Specs current and unmounts the next-steps table")
+
+            scope_select().select_option("")
+            page.wait_for_timeout(300)
+            page.locator(".brand").click()
+            wait_for_hash_prefix("#/next-steps", "All-workspaces brand")
+            assert "ws=" not in route_hash(), route_hash()
+            expect(page.locator("#main h1")).to_have_text("New files waiting for a next step")
+            report["scenarios"].append("Back at All workspaces the brand returns to #/next-steps")
+
+            # --- E. Zero and unavailable badge ------------------------------- #
+            check_deadline("zero-unavailable")
+            control("next-empty")
+            refresh_files()
+            expect(page.locator(".full-page .empty h2")).to_have_text("No new planning or review files")
+            assert page.locator(".nav-count").count() == 0, "zero rows must show no rail badge"
+            report["scenarios"].append("An empty live scan shows the empty surface and zero rail badge elements")
+
+            control("next-reset")
+            page.reload(wait_until="domcontentloaded")
+            wait_for_landing()
+            assert_badge_count(all_count, "reset restore")
+            report["scenarios"].append(f"Resetting the scan and reloading restores the {all_count} badge")
+
+            control("next-scan-fail", True)
+            page.reload(wait_until="domcontentloaded")
+            expect(page.locator(".full-page .ds-callout")).to_contain_text("Could not refresh next steps")
+            assert page.locator(".nav-count").count() == 0, "a failed scan must show no rail badge"
+            control("next-scan-fail", False)
+            page.locator(".full-page .ds-callout button", has_text="Refresh files").click()
+            wait_for_landing()
+            assert_badge_count(all_count, "scan-fail restore")
+            report["scenarios"].append(f"A failed initial scan shows no badge; the notice Refresh files retry restores the {all_count} badge")
+
+            # --- F. Import lands Specs and stops scanning -------------------- #
+            check_deadline("import")
+            import_page = context.new_page()
+            import_page.set_default_timeout(15000)
+            import_page.on("pageerror", lambda error: report["pageErrors"].append(f"import: {error}"))
+            attach_console_evidence(import_page, "import", report)
+            import_temp = evidence / f".landing-import-{os.getpid()}.json"
+            next_steps_requests: list[str] = []
+            import_page.on("request", lambda request: next_steps_requests.append(request.url) if "/api/next-steps" in request.url else None)
+            try:
+                import_page.clock.install()
+                import_page.goto(receipt["url"] + "/#/next-steps", wait_until="domcontentloaded")
+                expect(import_page.locator('.nav-item[data-area="next-steps"] .nav-count')).to_be_visible(timeout=20000)
+                import_temp.write_text(json.dumps(request_json(fixture, receipt["url"], "/api/state")))
+                import_page.locator("#import-file").set_input_files(str(import_temp))
+                expect(import_page).to_have_url(re.compile(r"#/specs(\?|$)"))
+                assert urlparse(import_page.url).fragment.startswith("/specs"), import_page.url
+                expect(import_page.locator("#connection-status")).to_contain_text("Imported snapshot")
+                requests_at_import = len(next_steps_requests)
+                import_page.clock.run_for(35000)
+                import_page.wait_for_timeout(300)
+                assert len(next_steps_requests) == requests_at_import, next_steps_requests
+                assert import_page.locator(".nav-count").count() == 0, "an imported snapshot must show no rail badge"
+                report["scenarios"].append(f"Importing a real /api/state envelope lands #/specs with the Imported snapshot status; 35s of clock time produced no /api/next-steps request after import ({requests_at_import} total) and no rail badge")
+            finally:
+                import_page.close()
+                import_temp.unlink(missing_ok=True)
+
+            # --- G. Rail adapter traversal ----------------------------------- #
+            check_deadline("rail")
+            scope_select().select_option("fixture")
+            page.wait_for_function("() => location.hash.includes('ws=fixture')")
+            for dest, label in (("specs", "Specs"), ("epics", "Epics"), ("agents", "Agents"), ("conversations", "Conversations"), ("files", "Files"), ("designs", "Designs"), ("workspaces", "Workspaces")):
+                page.locator(f'.nav-item[data-area="{dest}"]').click()
+                wait_for_hash_prefix(f"#/{dest}", f"rail {dest}")
+                expect(page.locator("#main h1")).to_have_text(label)
+                expect(page.locator(f'.nav-item[data-area="{dest}"]')).to_have_attribute("aria-current", "page")
+                if dest in ("conversations", "files", "designs"):
+                    assert "ws=fixture" in route_hash(), (dest, route_hash())
+            report["scenarios"].append("Each primary rail entry mounts only its own adapter: the hash keeps the destination, the current entry moves and the h1 names that destination")
+
+            # --- H. Production captures -------------------------------------- #
+            check_deadline("captures")
+            scope_select().select_option("")
+            page.wait_for_timeout(300)
+            page.locator('.nav-item[data-area="next-steps"]').click()
+            wait_for_landing()
+            assert_badge_count(all_count, "capture landing")
+            for width, height in WIDTH_HEIGHTS:
+                page.set_viewport_size({"width": width, "height": height})
+                page.wait_for_timeout(150)
+                path = evidence / f"production-01-next-steps-{width}.png"
+                page.screenshot(path=str(path), full_page=False)
+                report["captures"].append(str(path))
+            page.set_viewport_size({"width": 1280, "height": 900})
+            report["scenarios"].append("The live All-workspaces landing with its badge and table is captured at both production viewport sizes")
+        finally:
+            context.close()
+            browser.close()
+    check_deadline("end")
+
+
 def run_launch_case(report: dict, fixture: subprocess.Popen, receipt: dict, evidence: Path, deadline: float) -> None:
     """EV-7 bound plan/implement review and result journey.
 
@@ -1612,13 +1888,37 @@ def run_reference_captures(browser, report: dict, evidence: Path) -> None:
         context.close()
 
 
+def run_landing_reference_captures(browser, report: dict, evidence: Path) -> None:
+    """Capture only the 01-next-steps reference for the landing gate; skipped
+    when the packaged design screens are unavailable."""
+    screens = design_screens()
+    if screens is None:
+        report["scenarios"].append("Reference screen 01-next-steps was skipped because the packaged design screens are unavailable")
+        return
+    target = screens / "01-next-steps.html"
+    if not target.is_file():
+        raise RuntimeError(f"reference screen missing: {target}")
+    context = browser.new_context(viewport={"width": 1280, "height": 800}, device_scale_factor=1)
+    page = context.new_page()
+    page.on("pageerror", lambda error: report["pageErrors"].append(f"reference: {error}"))
+    attach_console_evidence(page, "reference", report)
+    try:
+        for width, height in WIDTH_HEIGHTS:
+            page.set_viewport_size({"width": width, "height": height})
+            page.goto(target.as_uri(), wait_until="domcontentloaded")
+            path = evidence / f"reference-01-next-steps-{width}.png"
+            page.screenshot(path=str(path), full_page=False)
+            report["captures"].append(str(path))
+        report["scenarios"].append("Reference screen 01-next-steps captured at both production viewport sizes")
+    finally:
+        context.close()
+
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--case", default="list")
 arguments = parser.parse_args()
 if arguments.case not in CASES:
     raise SystemExit(f"unsupported case: {arguments.case}")
-if arguments.case == "landing":
-    raise SystemExit("--case landing is not implemented in this packet; the step-7 landing/badge gate is not claimed here")
 
 evidence = Path(os.environ.get("SENTINEL_EVIDENCE_DIR", "/tmp/sentinel-next-steps-evidence"))
 evidence.mkdir(parents=True, exist_ok=True)
@@ -1669,6 +1969,23 @@ try:
                 run_launch_reference_captures(browser, report, evidence)
             finally:
                 browser.close()
+    elif arguments.case == "landing":
+        fixture = spawn_fixture({"SENTINEL_NEXT_STEPS": "1"})
+        receipt = fixture_receipt(fixture, report, "next-steps")
+        report["fixture"] = receipt
+        run_landing_case(report, fixture, receipt, evidence, deadline)
+        # Reference captures run in a dedicated short-lived browser so cleanup
+        # stays independent of a failing landing case.
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                executable_path=shutil.which("google-chrome"),
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
+            )
+            try:
+                run_landing_reference_captures(browser, report, evidence)
+            finally:
+                browser.close()
     else:
         run_default_mode_assertion(report)
         fixture = spawn_fixture({"SENTINEL_NEXT_STEPS": "1"})
@@ -1704,6 +2021,7 @@ finally:
         report,
         evidence,
         "Next steps launch evidence walkthrough (EV-7)" if arguments.case == "launch"
+        else "Next steps landing evidence walkthrough (EV-8)" if arguments.case == "landing"
         else "Next steps list evidence walkthrough (EV-4)",
     )
     print(json.dumps({key: report[key] for key in ("status", "case", "elapsedSeconds", "observedCommit", "dirty", "errors")}, indent=2))

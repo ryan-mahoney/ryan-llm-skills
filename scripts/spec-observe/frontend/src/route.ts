@@ -56,7 +56,8 @@ export function parseHash(hash: string): RouteState {
   const fragment = (typeof hash === 'string' ? hash : '').replace(/^#/, '');
   const queryIndex = fragment.indexOf('?');
   const destPart = (queryIndex === -1 ? fragment : fragment.slice(0, queryIndex)).replace(/^\/+|\/+$/g, '');
-  if (!isDestination(destPart)) return { dest: 'specs' };
+  // Unknown or empty hashes land on the Next steps portfolio; valid destinations and their scope/query params keep their behavior.
+  if (!isDestination(destPart)) return { dest: 'next-steps' };
   const route: RouteState = { dest: destPart };
   if (queryIndex === -1) return route;
   const params = new URLSearchParams(fragment.slice(queryIndex + 1));
@@ -67,7 +68,7 @@ export function parseHash(hash: string): RouteState {
 }
 
 export function formatHash(route: RouteState): string {
-  const dest = isDestination(route?.dest) ? route.dest : 'specs';
+  const dest = isDestination(route?.dest) ? route.dest : 'next-steps';
   const params = new URLSearchParams();
   for (const name of SUPPORTED_PARAMS) {
     const value = route?.[name];

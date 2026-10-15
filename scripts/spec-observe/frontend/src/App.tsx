@@ -1,15 +1,16 @@
 import { For, Show, Switch, Match, createSignal, createMemo, createEffect, on, onMount, onCleanup } from 'solid-js';
 import { getJson } from './api';
-import { startNextStepsPolling, stopNextStepsPolling } from './next-steps-store';
+import { scan, scanError, startNextStepsPolling, stopNextStepsPolling } from './next-steps-store';
 import { str, base, time, packageFilterMatches, setClock, tickClock, serverNow, stale, statusMarkdown } from './format';
 import { catalog as modelsCatalog, loadCatalog as loadModelsCatalog } from './models-state';
 import { normalizeEnvelope, authoritativeObservers, collectRecords, packageSummaries, collectAssignments, collectEpics, type Envelope, type WireRecord } from './model';
-import Shell from './Shell';
+import Shell, { type ShellNavEntry } from './Shell';
 import type { StatusTone } from './primitives';
 import { parseHash, subscribeRoute, navigate, routeHistoryMode, type Destination, type RouteState } from './route';
 import { clearIncompatibleFields, firstUnmatchedTargetId, inWorkspaceScope, needsWorkspacePicker, requiresWorkspace, scopeLabel, withWorkspace, type CatalogEntry } from './scope';
 import { visibleSpecs } from './spec-state';
 import { destinationEntries, type DestinationProps } from './destinations';
+import { nextStepRows, railCount } from './destinations/next-steps-state';
 import { WorkspacePicker } from './destinations/workspaces';
 import { catalogRead, type WorkspaceCatalog } from './destinations/workspace-state';
 import { memberRecords, visibleEpics as sharedVisibleEpics } from './destinations/epic-state';
@@ -31,7 +32,7 @@ function DestinationOutlet(props: DestinationProps & { dest: Destination }) {
   const Render = entry.render;
   return <Render {...props} />;
 }
-const primaryNav = registry.filter(entry => entry.nav === 'primary').sort((a, b) => a.order - b.order).map(entry => ({ dest: entry.dest, label: entry.label }));
+const primaryNavEntries: ShellNavEntry[] = registry.filter(entry => entry.nav === 'primary').sort((a, b) => a.order - b.order).map(entry => ({ dest: entry.dest, label: entry.label }));
 const directoryNav = registry.filter(entry => entry.nav === 'directory').sort((a, b) => a.order - b.order).map(entry => ({ dest: entry.dest, label: entry.label }));
 
 export default function App() {
@@ -130,6 +131,29 @@ export default function App() {
       ? 'Reconnect to the live dashboard before starting a conversation.'
       : '';
   const completionToken = () => live() && !error() ? payload()?.action_token : undefined;
+  // Rail waiting badge: only a trustworthy live scan in the current scope with
+  // a positive count shows one; imported, offline, errored or unread scans
+  // show none, and query/stage filters never change the count.
+  const nextStepsWaitingCount = createMemo<number | undefined>(() => {
+    if (!live() || imported() || scanError() !== '' || scan() === null) return undefined;
+    const rows = nextStepRows(scan(), {
+      records: records(),
+      assignments: assignments(),
+      epics: epics(),
+      catalog: catalogEntries(),
+      scope: scopeWs(),
+      token: completionToken() ?? null,
+      live: live(),
+      connectionFailed: Boolean(error()),
+      now: serverNow(),
+    });
+    const count = railCount(rows);
+    return count > 0 ? count : undefined;
+  });
+  const primaryNav = createMemo<ShellNavEntry[]>(() => {
+    const count = nextStepsWaitingCount();
+    return primaryNavEntries.map(entry => entry.dest === 'next-steps' && count !== undefined ? { ...entry, count } : entry);
+  });
   const observers = createMemo(() => authoritativeObservers(payload()?.observers ?? []));
   const scopedObservers = createMemo(() => observers().filter(observer => inWorkspaceScope({ workspace: str(observer.snapshot?.workspace) || str(observer.observer_id) || str(observer.source) || 'unknown' }, 'run', scopeWs(), catalogEntries())));
   const freshObservers = () => observers().filter(observer => observer.state === 'observing' && !stale(observer.published_at));
@@ -645,12 +669,13 @@ export default function App() {
     <Shell
       route={route()}
       currentDestination={currentDestination()}
-      primaryNav={primaryNav}
+      primaryNav={primaryNav()}
       directoryNav={directoryNav}
       workspaceOptions={workspaceOptions()}
       scope={scopeWs()}
       onScopeChange={chooseScope}
       onDestination={goDestination}
+      home={!imported() && scopeWs() === undefined ? 'next-steps' : 'specs'}
       crumbs={crumbs()}
       title={title()}
       headerActions={route().dest === 'launch'

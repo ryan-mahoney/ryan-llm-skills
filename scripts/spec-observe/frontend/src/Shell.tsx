@@ -2,7 +2,7 @@ import { For, Show, createEffect, createSignal, createUniqueId, type JSX } from 
 import { formatHash, type Destination, type RouteState } from './route';
 import { StatusText, type StatusTone } from './primitives';
 
-export type ShellNavEntry = { dest: Destination; label: string };
+export type ShellNavEntry = { dest: Destination; label: string; count?: number };
 export type ShellWorkspaceOption = { id: string; label: string };
 
 export type ShellProps = {
@@ -26,6 +26,9 @@ export type ShellProps = {
 };
 
 const navIcons: Partial<Record<Destination, () => JSX.Element>> = {
+  'next-steps': () => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 5h11M4 12h8M4 19h11"/><path d="M15 9l4 3-4 3"/></svg>
+  ),
   specs: () => (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
       <rect x="5" y="3" width="14" height="18" rx="2" />
@@ -118,6 +121,7 @@ export default function Shell(props: ShellProps) {
       >
         {navIcon(entry.dest)()}
         <span>{entry.label}</span>
+        {entry.count !== undefined && entry.count > 0 ? <span class="nav-count" aria-label={`${entry.count} waiting`}>{entry.count}</span> : null}
       </a>
     );
   };
@@ -144,7 +148,7 @@ export default function Shell(props: ShellProps) {
       </button>
       <div class="app">
         <aside class="rail" aria-label="Application navigation">
-          <a class="brand" href={destinationHref(home())} onClick={go(home())}>
+          <a class="brand" href={destinationHref(home())} onClick={event => { event.preventDefault(); props.onDestination(home()); }}>
             {navIcon(home())()}
             <span>Sentinel</span>
           </a>
