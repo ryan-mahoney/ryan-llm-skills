@@ -147,3 +147,14 @@ test('epicsReferencingDesign excludes other-workspace and non-referencing epics'
   assert.equal(result.length, 1);
   assert.equal(result[0], reference);
 });
+
+test('epicsReferencingDesign preserves the container order it is given (the app sorts epics upstream in collectEpics)', () => {
+  const entry = { id: 'kit', directory: '/storage/projects/fixture' };
+  const mid = { key: 'e1', workspace: 'fixture', title: 'Mid cross link', designs: [{ workspace: 'fixture', design: 'alpha' }] };
+  const zeta = { key: 'e2', workspace: 'fixture', title: 'Zeta cross link', designs: [{ workspace: 'fixture', design: 'alpha' }] };
+  const alpha = { key: 'e3', workspace: 'fixture', title: 'Alpha cross link', designs: [{ workspace: 'fixture', design: 'alpha' }] };
+  const result = epicsReferencingDesign(design(), [mid, zeta, alpha], entry);
+  const titles = result.map((epic) => epic.title);
+  assert.deepEqual(titles, ['Mid cross link', 'Zeta cross link', 'Alpha cross link']);
+  assert.notDeepEqual(titles, [...titles].sort());
+});

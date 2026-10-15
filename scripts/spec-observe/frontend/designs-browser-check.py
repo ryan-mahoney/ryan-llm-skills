@@ -2612,7 +2612,7 @@ try:
                 raise CaseComplete()
 
             if case == 'cross-links':
-                # Real /api/state envelope rewritten in flight: two fixture epics
+                # Real /api/state envelope rewritten in flight: three fixture epics
                 # reference the fixture demo slug, and a second observer in the other
                 # workspace references the same slug there. App, route, adapters and
                 # the Designs state owner stay real; only observation data is injected.
@@ -2638,9 +2638,11 @@ try:
                         if not isinstance(snapshot, dict) or snapshot.get('workspace') != 'fixture':
                             continue
                         snapshot['epics'] = [
-                            {'workspace': 'fixture', 'epic': 'link-one', 'title': 'Link one', 'members': [],
+                            {'workspace': 'fixture', 'epic': 'link-mid', 'title': 'Mid cross link', 'members': [],
                              'designs': [{'workspace': 'fixture', 'design': 'demo'}]},
-                            {'workspace': 'fixture', 'epic': 'link-two', 'title': 'Link two', 'members': [],
+                            {'workspace': 'fixture', 'epic': 'link-zeta', 'title': 'Zeta cross link', 'members': [],
+                             'designs': [{'workspace': 'fixture', 'design': 'demo'}]},
+                            {'workspace': 'fixture', 'epic': 'link-alpha', 'title': 'Alpha cross link', 'members': [],
                              'designs': [{'workspace': 'fixture', 'design': 'demo'}]},
                         ]
                         replaced.append(str(observer.get('observer_id', '')))
@@ -2703,24 +2705,40 @@ try:
                         })
                         return path
 
-                    # Populated: the two fixture epics in collectEpics title order under
-                    # Referenced by; the other-workspace epic stays out of this scope.
+                    # Populated: three fixture epics rendering in the app canonical order
+                    # under Referenced by; the other-workspace epic stays out of this scope.
                     page.goto(base + '/#/designs?ws=fixture&id=demo', wait_until='domcontentloaded')
                     expect(page.locator('#design-detail-heading')).to_have_text('Design fixture')
                     expect(page.locator('.list-pane .record[aria-current="page"]')).to_contain_text('Design fixture')
                     expect(page.locator('#design-frame')).to_have_count(1)
                     head_text = page.locator('.detail-pane .object-head').inner_text()
                     assert 'Referenced by' in head_text, head_text
-                    expect(related()).to_have_count(2)
-                    expect(related().nth(0)).to_have_text('Link one')
-                    expect(related().nth(1)).to_have_text('Link two')
+                    expect(related()).to_have_count(3)
+                    expect(related().nth(0)).to_have_text('Alpha cross link')
+                    expect(related().nth(1)).to_have_text('Mid cross link')
+                    expect(related().nth(2)).to_have_text('Zeta cross link')
                     assert 'Other link' not in head_text, head_text
-                    assert_related_href(related().nth(0).get_attribute('href'), 'fixture', 'link-one')
-                    assert_related_href(related().nth(1).get_attribute('href'), 'fixture', 'link-two')
+                    assert_related_href(related().nth(0).get_attribute('href'), 'fixture', 'link-alpha')
+                    assert_related_href(related().nth(1).get_attribute('href'), 'fixture', 'link-mid')
+                    assert_related_href(related().nth(2).get_attribute('href'), 'fixture', 'link-zeta')
+                    # Discrimination: the fixture seeds the referencing epics in the raw order
+                    # (Mid, Zeta, Alpha), which is deliberately NOT the app's canonical order.
+                    # App sources epics from collectEpics (App.tsx), which sorts by workspace
+                    # then title, so Designs must render the canonical order (Alpha, Mid, Zeta)
+                    # and not the raw seed order. A non-title seed makes this assertion
+                    # non-vacuous: preserving the raw array order would fail it. Preservation of
+                    # an arbitrary container order is proven separately by the
+                    # epicsReferencingDesign unit cases.
+                    seeded_raw_order = ['Mid cross link', 'Zeta cross link', 'Alpha cross link']
+                    canonical_order = ['Alpha cross link', 'Mid cross link', 'Zeta cross link']
+                    observed_labels = [related().nth(i).inner_text() for i in range(3)]
+                    assert observed_labels == canonical_order, observed_labels
+                    assert seeded_raw_order != canonical_order, 'fixture seed must not coincide with canonical order'
+                    assert canonical_order == sorted(seeded_raw_order), canonical_order
                     assert links_state['stateReads'] >= 1 and any(write['replacedObservers'] for write in links_state['writes']), links_state
                     for width in (1280, 1600):
                         capture_state('cross-links-populated', width)
-                    passed('the fixture-scoped Referenced by line lists Link one then Link two in title order, excludes the other-workspace epic, and renders native scoped epics hrefs')
+                    passed('the fixture-scoped Referenced by line lists the referencing epics in the app canonical order (Alpha cross link, Mid cross link, Zeta cross link) from a non-title raw seed order, excludes the other-workspace epic, and renders native scoped epics hrefs')
 
                     # Selection and brief survive the real cross-link click away and Back.
                     page.goto(base + '/#/designs?ws=fixture&id=demo&path=screens%2F02-screen-2.html&tab=1600', wait_until='domcontentloaded')
@@ -2732,12 +2750,12 @@ try:
                     assert brief_href and '#/files?' in brief_href, brief_href
                     related().nth(0).click()
                     expect(page).to_have_url(re.compile(r'#/epics\?ws=fixture&id='))
-                    assert links_params() == {'ws': ['fixture'], 'id': [json.dumps(['fixture', 'link-one'], separators=(',', ':'))]}, page.url
-                    expect(page.locator('.detail-pane .object-head h2')).to_have_text('Link one')
+                    assert links_params() == {'ws': ['fixture'], 'id': [json.dumps(['fixture', 'link-alpha'], separators=(',', ':'))]}, page.url
+                    expect(page.locator('.detail-pane .object-head h2')).to_have_text('Alpha cross link')
                     epics_identity = page.url
                     page.reload(wait_until='domcontentloaded')
                     assert page.url == epics_identity, page.url
-                    expect(page.locator('.detail-pane .object-head h2')).to_have_text('Link one')
+                    expect(page.locator('.detail-pane .object-head h2')).to_have_text('Alpha cross link')
                     page.go_back()
                     wait_until(lambda: page.locator('#design-detail-heading').count() == 1, 'designs detail after epic back')
                     expect(page.locator('#design-detail-heading')).to_have_text('Design fixture')
@@ -2755,7 +2773,7 @@ try:
                     assert 'Referenced by' in other_head, other_head
                     expect(related()).to_have_count(1)
                     expect(related().nth(0)).to_have_text('Other link')
-                    assert 'Link one' not in other_head and 'Link two' not in other_head, other_head
+                    assert all(label not in other_head for label in ('Mid cross link', 'Zeta cross link', 'Alpha cross link')), other_head
                     assert_related_href(related().nth(0).get_attribute('href'), 'other', 'other-link')
                     passed('the other workspace demo slug references only its own epic, so design cross-links stay workspace-scoped')
 
