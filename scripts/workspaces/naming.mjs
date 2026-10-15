@@ -7,7 +7,7 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import { tmpdir } from "node:os";
 
-export const TITLE_MODEL = "openrouter/inception/mercury-2.5";
+export const TITLE_MODEL = "deepseek/deepseek-flash";
 const TITLE_TIMEOUT_MS = 15000;
 const MAX_INPUT_CHARS = 2000;
 const MAX_TITLE_CHARS = 80;

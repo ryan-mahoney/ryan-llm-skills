@@ -12,7 +12,7 @@ The managed owner/editor paths are in each assignment manifest and normally poin
 inside `PACKAGE/runtime/sessions/<pair>/`. Pair retention is package-wide by
 default; `session_scope: step` separates sessions by step. Follow these paths,
 `parent_session`/`parentSession`, and tool-returned child references. Reviewers,
-fixers, scouts, clerks, and legacy subagents can live outside the package; the
+fixers, scouts and legacy subagents can live outside the package; the
 metrics helper discovers descendants beneath linked session basenames. External
 or missing children remain coverage gaps. Similar names, mtimes, or CWDs alone
 do not establish parentage or role.

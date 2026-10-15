@@ -119,7 +119,7 @@ Reuse the implementation owner/editor across steps.
 
 PACKAGE: transitops/feature
 IMPLEMENT_AGENT: <provider/model:thinking>
-EDITOR_MODEL: openrouter/inception/mercury-2.5:high
+EDITOR_MODEL: deepseek/deepseek-flash:max
 REVIEW_AGENT: <provider/model:thinking>
 FINAL_REVIEWER: <provider/model:thinking>
 ```
@@ -140,7 +140,7 @@ See [runtime setup and API](../pi/extensions/spec-runtime/README.md) and
 Explicit selectors go straight to launch. The workflow does not enumerate every
 model or probe every agent before work; discovery is for ambiguity or a concrete
 launch failure. It never silently substitutes a provider or model. An explicit
-editor override wins over the Mercury default.
+editor override wins over the `deepseek/deepseek-flash:max` default.
 
 The generated `history-index.json` points to canonical decisions, introduced symbols,
 handoffs, and review/fix records. Handoffs carry paths and unresolved exceptions;

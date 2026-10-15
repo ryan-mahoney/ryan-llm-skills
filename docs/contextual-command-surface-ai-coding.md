@@ -120,8 +120,8 @@ A request can remain a conversation. General questions and incomplete ideas do n
 ## Model responsibilities
 
 A fast generative model can extract goals, constraints, references, and possible actions from the transcript.
-Mercury 2.5 or a fast DeepSeek model are candidates for evaluation, not fixed requirements.
-Sentinel already uses Mercury 2.5 for [thread titles](../scripts/workspaces/naming.mjs).
+A fast DeepSeek model is the candidate for evaluation, not a fixed requirement.
+Sentinel already uses `deepseek/deepseek-flash` for [thread titles](../scripts/workspaces/naming.mjs).
 That existing use does not establish its accuracy for contextual interpretation.
 
 Jev can assess bounded questions against supplied state or select among known candidates.

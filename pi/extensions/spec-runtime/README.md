@@ -27,7 +27,7 @@ Call `spec_dispatch` once:
   "package": "transitops/feature",
   "step": "<storage root>/projects/transitops/specs/feature/step-001-subspec.md",
   "owner_model": "deepseek/deepseek-flash:max",
-  "editor_model": "openrouter/inception/mercury-2.5:high"
+  "editor_model": "deepseek/deepseek-flash:max"
 }
 ```
 
@@ -345,7 +345,7 @@ Start sentinel once from any directory, including a Pi session with no repositor
 /sentinel observe
 /sentinel shadow
 /sentinel recover
-/sentinel recover --model openrouter/inception/mercury-2.5:high
+/sentinel recover --model deepseek/deepseek-flash:max
 /sentinel observe --root "/Users/name/Projects"
 /sentinel status
 /sentinel stop
@@ -360,8 +360,8 @@ an explicit native command. The tool returns bounded status, freshness and avail
 snapshot/dashboard paths, without source or transcript inspection or shell daemons.
 
 Shadow runs bounded diagnosis and reports proposed
-interventions; recover allows guarded continuation/cancellation. Mercury 2.5 at high
-reasoning is the diagnostic default. Root/model overrides apply to that invocation.
+interventions; recover allows guarded continuation/cancellation. `deepseek/deepseek-flash:max` is the
+diagnostic default. Root/model overrides apply to that invocation.
 No operator-created policy, target workflow or expiry is needed. Repository discovery
 uses `~/Documents` by default (or a legacy saved root), independently of Pi's cwd.
 

@@ -1,7 +1,7 @@
 ---
 name: spec-step-editor
 description: Implements bounded code changes for a spec step owner; verification belongs to the owner.
-model: openrouter/inception/mercury-2.5:high
+model: deepseek/deepseek-flash:max
 systemPromptMode: append
 inheritProjectContext: true
 inheritSkills: false

@@ -12,7 +12,7 @@ test('prefills the package reference into the spec-end-to-end invocation and its
   const content = implementationBriefContent(ref);
   assert.ok(content.startsWith(`/spec-end-to-end Implement ${ref} from its prepared specs.\n`));
   assert.ok(content.endsWith(`\nPACKAGE: ${ref}`));
-  assert.match(content, /^EDITOR_AGENT: mimo-v2\.6-pro-ultraspeed:off from xiaomi$/m);
+  assert.match(content, /^EDITOR_AGENT: deepseek-flash:max from deepseek$/m);
 });
 
 test('legacy planned surface keeps canonical target alias protection', () => {

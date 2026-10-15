@@ -131,7 +131,6 @@ test('package metrics isolate retained sessions, find async reviewers, and keep 
   assert.equal(data.agents.find(a => a.role === 'reviewer').model_calls, 1);
   assert.equal(data.process.observed_span_seconds, 40);
   assert.equal(data.process.completion, 'not_inferred_from_agent_exit');
-  assert.equal(data.mercury.model_calls, 0);
   assert.equal(data.leaders.model_response_seconds.role, 'owner');
   assert.equal(data.steps[0].elapsed_seconds, 20);
   assert.equal(data.startup.session_to_first_owner_seconds, 5);
@@ -154,16 +153,13 @@ test('live and bounded transcripts report gaps instead of guessing completion', 
   assert.equal((await readMetrics({ file, role: 'owner' }, { maxBytes: 20 })).coverage.truncated, true);
 });
 
-test('native clerk names attribute Mercury calls and completion reports separate subsequent checks', async t => {
+test('completion reports separate subsequent checks', async t => {
   const dir = await fixture(t), root = path.join(dir, 'pi/root.jsonl');
-  const clerk = path.join(dir, 'pi/root/clerk/run-0/session.jsonl');
   const summary = `outcome: published\nspec-folder: ${dir}\npr: https://example.test/pr/3\nblocker: none`;
   await log(root, [header('root'), message('user', 0, {}),
     assistant(10, 8, [{ type: 'thinking', thinking: '```txt\n' + summary + '\n```' }], { stopReason: 'stop' }),
     assistant(20, 18, [{ type: 'text', text: '```txt\n' + summary + '\n```' }], { stopReason: 'stop' }),
     assistant(25, 24, [call('test', 'bash', 'node --test x.test.mjs')]), result('test', 30)]);
-  await log(clerk, [header('clerk'), { type: 'session_info', name: 'subagent-spec-clerk-e576cedd-b542-4195-9c26-c58d7902e399-1' },
-    assistant(5, 3, [], { model: 'mercury-2.5' }), assistant(7, 6, [], { model: 'mercury-2.5' })]);
   await mkdir(path.join(dir, 'runtime/runs'), { recursive: true });
   await writeFile(path.join(dir, 'runtime/runs/run.json'), JSON.stringify({ id: 'run', parent_session: root, started_at: time(0), finished_at: time(15), state: 'completed' }));
   const entry = { parent_session: root, url: 'https://example.test/pr/3', submitted_at: time(16) };
@@ -171,7 +167,6 @@ test('native clerk names attribute Mercury calls and completion reports separate
   const receipt = receiptOf(entry);
   await writeFile(path.join(dir, 'pr-url.json'), JSON.stringify(receipt));
   const data = await metrics(dir, { now: Date.parse(time(40)) });
-  assert.equal(data.mercury.clerk_model_calls, 2);
   assert.equal(data.process.elapsed_to_completion_report_seconds, 20);
   assert.equal(data.process.post_completion_activity_seconds, 10);
   assert.match(formatMetrics(data), /completion reported by coordinator/);

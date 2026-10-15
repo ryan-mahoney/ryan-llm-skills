@@ -1088,7 +1088,7 @@ test('sentinel runtime mode: no policy file or expiry, with immediate controller
   const checkpoint = readCheckpointRecord(packagePath, 'wf-1');
   const authority = createSentinelAuthority();
   let active = true;
-  const grant = activateRuntimePolicy(authority, { checkpoint, mode: 'shadow', model: 'openrouter/inception/mercury-2.5:high',
+  const grant = activateRuntimePolicy(authority, { checkpoint, mode: 'shadow', model: 'deepseek/deepseek-flash:max',
     coordinator_session: 'session-1', isActive: () => active, now: () => FIXED });
   assert.equal(grant.expires_at, null);
   assert.equal(readPolicyGuard(authority, { now: () => FIXED + 30 * 86400000 }).state, 'ready');

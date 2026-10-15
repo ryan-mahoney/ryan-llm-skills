@@ -575,7 +575,7 @@ Its prepared text and repository target come from the public
 `seedNewThreadDraft`/`consumeNewThreadDraft` producer in
 `conversations-state.ts`, consumed once into the created thread. The thread's Pi runs in that directory and receives no kit or
 project context. When the first message is sent, the host asks
-`openrouter/inception/mercury-2.5` for a short title through a tool-less
+`deepseek/deepseek-flash` for a short title through a tool-less
 `pi --print` call and saves it only if the thread still has the default title;
 the open page updates without a reload. A failed or slow naming call leaves
 "New thread" in place and never delays delivery. The first message's text is
@@ -848,7 +848,6 @@ Reports distinguish:
   are not counted as fresh tests.
 - **Cost/tokens:** provider-reported values and coverage, not billing totals. Missing
   pricing stays unknown; a reported zero can mean the model was unpriced.
-- **Mercury/clerk use:** actual model response counts, not configured availability.
 
 Missing, partial and bounded transcripts remain explicit coverage gaps. No acceptance
 verdict, causal performance claim or model assignment is changed by telemetry.
@@ -933,8 +932,7 @@ Focused parser/discovery checks:
 node --test scripts/spec-observe/core.test.mjs
 ```
 
-Metrics recognize native `subagent-spec-clerk-<uuid>-<number>` session names as
-clerk work. They report PR submission only from `pr-url.json` with schema version 1,
+Metrics report PR submission only from `pr-url.json` with schema version 1,
 kind `pr_submission`, a `package_ref` matching the package, and a target entry with `url`, actual
 `submitted_at` and the selected coordinator's exact `parent_session`. Legacy or differently bound receipts remain
 unmeasured. Coordinator completion is reported separately from the existing fenced

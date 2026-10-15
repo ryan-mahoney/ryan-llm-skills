@@ -32,27 +32,6 @@ remains uncertain; do not lower safeguards or repeatedly ask the same question t
 a confident answer. Context reason codes distinguish these cases for later tuning.
 Uncertain/unavailable advice falls back to the owner under the existing policy.
 
-## Optional clerical model
-
-Pi's `spec-clerk` profile uses `openrouter/inception/mercury-2.5:high`, with only `read`
-and no nested workers. A coordinator may invoke it through the installed `subagent`
-tool with `agent: spec-clerk`, `context: fresh`, `async: false`, `timeoutMs: 60000`,
-the code checkout as `cwd`, and a small explicit source packet. Example task:
-
-```text
-Draft a PR summary in at most 1200 characters from these approved facts: [facts].
-Preserve these unresolved limitations: [limitations].
-Return the draft only. No repository exploration or additional claims.
-```
-
-Use this for enough prose transformation to offset a handoff, outside the step's edit
-loop. Do not send raw repositories or large transcripts. A deterministic renderer owns
-formatting that has a fixed template; the clerk handles optional language compression.
-The caller assesses the draft before publication. One attempt, no automatic model
-substitution or repair conversation: if it fails, draft directly. It never chooses Git
-actions, verification scope, fixes or readiness. No new required model selector or
-startup availability probe is added. Live quality and net savings remain unmeasured.
-
 ## Candidate experiment: shared source memory
 
 A future oracle could retrieve source-backed answers from a small persistent store,

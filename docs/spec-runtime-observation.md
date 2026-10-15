@@ -110,7 +110,7 @@ For an aggregate report of the current coordinator session, run:
 The [metrics CLI](../scripts/spec-observe/README.md#workflow-metrics) works without
 restarting Pi and supports earlier sessions and all recorded resumptions. It reports
 elapsed observations, step attempts, model/tool calls by role, model response time,
-recognized test submissions, reported cost, and Mercury/clerk usage. Parallel times
+recognized test submissions and reported cost. Parallel times
 overlap; unfinished work, missing pricing and incomplete logs stay explicit.
 
 ## Curated gym runs

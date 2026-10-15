@@ -119,9 +119,7 @@ outcomes and unresolved decisions; details remain in canonical records.
 
 Optional Luna scouting answers one bounded source question with exact supporting sites and
 unknowns. It owns discovery, not architecture, repair, checks or a review verdict. Direct reads
-remain the default for a known small region. Optional Mercury clerical work transforms a small
-approved fact packet into prose with fresh context and a one-minute deadline; its caller
-assesses the draft before use. Neither adds a required startup probe or fallback model switch.
+remain the default for a known small region. It adds no required startup probe or fallback model switch.
 Configured model identifiers are editable technical settings, not evidence of comparative
 model quality.
 
