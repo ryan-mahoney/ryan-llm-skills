@@ -138,6 +138,15 @@ export function packageSpecHref(
   return `${base}&q=${encodeURIComponent(packageRef)}`;
 }
 
+// Shared route path guard: workspace-relative file links must not address
+// absolute paths, backslash paths or NUL, nor contain empty, dot or parent
+// segments that would escape the workspace root.
+export function safeRelativeFilePath(value: unknown): value is string {
+  if (typeof value !== 'string' || value === '') return false;
+  if (value.startsWith('/') || value.includes('\\') || value.includes('\0')) return false;
+  return value.split('/').every(segment => segment !== '' && segment !== '.' && segment !== '..');
+}
+
 const listeners = new Set<RouteListener>();
 let bound = false;
 let observedKey: string | null = null;

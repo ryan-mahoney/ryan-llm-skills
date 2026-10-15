@@ -1,7 +1,23 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { specRecordFor, specRoute, workTourRoute } from './agent-links';
+// Namespace access keeps a missing extension export a behavior assertion
+// instead of an import-time module failure.
+import * as agentLinksModule from './agent-links';
 import type { RouteState } from './route';
+import type { WireRecord } from './model';
+
+// The cast defers the new relationship exports to their callsites so the type
+// gate stays green before those production exports land.
+const agentLinks = agentLinksModule as unknown as {
+  threadRoute: (a: WireRecord) => RouteState | null;
+  briefRoute: (a: WireRecord) => RouteState | null;
+  repositoryFilesRoute: (ws: string, repositoryId: unknown) => RouteState | null;
+  launchedAgents: (
+    thread: WireRecord,
+    assignments: WireRecord[],
+  ) => { handoff: WireRecord; row: WireRecord | null }[];
+};
 
 const frozen = <T>(value: T): T => Object.freeze(value) as T;
 
@@ -250,4 +266,107 @@ test('workTourRoute: builds the files route from the recorded canonical package'
   const expected: RouteState = { dest: 'files', source: 'package', id: 'pkg/core', path: 'work-tour.html' };
   assert.deepEqual(workTourRoute(record), expected);
   assert.deepEqual(workTourRoute(record, ' ws-a '), { ...expected, ws: ' ws-a ' });
+});
+
+const THREAD_ID = '8f3b1a2e-4c5d-4e6f-8a9b-0c1d2e3f4a5b';
+
+test('threadRoute: routes a nonempty workspace and thread id to conversations', () => {
+  const record = frozen({ workspace_id: 'ws-a', thread_id: THREAD_ID });
+  const expected: RouteState = { dest: 'conversations', ws: 'ws-a', id: '8f3b1a2e-4c5d-4e6f-8a9b-0c1d2e3f4a5b' };
+  assert.deepEqual(agentLinks.threadRoute(record), expected);
+});
+
+test('threadRoute: refuses missing, empty or whitespace workspace and thread ids', () => {
+  assert.equal(agentLinks.threadRoute(frozen({ thread_id: THREAD_ID })), null);
+  assert.equal(agentLinks.threadRoute(frozen({ workspace_id: '', thread_id: THREAD_ID })), null);
+  assert.equal(agentLinks.threadRoute(frozen({ workspace_id: '   ', thread_id: THREAD_ID })), null);
+  assert.equal(agentLinks.threadRoute(frozen({ workspace_id: 'ws-a' })), null);
+  assert.equal(agentLinks.threadRoute(frozen({ workspace_id: 'ws-a', thread_id: '' })), null);
+  assert.equal(agentLinks.threadRoute(frozen({ workspace_id: 'ws-a', thread_id: '   ' })), null);
+});
+
+test('repositoryFilesRoute: routes a repository id to repository files', () => {
+  const expected: RouteState = { dest: 'files', ws: 'ws-a', source: 'repository', id: 'repo-1' };
+  assert.deepEqual(agentLinks.repositoryFilesRoute('ws-a', 'repo-1'), expected);
+});
+
+test('repositoryFilesRoute: refuses an empty workspace and a missing repository id', () => {
+  assert.equal(agentLinks.repositoryFilesRoute('', 'repo-1'), null);
+  assert.equal(agentLinks.repositoryFilesRoute('ws-a', ''), null);
+  assert.equal(agentLinks.repositoryFilesRoute('ws-a', null), null);
+  assert.equal(agentLinks.repositoryFilesRoute('ws-a', undefined), null);
+  assert.equal(agentLinks.repositoryFilesRoute('ws-a', 42), null);
+});
+
+test('briefRoute: routes a safe relative brief path to workspace files', () => {
+  const record = frozen({ workspace_id: 'ws-a', brief: 'briefs/id.md' });
+  const expected: RouteState = { dest: 'files', ws: 'ws-a', source: 'workspace', path: 'briefs/id.md' };
+  assert.deepEqual(agentLinks.briefRoute(record), expected);
+});
+
+test('briefRoute: refuses unsafe brief paths and a missing workspace', () => {
+  for (const brief of ['/abs.md', 'back\\slash.md', 'nul\0char.md', '', '.', '..', 'a//b', 'a/../b', 'a/./b']) {
+    assert.equal(
+      agentLinks.briefRoute(frozen({ workspace_id: 'ws-a', brief })),
+      null,
+      `brief ${JSON.stringify(brief)} must not route`,
+    );
+  }
+  assert.equal(agentLinks.briefRoute(frozen({ workspace_id: 'ws-a' })), null);
+  assert.equal(agentLinks.briefRoute(frozen({ brief: 'briefs/id.md' })), null);
+  assert.equal(agentLinks.briefRoute(frozen({ workspace_id: '', brief: 'briefs/id.md' })), null);
+});
+
+test('launchedAgents: joins a sent handoff with its exact assignment row', () => {
+  const handoff = frozen({ assignment_id: 'a-1', thread_id: THREAD_ID });
+  const row = frozen({ assignment_id: 'a-1', workspace: 'ws-a', state: 'live' });
+  const thread = frozen({ workspace_id: 'ws-a', handoffs: [handoff] });
+  assert.deepEqual(agentLinks.launchedAgents(thread, [row]), [{ handoff, row }]);
+});
+
+test('launchedAgents: keeps a sent handoff without a matching row', () => {
+  const handoff = frozen({ assignment_id: 'a-1' });
+  const other = frozen({ assignment_id: 'a-2', workspace: 'ws-a' });
+  const thread = frozen({ workspace_id: 'ws-a', handoffs: [handoff] });
+  assert.deepEqual(agentLinks.launchedAgents(thread, [other]), [{ handoff, row: null }]);
+});
+
+test('launchedAgents: omits unsent handoffs without a nonempty assignment id', () => {
+  const sent = frozen({ assignment_id: 'a-1' });
+  const thread = frozen({
+    workspace_id: 'ws-a',
+    handoffs: [
+      frozen({ assignment_id: '' }),
+      frozen({ thread_id: THREAD_ID }),
+      sent,
+      frozen({ assignment_id: null }),
+    ],
+  });
+  assert.deepEqual(agentLinks.launchedAgents(thread, []), [{ handoff: sent, row: null }]);
+});
+
+test('launchedAgents: returns included handoffs in recorded order regardless of row order', () => {
+  const first = frozen({ assignment_id: 'a-1', label: 'first' });
+  const second = frozen({ assignment_id: 'a-2', label: 'second' });
+  const rowFirst = frozen({ assignment_id: 'a-1', workspace: 'ws-a' });
+  const rowSecond = frozen({ assignment_id: 'a-2', workspace: 'ws-a' });
+  const thread = frozen({ workspace_id: 'ws-a', handoffs: [first, second] });
+  assert.deepEqual(agentLinks.launchedAgents(thread, [rowSecond, rowFirst]), [
+    { handoff: first, row: rowFirst },
+    { handoff: second, row: rowSecond },
+  ]);
+});
+
+test('launchedAgents: refuses to join an assignment row from another workspace', () => {
+  const handoff = frozen({ assignment_id: 'a-1' });
+  const foreign = frozen({ assignment_id: 'a-1', workspace: 'ws-b' });
+  const thread = frozen({ workspace_id: 'ws-a', handoffs: [handoff] });
+  assert.deepEqual(agentLinks.launchedAgents(thread, [foreign]), [{ handoff, row: null }]);
+});
+
+test('launchedAgents: matches a trimmed observed row workspace', () => {
+  const handoff = frozen({ assignment_id: 'a-1' });
+  const padded = frozen({ assignment_id: 'a-1', workspace: ' ws-a ' });
+  const thread = frozen({ workspace_id: 'ws-a', handoffs: [handoff] });
+  assert.deepEqual(agentLinks.launchedAgents(thread, [padded]), [{ handoff, row: padded }]);
 });

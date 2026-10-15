@@ -1,6 +1,6 @@
 import { packageFilterMatches } from './format';
 import type { WireRecord } from './model';
-import type { RouteState } from './route';
+import { safeRelativeFilePath, type RouteState } from './route';
 
 export type SpecRecordMatch = { record: WireRecord; match: 'assignment' | 'package' };
 
@@ -85,4 +85,45 @@ export function workTourRoute(record: WireRecord, ws?: string): RouteState | nul
   const route: RouteState = { dest: 'files', source: 'package', id: record.package, path: 'work-tour.html' };
   if (typeof ws === 'string' && ws !== '') route.ws = ws;
   return route;
+}
+
+// Scoped relationship routes: every route below either carries an explicit
+// nonempty workspace identity or returns null. Values are passed through
+// verbatim; trimming is used only to decide presence.
+export function threadRoute(a: WireRecord): RouteState | null {
+  if (!normWs(a.workspace_id) || !normWs(a.thread_id)) return null;
+  return { dest: 'conversations', ws: a.workspace_id, id: a.thread_id };
+}
+
+export function briefRoute(a: WireRecord): RouteState | null {
+  if (!normWs(a.workspace_id) || !safeRelativeFilePath(a.brief)) return null;
+  return { dest: 'files', ws: a.workspace_id, source: 'workspace', path: a.brief };
+}
+
+export function repositoryFilesRoute(ws: string, repositoryId: unknown): RouteState | null {
+  if (typeof ws !== 'string' || !ws.trim()) return null;
+  if (typeof repositoryId !== 'string' || !repositoryId.trim()) return null;
+  return { dest: 'files', ws, source: 'repository', id: repositoryId };
+}
+
+// Handoff join: keep each sent handoff in recorded order and attach the
+// observation row only when the assignment id matches exactly and both sides
+// name the same nonempty workspace. Unsent handoffs are omitted; a missing or
+// foreign row stays null rather than falling back to a guess.
+export function launchedAgents(
+  thread: WireRecord,
+  assignments: WireRecord[],
+): { handoff: WireRecord; row: WireRecord | null }[] {
+  const workspace = normWs(thread.workspace_id);
+  const handoffs: WireRecord[] = Array.isArray(thread.handoffs) ? thread.handoffs : [];
+  const launched: { handoff: WireRecord; row: WireRecord | null }[] = [];
+  for (const handoff of handoffs) {
+    const id = assignmentId(handoff);
+    if (id === null) continue;
+    const row = workspace
+      ? assignments.find(candidate => assignmentId(candidate) === id && normWs(candidate.workspace) === workspace) ?? null
+      : null;
+    launched.push({ handoff, row });
+  }
+  return launched;
 }
