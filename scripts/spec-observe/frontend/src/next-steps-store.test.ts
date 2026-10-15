@@ -216,7 +216,11 @@ test('repeated start owns one timer and stop aborts and invalidates the pending 
 test('App live/import/unmount ownership invokes the scan store and keeps its state refresh cadence', (t) => {
   t.after(() => stopNextStepsPolling());
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8');
-  assert.match(source, /import \{ startNextStepsPolling, stopNextStepsPolling \} from '\.\/next-steps-store';/);
+  const scanStoreImport = source.match(/import \{([^}]*)\} from '\.\/next-steps-store';/);
+  assert.ok(scanStoreImport, 'App imports the scan store module');
+  const scanStoreNames = (scanStoreImport[1] ?? '').split(',').map(name => name.trim());
+  assert.ok(scanStoreNames.includes('startNextStepsPolling'), 'App imports the scan store live start owner');
+  assert.ok(scanStoreNames.includes('stopNextStepsPolling'), 'App imports the scan store live stop owner');
   assert.match(source, /createEffect\(\(\) => \{\s*if \(live\(\)\) startNextStepsPolling\(\);\s*else stopNextStepsPolling\(\);\s*\}\);/);
   assert.match(source, /async function importSnapshot[\s\S]*?workspaceGeneration\+\+;\s*stopNextStepsPolling\(\);/, 'import stops the live scan owner');
   assert.match(source, /onMount\(\(\) => \{[\s\S]*?stateGeneration\+\+;\s*catalogGeneration\+\+;\s*workspaceGeneration\+\+;\s*stopNextStepsPolling\(\);/, 'unmount cleanup stops the live scan owner');
