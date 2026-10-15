@@ -643,8 +643,32 @@ Every POST requires the exact operator origin, the dashboard action token
 `unavailable` 503; exception text, child output and paths never cross the
 boundary.
 
-**Speech setup.** `SENTINEL_SPEECH_CHECKOUT` must name an absolute, existing
-Rearrange Writer checkout with provisioned ASR assets and `bun` on `PATH`.
+**Speech setup.** Install Bun, then run this command from the tooling checkout:
+
+```bash
+node scripts/spec-observe/setup-speech.mjs --checkout "$HOME/Documents/rearrange-writer"
+systemctl --user restart spec-sentinel
+curl -fsS http://127.0.0.1:4319/api/request/speech
+```
+
+The Linux installer installs locked writer dependencies, provisions checksum-verified ASR
+assets, and checks that the real daemon loads its engine. It saves a systemd user-service
+drop-in with `SENTINEL_SPEECH_CHECKOUT` and a PATH that includes Bun and Pi Node.
+It writes configuration only after the load check passes. It does not restart Sentinel.
+It saves the chosen paths in `$XDG_CONFIG_HOME/adjacent/speech-setup.json`
+(default: `$HOME/.config/adjacent/speech-setup.json`) for later sync runs.
+Restart Sentinel after setup, then reload the dashboard to refresh its speech availability.
+
+`sync.sh` runs this installer automatically when `SENTINEL_SPEECH_CHECKOUT` or the default
+`$HOME/Documents/rearrange-writer` checkout exists. Model downloads skip files with matching
+checksums. Without a checkout, automatic setup prints the command needed to enable speech.
+To clone and provision the writer on a fresh host, supply `--repository <writer-clone-url>`.
+Alternatively, set `SENTINEL_SPEECH_REPOSITORY_URL` before `sync.sh` to enable automatic cloning.
+Git access to that repository and Bun are prerequisites. Set `SENTINEL_SPEECH_BUN` to an
+absolute executable path when Bun is outside PATH and `$HOME/.bun/bin`.
+
+For manual service configuration, `SENTINEL_SPEECH_CHECKOUT` must name an absolute, existing
+Rearrange Writer checkout with provisioned ASR assets and `bun` on the service PATH.
 Unset or unusable means speech only is unavailable (`state: "unavailable"`,
 503 on transcribe) while typing still works. Each recording is uploaded once
 as ≤ 30 s of 16 kHz Float32LE and transcribed by one daemon child per clip;
