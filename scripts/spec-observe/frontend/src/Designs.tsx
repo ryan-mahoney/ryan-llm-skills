@@ -5,11 +5,11 @@
 // workspace/slug/file identity so index polls and width changes never restart it.
 import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, Show, Switch } from 'solid-js';
 import { getJson, HttpError } from './api';
-import { serverNow, stale, time } from './format';
+import { serverNow, stale, str, time } from './format';
 import { fileViewUrl } from './observation-format';
 import { formatHash, navigate, type RouteState } from './route';
 import { ActionBar, EmptyState, MasterDetail, RegionalSkeleton, StateNotice, StatusText, type StatusTone } from './primitives';
-import { designBriefRoute, selectDesign, type Design, type DesignsResponse, type Screen } from './destinations/designs-state';
+import { designBriefRoute, epicsReferencingDesign, selectDesign, type Design, type DesignsResponse, type Screen } from './destinations/designs-state';
 import { catalogRead } from './destinations/workspace-state';
 import { resolveCatalogEntry } from './scope';
 import type { DestinationProps } from './destinations';
@@ -382,6 +382,11 @@ export default function Designs(props: DestinationProps) {
   const briefRoute = createMemo(() => {
     const item = design();
     return item ? designBriefRoute(props.route.ws ?? '', item) : null;
+  });
+  const workspaceEntry = createMemo(() => resolveCatalogEntry(props.catalog, props.route.ws ?? ''));
+  const referencingEpics = createMemo(() => {
+    const item = design();
+    return item ? epicsReferencingDesign(item, props.epics ?? [], workspaceEntry()) : [];
   });
 
   // Explicit screen retry: re-probe without touching the frame identity; only a
@@ -930,6 +935,24 @@ export default function Designs(props: DestinationProps) {
                 </div>
                 <Show when={screen()}>
                   <p>Screen {screen()!.step} · {screen()!.title}</p>
+                </Show>
+                <Show when={referencingEpics().length > 0}>
+                  <p class="small muted">
+                    Referenced by{' '}
+                    <For each={referencingEpics()}>
+                      {(epic, index) => (
+                        <>
+                          <Show when={index() > 0}>{', '}</Show>
+                          <a
+                            class="text-link"
+                            data-related="epic"
+                            href={formatHash({ dest: 'epics', ws: props.route.ws, id: String(epic.key ?? '') })}
+                            onClick={routeClick({ dest: 'epics', ws: props.route.ws, id: String(epic.key ?? '') })}
+                          >{str(epic.title) || str(epic.epic) || String(epic.key ?? '')}</a>
+                        </>
+                      )}
+                    </For>
+                  </p>
                 </Show>
               </div>
               <div class="design-toolbar">

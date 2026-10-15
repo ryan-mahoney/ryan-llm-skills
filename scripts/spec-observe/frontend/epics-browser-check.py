@@ -15,8 +15,10 @@ bound app-ui reference captures; `--case observations` runs the EV-7 retained
 transport/import gate with bound app-ui reference captures; `--case member`
 runs the EV-4 real absolute-path member, return focus/scroll and precedence
 gate; `--case documents` runs the EV-8 Supporting documents link/selection
-gate through the real files and designs APIs; the other choices run one group
-for debugging.
+gate through the real files and designs APIs; `--case member-agent` runs the
+Step 3 member-to-observed-agent gate (composite-key href, plain/modified click,
+reload identity, populated/refused captures under evidence/step-003); the
+other choices run one group for debugging.
 Only the final /api/state HTTP response is substituted through page.route; the
 fixture's real dashboard, catalog, files, the built App/registry and
 browser-fixture.mjs stay untouched. No live Sentinel is contacted.
@@ -38,7 +40,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--case', choices=['list', 'loading', 'cold', 'file', 'a11y', 'detail', 'observations', 'member', 'documents'], default='list')
+parser.add_argument('--case', choices=['list', 'loading', 'cold', 'file', 'a11y', 'detail', 'observations', 'member', 'member-agent', 'documents'], default='list')
 case = parser.parse_args().case
 root = Path(__file__).resolve().parent
 evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-epics-evidence'))
@@ -1832,6 +1834,262 @@ try:
             assert no_member_focus(), 'a missing remembered member focused an unrelated row'
             report['scenarios'].append('member return: an unavailable remembered member does not focus an unrelated member row')
 
+        def group_member_agent(page):
+            # Step 3: an Epic member row routes to its observed agent. The
+            # populated state proves the composite-key href, the per-row
+            # identity after a plain click and a reload, and the modified-click
+            # page; the absent state proves an unmatched member keeps its
+            # refusal text and offers no agent route. Only the final /api/state
+            # response is substituted and captures stay under evidence/step-003.
+            # memberAgentRoute's q=<uuid>/no-id branch is unreachable through
+            # the production projection (collectAssignments always computes
+            # `key`); it stays unit-covered in epic-state.test.ts and is
+            # reported as a case gap below.
+            case_started = time.monotonic()
+            run_package = Path(real_observer['snapshot']['runs'][0]['package'])
+            assert run_package.name == 'browser', f'unexpected fixture package path: {run_package}'
+            workspace_dir = str(run_package.parents[1])
+            step_003 = evidence / 'step-003'
+            step_003.mkdir(parents=True, exist_ok=True)
+            mode = {'value': None}
+
+            def route_state(route):
+                if mode['value'] is None:
+                    route.continue_()
+                else:
+                    route.fulfill(json=mode['value'])
+
+            page.route('**/api/state**', route_state)
+
+            def stamp():
+                return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+
+            def member(slug, status, **extra):
+                record = {
+                    'name': slug,
+                    'package': str(Path(workspace_dir) / 'specs' / slug),
+                    'workspace': 'fixture',
+                    'status': status,
+                    'waiting_on': [],
+                    'requires': [],
+                }
+                record.update(extra)
+                return record
+
+            def member_run(slug, assignment):
+                return {
+                    'workspace': 'fixture',
+                    'package': str(Path(workspace_dir) / 'specs' / slug),
+                    'package_ref': f'fixture/{slug}',
+                    'assignment_id': assignment,
+                    'workflow_id': f'{assignment}-workflow',
+                    'execution': 'running',
+                    'workflow_state': 'waiting-worker',
+                    'is_current_assignment': False,
+                    'observed_at': stamp(),
+                    'coverage': {'state': 'complete', 'reasons': []},
+                }
+
+            # Observed wire owners deliberately omit `key`: the client
+            # projection (collectAssignments) computes the composite key the
+            # route must carry as id=.
+            def owner(assignment, slug, **extra):
+                record = {
+                    'assignment_id': assignment,
+                    'workspace_id': 'fixture',
+                    'spec_package': str(Path(workspace_dir) / 'specs' / slug),
+                    'workflow_id': f'{assignment}-workflow',
+                    'display': 'running',
+                    'state': 'live',
+                    'skill': 'spec-end-to-end',
+                    'created_at': stamp(),
+                    'coverage': {'state': 'complete', 'reasons': []},
+                }
+                record.update(extra)
+                return record
+
+            def agent_envelope(slug, members, runs=(), assignments=()):
+                published = stamp()
+                observer = {
+                    'schema_version': 1,
+                    'observer_id': 'epics-member-agent-fixture',
+                    'state': 'observing',
+                    'published_at': published,
+                    'snapshot': {
+                        'workspace': 'fixture',
+                        'coverage': {'state': 'complete', 'observed_at': published, 'reasons': []},
+                        'runs': list(runs),
+                        'recently_completed': [],
+                        'assignments': list(assignments),
+                        'assignment_coverage': {'state': 'complete', 'reasons': []},
+                        'epics': [{
+                            'workspace': 'fixture',
+                            'epic': slug,
+                            'title': f'Member agent {slug}',
+                            'state': 'active',
+                            'members': members,
+                            'summary': {'total': len(members), 'merged': 0, 'complete': 0, 'attention': 0},
+                            'next': members[-1]['name'] if members else '',
+                            'coverage': {'state': 'complete', 'reasons': []},
+                        }],
+                        'planned_packages': [],
+                    },
+                }
+                return {**real_state, 'observers': [observer]}
+
+            alpha_uuid = '11111111-2222-4333-8444-555555555555'
+            decoy_uuid = '99999999-0000-4111-8222-333333333333'
+            alternate_uuid = '77777777-8888-4999-8aaa-bbbbbbbbbbbb'
+            alpha_slug = 'alpha-spec'
+            step_slug = 'step-spec'
+            ghost_slug = 'ghost-spec'
+            alpha_key = json.dumps(['fixture', alpha_uuid], separators=(',', ':'))
+            decoy_key = json.dumps(['fixture', decoy_uuid], separators=(',', ':'))
+            populated_payload = agent_envelope(
+                'member-agent-populated',
+                [
+                    member(alpha_slug, 'in-progress', step={'position': 2, 'total': 5}),
+                    member(step_slug, 'in-progress', step={'position': 3, 'total': 4}),
+                ],
+                runs=[member_run(alpha_slug, alpha_uuid), member_run(step_slug, alternate_uuid)],
+                assignments=[owner(alpha_uuid, alpha_slug), owner(decoy_uuid, 'aaa-decoy')],
+            )
+            absent_payload = agent_envelope(
+                'member-agent-refused',
+                [member(ghost_slug, 'proposed')],
+                assignments=[owner(decoy_uuid, 'aaa-decoy')],
+            )
+
+            def open_member_agent_epic(payload):
+                mode['value'] = payload
+                page.goto('about:blank')
+                page.goto(receipt['url'] + '/#/epics?ws=fixture', wait_until='domcontentloaded')
+                expect(page.locator('h1')).to_have_text('Epics')
+                expect(rows_on(page)).to_have_count(1)
+                page.wait_for_function("() => location.hash.includes('id=')")
+                expect(page.locator('article.detail-pane .object-head h2')).to_have_text(payload['observers'][0]['snapshot']['epics'][0]['title'])
+                return page.locator('table.epic-members')
+
+            def member_row(table, name):
+                return table.locator('tbody tr', has=page.locator('button.text-link.mono', has_text=name))
+
+            def capture_table(state, table):
+                section = page.locator('section.section', has=page.locator('table.epic-members'))
+                paths = []
+                for width in (1280, 1600):
+                    check_deadline()
+                    page.set_viewport_size({'width': width, 'height': 900})
+                    table.scroll_into_view_if_needed()
+                    expect(table).to_be_visible()
+                    path = step_003 / f'{state}-{width}.png'
+                    section.screenshot(path=str(path))
+                    report['screenshots'].append(str(path))
+                    paths.append(f'step-003/{path.name}')
+                    report['scenarios'].append(f'member-agent capture: {state} member-table region saved to {path} at {width}x900')
+                return paths
+
+            # (a) populated state: the open-agent row and the current-step row.
+            check_deadline()
+            table = open_member_agent_epic(populated_payload)
+            alpha_row = member_row(table, alpha_slug)
+            step_row = member_row(table, step_slug)
+            expect(alpha_row).to_have_count(1)
+            expect(step_row).to_have_count(1)
+            open_link = alpha_row.locator('a[data-action="open-agent"]')
+            expect(open_link).to_have_count(1)
+            expect(open_link).to_have_text('Open agent')
+            expect(open_link).to_have_attribute('aria-label', f'Open agent for {alpha_slug}')
+            expect(alpha_row.locator('.status')).to_have_text('Implementation starting')
+            expect(alpha_row.locator('.action-note')).to_have_count(0)
+            expect(step_row.locator('.status')).to_have_text('In progress · step 3 of 4')
+            expect(step_row.locator('a[data-action="open-agent"]')).to_have_count(0)
+            report['scenarios'].append('member-agent populated: the observed owner row offers Open agent while the step row keeps In progress · step 3 of 4')
+
+            # (b) href contract: composite key as id=, never a bare UUID, ws from workspace_id.
+            href = open_link.get_attribute('href') or ''
+            fragment = href.partition('#')[2]
+            assert fragment.startswith('/agents?'), f'unexpected member agent href: {href}'
+            href_params = parse_qs(fragment.partition('?')[2])
+            assert href_params.get('id') == [alpha_key], f'href id is not the observed composite row key: {href}'
+            assert href_params.get('ws') == ['fixture'], f'href ws is not the assignment workspace_id: {href}'
+            assert 'q' not in href_params, f'href fabricated a q filter: {href}'
+            assert urlencode({'id': alpha_key}) in href, f'literal composite key absent from id=: {href}'
+            assert f'id={alpha_uuid}' not in href and urlencode({'id': alpha_uuid}) not in href, f'href used a bare assignment UUID: {href}'
+            report['scenarios'].append(f'member-agent href: ws=fixture with the literal composite key id={alpha_key} and no bare-UUID or q fallback')
+
+            # (c) captures of the scrolled member-table region at both widths.
+            report.setdefault('captures', {})['member-agent'] = {'populated': capture_table('populated', table)}
+
+            # (d) a plain primary click selects exactly this observed row.
+            check_deadline()
+            open_link.click()
+            expect(page.locator('h1')).to_have_text('Agents')
+            detail = page.locator('article.agent-detail')
+            expect(detail).to_have_attribute('data-key', alpha_key)
+            expect(detail.locator('.object-head h2')).to_have_text(alpha_uuid)
+            expect(detail.locator('.object-head h2')).to_have_attribute('title', alpha_uuid)
+            expect(detail.locator('.subtitle.mono')).to_contain_text(alpha_slug)
+            assert page.get_by_text('Agent observation unavailable').count() == 0, 'plain click fell back to the unavailable-agent view'
+            expect(detail).not_to_have_attribute('data-key', decoy_key)
+            assert params_on(page).get('id') == [alpha_key], f'plain click lost the composite id: {page.url}'
+            report['scenarios'].append('member-agent click: the plain primary click selected the observed composite row, not the first sibling or the unavailable view')
+            page.reload(wait_until='domcontentloaded')
+            expect(page.locator('h1')).to_have_text('Agents')
+            expect(page.locator('article.agent-detail')).to_have_attribute('data-key', alpha_key)
+            expect(page.locator('article.agent-detail .object-head h2')).to_have_text(alpha_uuid)
+            assert params_on(page).get('id') == [alpha_key], f'reload lost the selected agent: {page.url}'
+            report['scenarios'].append('member-agent reload: the same observed agent stays selected')
+
+            # (e) modified click: native modifier navigation in a separate page.
+            check_deadline()
+            table = open_member_agent_epic(populated_payload)
+            open_link = member_row(table, alpha_slug).locator('a[data-action="open-agent"]')
+            href = open_link.get_attribute('href') or ''
+            fragment = href.partition('#')[2]
+            popup = None
+            try:
+                with context.expect_page(timeout=5000) as popup_info:
+                    open_link.click(modifiers=['Control'])
+                popup = popup_info.value
+                method = 'ctrl-click opened a separate page through native modified navigation'
+            except Exception:
+                method = 'ctrl-click produced no page; the real href was opened in a second page'
+            if popup is None:
+                popup = new_page()
+                popup.route('**/api/state**', route_state)
+                popup.goto(receipt['url'] + '/#' + fragment, wait_until='domcontentloaded')
+            else:
+                popup.set_default_timeout(10000)
+                popup.on('pageerror', lambda error: report['pageErrors'].append(str(error)))
+                popup.route('**/api/state**', route_state)
+                popup.reload(wait_until='domcontentloaded')
+            expect(popup.locator('h1')).to_have_text('Agents')
+            popup_detail = popup.locator('article.agent-detail')
+            expect(popup_detail).to_have_attribute('data-key', alpha_key)
+            expect(popup_detail.locator('.object-head h2')).to_have_text(alpha_uuid)
+            popup_params = parse_qs(urlsplit(popup.url).fragment.partition('?')[2])
+            assert popup_params.get('ws') == ['fixture'], f'modified-click page lost the workspace scope: {popup.url}'
+            assert popup_params.get('id') == [alpha_key], f'modified-click page lost the composite id: {popup.url}'
+            assert 'q' not in popup_params, f'modified-click page used a q filter: {popup.url}'
+            assert popup.get_by_text('Agent observation unavailable').count() == 0, 'modified-click page showed the unavailable fallback'
+            popup.close()
+            report['scenarios'].append(f'member-agent modified click: {method}; the scoped agent kept ws and the composite id and loaded the intended assignment')
+
+            # (f) absent/refused state: no owner, refusal text, no agent route.
+            check_deadline()
+            table = open_member_agent_epic(absent_payload)
+            expect(table.locator('tbody tr')).to_have_count(1)
+            absence_row = table.locator('tbody tr').first
+            expect(absence_row.locator('.status')).to_have_text('Package not observed')
+            expect(absence_row.locator('.action-note[data-action-note="plan"]')).to_have_text('No observed package matches this member in this observation.')
+            expect(absence_row.locator('button[data-action="plan"]')).to_be_disabled()
+            expect(page.locator('[data-action="open-agent"]')).to_have_count(0)
+            report['scenarios'].append('member-agent absent: the ownerless member keeps its refusal note and offers no agent route')
+            report['captures']['member-agent']['absent'] = capture_table('absent', table)
+
+            report['scenarios'].append('member-agent gap: memberAgentRoute q=<uuid>/no-id is unreachable through collectAssignments (always computes key); covered by the epic-state.test.ts memberAgentRoute unit case, not asserted in the browser')
+            report['scenarios'].append(f'member-agent timing: case body finished in {round(time.monotonic() - case_started, 3)}s inside the shared fixture-readiness 10s and 110s deadline bounds')
+
         def group_documents(page):
             # EV-8: Supporting documents links through the real files and
             # designs routes. Only the final /api/state response is substituted;
@@ -2174,7 +2432,7 @@ try:
             report['captures'] = {'production': ['epics-documents-03-1280.png', 'epics-documents-03-1600.png'], 'reference': ['epics-ref-03-1280.png', 'epics-ref-03-1600.png']}
 
         groups = {'list': group_list, 'loading': group_loading, 'cold': group_cold, 'file': group_file, 'a11y': group_a11y}
-        handlers = {**groups, 'detail': group_detail, 'observations': group_observations, 'member': group_member, 'documents': group_documents}
+        handlers = {**groups, 'detail': group_detail, 'observations': group_observations, 'member': group_member, 'member-agent': group_member_agent, 'documents': group_documents}
         selected = list(groups) if case == 'list' else [case]
         for name in selected:
             check_deadline()
@@ -2195,7 +2453,7 @@ except BaseException:
 finally:
     stop_fixture()
     report['elapsedSeconds'] = round(time.monotonic() - started, 3)
-    report_file = evidence / {'detail': 'epics-detail.json', 'observations': 'epics-observations.json', 'member': 'epics-member.json', 'documents': 'epics-documents.json'}.get(case, 'epics-list.json')
+    report_file = evidence / {'detail': 'epics-detail.json', 'observations': 'epics-observations.json', 'member': 'epics-member.json', 'member-agent': 'epics-member-agent.json', 'documents': 'epics-documents.json'}.get(case, 'epics-list.json')
     report['reportPath'] = str(report_file)
     report_file.write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))

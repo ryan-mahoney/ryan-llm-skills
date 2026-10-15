@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { designBriefRoute, selectDesign } from './designs-state';
+import { designBriefRoute, epicsReferencingDesign, selectDesign } from './designs-state';
 import type { Design, Screen } from './designs-state';
 import { fileViewUrl, packageViewUrl } from '../observation-format';
 
@@ -119,4 +119,42 @@ test('fileViewUrl encodes Unicode owners as UTF-8 base64url and each path segmen
   assert.equal(packageViewUrl('agent-tooling/newui-07-designs', 'work-tour.html'),
     '/package-view/YWdlbnQtdG9vbGluZy9uZXd1aS0wNy1kZXNpZ25z/work-tour.html');
   assert.equal(packageViewUrl('kité', 'work-tour.html'), fileViewUrl('package', 'kité', 'work-tour.html'));
+});
+
+test('epicsReferencingDesign returns no matches without a catalog entry', () => {
+  const epic = { key: 'e1', workspace: 'fixture', designs: [{ workspace: 'fixture', design: 'alpha' }] };
+  assert.deepEqual(epicsReferencingDesign(design(), [epic], undefined), []);
+});
+
+test('epicsReferencingDesign returns same-workspace referencing epics in observed order', () => {
+  const entry = { id: 'kit', directory: '/storage/projects/fixture' };
+  const first = { key: 'e1', workspace: 'fixture', epic: 'one', designs: [{ workspace: 'fixture', design: 'alpha' }] };
+  const second = { key: 'e2', workspace: 'fixture', epic: 'two', designs: [{ workspace: 'fixture', design: 'alpha' }] };
+  const result = epicsReferencingDesign(design(), [first, second], entry);
+  assert.equal(result.length, 2);
+  assert.equal(result[0], first);
+  assert.equal(result[1], second);
+});
+
+test('epicsReferencingDesign excludes other-workspace and non-referencing epics', () => {
+  const entry = { id: 'kit', directory: '/storage/projects/fixture' };
+  const reference = { key: 'e1', workspace: 'fixture', designs: [{ workspace: 'fixture', design: 'alpha' }] };
+  const otherWorkspace = { key: 'e2', workspace: 'other', designs: [{ workspace: 'other', design: 'alpha' }] };
+  const otherDesign = { key: 'e3', workspace: 'fixture', designs: [{ workspace: 'fixture', design: 'beta' }] };
+  const noDesigns = { key: 'e4', workspace: 'fixture' };
+  const emptyDesigns = { key: 'e5', workspace: 'fixture', designs: [] };
+  const result = epicsReferencingDesign(design(), [otherWorkspace, reference, otherDesign, noDesigns, emptyDesigns], entry);
+  assert.equal(result.length, 1);
+  assert.equal(result[0], reference);
+});
+
+test('epicsReferencingDesign preserves the container order it is given (the app sorts epics upstream in collectEpics)', () => {
+  const entry = { id: 'kit', directory: '/storage/projects/fixture' };
+  const mid = { key: 'e1', workspace: 'fixture', title: 'Mid cross link', designs: [{ workspace: 'fixture', design: 'alpha' }] };
+  const zeta = { key: 'e2', workspace: 'fixture', title: 'Zeta cross link', designs: [{ workspace: 'fixture', design: 'alpha' }] };
+  const alpha = { key: 'e3', workspace: 'fixture', title: 'Alpha cross link', designs: [{ workspace: 'fixture', design: 'alpha' }] };
+  const result = epicsReferencingDesign(design(), [mid, zeta, alpha], entry);
+  const titles = result.map((epic) => epic.title);
+  assert.deepEqual(titles, ['Mid cross link', 'Zeta cross link', 'Alpha cross link']);
+  assert.notDeepEqual(titles, [...titles].sort());
 });

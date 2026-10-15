@@ -52,7 +52,7 @@ import subprocess
 import threading
 import time
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -61,7 +61,7 @@ from urllib.parse import parse_qs, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--case', choices=['journey', 'unproduced', 'empty', 'loading', 'error', 'partial', 'unavailable', 'offline', 'stale'], default='journey')
+parser.add_argument('--case', choices=['journey', 'unproduced', 'empty', 'loading', 'error', 'partial', 'unavailable', 'offline', 'stale', 'cross-links'], default='journey')
 parser.add_argument('--capture-reference', default=None)
 options = parser.parse_args()
 case = options.case
@@ -197,6 +197,27 @@ def seed_designs(storage):
         (other / 'screen.css').write_text(SCREEN_CSS)
         (other / 'screens' / '01-other-screen.html').write_text(screen_html('Other screen', 'Other workspace screen'))
         (other / 'design.json').write_text(json.dumps(other_record))
+    if case == 'cross-links':
+        # Cross-links fixtures: a second real design with the same slug (`demo`) in
+        # the other workspace but a distinct title, so a slug-only epic match would
+        # wrongly surface the fixture epics there.
+        other_demo = other_root / 'demo'
+        (other_demo / 'screens').mkdir(parents=True, exist_ok=True)
+        (other_demo / 'marker.js').write_text(MARKER_JS)
+        (other_demo / 'screen.css').write_text(SCREEN_CSS)
+        (other_demo / 'screens' / '01-cross-screen.html').write_text(screen_html('Cross screen', 'Cross workspace screen'))
+        (other_demo / 'brief.md').write_text('# Cross-workspace brief\n\nMarker cross brief.\n')
+        other_demo_record = {
+            'schema_version': 1,
+            'design': 'demo',
+            'title': 'Other cross fixture',
+            'brief': 'brief.md',
+            'note': 'Same slug as the fixture demo, distinct title and workspace.',
+            'viewport': {'posture': 'desktop-only', 'widths': [1280]},
+            'screens': [{'step': 1, 'id': 'cross-screen', 'title': 'Cross screen', 'person': 'Operator',
+                         'job': 'Prove the other-workspace epic reference', 'kind': 'action', 'state': 'ideal'}],
+        }
+        (other_demo / 'design.json').write_text(json.dumps(other_demo_record))
     seeded = {
         'fixture/demo': demo_record,
         'fixture/second': second_record,
@@ -214,6 +235,12 @@ def seed_designs(storage):
             'other/designs/other-demo/design.json', 'other/designs/other-demo/screens/01-other-screen.html',
         ]),
     }
+    if case == 'cross-links':
+        seeded['other/demo'] = other_demo_record
+        seeded['files'].extend([
+            'other/designs/demo/design.json', 'other/designs/demo/screens/01-cross-screen.html',
+            'other/designs/demo/brief.md', 'other/designs/demo/marker.js', 'other/designs/demo/screen.css',
+        ])
     if case == 'unproduced':
         # Planned-screen branch fixtures: one produced step to enter from, one
         # planned step with a real capture but no HTML, plus missing/unsafe briefs.
@@ -2583,6 +2610,200 @@ try:
                 assert not mutations, f'mutation requests observed: {mutations}'
                 report['status'] = 'passed'
                 raise CaseComplete()
+
+            if case == 'cross-links':
+                # Real /api/state envelope rewritten in flight: three fixture epics
+                # reference the fixture demo slug, and a second observer in the other
+                # workspace references the same slug there. App, route, adapters and
+                # the Designs state owner stay real; only observation data is injected.
+                links_state = {'stateReads': 0, 'writes': []}
+
+                def state_with_links(route):
+                    if route.request.method != 'GET':
+                        route.continue_()
+                        return
+                    response = route.fetch()
+                    try:
+                        body = response.json()
+                    except Exception:
+                        route.continue_()
+                        return
+                    observers = body.get('observers')
+                    if not isinstance(observers, list):
+                        route.continue_()
+                        return
+                    replaced = []
+                    for observer in observers:
+                        snapshot = observer.get('snapshot') if isinstance(observer, dict) else None
+                        if not isinstance(snapshot, dict) or snapshot.get('workspace') != 'fixture':
+                            continue
+                        snapshot['epics'] = [
+                            {'workspace': 'fixture', 'epic': 'link-mid', 'title': 'Mid cross link', 'members': [],
+                             'designs': [{'workspace': 'fixture', 'design': 'demo'}]},
+                            {'workspace': 'fixture', 'epic': 'link-zeta', 'title': 'Zeta cross link', 'members': [],
+                             'designs': [{'workspace': 'fixture', 'design': 'demo'}]},
+                            {'workspace': 'fixture', 'epic': 'link-alpha', 'title': 'Alpha cross link', 'members': [],
+                             'designs': [{'workspace': 'fixture', 'design': 'demo'}]},
+                        ]
+                        replaced.append(str(observer.get('observer_id', '')))
+                    observers.append({
+                        'observer_id': 'cross-links-other',
+                        'state': 'observing',
+                        'published_at': datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z'),
+                        'snapshot': {
+                            'workspace': 'other', 'runs': [], 'assignments': [],
+                            'epics': [{'workspace': 'other', 'epic': 'other-link', 'title': 'Other link',
+                                       'members': [], 'designs': [{'workspace': 'other', 'design': 'demo'}]}],
+                        },
+                    })
+                    links_state['stateReads'] += 1
+                    links_state['writes'].append({'replacedObservers': replaced})
+                    headers = {key: value for key, value in response.headers.items() if key.lower() != 'content-length'}
+                    route.fulfill(status=response.status, headers=headers, json=body)
+
+                page.route('**/api/state**', state_with_links)
+                try:
+                    def related():
+                        return page.locator('.detail-pane .object-head [data-related="epic"]')
+
+                    def links_params():
+                        fragment = urlsplit(page.url).fragment
+                        return parse_qs(fragment.partition('?')[2])
+
+                    def wait_until(condition, label, timeout=5):
+                        deadline = time.monotonic() + timeout
+                        while time.monotonic() < deadline:
+                            if condition():
+                                return
+                            page.wait_for_timeout(25)
+                        raise AssertionError(f'{label} not observed')
+
+                    def assert_related_href(href, workspace, epic_name):
+                        fragment = urlsplit(href or '').fragment
+                        assert fragment.startswith('/epics?'), (href, fragment)
+                        query = parse_qs(fragment.partition('?')[2])
+                        expected = {'ws': [workspace], 'id': [json.dumps([workspace, epic_name], separators=(',', ':'))]}
+                        assert query == expected, (href, query)
+
+                    capture_dir = evidence / 'step-009'
+                    capture_dir.mkdir(parents=True, exist_ok=True)
+
+                    def capture_state(name, width):
+                        page.set_viewport_size({'width': width, 'height': 900})
+                        page.wait_for_timeout(150)
+                        page.evaluate("() => { for (const node of document.querySelectorAll('.detail-pane, .detail-pane .detail-body')) node.scrollTop = 0; }")
+                        path = capture_dir / f'{name}-{width}.png'
+                        page.screenshot(path=str(path))
+                        head = page.locator('.detail-pane .object-head').first
+                        geometry = head.evaluate('(element) => ({ scrollWidth: element.scrollWidth, clientWidth: element.clientWidth })')
+                        assert geometry['scrollWidth'] <= geometry['clientWidth'] + 1, (name, width, geometry)
+                        report['captures'].append(str(path))
+                        report.setdefault('crossLinksCaptures', []).append({
+                            'state': name, 'width': width, 'url': page.url, 'capture': str(path),
+                            'objectHeadScrollWidth': geometry['scrollWidth'],
+                            'objectHeadClientWidth': geometry['clientWidth'],
+                        })
+                        return path
+
+                    # Populated: three fixture epics rendering in the app canonical order
+                    # under Referenced by; the other-workspace epic stays out of this scope.
+                    page.goto(base + '/#/designs?ws=fixture&id=demo', wait_until='domcontentloaded')
+                    expect(page.locator('#design-detail-heading')).to_have_text('Design fixture')
+                    expect(page.locator('.list-pane .record[aria-current="page"]')).to_contain_text('Design fixture')
+                    expect(page.locator('#design-frame')).to_have_count(1)
+                    head_text = page.locator('.detail-pane .object-head').inner_text()
+                    assert 'Referenced by' in head_text, head_text
+                    expect(related()).to_have_count(3)
+                    expect(related().nth(0)).to_have_text('Alpha cross link')
+                    expect(related().nth(1)).to_have_text('Mid cross link')
+                    expect(related().nth(2)).to_have_text('Zeta cross link')
+                    assert 'Other link' not in head_text, head_text
+                    assert_related_href(related().nth(0).get_attribute('href'), 'fixture', 'link-alpha')
+                    assert_related_href(related().nth(1).get_attribute('href'), 'fixture', 'link-mid')
+                    assert_related_href(related().nth(2).get_attribute('href'), 'fixture', 'link-zeta')
+                    # Discrimination: the fixture seeds the referencing epics in the raw order
+                    # (Mid, Zeta, Alpha), which is deliberately NOT the app's canonical order.
+                    # App sources epics from collectEpics (App.tsx), which sorts by workspace
+                    # then title, so Designs must render the canonical order (Alpha, Mid, Zeta)
+                    # and not the raw seed order. A non-title seed makes this assertion
+                    # non-vacuous: preserving the raw array order would fail it. Preservation of
+                    # an arbitrary container order is proven separately by the
+                    # epicsReferencingDesign unit cases.
+                    seeded_raw_order = ['Mid cross link', 'Zeta cross link', 'Alpha cross link']
+                    canonical_order = ['Alpha cross link', 'Mid cross link', 'Zeta cross link']
+                    observed_labels = [related().nth(i).inner_text() for i in range(3)]
+                    assert observed_labels == canonical_order, observed_labels
+                    assert seeded_raw_order != canonical_order, 'fixture seed must not coincide with canonical order'
+                    assert canonical_order == sorted(seeded_raw_order), canonical_order
+                    assert links_state['stateReads'] >= 1 and any(write['replacedObservers'] for write in links_state['writes']), links_state
+                    for width in (1280, 1600):
+                        capture_state('cross-links-populated', width)
+                    passed('the fixture-scoped Referenced by line lists the referencing epics in the app canonical order (Alpha cross link, Mid cross link, Zeta cross link) from a non-title raw seed order, excludes the other-workspace epic, and renders native scoped epics hrefs')
+
+                    # Selection and brief survive the real cross-link click away and Back.
+                    page.goto(base + '/#/designs?ws=fixture&id=demo&path=screens%2F02-screen-2.html&tab=1600', wait_until='domcontentloaded')
+                    expect(page.locator('#design-detail-heading')).to_have_text('Design fixture')
+                    expect(page.locator('#design-width')).to_have_value('1600')
+                    brief = page.locator('.detail-pane').get_by_role('link', name='Open brief', exact=True)
+                    expect(brief).to_have_count(1)
+                    brief_href = brief.get_attribute('href')
+                    assert brief_href and '#/files?' in brief_href, brief_href
+                    related().nth(0).click()
+                    expect(page).to_have_url(re.compile(r'#/epics\?ws=fixture&id='))
+                    assert links_params() == {'ws': ['fixture'], 'id': [json.dumps(['fixture', 'link-alpha'], separators=(',', ':'))]}, page.url
+                    expect(page.locator('.detail-pane .object-head h2')).to_have_text('Alpha cross link')
+                    epics_identity = page.url
+                    page.reload(wait_until='domcontentloaded')
+                    assert page.url == epics_identity, page.url
+                    expect(page.locator('.detail-pane .object-head h2')).to_have_text('Alpha cross link')
+                    page.go_back()
+                    wait_until(lambda: page.locator('#design-detail-heading').count() == 1, 'designs detail after epic back')
+                    expect(page.locator('#design-detail-heading')).to_have_text('Design fixture')
+                    assert links_params() == {'ws': ['fixture'], 'id': ['demo'], 'path': ['screens/02-screen-2.html'], 'tab': ['1600']}, page.url
+                    expect(page.locator('.list-pane .record[aria-current="page"]')).to_contain_text('Design fixture')
+                    expect(page.locator('#design-frame')).to_have_count(1)
+                    expect(brief).to_have_attribute('href', brief_href)
+                    passed('clicking a cross-link opens the native epics detail, the route identity survives reload, and Back restores the selected screen with the same brief href')
+
+                    # Cross-workspace: the other workspace's own demo slug references
+                    # only the other-workspace epic, so no fixture link leaks across.
+                    page.goto(base + '/#/designs?ws=other&id=demo', wait_until='domcontentloaded')
+                    expect(page.locator('#design-detail-heading')).to_have_text('Other cross fixture')
+                    other_head = page.locator('.detail-pane .object-head').inner_text()
+                    assert 'Referenced by' in other_head, other_head
+                    expect(related()).to_have_count(1)
+                    expect(related().nth(0)).to_have_text('Other link')
+                    assert all(label not in other_head for label in ('Mid cross link', 'Zeta cross link', 'Alpha cross link')), other_head
+                    assert_related_href(related().nth(0).get_attribute('href'), 'other', 'other-link')
+                    passed('the other workspace demo slug references only its own epic, so design cross-links stay workspace-scoped')
+
+                    # Reference-free state: a produced design with no epic reference
+                    # renders no Referenced by line, not an empty or broken one.
+                    page.goto(base + '/#/designs?ws=fixture&id=second', wait_until='domcontentloaded')
+                    expect(page.locator('#design-detail-heading')).to_have_text('Alternate fixture')
+                    empty_head = page.locator('.detail-pane .object-head').inner_text()
+                    assert 'Referenced by' not in empty_head, empty_head
+                    expect(related()).to_have_count(0)
+                    for width in (1280, 1600):
+                        capture_state('cross-links-absent', width)
+                    passed('a reference-free design renders no Referenced by line and no related epic anchors')
+
+                    report['crossLinks'] = {
+                        'stateReads': links_state['stateReads'],
+                        'writes': links_state['writes'],
+                        'briefHref': brief_href,
+                        'epicsIdentity': epics_identity,
+                    }
+                    assert not report['pageErrors'], report['pageErrors']
+                    assert not report['consoleErrors'], report['consoleErrors']
+                    unexpected = [failure for failure in report['requestFailures'] if 'ERR_ABORTED' not in failure['failure']]
+                    assert not unexpected, unexpected
+                    mutations = [r for r in requests if r['method'] not in ('GET', 'HEAD')]
+                    assert not mutations, f'mutation requests observed: {mutations}'
+                    report['status'] = 'passed'
+                    raise CaseComplete()
+                finally:
+                    page.unroute('**/api/state**', state_with_links)
 
             # Migrated coverage 1/2: Workspaces Designs enters the real adapter/API.
             page.goto(base + '/#/workspaces?ws=fixture', wait_until='domcontentloaded')

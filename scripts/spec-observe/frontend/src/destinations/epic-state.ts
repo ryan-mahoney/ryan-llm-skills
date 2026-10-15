@@ -127,6 +127,20 @@ export function epicMemberRecord(epic: WireRecord, member: WireRecord, records: 
 
 export const memberIsMissing = (member: WireRecord): boolean => member?.status === 'missing' || member?.exists === false;
 
+// Observed member owner → Agents route: the observed composite row key
+// selects the exact observed row; without it a nonempty assignment UUID only
+// filters the list as q, because a bare id can be replaced by an unrelated
+// first row. An absent owner or missing identifier never fabricates a route.
+export function memberAgentRoute(owner: WireRecord | null, fallbackWs: string): RouteState | null {
+  if (!owner) return null;
+  const key = text(owner.key);
+  const assignmentId = text(owner.assignment_id);
+  if (!key && !assignmentId) return null;
+  const ws = text(owner.workspace_id) || text(owner.workspace) || fallbackWs;
+  if (key) return { dest: 'agents', ws, id: key };
+  return { dest: 'agents', ws, q: assignmentId };
+}
+
 // Declared prerequisites resolved against sibling planning facts: a landed
 // sibling is landed, positive preparation is prepared-but-not-observed-merged,
 // and anything else keeps the declaration visible without authorizing a plan.
