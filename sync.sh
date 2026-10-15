@@ -9,6 +9,9 @@ SYNC_AUGMENT="${SYNC_AUGMENT:-0}"
 # with no node_modules. Idempotent; already-installed packages are skipped.
 "$AGENTS_DIR/scripts/install-deps.sh"
 
+# Prepare speech on execution hosts with a writer checkout (or a configured clone URL).
+node "$AGENTS_DIR/scripts/spec-observe/setup-speech.mjs" --auto
+
 # Workspace sync tooling. Machine configuration and Unison state stay outside Git.
 mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/adjacent-sync" ] && [ ! -L "$HOME/.local/bin/adjacent-sync" ]; then
