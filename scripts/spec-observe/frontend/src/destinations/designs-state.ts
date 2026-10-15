@@ -5,6 +5,8 @@
 // caller and never changes the selection. The caller pushes explicit choices
 // and applies a non-null `normalized` route with a replace navigation.
 import { safeRelativeFilePath, type RouteState } from '../route';
+import { matchesCatalogEntry, type CatalogEntry } from '../scope';
+import type { WireRecord } from '../model';
 
 export type Screen = {
   step: number;
@@ -73,4 +75,13 @@ export function selectDesign(route: RouteState, designs: Design[]): DesignSelect
 export function designBriefRoute(ws: string, design: Design): RouteState | null {
   if (typeof ws !== 'string' || ws === '' || !safeRelativeFilePath(design.brief)) return null;
   return { dest: 'files', ws, source: 'workspace', path: `${design.path}/${design.brief}` };
+}
+
+export function epicsReferencingDesign(design: Design, epics: WireRecord[], entry: CatalogEntry | undefined): WireRecord[] {
+  if (!entry) return [];
+  return (epics ?? []).filter(epic => {
+    const designs = epic?.designs;
+    if (!Array.isArray(designs) || !designs.some(item => item?.design === design.slug)) return false;
+    return matchesCatalogEntry(epic, 'epic', entry);
+  });
 }
