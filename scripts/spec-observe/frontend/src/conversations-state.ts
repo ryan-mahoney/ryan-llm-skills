@@ -1,3 +1,5 @@
+import { sameChoice as sameModelChoice, type ModelChoice } from './models-state';
+
 // Conversations-domain pure state owners: route selection, read/view
 // availability, derived thread state, composer availability and scoped queue
 // summaries. Threads.tsx delegates these decisions here; the label/help/tone
@@ -448,6 +450,9 @@ export function getThreadScroll(ws: string, thread: string): ThreadScroll | unde
 // reopen cannot replay prepared text.
 export type NewThreadDraftSeed = { text: string; target?: string };
 
+const sameModel = (a: ModelChoice | null, b: ModelChoice | null): boolean =>
+  (a === null && b === null) || (a !== null && b !== null && sameModelChoice(a, b));
+
 const newThreadSeeds = new Map<string, NewThreadDraftSeed>();
 
 const copyNewThreadSeed = (seed: NewThreadDraftSeed): NewThreadDraftSeed => {
@@ -471,18 +476,24 @@ export function consumeNewThreadDraft(ws: string): NewThreadDraftSeed | undefine
 // Retained workspace new-thread draft. Opening the dialog consumes a one-use
 // seed and merges it: text appends after a blank line when typed text exists,
 // and a seed with a repository target replaces the retained choice.
-export type NewThreadWorkspaceDraft = { text: string; target: string | null };
+export type NewThreadWorkspaceDraft = { text: string; target: string | null; model: ModelChoice | null };
 
 const newThreadDrafts = new Map<string, NewThreadWorkspaceDraft>();
 
 export function getNewThreadDraft(ws: string): NewThreadWorkspaceDraft {
   const stored = ws ? newThreadDrafts.get(ws) : undefined;
-  return stored ? { text: stored.text, target: stored.target } : { text: '', target: null };
+  return stored
+    ? { text: stored.text, target: stored.target, model: stored.model ? { provider: stored.model.provider, model: stored.model.model } : null }
+    : { text: '', target: null, model: null };
 }
 
 export function setNewThreadDraft(ws: string, value: NewThreadWorkspaceDraft): void {
   if (!ws) return;
-  newThreadDrafts.set(ws, { text: value.text, target: value.target ?? null });
+  newThreadDrafts.set(ws, {
+    text: value.text,
+    target: value.target ?? null,
+    model: value.model ? { provider: value.model.provider, model: value.model.model } : null,
+  });
 }
 
 // Without an expected value the clear is unconditional; with one it only
@@ -492,7 +503,7 @@ export function clearNewThreadDraft(ws: string, expected?: NewThreadWorkspaceDra
   if (!ws) return;
   if (expected !== undefined) {
     const stored = newThreadDrafts.get(ws);
-    if (!stored || stored.text !== expected.text || stored.target !== expected.target) return;
+    if (!stored || stored.text !== expected.text || stored.target !== expected.target || !sameModel(stored.model, expected.model)) return;
   }
   newThreadDrafts.delete(ws);
 }
@@ -513,7 +524,7 @@ export function openNewThreadDraft(ws: string): NewThreadWorkspaceDraft {
         : retained.text === ''
           ? seed.text
           : `${retained.text}\n\n${seed.text}`;
-    newThreadDrafts.set(ws, { text, target });
+    newThreadDrafts.set(ws, { text, target, model: retained.model });
   }
   return getNewThreadDraft(ws);
 }
@@ -528,6 +539,7 @@ export type NewThreadRequestCapture = {
   id: number;
   text: string;
   target: string | null;
+  model: ModelChoice | null;
 };
 
 export type NewThreadPendingRequest = {
@@ -535,6 +547,7 @@ export type NewThreadPendingRequest = {
   ws: string;
   text: string;
   target: string | null;
+  model: ModelChoice | null;
   status: 'creating' | 'error';
   error: string | null;
   promise: Promise<unknown>;
@@ -562,6 +575,7 @@ export function beginNewThreadRequest<T>(
   ws: string,
   text: string,
   target: string | null,
+  model: ModelChoice | null,
   create: () => Promise<T>,
 ): Promise<T> {
   if (!ws) return create();
@@ -570,7 +584,7 @@ export function beginNewThreadRequest<T>(
   const id = nextNewThreadRequestId++;
   const draftEntry = newThreadDrafts.get(ws);
   const promise = create();
-  newThreadRequests.set(ws, { id, ws, text, target: target ?? null, status: 'creating', error: null, promise, draftEntry });
+  newThreadRequests.set(ws, { id, ws, text, target: target ?? null, model, status: 'creating', error: null, promise, draftEntry });
   return promise;
 }
 

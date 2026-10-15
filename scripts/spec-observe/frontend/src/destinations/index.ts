@@ -11,6 +11,7 @@ import FilesDestination from './files';
 import DesignsDestination from './designs';
 import { WorkspacesDestination } from './workspaces';
 import LaunchDestination from './launch';
+import ModelsDestination from './models';
 
 export type DestinationProps = {
   route: RouteState;
@@ -76,8 +77,7 @@ export type DestinationEntry = {
 
 // Rail order reserves 0 for the unrendered Next steps entry; primary
 // destinations therefore start at 10 and continue in tens through 60.
-// Workspaces takes 70 and order 80 is reserved for the unrendered Models
-// entry. Reserved orders add no controls in this packet.
+// Workspaces takes 70 and Models takes 80.
 export function destinationEntries(): DestinationEntry[] {
   return [
     { dest: 'specs', label: 'Specs', order: 10, nav: 'primary', render: SpecsDestination },
@@ -87,6 +87,7 @@ export function destinationEntries(): DestinationEntry[] {
     { dest: 'files', label: 'Files', order: 50, nav: 'primary', render: FilesDestination },
     { dest: 'designs', label: 'Designs', order: 60, nav: 'primary', render: DesignsDestination },
     { dest: 'workspaces', label: 'Workspaces', order: 70, nav: 'directory', render: WorkspacesDestination },
+    { dest: 'models', label: 'Models', order: 80, nav: 'directory', render: ModelsDestination },
     // Launch is a hidden Agents-child flow: it adds no rail entry, and the
     // Shell highlights Agents while it is open.
     { dest: 'launch', label: 'Launch agent', order: 35, nav: 'hidden', parent: 'agents', render: LaunchDestination },

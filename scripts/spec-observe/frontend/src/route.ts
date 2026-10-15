@@ -6,7 +6,8 @@ export type Destination =
   | 'files'
   | 'designs'
   | 'workspaces'
-  | 'launch';
+  | 'launch'
+  | 'models';
 
 export type RouteState = {
   dest: Destination;
@@ -37,6 +38,7 @@ export const DESTINATIONS: readonly Destination[] = [
   'designs',
   'workspaces',
   'launch',
+  'models',
 ];
 
 export const SUPPORTED_PARAMS = ['ws', 'id', 'tab', 'source', 'path', 'filter', 'q', 'thread', 'target', 'package', 'skill'] as const;

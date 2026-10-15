@@ -7,7 +7,9 @@ import { getJson, postJson } from './api';
 import type { InputPreview, ReferenceIdentity } from './composerTypes';
 import type { WireRecord } from './model';
 
-export type LaunchContext = { ws: string; thread?: string; target?: string | null; package?: string; skill?: string; authority?: 'none' | 'draft-pr' };
+import type { ModelChoice } from './models-state';
+
+export type LaunchContext = { ws: string; thread?: string; target?: string | null; package?: string; skill?: string; authority?: 'none' | 'draft-pr'; model?: ModelChoice | null };
 export type LaunchPreview = { record: WireRecord; contractDigest: string; inputPreview?: InputPreview };
 export type LaunchReply = { assignment: WireRecord; observation: WireRecord };
 export const FIXED_INSTRUCTION = 'Perform the attached assignment brief.';
@@ -72,6 +74,7 @@ const threadAssignmentBody = (ctx: LaunchContext, ids: LaunchPreviewInput) => ({
   instructions: FIXED_INSTRUCTION,
   skill: skillOf(ctx),
   ...(ctx.package ? { specPackage: ctx.package } : {}),
+  ...(ctx.model ? { provider: ctx.model.provider, model: ctx.model.model } : {}),
 });
 
 const directAssignmentBody = (ctx: LaunchContext, ids: LaunchPreviewInput) => ({
@@ -86,6 +89,7 @@ const directAssignmentBody = (ctx: LaunchContext, ids: LaunchPreviewInput) => ({
   // The bound presentation owns publication authority; only an explicitly
   // derived value crosses the wire, and thread bodies never carry it.
   ...(ctx.authority ? { publication_authority: ctx.authority } : {}),
+  ...(ctx.model ? { provider: ctx.model.provider, model: ctx.model.model } : {}),
 });
 
 // A bound direct hand-off carries the package's canonical primary path, while

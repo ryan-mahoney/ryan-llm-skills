@@ -11,6 +11,8 @@ import type { BriefReference, InputPreview } from './composerTypes';
 import { previewLaunchAssignment, saveLaunchBrief, submitLaunchAssignment } from './launch-client';
 import type { LaunchContext, LaunchPreview, LaunchReply } from './launch-client';
 import type { WireRecord } from './model';
+import type { ModelChoice } from './models-state';
+import { sameChoice } from './models-state';
 
 export type { LaunchContext, LaunchPreview, LaunchReply } from './launch-client';
 
@@ -18,13 +20,19 @@ export type LaunchStage = 'brief' | 'review' | 'result';
 export type LaunchStageView = LaunchStage | 'inspection';
 export type LaunchReviewStatus = 'idle' | 'resolving' | 'current' | 'stale' | 'denied' | 'error';
 
+const sameModel = (a: ModelChoice | null, b: ModelChoice | null): boolean => {
+  if (a === null && b === null) return true;
+  if (a === null || b === null) return false;
+  return sameChoice(a, b);
+};
+
 export type SavedLaunchBrief = {
   requestId: string; title: string; content: string; references: BriefReference[]; brief: string;
 };
 
 export type LaunchPreviewState = {
   record: WireRecord; contractDigest: string; inputPreview?: InputPreview;
-  revision: number; target: string | null;
+  revision: number; target: string | null; model: ModelChoice | null;
 };
 
 export type LaunchResult = {
@@ -34,7 +42,7 @@ export type LaunchResult = {
 
 export type LaunchPending = {
   kind: 'save' | 'preview' | 'launch'; revision: number;
-  requestId: string; assignmentId?: string; target: string | null;
+  requestId: string; assignmentId?: string; target: string | null; model: ModelChoice | null;
   promise: Promise<unknown>;
 };
 
@@ -58,6 +66,7 @@ export type LaunchDraft = {
   pending?: LaunchPending;
   reviewStatus: LaunchReviewStatus;
   error?: LaunchDraftError;
+  model: ModelChoice | null;
 };
 
 export type LaunchSeed = { title: string; content: string; references?: BriefReference[]; stage?: LaunchStage };
@@ -69,6 +78,7 @@ export type LaunchStore = {
   seedLaunchDraft: (context: LaunchContext, seed: LaunchSeed) => LaunchDraft;
   editLaunchDraft: (context: LaunchContext, changes: LaunchDraftChanges) => LaunchDraft | undefined;
   changeLaunchTarget: (context: LaunchContext, target: string | null) => LaunchDraft | undefined;
+  changeLaunchModel: (context: LaunchContext, choice: ModelChoice | null) => LaunchDraft | undefined;
   saveLaunchDraft: (context: LaunchContext, token: string) => Promise<WireRecord>;
   reviewLaunchDraft: (context: LaunchContext, token: string) => Promise<LaunchPreview>;
   launchReviewedDraft: (context: LaunchContext, token: string) => Promise<LaunchReply>;
@@ -130,7 +140,7 @@ export function createLaunchStore(): LaunchStore {
     settle: (outcome: PendingOutcome) => void,
   ): Promise<T> => {
     const promise = Promise.resolve().then(run);
-    entry.pending = { kind, revision: entry.revision, requestId, assignmentId, target: entry.target, promise };
+    entry.pending = { kind, revision: entry.revision, requestId, assignmentId, target: entry.target, model: entry.model, promise };
     notify(); // mounted observers see the pending operation begin
     const complete = (outcome: PendingOutcome): void => {
       if (entry.pending?.promise === promise) entry.pending = undefined; // clear only our own latch
@@ -157,6 +167,7 @@ export function createLaunchStore(): LaunchStore {
     // correction transition. After acknowledged success, an explicit seed starts
     // an independent draft, leaving the prior entry and its identities untouched.
     if (retained?.pending || (retained?.result && retained.result.kind !== 'launched')) return retained;
+    const model = context.model ? { provider: context.model.provider, model: context.model.model } : null;
     const draft: LaunchDraft = {
       title: seed.title,
       content: seed.content,
@@ -164,6 +175,7 @@ export function createLaunchStore(): LaunchStore {
       target: context.target ?? null,
       revision: 0,
       reviewStatus: 'idle',
+      model,
     };
     if (seed.stage !== undefined) draft.stageLabel = seed.stage;
     entries.set(key, draft);
@@ -186,7 +198,7 @@ export function createLaunchStore(): LaunchStore {
       return undefined;
     }
     if (!draft) {
-      draft = { title: '', content: '', references: [], target: context.target ?? null, revision: 0, reviewStatus: 'idle' };
+      draft = { title: '', content: '', references: [], target: context.target ?? null, revision: 0, reviewStatus: 'idle', model: context.model ? { provider: context.model.provider, model: context.model.model } : null };
       entries.set(key, draft);
     }
     draft.title = title;
@@ -220,6 +232,26 @@ export function createLaunchStore(): LaunchStore {
     // draft; the approval was bound to the old target and cannot be reused.
     // lastReviewed is retained so the stale view can present previous
     // facts beside the current requested target.
+    draft.preview = undefined;
+    draft.assignmentId = undefined;
+    draft.reviewStatus = hadPreview ? 'stale' : 'idle';
+    draft.error = undefined;
+    notify();
+    return draft;
+  };
+
+  const changeLaunchModel = (context: LaunchContext, choice: ModelChoice | null): LaunchDraft | undefined => {
+    const draft = entries.get(contextKey(context));
+    if (!draft || draft.result) return draft;
+    // A submitted launch has locked its reviewed facts; model changes require
+    // re-review before launch.
+    if (draft.pending?.kind === 'launch') return draft;
+    if (sameModel(draft.model, choice)) return draft;
+    const hadPreview = draft.preview !== undefined;
+    draft.model = choice ? { provider: choice.provider, model: choice.model } : null;
+    draft.revision += 1;
+    // Model change invalidates the current approval but retains saved bytes
+    // and last-reviewed facts for the stale view.
     draft.preview = undefined;
     draft.assignmentId = undefined;
     draft.reviewStatus = hadPreview ? 'stale' : 'idle';
@@ -274,10 +306,11 @@ export function createLaunchStore(): LaunchStore {
     const references = cloneReferences(saved.references);
     const revision = entry.revision;
     const target = entry.target;
+    const model = entry.model;
     entry.error = undefined;
     entry.reviewStatus = 'resolving';
     entry.preview = undefined; // no approval is current while a new resolve runs
-    const requestContext: LaunchContext = { ...context, target };
+    const requestContext: LaunchContext = { ...context, target, model };
     return registerPending(key, entry, 'preview', requestId, assignmentId,
       () => previewLaunchAssignment(requestContext, { requestId, assignmentId, references }, token),
       outcome => {
@@ -306,13 +339,14 @@ export function createLaunchStore(): LaunchStore {
           return;
         }
         const preview = outcome.value as LaunchPreview;
-        if (entry.revision === revision && entry.target === target) {
+        if (entry.revision === revision && entry.target === target && sameModel(entry.model, model)) {
           entry.preview = {
             record: preview.record,
             contractDigest: preview.contractDigest,
             inputPreview: preview.inputPreview,
             revision,
             target,
+            model,
           };
           // Retain the reviewed facts separately from the current approval;
           // later stale/denied transitions clear preview but keep this.
@@ -322,6 +356,7 @@ export function createLaunchStore(): LaunchStore {
             inputPreview: preview.inputPreview,
             revision,
             target,
+            model,
           };
           entry.reviewStatus = 'current';
         } else if (entry.reviewStatus === 'resolving') {
@@ -341,7 +376,8 @@ export function createLaunchStore(): LaunchStore {
     if (!saved || !savedMatchesDraft(entry)) return Promise.reject(new Error('The reviewed brief is no longer current.'));
     const preview = entry.preview;
     const target = entry.target;
-    if (!preview || preview.revision !== entry.revision || preview.target !== target) {
+    const model = entry.model;
+    if (!preview || preview.revision !== entry.revision || preview.target !== target || !sameModel(preview.model, model)) {
       return Promise.reject(new Error('Review the current target before launching.'));
     }
     if (!entry.assignmentId) return Promise.reject(new Error('The reviewed assignment identity is missing.'));
@@ -349,7 +385,7 @@ export function createLaunchStore(): LaunchStore {
     const assignmentId = entry.assignmentId;
     const references = cloneReferences(saved.references);
     const expectedDigest = preview.contractDigest;
-    const requestContext: LaunchContext = { ...context, target };
+    const requestContext: LaunchContext = { ...context, target, model };
     entry.error = undefined;
     return registerPending(key, entry, 'launch', requestId, assignmentId,
       () => submitLaunchAssignment(requestContext, { requestId, assignmentId, references, expectedDigest }, token),
@@ -419,6 +455,7 @@ export function createLaunchStore(): LaunchStore {
     seedLaunchDraft,
     editLaunchDraft,
     changeLaunchTarget,
+    changeLaunchModel,
     saveLaunchDraft,
     reviewLaunchDraft,
     launchReviewedDraft,
@@ -432,6 +469,7 @@ export const getLaunchDraft = launchStore.getLaunchDraft;
 export const seedLaunchDraft = launchStore.seedLaunchDraft;
 export const editLaunchDraft = launchStore.editLaunchDraft;
 export const changeLaunchTarget = launchStore.changeLaunchTarget;
+export const changeLaunchModel = launchStore.changeLaunchModel;
 export const saveLaunchDraft = launchStore.saveLaunchDraft;
 export const reviewLaunchDraft = launchStore.reviewLaunchDraft;
 export const launchReviewedDraft = launchStore.launchReviewedDraft;

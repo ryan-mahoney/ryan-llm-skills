@@ -2561,6 +2561,8 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
     "skill",
     "spec_package",
     "publication_authority",
+    "provider",
+    "model",
   ]);
   const DIRECT_LAUNCH_KEYS = new Set([...DIRECT_PREVIEW_KEYS, "expectedDigest"]);
 
@@ -2598,6 +2600,30 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
     if (publicationAuthority !== "none" && publicationAuthority !== "draft-pr") {
       throw typedError("invalid-handoff", "publication_authority must be none or draft-pr");
     }
+    const provider = input.provider ?? null;
+    const model = input.model ?? null;
+    if (provider !== null && model !== null) {
+      if (typeof provider !== "string" || provider === "") {
+        throw typedError("invalid-handoff", "provider must be a non-empty string when provided");
+      }
+      if (typeof model !== "string" || model === "") {
+        throw typedError("invalid-handoff", "model must be a non-empty string when provided");
+      }
+      if (provider.length > 100) {
+        throw typedError("invalid-handoff", "provider length exceeds 100 characters");
+      }
+      if (model.length > 300) {
+        throw typedError("invalid-handoff", "model length exceeds 300 characters");
+      }
+      if (!isSafeArgValue(provider)) {
+        throw typedError("invalid-handoff", "provider contains unsafe characters");
+      }
+      if (!isSafeArgValue(model)) {
+        throw typedError("invalid-handoff", "model contains unsafe characters");
+      }
+    } else if (provider !== null || model !== null) {
+      throw typedError("invalid-handoff", "provider and model must both be specified or both omitted");
+    }
     let expectedDigest = null;
     if (launch) {
       if (typeof input.expectedDigest !== "string" || !/^[0-9a-f]{64}$/.test(input.expectedDigest)) {
@@ -2615,6 +2641,8 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
       specPackage,
       publicationAuthority,
       references: validateReferences(input.references),
+      provider,
+      model,
       expectedDigest,
     };
   }
@@ -2655,8 +2683,8 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
         skill: validated.skill,
         target: validated.repositoryId,
         specPackage: validated.specPackage,
-        provider: null,
-        model: null,
+        provider: validated.provider,
+        model: validated.model,
         thinking: null,
         harness: "pi",
         project_trust: null,

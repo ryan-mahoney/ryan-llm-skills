@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, rmSync, symlinkSync, existsSync, readdirSync, lstatSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, rmSync, symlinkSync, existsSync, readdirSync, lstatSync, realpathSync, readFileSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { request as httpRequest } from 'node:http';
 import { readDashboardState, createDashboardServer, isRemoteRequest, normalizePublicHost } from './dashboard.mjs';
 import { COMPLETION_FILE } from './manual-completion.mjs';
 import { setupStorage, createWorkspace, addMaterial } from '../workspaces/store.mjs';
@@ -64,7 +64,7 @@ test('dashboard serves only its page and read-only same-origin state endpoint', 
   writeFileSync(join(f.observers, 'a.json'), JSON.stringify(envelope('a')));
   const state = await request(server, '/api/state');
   assert.equal(state.status, 200);
-  assert.equal(JSON.parse(state.body).observers[0].observer_id, 'a');
+  assert.equal(typeof JSON.parse(state.body).action_token, 'string');
   assert.equal((await request(server, '/api/state', { method: 'POST' })).status, 405);
   assert.equal((await request(server, '/api/state', { host: 'remote.example:4319' })).status, 403);
   assert.equal((await request(server, '/api/state', { origin: 'https://other.example' })).status, 403);
@@ -397,7 +397,15 @@ test('workspace HTTP serves identical bodies to accepted public and forwarded ho
   assert.equal(readFileSync(join(workspace, 'kit.yaml'), 'utf8'), kitBefore);
   assert.equal(readFileSync(join(workspace, brief.path), 'utf8'), briefBefore);
   const plain = createDashboardServer({ agentDir: f.dir, storageRoot });
-  assert.equal((await request(plain, '/api/workspaces', { host: 'dashboard.example' })).status, 403);
+  const plainBefore = readFileSync(join(workspace, 'kit.yaml'), 'utf8');
+  for (const [index, path] of paths.entries()) {
+    const response = await request(plain, path);
+    assert.equal(response.status, 200, path);
+    assert.doesNotMatch(response.body, /action_token/, path);
+    assert.equal(response.body, loopback[index], path);
+  }
+  const plainKitAfter = readFileSync(join(workspace, 'kit.yaml'), 'utf8');
+  assert.equal(plainKitAfter, plainBefore);
 });
 
 // Run independently: node --test --test-name-pattern='workspace HTTP serves reads over a real listening' scripts/spec-observe/dashboard.test.mjs
@@ -673,4 +681,315 @@ test('workspace designs route lists valid indexes with derived status, reports i
     assert.notEqual(refused.status, 200, refusedPath);
     assert.doesNotMatch(refused.body, /OUTSIDE-SECRET|THREAD-SECRET|ENV-SECRET/, refusedPath);
   }
+});
+
+
+async function httpJson(port, path, { method = 'GET', host, origin, token, body } = {}) {
+  return new Promise((resolve, reject) => {
+    const payload = body === undefined ? undefined : (typeof body === 'string' ? body : JSON.stringify(body));
+    const headers = {};
+    if (host !== undefined) headers.host = host;
+    if (origin !== undefined) headers.origin = origin;
+    if (token !== undefined) headers['x-sentinel-token'] = token;
+    if (payload !== undefined) {
+      headers['content-type'] = 'application/json';
+      headers['content-length'] = String(Buffer.byteLength(payload));
+    }
+    const req = httpRequest({ hostname: '127.0.0.1', port, path, method, headers }, res => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: data }));
+    });
+    req.on('error', reject);
+    if (payload !== undefined) req.write(payload);
+    req.end();
+  });
+}
+
+async function startModelServer(t, server) {
+  t.after(() => {
+    server.closeAllConnections();
+    return new Promise(resolve => server.close(resolve));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  return server.address().port;
+}
+
+test('model routes: real server persists loopback and public-host writes', async t => {
+  const f = fixture(t);
+  const fakeCatalog = {
+    host: 'testbox',
+    read: async () => ({
+      state: 'ready',
+      host: 'testbox',
+      read_at: '2026-01-01T00:00:00.000Z',
+      providers: 1,
+      models: [{ provider: 'deepinfra', model: 'ByteDance/Seed-2.0-code', context: '256K', max_out: '128K', thinking: true, images: false }]
+    })
+  };
+  const server = createDashboardServer({ agentDir: f.dir, publicHost: 'dashboard.example', modelCatalog: fakeCatalog });
+  const port = await startModelServer(t, server);
+  const loopbackHost = '127.0.0.1:' + port;
+
+  const state = await httpJson(port, '/api/state');
+  const token = JSON.parse(state.body).action_token;
+
+  const loopbackPost = await httpJson(port, '/api/models/preferred', { method: 'POST', origin: 'http://' + loopbackHost, token, body: { provider: 'deepinfra', model: 'ByteDance/Seed-2.0-code', preferred: true } });
+  assert.equal(loopbackPost.status, 200);
+  const loopbackData = JSON.parse(loopbackPost.body);
+  assert.deepEqual(loopbackData.preferred, [{ provider: 'deepinfra', model: 'ByteDance/Seed-2.0-code' }]);
+  assert.ok(typeof loopbackData.updated_at === 'string');
+
+  const filePath = join(f.dir, 'spec-sentinel', 'preferred-models.json');
+  const fileData = JSON.parse(readFileSync(filePath, 'utf8'));
+  assert.deepEqual(fileData.preferred, [{ provider: 'deepinfra', model: 'ByteDance/Seed-2.0-code' }]);
+
+  const publicState = await httpJson(port, '/api/state', { host: 'dashboard.example' });
+  const publicToken = JSON.parse(publicState.body).thread_action_token;
+
+  const publicPost = await httpJson(port, '/api/models/preferred', { method: 'POST', host: 'dashboard.example', origin: 'https://dashboard.example', token: publicToken, body: { provider: 'other', model: 'other-model', preferred: true } });
+  assert.equal(publicPost.status, 200);
+
+  const listed = await httpJson(port, '/api/models/preferred');
+  assert.equal(listed.status, 200);
+  const listedData = JSON.parse(listed.body);
+  assert.deepEqual(listedData.preferred, [{ provider: 'deepinfra', model: 'ByteDance/Seed-2.0-code' }, { provider: 'other', model: 'other-model' }]);
+});
+
+test('model routes: write failure returns preferences-unavailable and the queue recovers', async t => {
+  const f = fixture(t);
+  const sentinel = join(f.dir, 'spec-sentinel');
+  const server = createDashboardServer({ agentDir: f.dir });
+  const port = await startModelServer(t, server);
+
+  const state = await httpJson(port, '/api/state');
+  const token = JSON.parse(state.body).action_token;
+  const loopbackHost = '127.0.0.1:' + port;
+
+  // A read-only sentinel directory lets the read succeed (missing file) while the
+  // atomic publish itself fails, so the write path is genuinely exercised.
+  chmodSync(sentinel, 0o500);
+  let failed;
+  try {
+    failed = await httpJson(port, '/api/models/preferred', { method: 'POST', origin: 'http://' + loopbackHost, token, body: { provider: 'a', model: 'm', preferred: true } });
+  } finally {
+    chmodSync(sentinel, 0o700);
+  }
+  assert.equal(failed.status, 503);
+  assert.deepEqual(JSON.parse(failed.body), { error: 'Preferences data unavailable. Retry shortly.', reason: 'preferences-unavailable' });
+
+  const recovered = await httpJson(port, '/api/models/preferred', { method: 'POST', origin: 'http://' + loopbackHost, token, body: { provider: 'a', model: 'm', preferred: true } });
+  assert.equal(recovered.status, 200);
+  assert.deepEqual(JSON.parse(recovered.body).preferred, [{ provider: 'a', model: 'm' }]);
+  const filePath = join(f.dir, 'spec-sentinel', 'preferred-models.json');
+  assert.deepEqual(JSON.parse(readFileSync(filePath, 'utf8')).preferred, [{ provider: 'a', model: 'm' }]);
+});
+
+test('model routes: oversize and method refusals leave the file unchanged', async t => {
+  const f = fixture(t);
+  const server = createDashboardServer({ agentDir: f.dir });
+  const port = await startModelServer(t, server);
+
+  const state = await httpJson(port, '/api/state');
+  const token = JSON.parse(state.body).action_token;
+  const loopbackHost = '127.0.0.1:' + port;
+
+  const filePath = join(f.dir, 'spec-sentinel', 'preferred-models.json');
+  const dirPath = join(f.dir, 'spec-sentinel');
+  mkdirSync(dirPath, { mode: 0o700, recursive: true });
+  writeFileSync(filePath, JSON.stringify({ version: 1, preferred: [{ provider: 'a', model: 'm' }], updated_at: new Date(1000).toISOString() }));
+  const seededBytes = readFileSync(filePath, 'utf8');
+
+  const oversizedPost = await httpJson(port, '/api/models/preferred', { method: 'POST', origin: 'http://' + loopbackHost, token, body: { provider: 'a', model: 'x'.repeat(9000), preferred: true } });
+  assert.equal(oversizedPost.status, 413);
+  assert.equal(readFileSync(filePath, 'utf8'), seededBytes);
+
+  const longModelPost = await httpJson(port, '/api/models/preferred', { method: 'POST', origin: 'http://' + loopbackHost, token, body: { provider: 'a', model: 'x'.repeat(301), preferred: true } });
+  assert.equal(longModelPost.status, 400);
+  assert.equal(readFileSync(filePath, 'utf8'), seededBytes);
+
+  const put = await httpJson(port, '/api/models/preferred', { method: 'PUT', host: loopbackHost });
+  assert.equal(put.status, 405);
+  assert.equal(put.headers['allow'], 'GET, HEAD, POST');
+  assert.equal(readFileSync(filePath, 'utf8'), seededBytes);
+});
+
+test('model routes: 201st unique addition refuses without changing bytes', async t => {
+  const f = fixture(t);
+  const server = createDashboardServer({ agentDir: f.dir });
+  const port = await startModelServer(t, server);
+
+  const state = await httpJson(port, '/api/state');
+  const token = JSON.parse(state.body).action_token;
+  const loopbackHost = '127.0.0.1:' + port;
+
+  const filePath = join(f.dir, 'spec-sentinel', 'preferred-models.json');
+  const dirPath = join(f.dir, 'spec-sentinel');
+  mkdirSync(dirPath, { mode: 0o700, recursive: true });
+
+  const preferred = Array.from({ length: 200 }, (_, i) => ({ provider: `p${i}`, model: `m${i}` }));
+  const seededBytes = JSON.stringify({ version: 1, preferred, updated_at: new Date(1000).toISOString() });
+  writeFileSync(filePath, seededBytes);
+
+  const add201Post = await httpJson(port, '/api/models/preferred', { method: 'POST', origin: 'http://' + loopbackHost, token, body: { provider: 'p200', model: 'm200', preferred: true } });
+  assert.equal(add201Post.status, 400);
+  assert.equal(readFileSync(filePath, 'utf8'), seededBytes);
+
+  const removePost = await httpJson(port, '/api/models/preferred', { method: 'POST', origin: 'http://' + loopbackHost, token, body: { provider: 'p0', model: 'm0', preferred: false } });
+  assert.equal(removePost.status, 200);
+  const finalData = JSON.parse(removePost.body);
+  assert.equal(finalData.preferred.length, 199);
+});
+
+test('model routes: catalog GET/HEAD returns state-less result', async t => {
+  const f = fixture(t);
+  const catalogReadOptions = [];
+  const fakeCatalog = {
+    host: 'testbox',
+    read: async (options) => {
+      catalogReadOptions.push(options);
+      return {
+        state: 'ready',
+        host: 'testbox',
+        read_at: '2026-01-01T00:00:00.000Z',
+        providers: 1,
+        models: [{ provider: 'deepinfra', model: 'ByteDance/Seed-2.0-code', context: '256K', max_out: '128K', thinking: true, images: false }]
+      };
+    }
+  };
+  const server = createDashboardServer({ agentDir: f.dir, modelCatalog: fakeCatalog });
+
+  const r = await request(server, '/api/models/catalog');
+  assert.equal(r.status, 200);
+  const body = JSON.parse(r.body);
+  assert.equal(body.state, undefined);
+  assert.equal(body.host, 'testbox');
+  assert.equal(body.models.length, 1);
+
+  await request(server, '/api/models/catalog?refresh=1');
+  assert.deepEqual(catalogReadOptions[1], { refresh: true });
+
+  const head = await request(server, '/api/models/catalog', { method: 'HEAD' });
+  assert.equal(head.status, 200);
+  assert.equal(head.body, '');
+});
+
+test('model routes: catalog HEAD and preference HEAD return empty body', async t => {
+  const f = fixture(t);
+  const server = createDashboardServer({ agentDir: f.dir, modelCatalog: { host: 'testbox', read: async () => ({ state: 'ready', host: 'testbox', read_at: '2026-01-01T00:00:00.000Z', providers: 0, models: [] }) } });
+
+  const catalogHead = await request(server, '/api/models/catalog', { method: 'HEAD' });
+  assert.equal(catalogHead.status, 200);
+  assert.equal(catalogHead.body, '');
+
+  const prefHead = await request(server, '/api/models/preferred', { method: 'HEAD' });
+  assert.equal(prefHead.status, 200);
+  assert.equal(prefHead.body, '');
+});
+
+test('model routes: preferred GET returns empty by default', async t => {
+  const f = fixture(t);
+  const server = createDashboardServer({ agentDir: f.dir });
+
+  const r = await request(server, '/api/models/preferred');
+  assert.equal(r.status, 200);
+  const body = JSON.parse(r.body);
+  assert.deepEqual(body.preferred, []);
+  assert.equal(body.updated_at, null);
+});
+
+test('model routes: observer requests with x-forwarded-for still return 200', async t => {
+  const f = fixture(t);
+  const server = createDashboardServer({ agentDir: f.dir });
+
+  const r = await request(server, '/api/models/preferred', { headers: { 'x-forwarded-for': '' } });
+  assert.equal(r.status, 200);
+});
+
+test('model routes: catalog failure yields 503', async t => {
+  const f = fixture(t);
+  const fakeCatalog = {
+    host: 'testbox',
+    read: async () => ({
+      state: 'failed',
+      host: 'testbox',
+      failed_at: '2026-01-01T00:00:00.000Z',
+      reason: 'catalog-unavailable'
+    })
+  };
+  const server = createDashboardServer({ agentDir: f.dir, modelCatalog: fakeCatalog });
+
+  const r = await request(server, '/api/models/catalog');
+  assert.equal(r.status, 503);
+  const body = JSON.parse(r.body);
+  assert.equal(body.reason, 'catalog-unavailable');
+  assert.equal(body.host, 'testbox');
+  assert.ok(body.failed_at);
+});
+
+test('model routes: authorization refusals do not read body', async t => {
+  const f = fixture(t);
+  const server = createDashboardServer({ agentDir: f.dir });
+
+  const state = await request(server, '/api/state');
+  const token = JSON.parse(state.body).action_token;
+
+  const badRequests = [
+    { headers: { 'x-forwarded-for': '', origin: 'http://127.0.0.1:4319', 'x-sentinel-token': token, 'content-type': 'application/json' } },
+    { headers: { origin: 'https://other.example', 'x-sentinel-token': token, 'content-type': 'application/json' } },
+    { headers: { origin: 'http://127.0.0.1:4319', 'content-type': 'application/json' } },
+    { headers: { origin: 'http://127.0.0.1:4319', 'x-sentinel-token': 'wrong', 'content-type': 'application/json' } },
+    { headers: { origin: 'http://127.0.0.1:4319', 'x-sentinel-token': token, 'content-type': 'text/plain' } },
+  ];
+
+  for (const req of badRequests) {
+    const r = await request(server, '/api/models/preferred', { method: 'POST', body: '{}', ...req });
+    assert.equal(r.status, 403);
+    assert.equal(r.bodyRead, false);
+  }
+
+  const filePath = join(f.dir, 'spec-sentinel', 'preferred-models.json');
+  assert.equal(existsSync(filePath), false);
+});
+
+test('model routes: body validation rejects without changing file', async t => {
+  const f = fixture(t);
+  const server = createDashboardServer({ agentDir: f.dir });
+  const port = await startModelServer(t, server);
+  const loopbackHost = '127.0.0.1:' + port;
+
+  const state = await httpJson(port, '/api/state');
+  const token = JSON.parse(state.body).action_token;
+
+  const filePath = join(f.dir, 'spec-sentinel', 'preferred-models.json');
+  mkdirSync(join(f.dir, 'spec-sentinel'), { recursive: true });
+  writeFileSync(filePath, JSON.stringify({ version: 1, preferred: [{ provider: 'a', model: 'm' }], updated_at: new Date(1000).toISOString() }));
+  const seededBytes = readFileSync(filePath, 'utf8');
+
+  const badBodies = [
+    ['provider-only', { provider: 'a' }],
+    ['extra-key', { provider: 'a', model: 'm', preferred: true, extra: 1 }],
+    ['non-bool', { provider: 'a', model: 'm', preferred: 'yes' }],
+    ['empty-provider', { provider: '', model: 'm', preferred: true }],
+    ['leading-dash', { provider: '-bad', model: 'm', preferred: true }],
+  ];
+
+  for (const [name, body] of badBodies) {
+    const r = await httpJson(port, '/api/models/preferred', { method: 'POST', origin: 'http://' + loopbackHost, token, body });
+    assert.equal(r.status, 400, name);
+    assert.equal(readFileSync(filePath, 'utf8'), seededBytes);
+  }
+});
+
+test('model routes: 405 with Allow header', async t => {
+  const f = fixture(t);
+  const server = createDashboardServer({ agentDir: f.dir });
+
+  const r = await request(server, '/api/models/preferred', { method: 'PUT' });
+  assert.equal(r.status, 405);
+  assert.equal(r.headers['Allow'], 'GET, HEAD, POST');
+
+  const r2 = await request(server, '/api/models/catalog', { method: 'POST' });
+  assert.equal(r2.status, 405);
+  assert.equal(r2.headers['Allow'], 'GET, HEAD');
 });
