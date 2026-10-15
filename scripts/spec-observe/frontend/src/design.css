@@ -575,3 +575,37 @@ dialog.request-work .cmd-foot .ds-btn{width:100%}
 dialog.request-work .cmd-foot .ds-btn--primary{min-height:52px;font-size:15px}
 dialog.request-work .cmd-foot .foot-note{margin:0;max-width:none}
 }
+/* Request capture and recovery states (step 10): field, hints, the labelled
+   recording readout with level bars, and state notices, scoped under the same
+   dialog shell. --ds-* tokens only; 44px/52px targets and the dashed disabled
+   variants stay owned by the block above. */
+dialog.request-work .req-top{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:8px}
+dialog.request-work .req-top label{font-weight:600;font-size:13px;color:var(--ds-ink)}
+dialog.request-work .req-top .muted{font-size:12px}
+dialog.request-work .cmd-request textarea{width:100%;min-height:72px;max-height:220px;padding:10px 12px;border:1px solid var(--ds-input-border);border-radius:4px;font-size:15px;line-height:1.6;color:var(--ds-ink);background:var(--ds-panel)}
+dialog.request-work .cmd-request textarea:focus-visible{outline:2px solid var(--ds-accent);outline-offset:1px}
+dialog.request-work .cmd-request textarea:disabled{opacity:.7}
+dialog.request-work .req-tools{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:8px}
+dialog.request-work .hint{font-size:12px;color:var(--ds-muted)}
+dialog.request-work .req-error{margin-top:8px;font-size:12px;color:var(--ds-status-red)}
+dialog.request-work .req-notice{margin:16px 0}
+dialog.request-work .req-notice .hint{margin-bottom:8px}
+dialog.request-work .req-notes{margin-top:20px}
+dialog.request-work .req-notes h3{font-size:13px;font-weight:600;color:var(--ds-ink);margin-bottom:8px}
+dialog.request-work .req-notes ul{margin:0;padding:0;list-style:none;display:grid;gap:6px}
+dialog.request-work .req-notes li{font-size:13px;color:var(--ds-ink-2);display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+dialog.request-work .req-notes li strong{color:var(--ds-ink);font-weight:600;min-width:110px}
+dialog.request-work .rec-live{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:16px;border:1px solid var(--ds-line-2);border-radius:3px;background:var(--ds-panel-2);margin-top:16px}
+dialog.request-work .rec-dot{width:10px;height:10px;border-radius:50%;background:var(--ds-status-red);flex-shrink:0;box-shadow:0 0 0 4px color-mix(in srgb,var(--ds-status-red) 25%,transparent)}
+dialog.request-work .rec-label{font-size:15px;font-weight:600;color:var(--ds-ink)}
+dialog.request-work .rec-levels{display:flex;align-items:flex-end;gap:3px;height:22px;flex:1;min-width:80px}
+dialog.request-work .rec-levels span{width:4px;height:100%;background:var(--ds-line-2);border-radius:2px;transform:scaleY(.25);transform-origin:bottom}
+dialog.request-work .rec-levels span.on{background:var(--ds-status-red);transform:scaleY(1)}
+dialog.request-work .rec-clock{margin-left:auto;font-family:var(--ds-mono);font-size:13px;color:var(--ds-ink-2);white-space:nowrap}
+dialog.request-work .rec-bar{height:3px;background:var(--ds-line-2);margin-top:10px;border-radius:1px}
+dialog.request-work .rec-bar i{display:block;height:3px;background:var(--ds-status-red);border-radius:1px}
+@media(max-width:640px){
+dialog.request-work .rec-clock{margin-left:0}
+dialog.request-work .cmd-request textarea{min-height:64px}
+dialog.request-work .req-notes li strong{min-width:0}
+}

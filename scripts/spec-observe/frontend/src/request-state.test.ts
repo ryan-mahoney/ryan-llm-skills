@@ -18,6 +18,12 @@
 // - A retained clip transcribes once; corrected text is authoritative (F3).
 // - An accepted recording is a new request-content generation (F4).
 // - Deferred acquisition/stop completions are generation-bound (F5).
+// - The recording-limit path transcribes only (transcribeClip) and waits for
+//   the explicit Interpret request under the clip's existing request identity.
+// - Named transcription failure variants retain clip bytes and typed text; the
+//   unchanged retry re-sends identical bytes under the same request id.
+// - cancelRecording cancels the capture session, discards the audio and never
+//   installs late stop bytes; late transcribe outcomes are discarded silently.
 // No case waits on real timers: a microtask flush drives the deferred pipeline.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -698,4 +704,252 @@ test('Deferred capture acquisition and stop completions are bound to their recor
   stopTwo.resolve(new Float32Array([6]));
   await finishingTwo;
   assert.equal(store.getRequest(ws)!.clip, null);
+});
+
+test('Recording limit auto-transcribes only: transcribeClip installs spoken text and waits for the explicit Interpret request.', async () => {
+  const clip = new Float32Array([0.4, -0.1, 0.2]);
+  const levels: number[] = [];
+  let limitFired = 0;
+  let transcribes = 0;
+  let interprets = 0;
+  const sent: { clip: Float32Array | undefined; requestId: string }[] = [];
+  const store = createRequestStore({
+    capture: (hooks) => {
+      hooks?.onLevel?.(0.5);
+      hooks?.onLevel?.(0.75);
+      hooks?.onLimit?.();
+      return Promise.resolve({ stop: async () => clip, cancel: () => undefined });
+    },
+    transcribe: (seenClip, requestId) => {
+      transcribes += 1;
+      sent.push({ clip: seenClip, requestId });
+      return Promise.resolve(wireSpeech(requestId, 'spoken limit text'));
+    },
+    interpret: () => {
+      interprets += 1;
+      return Promise.resolve(wireProposal(WIRE_ID));
+    },
+  });
+  const ws = 'demo';
+
+  // The capture level/limit hooks reach the capture boundary.
+  await store.beginRecording(ws, {
+    onLevel: level => { levels.push(level); },
+    onLimit: () => { limitFired += 1; },
+  });
+  assert.deepEqual(levels, [0.5, 0.75]);
+  assert.equal(limitFired, 1);
+  await store.finishRecording(ws);
+  const clipId = store.getRequest(ws)!.requestId!;
+  assert.strictEqual(store.getRequest(ws)!.clip, clip);
+
+  // The limit path transcribes only: one boundary call carrying the clip's
+  // identity and exact bytes; the double tap shares the same promise.
+  const first = store.transcribeClip(ws, 'token');
+  assert.strictEqual(store.transcribeClip(ws, 'token'), first);
+  const state = await first;
+  assert.equal(transcribes, 1);
+  assert.strictEqual(sent[0].clip, clip);
+  assert.equal(sent[0].requestId, clipId);
+  assert.equal(interprets, 0); // waits for the explicit Interpret request
+  assert.equal(state.transcript, 'spoken limit text');
+  assert.equal(state.phase, 'ready');
+  assert.equal(state.clipNeedsTranscription, false);
+  assert.strictEqual(state.clip, clip); // retained bytes serve recovery only
+  assert.equal(state.requestId, clipId); // the clip identity is unchanged
+
+  // An unchanged retry resolves the current view without re-sending.
+  const retry = await store.transcribeClip(ws, 'token');
+  assert.equal(transcribes, 1);
+  assert.equal(interprets, 0);
+  assert.equal(retry.requestId, clipId);
+  assert.equal(retry.transcript, 'spoken limit text');
+});
+
+test('Transcribe-only failure variants retain the clip and typed text; the unchanged retry re-sends identical bytes under the same request id.', async () => {
+  const clip = new Float32Array([0.9, 0.1]);
+  let transcribes = 0;
+  let interprets = 0;
+  const sent: { clip: Float32Array | undefined; requestId: string }[] = [];
+  const outcomes: (Error | null)[] = [
+    new HttpError(502, 'Speech transcription failed.', 'transcription-failed'),
+    new HttpError(422, 'No speech found in the recording.', 'no-speech'),
+    null,
+  ];
+  const store = createRequestStore({
+    capture: async () => ({ stop: async () => clip, cancel: () => undefined }),
+    transcribe: (seenClip, requestId) => {
+      transcribes += 1;
+      sent.push({ clip: seenClip, requestId });
+      const failure = outcomes.shift() ?? null;
+      if (failure) throw failure;
+      return Promise.resolve(wireSpeech(requestId, 'recovered speech'));
+    },
+    interpret: () => {
+      interprets += 1;
+      return Promise.resolve(wireProposal(WIRE_ID));
+    },
+  });
+  const ws = 'demo';
+  store.editTranscript(ws, 'Keep this typed draft.');
+  await store.beginRecording(ws);
+  await store.finishRecording(ws);
+  const clipId = store.getRequest(ws)!.requestId!;
+
+  // Named failure variants set from the boundary error; bytes and typed text
+  // are retained so the retry can re-send the same clip.
+  await assert.rejects(store.transcribeClip(ws, 'token'));
+  let state = store.getRequest(ws)!;
+  assert.equal(state.failure, 'transcription-failed');
+  assert.equal(state.phase, 'failure');
+  assert.strictEqual(state.clip, clip);
+  assert.equal(state.clipNeedsTranscription, true);
+  assert.equal(state.transcript, 'Keep this typed draft.');
+  assert.equal(state.requestId, clipId);
+
+  // The unchanged retry re-sends the exact same bytes under the same request
+  // id; the no-speech variant maps the same way and still retains the clip.
+  await assert.rejects(store.transcribeClip(ws, 'token'));
+  state = store.getRequest(ws)!;
+  assert.equal(state.failure, 'no-speech');
+  assert.strictEqual(state.clip, clip);
+  assert.equal(transcribes, 2);
+  assert.strictEqual(sent[1].clip, clip);
+  assert.equal(sent[1].requestId, clipId);
+
+  // The eventual success installs the spoken text and still waits for the
+  // explicit Interpret request.
+  const recovered = await store.transcribeClip(ws, 'token');
+  assert.equal(transcribes, 3);
+  assert.strictEqual(sent[2].clip, clip);
+  assert.equal(sent[2].requestId, clipId);
+  assert.equal(interprets, 0);
+  assert.equal(recovered.failure, null);
+  assert.equal(recovered.transcript, 'recovered speech');
+  assert.equal(recovered.phase, 'ready');
+  assert.equal(recovered.clipNeedsTranscription, false);
+});
+
+test('Cancel recording cancels the capture session, discards the audio and keeps typed text; a late stop never installs bytes.', async () => {
+  const ws = 'demo';
+  const clip = new Float32Array([2, 3]);
+  let cancels = 0;
+  const acquisitions: Deferred<CaptureHandle>[] = [];
+  const handleOf = (stop: () => Promise<Float32Array>): CaptureHandle => ({
+    stop,
+    cancel: () => {
+      cancels += 1;
+    },
+  });
+  const store = createRequestStore({
+    capture: () => {
+      const pending = deferred<CaptureHandle>();
+      acquisitions.push(pending);
+      return pending.promise;
+    },
+    transcribe: async () => {
+      throw new Error('transcribe must not be touched');
+    },
+    interpret: async () => {
+      throw new Error('interpret must not be touched');
+    },
+  });
+  store.editTranscript(ws, 'Keep this typed draft.');
+
+  // A retained clip exists from an earlier recording.
+  const recording = store.beginRecording(ws);
+  await flush();
+  acquisitions[0].resolve(handleOf(async () => clip));
+  await recording;
+  await store.finishRecording(ws);
+  assert.strictEqual(store.getRequest(ws)!.clip, clip);
+  assert.equal(store.getRequest(ws)!.clipNeedsTranscription, true);
+  const clipId = store.getRequest(ws)!.requestId!;
+
+  // Cancel while recording: the in-flight handle's cancel() is observed and
+  // the retained audio is discarded without touching typed text or identity.
+  const active = store.beginRecording(ws);
+  await flush();
+  acquisitions[1].resolve(handleOf(async () => new Float32Array([9])));
+  await active;
+  const cancelled = store.cancelRecording(ws);
+  assert.equal(cancels, 1);
+  assert.equal(cancelled.recording, false);
+  assert.equal(cancelled.clip, null);
+  assert.equal(cancelled.clipNeedsTranscription, false);
+  assert.equal(cancelled.transcript, 'Keep this typed draft.');
+  assert.equal(cancelled.phase, 'ready');
+  assert.equal(cancelled.requestId, clipId); // no contentChanged minting
+
+  // A stop() resolving after cancel never installs clip bytes.
+  const stop = deferred<Float32Array>();
+  const recordingTwo = store.beginRecording(ws);
+  await flush();
+  acquisitions[2].resolve(handleOf(() => stop.promise));
+  await recordingTwo;
+  const finishing = store.finishRecording(ws);
+  await flush();
+  store.cancelRecording(ws);
+  stop.resolve(new Float32Array([7, 7]));
+  await finishing;
+  const state = store.getRequest(ws)!;
+  assert.equal(state.clip, null);
+  assert.equal(state.clipNeedsTranscription, false);
+  assert.equal(state.phase, 'ready');
+  assert.equal(state.transcript, 'Keep this typed draft.');
+  assert.equal(state.requestId, clipId);
+
+  // Cancel during an in-flight acquisition cancels the late handle and never
+  // installs a recording.
+  const pending = store.beginRecording(ws);
+  await flush();
+  store.cancelRecording(ws);
+  acquisitions[3].resolve(handleOf(async () => new Float32Array([5])));
+  await pending;
+  assert.equal(cancels, 2);
+  assert.equal(store.getRequest(ws)!.recording, false);
+  assert.equal(store.getRequest(ws)!.phase, 'ready');
+});
+
+test('A late transcribeClip outcome after a content change or clip discard is discarded silently.', async () => {
+  const clip = new Float32Array([0.6]);
+  const transcriptions: Deferred<unknown>[] = [];
+  const store = createRequestStore({
+    capture: async () => ({ stop: async () => clip, cancel: () => undefined }),
+    transcribe: () => {
+      const pending = deferred<unknown>();
+      transcriptions.push(pending);
+      return pending.promise;
+    },
+    interpret: async (body) => wireProposal(body.requestId),
+  });
+  const ws = 'demo';
+
+  // A content change mid-flight discards the late spoken text.
+  await store.beginRecording(ws);
+  await store.finishRecording(ws);
+  const first = store.transcribeClip(ws, 'token');
+  await flush();
+  store.editTranscript(ws, 'Operator typed instead.');
+  transcriptions[0].resolve(wireSpeech('unused', 'late spoken text'));
+  await first;
+  let state = store.getRequest(ws)!;
+  assert.equal(state.transcript, 'Operator typed instead.'); // late speech discarded
+  assert.equal(state.failure, null);
+  // The clip was transcribed once, so corrected text stays authoritative.
+  assert.equal(state.clipNeedsTranscription, false);
+
+  // A clip discard mid-flight does the same and keeps the cleared state.
+  await store.beginRecording(ws);
+  await store.finishRecording(ws);
+  const second = store.transcribeClip(ws, 'token');
+  await flush();
+  store.discardRequest(ws);
+  transcriptions[1].resolve(wireSpeech('unused', 'late spoken text'));
+  await second;
+  state = store.getRequest(ws)!;
+  assert.equal(state.transcript, '');
+  assert.equal(state.clip, null);
+  assert.equal(state.phase, 'ready');
+  assert.equal(state.failure, null);
 });

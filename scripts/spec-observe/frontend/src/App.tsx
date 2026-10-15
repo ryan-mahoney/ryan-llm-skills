@@ -19,7 +19,7 @@ import { getConversationReturnId } from './conversations-state';
 import { armLaunchPickerIntent, cancelLaunchPickerIntent, createLaunchPickerIntent, shouldApplyPickerReset, shouldResetAcknowledgedDraft } from './launch-picker-intent';
 import { agentCoverage, effectiveAgentFilter, retainSelectedAgent, visibleAgents } from './agent-state';
 import { pageContext, changeScope, getRequest } from './request-state';
-import RequestWorkPanel from './RequestWork';
+import RequestWorkPanel, { type SpeechStatus } from './RequestWork';
 
 type Filter = 'active' | 'attention' | 'completed' | 'ready';
 type Catalog = WorkspaceCatalog;
@@ -679,6 +679,23 @@ export default function App() {
     if (workspace) changeScope(workspace, null);
   };
 
+  // Speech readiness for the request panel (step 10): one cached GET to the
+  // request route's speech probe when the panel first opens; a failed or
+  // other-state reply reads as unavailable (the panel shows the screen-18
+  // reason and keeps typing available).
+  const [speechStatus, setSpeechStatus] = createSignal<SpeechStatus>({ state: 'checking' });
+  let speechChecked = false;
+  createEffect(() => {
+    if (!requestWorkOpen() || speechChecked) return;
+    speechChecked = true;
+    getJson<{ state?: unknown; host?: unknown }>('/api/request/speech')
+      .then(reply => {
+        const host = typeof reply.host === 'string' && reply.host !== '' ? reply.host : undefined;
+        setSpeechStatus(reply.state === 'ready' ? { state: 'ready', host } : { state: 'unavailable', host });
+      })
+      .catch(() => setSpeechStatus({ state: 'unavailable' }));
+  });
+
   onMount(() => {
     const onShortcut = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'j') {
@@ -802,6 +819,10 @@ export default function App() {
       onClose={closeRequestWork}
       scope={requestScope()}
       onRemoveScope={removeRequestScope}
+      workspace={requestContext().scope?.workspace ?? ''}
+      token={completionToken()}
+      live={live() && !error()}
+      speech={speechStatus()}
     />
   </>;
 }

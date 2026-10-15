@@ -13,8 +13,11 @@ entry runs the step-9 request-work shell proof: the persistent
 #request-work-trigger in the page head on every real destination (including the
 hidden launch route, workspace-scoped routes and the workspace-picker state),
 the compact pinned 56px phone title/trigger header entry at 390 and 320 with the
-sheet below it, the native #request-work-dialog focus lifecycle (open, Escape,
-Ctrl+J, Meta+J, the labelled close button), the existing New thread modal
+sheet below it, the native #request-work-dialog focus lifecycle (open/ready
+focuses Start recording, or the request field when recording is disabled;
+transcribing focuses the panel heading; Escape/close returns focus to the
+trigger; plus Ctrl+J, Meta+J and the labelled close button), the existing New
+thread modal
 blocking the request shortcut, and the responsive sheet geometry at 320, 390 and
 1280 widths. It writes request-dialog-<width>.png,
 request-entry-closed-<width>.png, request-sheet-below-<width>.png captures and
@@ -26,15 +29,35 @@ the workspace scope, the displayed context matches it, and the removal survives
 close/reopen on the same route. It writes request-scope-entity-<width>.png and
 request-scope-removed-<width>.png captures and browser/request-browser-scope.json.
 
+spoken-plan runs the real oscillator-media capture journey with SENTINEL_REQUEST_FIXTURE
+scenarios: the built App's #request-work-trigger opens the native dialog, Start
+recording shows the labelled red-dot/level/elapsed readout, Cancel recording
+stops the granted tracks and discards the audio, Stop transcribes through the
+real store and HTTP route to editable request text and the interpreted result.
+It writes request-spoken-recording-1280.png, request-spoken-cancelled-1280.png,
+request-spoken-transcript-1280.png and request-spoken-result-1280.png captures
+and browser/request-browser-spoken-plan.json.
+
+input-failures runs four named recovery journeys: denied microphone, unavailable
+speech readiness, transcription failure with an identical-bytes/same-request-id
+retry, and interpretation failure plus offline retry. It writes
+request-input-<state>-1280.png captures and
+browser/request-browser-input-failures.json.
+
 With --capture-reference it also serves the reference screen from the owned
 loopback server and captures request-reference-<width>.png at the same widths.
 
 The App, Shell, route owner and request-state are real; browser-fixture.mjs
-fakes only the final service boundary with its default flags. The checker owns
-its Playwright Chromium (no CDP), its fixture process and its temporary
+fakes only the final service boundary. Entry/scope runs keep its default flags.
+The spoken-plan and input-failures cases set SENTINEL_REQUEST_FIXTURE=1 in the
+fixture child environment (and only for those case sets), which enables the
+real request routes' deterministic final-child seam; the checker then drives
+scenarios through GET /__fixture/control?action=request-scenario. The checker
+owns its Playwright Chromium (no CDP), its fixture process and its temporary
 storage, and removes them in finally.
 """
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -45,6 +68,8 @@ import subprocess
 import threading
 import time
 import traceback
+import urllib.parse
+import urllib.request
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -52,10 +77,11 @@ from pathlib import Path
 from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--case', choices=['entry', 'scope'], default='entry')
+parser.add_argument('--case', action='append', choices=['entry', 'scope', 'spoken-plan', 'input-failures'], default=None)
 parser.add_argument('--capture-reference', default=None)
 options = parser.parse_args()
-case = options.case
+# Repeatable --case: one receipt per case, all against one owned fixture.
+cases = options.case or ['entry']
 reference_html = Path(options.capture_reference).resolve() if options.capture_reference else None
 
 root = Path(__file__).resolve().parent
@@ -63,26 +89,32 @@ checkout = root.parents[2]
 evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-request-evidence'))
 browser_evidence = evidence / 'browser'
 browser_evidence.mkdir(parents=True, exist_ok=True)
-receipt_path = browser_evidence / f'request-browser-{case}.json'
 started = time.monotonic()
 startup_seconds = None
-check_started = None
-report = {
-    'status': 'failed',
-    'case': case,
-    'assertions': [],
-    'captures': [],
-    'referenceCaptures': [],
-    'measurements': {},
-    'pageErrors': [],
-    'consoleErrors': [],
-    'requestFailures': [],
-    'fixture': {},
-    'observedCommit': None,
-    'dirty': None,
-    'reference': str(reference_html) if reference_html else None,
-    'cleanup': {},
-}
+case_receipts = []
+
+
+def fresh_report(case_name):
+    return {
+        'status': 'failed',
+        'case': case_name,
+        'assertions': [],
+        'captures': [],
+        'referenceCaptures': [],
+        'measurements': {},
+        'pageErrors': [],
+        'consoleErrors': [],
+        'requestFailures': [],
+        'fixture': {},
+        'observedCommit': None,
+        'dirty': None,
+        'reference': str(reference_html) if reference_html else None,
+        'cleanup': {},
+    }
+
+
+report = fresh_report(cases[0])
+receipt_path = browser_evidence / f'request-browser-{cases[0]}.json'
 fixture = None
 fixture_pgid = None
 reference_server = None
@@ -104,10 +136,10 @@ class QuietRequestHandler(SimpleHTTPRequestHandler):
         pass
 
 
-def write_receipt():
-    temporary = receipt_path.with_name(receipt_path.name + '.tmp')
-    temporary.write_text(json.dumps(report, indent=2) + '\n')
-    os.replace(temporary, receipt_path)
+def write_receipt(path, payload):
+    temporary = path.with_name(path.name + '.tmp')
+    temporary.write_text(json.dumps(payload, indent=2) + '\n')
+    os.replace(temporary, path)
 
 
 def run_assertion(name, action):
@@ -143,9 +175,10 @@ def capture_reference():
     assert reference_html.is_file(), reference_html
     reference_root = reference_html.parent.parent
     assert (reference_root / 'vendor' / 'tailwind.js').is_file(), reference_root
-    reference_server = ThreadingHTTPServer(
-        ('127.0.0.1', 0), partial(QuietRequestHandler, directory=str(reference_root)))
-    threading.Thread(target=reference_server.serve_forever, daemon=True).start()
+    if reference_server is None:
+        reference_server = ThreadingHTTPServer(
+            ('127.0.0.1', 0), partial(QuietRequestHandler, directory=str(reference_root)))
+        threading.Thread(target=reference_server.serve_forever, daemon=True).start()
     reference_page = context.new_page()
     reference_page.on('pageerror', lambda error: report['pageErrors'].append(f'reference: {error}'))
     reference_url = (f'http://127.0.0.1:{reference_server.server_address[1]}/'
@@ -224,14 +257,25 @@ def run_entry(url, thread1):
     run_assertion('trigger-on-picker-state:files', picker_state_trigger)
 
     # 2. Native dialog and real focus lifecycle against the built App.
-    def dialog_open_focuses_title():
+    def expect_ready_focus():
+        # Step-10 focus rule: open in ready focuses Start recording when the
+        # control is enabled, otherwise the request textarea. The disabled
+        # property is read at assert time so the rule's target is exact.
+        target = page.evaluate(
+            "() => { const start = document.getElementById('request-work-start');"
+            " return start && !start.disabled ? 'request-work-start' : 'request-work-text'; }")
+        focused = active_id()
+        assert focused == target, {'expected': target, 'focused': focused}
+        return target
+
+    def dialog_open_focuses_ready_target():
         page.goto(url + '/#/specs', wait_until='domcontentloaded')
         ensure_closed()
         open_via_trigger()
         assert dialog_open(), 'dialog did not open'
-        expect(page.locator('#request-work-title')).to_be_focused()
-        return {'activeElement': active_id()}
-    run_assertion('dialog-open-focuses-title', dialog_open_focuses_title)
+        target = expect_ready_focus()
+        return {'activeElement': active_id(), 'focusTarget': target}
+    run_assertion('dialog-open-focuses-ready-target', dialog_open_focuses_ready_target)
 
     def dialog_escape_closes_returns_focus():
         ensure_open = not dialog_open()
@@ -249,12 +293,12 @@ def run_entry(url, thread1):
         page.keyboard.press('Control+j')
         expect(page.locator('#request-work-dialog')).to_be_visible()
         assert dialog_open(), 'Ctrl+J did not open the dialog'
-        expect(page.locator('#request-work-title')).to_be_focused()
+        target = expect_ready_focus()
         page.keyboard.press('Control+j')
         expect(page.locator('#request-work-dialog')).not_to_be_visible()
         assert not dialog_open(), 'second Ctrl+J did not close the dialog'
         expect(page.locator('#request-work-trigger')).to_be_focused()
-        return {'activeElement': active_id()}
+        return {'activeElement': active_id(), 'focusTarget': target}
     run_assertion('dialog-shortcut-ctrl-j-toggle', dialog_shortcut_ctrl_j_toggle)
 
     def dialog_shortcut_meta_j_toggle():
@@ -262,12 +306,12 @@ def run_entry(url, thread1):
         page.keyboard.press('Meta+j')
         expect(page.locator('#request-work-dialog')).to_be_visible()
         assert dialog_open(), 'Meta+J did not open the dialog'
-        expect(page.locator('#request-work-title')).to_be_focused()
+        target = expect_ready_focus()
         page.keyboard.press('Meta+j')
         expect(page.locator('#request-work-dialog')).not_to_be_visible()
         assert not dialog_open(), 'second Meta+J did not close the dialog'
         expect(page.locator('#request-work-trigger')).to_be_focused()
-        return {'activeElement': active_id()}
+        return {'activeElement': active_id(), 'focusTarget': target}
     run_assertion('dialog-shortcut-meta-j-toggle', dialog_shortcut_meta_j_toggle)
 
     def dialog_close_button_returns_focus():
@@ -518,40 +562,466 @@ def run_scope(url):
     run_assertion('no-page-errors', no_page_errors)
 
 
+# Client-side media seam: fake ONLY navigator.mediaDevices.getUserMedia with a
+# real oscillator -> MediaStreamAudioDestinationNode stream, and expose the
+# granted stream on window for the cancellation assertions. Everything else
+# (the built App, capture pipeline, store and HTTP routes) stays real.
+MEDIA_FIXTURE_SCRIPT = r'''
+(() => {
+  window.__fixtureRequestStreams = [];
+  window.__fixtureMic = 'grant';
+  const granted = async () => {
+    const context = new AudioContext();
+    const oscillator = context.createOscillator();
+    oscillator.type = 'sine';
+    oscillator.frequency.value = 440;
+    const gain = context.createGain();
+    gain.gain.value = 0.25;
+    const destination = context.createMediaStreamDestination();
+    oscillator.connect(gain);
+    gain.connect(destination);
+    oscillator.start();
+    try { await context.resume(); } catch (error) { /* the launch flag permits audio */ }
+    window.__fixtureRequestStreams.push(destination.stream);
+    window.__fixtureRequestContext = context;
+    window.__fixtureRequestOscillator = oscillator;
+    return destination.stream;
+  };
+  const install = () => {
+    if (!navigator.mediaDevices) return;
+    navigator.mediaDevices.getUserMedia = () => window.__fixtureMic === 'deny'
+      ? Promise.reject(Object.assign(new Error('fixture microphone denied'), {name: 'NotAllowedError'}))
+      : granted();
+  };
+  install();
+})();
+'''
+
+
+def fixture_control(url, action, value=''):
+    """Drive the owned fixture's scenario seam and return its JSON reply."""
+    query = urllib.parse.urlencode({'action': action, 'value': value})
+    with urllib.request.urlopen(f'{url}/__fixture/control?{query}', timeout=15) as response:
+        return json.loads(response.read())
+
+
+def watch_request_bodies(network):
+    """Collect request-route traffic with body digests and interpret ids."""
+    def handler(request):
+        if '/api/request/' not in request.url:
+            return
+        body = request.post_data_buffer
+        item = {'method': request.method, 'url': request.url}
+        if body is not None:
+            item['bytes'] = len(body)
+            item['sha256'] = hashlib.sha256(body).hexdigest()
+            if '/api/request/interpret' in request.url:
+                try:
+                    item['requestId'] = json.loads(body.decode('utf-8')).get('request_id')
+                except Exception:
+                    pass
+        network.append(item)
+    page.on('request', handler)
+
+
+def run_spoken_plan(url):
+    """Real oscillator capture through the built store and request routes."""
+    network = []
+    watch_request_bodies(network)
+    expected_text = 'spoken request fixture text for the request work plan'
+
+    def capture(name):
+        path = browser_evidence / name
+        page.screenshot(path=str(path))
+        report['captures'].append(str(path))
+        return str(path)
+
+    def dialog_open():
+        return page.evaluate(
+            "() => { const d = document.getElementById('request-work-dialog'); return Boolean(d && d.open); }")
+
+    def ensure_closed():
+        if dialog_open():
+            page.keyboard.press('Escape')
+            expect(page.locator('#request-work-dialog')).not_to_be_visible()
+
+    def field():
+        return page.locator('#request-work-dialog #request-work-text')
+
+    def foot_button(label):
+        return page.locator('#request-work-dialog .cmd-foot').get_by_role('button', name=label, exact=True)
+
+    def open_panel():
+        ensure_closed()
+        page.locator('.page-head #request-work-trigger').click()
+        expect(page.locator('#request-work-dialog')).to_be_visible()
+
+    def recording_readout():
+        page.set_viewport_size({'width': 1280, 'height': 900})
+        page.goto(url + '/#/specs?ws=fixture&id=browser', wait_until='domcontentloaded')
+        # Fresh document + store even when the previous case left the same URL.
+        page.reload(wait_until='domcontentloaded')
+        open_panel()
+        start = page.locator('#request-work-dialog #request-work-start')
+        expect(start).to_be_enabled()
+        assert not page.locator('#request-work-dialog .rec-live').is_visible()
+        start.click()
+        expect(page.locator('#request-work-dialog .rec-live')).to_be_visible()
+        expect(page.locator('#request-work-dialog .rec-label')).to_have_text('Recording')
+        assert page.locator('#request-work-dialog .rec-dot').is_visible()
+        clock = page.locator('#request-work-dialog .rec-clock').inner_text()
+        assert re.fullmatch(r'0:0\d of 0:30', clock), clock
+        assert page.locator('#request-work-dialog .rec-levels span').count() == 8
+        live_regions = page.locator('#request-work-dialog [aria-live="polite"]').count()
+        assert live_regions == 1, live_regions
+        tracks = page.evaluate("() => (window.__fixtureRequestStreams || []).map(stream => stream.getTracks().map(track => track.readyState))")
+        assert tracks and all(state == 'live' for group in tracks for state in group), tracks
+        capture('request-spoken-recording-1280.png')
+        page.set_viewport_size({'width': 390, 'height': 900})
+        capture('request-spoken-recording-390.png')
+        page.set_viewport_size({'width': 1280, 'height': 900})
+        return {'clock': clock, 'tracks': tracks}
+    run_assertion('spoken-plan-recording-readout', recording_readout)
+
+    def cancellation_release():
+        assert page.locator('#request-work-dialog .rec-live').is_visible()
+        foot_button('Cancel recording').click()
+        expect(page.locator('#request-work-dialog .rec-live')).not_to_be_visible()
+        expect(page.locator('#request-work-dialog #request-work-start')).to_be_visible()
+        states = page.evaluate("() => ((window.__fixtureRequestStreams || []).slice(-1)[0] || {getTracks: () => []}).getTracks().map(track => track.readyState)")
+        assert states and all(state == 'ended' for state in states), states
+        assert not [item for item in network if '/api/request/transcribe' in item['url']], network
+        value = field().input_value()
+        assert value == '', {'value': value}
+        capture('request-spoken-cancelled-1280.png')
+        return {'tracks': states}
+    run_assertion('spoken-plan-cancel-stops-tracks-and-discards', cancellation_release)
+
+    held_interpret_routes = []
+
+    def hold_interpret(route, request):
+        # Hold the automatic interpret response so the transcript-installed
+        # capture is deterministic instead of racing the pipeline's interpret
+        # stage; the route is released right after the capture.
+        held_interpret_routes.append(route)
+
+    def stop_transcribes_and_installs():
+        page.route('**/api/request/interpret', hold_interpret)
+        try:
+            foot_button('Start recording').click()
+            expect(page.locator('#request-work-dialog .rec-live')).to_be_visible()
+            page.wait_for_timeout(700)
+            assert not [item for item in network if '/api/request/interpret' in item['url']], network
+            foot_button('Stop recording').click()
+            expect(page.locator('#request-work-dialog .req-notice').first).to_contain_text('Transcribing')
+            expect(field()).to_have_value(expected_text, timeout=20000)
+            expect(field()).to_be_editable()
+            capture('request-spoken-transcript-1280.png')
+            page.set_viewport_size({'width': 390, 'height': 900})
+            capture('request-spoken-transcript-390.png')
+            page.set_viewport_size({'width': 1280, 'height': 900})
+            return {'transcript': field().input_value()}
+        finally:
+            for route in held_interpret_routes:
+                route.continue_()
+            held_interpret_routes.clear()
+            page.unroute('**/api/request/interpret', hold_interpret)
+    run_assertion('spoken-plan-stop-transcribes-to-editable-text', stop_transcribes_and_installs)
+
+    def interpreted_result():
+        expect(page.locator('#request-work-dialog')).to_contain_text('Request interpreted.', timeout=20000)
+        interpret_requests = [item for item in network if '/api/request/interpret' in item['url']]
+        assert interpret_requests, network
+        assert page.locator('#request-work-dialog .cmd-foot').get_by_role('button', name='Plan epic', exact=True).is_disabled()
+        capture('request-spoken-result-1280.png')
+        return {'interpretRequests': len(interpret_requests)}
+    run_assertion('spoken-plan-interpreted-result', interpreted_result)
+
+    def transcript_editable():
+        edited = expected_text + ' Add a typed clarification.'
+        field().fill(edited)
+        expect(field()).to_have_value(edited)
+        return {'value': field().input_value()}
+    run_assertion('spoken-plan-transcript-editable', transcript_editable)
+
+    def limit_waits_for_interpretation():
+        # Fresh document and request store. The real client 30 s capture limit
+        # auto-stops the oscillator recording and auto-transcribes; the case
+        # then proves the limit path waits for the explicit Interpret request.
+        page.set_viewport_size({'width': 1280, 'height': 900})
+        page.goto(url + '/#/specs?ws=fixture&id=browser', wait_until='domcontentloaded')
+        page.reload(wait_until='domcontentloaded')
+        open_panel()
+        expect(page.locator('#request-work-dialog #request-work-start')).to_be_enabled()
+        limit_marker = len(network)
+        page.locator('#request-work-dialog #request-work-start').click()
+        expect(page.locator('#request-work-dialog .rec-live')).to_be_visible()
+        # Real 30 s capture limit + transcribe round-trip.
+        expect(field()).to_have_value(expected_text, timeout=45000)
+        # (a) The limit path auto-transcribes only: no interpret POST happened
+        # in this sub-journey before the explicit action.
+        interpret_waiting = [item for item in network[limit_marker:] if '/api/request/interpret' in item['url']]
+        assert interpret_waiting == [], interpret_waiting
+        # (b) The spoken text is installed and editable.
+        assert field().input_value() == expected_text
+        expect(field()).to_be_editable()
+        # (c) The limit install puts focus and the caret at the transcript end.
+        expect(field()).to_be_focused()
+        caret = page.evaluate("() => { const f = document.getElementById('request-work-text'); return {start: f.selectionStart, end: f.selectionEnd, length: f.value.length}; }")
+        assert caret['start'] == caret['length'] and caret['end'] == caret['length'], caret
+        # Waiting-for-interpret moment, before the explicit action.
+        capture('request-spoken-limit-1280.png')
+        page.set_viewport_size({'width': 390, 'height': 900})
+        capture('request-spoken-limit-390.png')
+        page.set_viewport_size({'width': 1280, 'height': 900})
+        with page.expect_request(lambda request: '/api/request/interpret' in request.url) as captured:
+            foot_button('Interpret request').click()
+        assert captured.value
+        interpret_after = [item for item in network[limit_marker:] if '/api/request/interpret' in item['url']]
+        assert len(interpret_after) == 1, interpret_after
+        expect(page.locator('#request-work-dialog')).to_contain_text('Request interpreted.', timeout=20000)
+        return {'interpretBefore': 0, 'interpretAfter': len(interpret_after), 'caret': caret}
+    run_assertion('spoken-plan-limit-waits-for-interpretation', limit_waits_for_interpretation)
+
+    report['measurements']['spokenPlanLimitPath'] = {
+        'driven': 'limit+manual-stop',
+        'reason': ('The real client 30 s capture limit auto-stops and auto-transcribes the '
+                   'oscillator recording; the case waits for the transcript, proves the caret '
+                   'lands at its end and that the explicit Interpret request is the first '
+                   'interpret POST in the sub-journey. The manual Stop sub-journey covers the '
+                   'ordinary transcribe-then-interpret pipeline and its editable transcript.'),
+    }
+
+    def no_page_errors():
+        assert not report['pageErrors'], report['pageErrors']
+        return {'pageErrors': len(report['pageErrors'])}
+    run_assertion('no-page-errors', no_page_errors)
+
+
+def run_input_failures(url):
+    """Four named recovery journeys over the real request routes."""
+    network = []
+    watch_request_bodies(network)
+
+    def capture(name):
+        path = browser_evidence / name
+        page.screenshot(path=str(path))
+        report['captures'].append(str(path))
+        return str(path)
+
+    def field():
+        return page.locator('#request-work-dialog #request-work-text')
+
+    def foot_button(label):
+        return page.locator('#request-work-dialog .cmd-foot').get_by_role('button', name=label, exact=True)
+
+    def failure_notice():
+        return page.locator('#request-work-dialog #request-work-failure')
+
+    def dialog_open():
+        return page.evaluate(
+            "() => { const d = document.getElementById('request-work-dialog'); return Boolean(d && d.open); }")
+
+    def ensure_closed():
+        if dialog_open():
+            page.keyboard.press('Escape')
+            expect(page.locator('#request-work-dialog')).not_to_be_visible()
+            expect(page.locator('.page-head #request-work-trigger')).to_be_focused()
+
+    def open_fresh():
+        page.set_viewport_size({'width': 1280, 'height': 900})
+        page.goto(url + '/#/specs?ws=fixture&id=browser', wait_until='domcontentloaded')
+        # A same-URL hash goto can stay same-document, leaving the prior
+        # journey's dialog open and its request store populated. Force a real
+        # document reload so each sub-journey starts from a fresh App + store.
+        page.reload(wait_until='domcontentloaded')
+        ensure_closed()
+        page.locator('.page-head #request-work-trigger').click()
+        expect(page.locator('#request-work-dialog')).to_be_visible()
+
+    def scenario(value):
+        reply = fixture_control(url, 'request-scenario', value)
+        assert reply.get('requestFixture', {}).get('scenario') == value, reply
+
+    def mic_denied():
+        scenario('happy')
+        open_fresh()
+        page.evaluate("() => { window.__fixtureMic = 'deny'; }")
+        typed = 'Keep this typed request through the microphone failure.'
+        field().fill(typed)
+        foot_button('Start recording').click()
+        expect(failure_notice()).to_be_visible()
+        notice = failure_notice().inner_text().lower()
+        assert 'microphone' in notice, notice
+        assert field().input_value() == typed
+        foot = page.locator('#request-work-dialog .cmd-foot').inner_text()
+        assert 'Recording needs microphone access.' in foot, foot
+        assert foot_button('Start recording').is_visible()
+        capture('request-input-mic-denied-1280.png')
+        page.set_viewport_size({'width': 390, 'height': 900})
+        capture('request-input-mic-denied-390.png')
+        page.set_viewport_size({'width': 1280, 'height': 900})
+        page.evaluate("() => { window.__fixtureMic = 'grant'; }")
+        return {'retained': typed}
+    run_assertion('input-failures-mic-denied-retains-typed-input', mic_denied)
+
+    def speech_unavailable():
+        scenario('speech-unavailable')
+        open_fresh()
+        expect(failure_notice()).to_be_visible()
+        notice = failure_notice().inner_text().lower()
+        assert 'speech model' in notice, notice
+        expect(page.locator('#request-work-dialog #request-work-start')).to_be_disabled()
+        foot = page.locator('#request-work-dialog .cmd-foot').inner_text()
+        assert 'speech model is prepared' in foot, foot
+        typed = 'Typing still works without recording.'
+        field().fill(typed)
+        expect(field()).to_have_value(typed)
+        capture('request-input-speech-unavailable-1280.png')
+        scenario('happy')
+        return {'notice': notice}
+    run_assertion('input-failures-speech-unavailable-disables-recording', speech_unavailable)
+
+    def transcription_failure():
+        scenario('transcribe-failed')
+        open_fresh()
+        typed = 'Typed bytes survive the failed clip.'
+        field().fill(typed)
+        foot_button('Start recording').click()
+        expect(page.locator('#request-work-dialog .rec-live')).to_be_visible()
+        page.wait_for_timeout(700)
+        foot_button('Stop recording').click()
+        expect(failure_notice()).to_be_visible(timeout=20000)
+        notice = failure_notice().inner_text().lower()
+        assert 'speech service' in notice, notice
+        assert field().input_value() == typed
+        first = [item for item in network if '/api/request/transcribe' in item['url']]
+        assert len(first) == 1, first
+        with page.expect_request(lambda request: '/api/request/transcribe' in request.url) as captured:
+            foot_button('Retry transcription').click()
+        retried_body = captured.value.post_data_buffer
+        assert retried_body is not None
+        first_id = urllib.parse.parse_qs(urllib.parse.urlparse(first[0]['url']).query)['request_id'][0]
+        second_id = urllib.parse.parse_qs(urllib.parse.urlparse(captured.value.url).query)['request_id'][0]
+        assert first_id == second_id, (first_id, second_id)
+        assert first[0]['sha256'] == hashlib.sha256(retried_body).hexdigest(), 'retry bytes differ'
+        assert first[0]['bytes'] == len(retried_body)
+        expect(page.locator('#request-work-dialog')).to_contain_text('Retry transcription')
+        assert field().input_value() == typed
+        capture('request-input-transcription-failed-1280.png')
+        scenario('happy')
+        return {'requestId': first_id, 'bytes': len(retried_body)}
+    run_assertion('input-failures-transcription-retry-identical-bytes', transcription_failure)
+
+    def interpretation_failure_and_offline():
+        scenario('interpret-failed')
+        open_fresh()
+        typed = 'Interpret this typed request and keep it.'
+        field().fill(typed)
+        foot_button('Interpret request').click()
+        expect(failure_notice()).to_be_visible()
+        notice = failure_notice().inner_text().lower()
+        assert 'interpretation model' in notice, notice
+        assert field().input_value() == typed
+        first = [item for item in network if '/api/request/interpret' in item['url']]
+        assert len(first) == 1 and first[0].get('requestId'), first
+        first_id = first[0]['requestId']
+        with page.expect_request(lambda request: '/api/request/interpret' in request.url) as captured:
+            foot_button('Retry interpretation').click()
+        retried_body = captured.value.post_data_buffer
+        assert retried_body is not None
+        retried = json.loads(retried_body.decode('utf-8'))
+        assert retried.get('request_id') == first_id, (first_id, retried.get('request_id'))
+        assert retried.get('transcript') == typed, retried.get('transcript')
+        expect(failure_notice()).to_be_visible()
+        assert field().input_value() == typed
+        scenario('interpret-offline')
+        with page.expect_request(lambda request: '/api/request/interpret' in request.url) as offline_captured:
+            foot_button('Retry interpretation').click()
+        offline_body = offline_captured.value.post_data_buffer
+        assert offline_body is not None
+        offline = json.loads(offline_body.decode('utf-8'))
+        assert offline.get('request_id') == first_id, (first_id, offline.get('request_id'))
+        expect(failure_notice()).to_contain_text('Reconnecting', timeout=20000)
+        assert field().input_value() == typed
+        assert foot_button('Retry connection').is_visible()
+        assert foot_button('Retry connection').is_enabled()
+        capture('request-input-offline-1280.png')
+        page.set_viewport_size({'width': 390, 'height': 900})
+        capture('request-input-offline-390.png')
+        page.set_viewport_size({'width': 1280, 'height': 900})
+        scenario('happy')
+        return {'requestId': first_id}
+    run_assertion('input-failures-interpretation-retry-identity-and-offline', interpretation_failure_and_offline)
+
+    report['measurements']['inputFailureScenarios'] = {
+        'control': 'GET /__fixture/control?action=request-scenario&value=<happy|speech-unavailable|transcribe-failed|interpret-failed|interpret-offline>',
+        'scenarios': ['happy', 'speech-unavailable', 'transcribe-failed', 'interpret-failed', 'interpret-offline'],
+    }
+
+    def no_page_errors():
+        assert not report['pageErrors'], report['pageErrors']
+        return {'pageErrors': len(report['pageErrors'])}
+    run_assertion('no-page-errors', no_page_errors)
+
+
 try:
+    # Request fixture mode composes the real request routes' final child
+    # boundaries. Only the two new case sets need it; entry/scope runs keep the
+    # fixture's default flags because the env gate stays off for them.
+    fixture_env = {**os.environ}
+    if any(name in ('spoken-plan', 'input-failures') for name in cases):
+        fixture_env['SENTINEL_REQUEST_FIXTURE'] = '1'
     fixture = subprocess.Popen(
         ['node', str(root / 'browser-fixture.mjs')],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         start_new_session=True,
+        env=fixture_env,
     )
     fixture_pgid = os.getpgid(fixture.pid)
     if not select.select([fixture.stdout], [], [], 10)[0]:
         raise RuntimeError('Fixture readiness exceeded 10 seconds')
     fixture_info = json.loads(fixture.stdout.readline())
-    report['fixture'] = fixture_info
-    report['observedCommit'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=checkout, text=True).strip()
-    report['dirty'] = bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=checkout, text=True).strip())
+    observed_commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=checkout, text=True).strip()
+    dirty = bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=checkout, text=True).strip())
     with sync_playwright() as p:
         try:
             executable = shutil.which('google-chrome')
-            browser = p.chromium.launch(**({'executable_path': executable} if executable else {}), headless=True, args=['--no-sandbox'])
+            browser = p.chromium.launch(**({'executable_path': executable} if executable else {}), headless=True,
+                                        args=['--no-sandbox', '--autoplay-policy=no-user-gesture-required'])
             context = browser.new_context(viewport={'width': 1280, 'height': 900}, device_scale_factor=1)
-            page = context.new_page()
-            page.on('pageerror', lambda error: report['pageErrors'].append(str(error)))
-            page.on('console', lambda message: report['consoleErrors'].append(message.text) if message.type == 'error' else None)
-            page.on('requestfailed', lambda request: report['requestFailures'].append(
-                {'method': request.method, 'url': request.url, 'failure': str(request.failure)}))
+            if any(name in ('spoken-plan', 'input-failures') for name in cases):
+                context.add_init_script(script=MEDIA_FIXTURE_SCRIPT)
             startup_seconds = round(time.monotonic() - started, 3)
-            check_started = time.monotonic()
-            if case == 'entry':
-                run_entry(fixture_info['url'], fixture_info['thread1'])
-            else:
-                run_scope(fixture_info['url'])
-            if reference_html:
-                run_assertion('reference-captures', capture_reference)
-            report['status'] = ('passed' if report['assertions']
-                                and all(a['status'] == 'passed' for a in report['assertions'])
-                                else 'failed')
+            for case_name in cases:
+                report = fresh_report(case_name)
+                receipt_path = browser_evidence / f'request-browser-{case_name}.json'
+                report['fixture'] = fixture_info
+                report['observedCommit'] = observed_commit
+                report['dirty'] = dirty
+                case_started = time.monotonic()
+                case_receipts.append((receipt_path, report))
+                page = context.new_page()
+                page.on('pageerror', lambda error, current=report: current['pageErrors'].append(str(error)))
+                page.on('console', lambda message, current=report: current['consoleErrors'].append(message.text) if message.type == 'error' else None)
+                page.on('requestfailed', lambda request, current=report: current['requestFailures'].append(
+                    {'method': request.method, 'url': request.url, 'failure': str(request.failure)}))
+                if case_name == 'entry':
+                    run_entry(fixture_info['url'], fixture_info['thread1'])
+                elif case_name == 'scope':
+                    run_scope(fixture_info['url'])
+                elif case_name == 'spoken-plan':
+                    run_spoken_plan(fixture_info['url'])
+                else:
+                    run_input_failures(fixture_info['url'])
+                if reference_html:
+                    run_assertion('reference-captures', capture_reference)
+                report['status'] = ('passed' if report['assertions']
+                                    and all(a['status'] == 'passed' for a in report['assertions'])
+                                    else 'failed')
+                report['checkSeconds'] = round(time.monotonic() - case_started, 3)
+                report['elapsedSeconds'] = round(time.monotonic() - started, 3)
+                page.close()
         finally:
             if context is not None:
                 try:
@@ -603,20 +1073,27 @@ finally:
                 cleanup['errors'].append(f"temporary fixture root still present: {fixture_info['root']}")
         except Exception as error:
             cleanup['errors'].append(f'temporary fixture root check: {error}')
-    report['startupSeconds'] = startup_seconds
-    report['checkSeconds'] = None if check_started is None else round(finished - check_started, 3)
-    report['elapsedSeconds'] = round(finished - started, 3)
-    report['cleanup'] = cleanup
-    write_receipt()
+    pairs = case_receipts or [(receipt_path, report)]
+    for path, payload in pairs:
+        payload['startupSeconds'] = startup_seconds
+        payload.setdefault('checkSeconds', None)
+        payload.setdefault('elapsedSeconds', round(finished - started, 3))
+        payload['cleanup'] = cleanup
+        write_receipt(path, payload)
 
-print(json.dumps({
-    'status': report['status'],
-    'elapsed_seconds': report['elapsedSeconds'],
-    'assertions': [{'name': a['name'], 'status': a['status']} for a in report['assertions']],
-    'measurements': report['measurements'],
-    'console_errors': len(report['consoleErrors']),
-    'captures': report['captures'],
-    'receipt': str(receipt_path),
-}))
-if report['status'] != 'passed':
+failed = []
+for path, payload in (case_receipts or [(receipt_path, report)]):
+    print(json.dumps({
+        'status': payload['status'],
+        'case': payload['case'],
+        'elapsed_seconds': payload.get('elapsedSeconds'),
+        'assertions': [{'name': a['name'], 'status': a['status']} for a in payload['assertions']],
+        'measurements': payload['measurements'],
+        'console_errors': len(payload['consoleErrors']),
+        'captures': payload['captures'],
+        'receipt': str(path),
+    }))
+    if payload['status'] != 'passed':
+        failed.append(payload['case'])
+if failed:
     raise SystemExit(1)

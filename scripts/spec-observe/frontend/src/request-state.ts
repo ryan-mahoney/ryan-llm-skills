@@ -7,8 +7,9 @@
 // captured immutable request snapshots, so an edited transcript, moved scope,
 // changed refs, an accepted new recording or a new request discards late
 // successes AND late errors while retaining the previous proposal marked
-// stale. Audio clips stay in memory only: nothing is persisted, and only an
-// explicit discard clears clip bytes and text. This module's core (store + derivations) is DOM-free,
+// stale. Audio clips stay in memory only: nothing is persisted, an explicit
+// discard clears clip bytes and text, and Cancel recording discards just the
+// captured audio. This module's core (store + derivations) is DOM-free,
 // transport-free and Node-free.
 import { createSignal } from 'solid-js';
 import { HttpError, postAudio, postJson } from './api';
@@ -92,9 +93,12 @@ export type RequestWork = {
 };
 
 export type CaptureHandle = { stop(): Promise<Float32Array>; cancel(): void };
+// Capture level/limit callbacks forwarded through the boundary to request-audio
+// startCapture; the recording limit drives the auto-transcribe path.
+export type CaptureHooks = { onLevel?: (level: number) => void; onLimit?: () => void };
 export type TranscribeBoundary = (clip: Float32Array, requestId: string, signal?: AbortSignal) => Promise<unknown>;
 export type InterpretBoundary = (body: RequestSnapshot, signal?: AbortSignal) => Promise<unknown>;
-export type CaptureBoundary = () => Promise<CaptureHandle>;
+export type CaptureBoundary = (hooks?: CaptureHooks) => Promise<CaptureHandle>;
 export type RequestStoreOptions = {
   transcribe?: TranscribeBoundary;
   interpret?: InterpretBoundary;
@@ -107,8 +111,10 @@ export type RequestStore = {
   editTranscript: (workspace: string, transcript: string) => RequestWork;
   changeScope: (workspace: string, scope: RequestScope | null, candidates?: string[]) => RequestWork;
   changeRefs: (workspace: string, refs: RequestReference[]) => RequestWork;
-  beginRecording: (workspace: string) => Promise<RequestWork>;
+  beginRecording: (workspace: string, hooks?: CaptureHooks) => Promise<RequestWork>;
   finishRecording: (workspace: string) => Promise<RequestWork>;
+  cancelRecording: (workspace: string) => RequestWork;
+  transcribeClip: (workspace: string, token: string) => Promise<RequestWork>;
   submitRequest: (workspace: string, token: string) => Promise<RequestReply>;
   enterPreview: (workspace: string, signature: string) => RequestWork;
   closePanel: (workspace: string) => RequestWork | undefined;
@@ -667,14 +673,17 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
     return view(entry);
   };
 
-  const beginRecording = async (workspace: string): Promise<RequestWork> => {
+  const beginRecording = async (workspace: string, hooks?: CaptureHooks): Promise<RequestWork> => {
     const entry = ensureEntry(workspace);
     if (entry.recording || acquiring.has(workspace)) return view(entry);
     const generation = newGeneration(workspace);
     acquiring.set(workspace, generation);
-    const capture = options.capture ?? ((): Promise<CaptureHandle> => startCapture());
+    // The default boundary forwards the level/limit hooks to request-audio;
+    // injected zero-arg capture boundaries stay assignable.
+    const capture = options.capture ?? ((boundaryHooks?: CaptureHooks): Promise<CaptureHandle> =>
+      startCapture({ onLevel: boundaryHooks?.onLevel, onLimit: boundaryHooks?.onLimit }));
     try {
-      const handle = await capture();
+      const handle = await capture(hooks);
       if (generationOf(workspace) !== generation) {
         handle.cancel(); // a later generation owns the entry: drop the late handle
         return view(entry);
@@ -726,6 +735,38 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
     return view(entry);
   };
 
+  // The one transcribe-stage body shared by submitRequest's pipeline and the
+  // transcribe-only limit path (transcribeClip): the transcribing phase
+  // transition, the wire call through the injectable options.transcribe
+  // boundary (default POST /api/request/transcribe?request_id=<uuid>) and the
+  // spoken install. The caller owns acceptance through isCurrent and moves its
+  // captured snapshot in install; clipNeedsTranscription clears only while the
+  // same clip is retained.
+  const runTranscribeStage = async (
+    entry: RequestEntry,
+    clip: Float32Array,
+    requestId: string,
+    token: string,
+    isCurrent: () => boolean,
+    install: (spoken: string) => void,
+  ): Promise<void> => {
+    if (isCurrent()) { entry.phase = 'transcribing'; notify(); }
+    const transcribe = options.transcribe ?? ((body: Float32Array, id: string, signal?: AbortSignal) =>
+      postAudio(transcribePath(id), body, token, signal));
+    const transcription = await transcribe(clip, requestId);
+    // The clip has been transcribed once; retained bytes serve explicit
+    // retry after a failed transcription and recovery only. They must not
+    // re-run (and overwrite operator-edited text) on later submissions.
+    if (entry.clip === clip) entry.clipNeedsTranscription = false;
+    const spoken = transcriptOf(transcription);
+    // The transcribed text joins the same request: identity is unchanged and
+    // the snapshot moves together, keeping the interpret reply acceptable.
+    if (spoken && isCurrent()) {
+      install(spoken);
+      notify();
+    }
+  };
+
   const submitRequest = (workspace: string, token: string): Promise<RequestReply> => {
     const key = workspace;
     const entry = ensureEntry(key);
@@ -744,8 +785,6 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
     entry.failure = null;
     const clip = entry.clip;
     const clipNeedsTranscription = entry.clipNeedsTranscription;
-    const transcribe = options.transcribe ?? ((body: Float32Array, requestId: string, signal?: AbortSignal) =>
-      postAudio(transcribePath(requestId), body, token, signal));
     const interpret = options.interpret ?? ((body: RequestSnapshot, signal?: AbortSignal) =>
       postJson('/api/request/interpret', interpretBodyOf(body), token, signal));
     // The captured snapshot alone owns acceptance; edits, scope/refs changes and
@@ -755,21 +794,11 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
     const run = async (): Promise<RequestReply> => {
       if (clip && clipNeedsTranscription) {
         stage = 'transcribe';
-        if (isCurrent()) { entry.phase = 'transcribing'; notify(); }
-        const transcription = await transcribe(clip, requestId);
-        // The clip has been transcribed once; retained bytes serve explicit
-        // retry after a failed transcription and recovery only. They must not
-        // re-run (and overwrite operator-edited text) on later submissions.
-        if (entry.clip === clip) entry.clipNeedsTranscription = false;
-        const spoken = transcriptOf(transcription);
-        // The transcribed text joins the same request: identity is unchanged and
-        // the snapshot moves together, keeping the interpret reply acceptable.
-        if (spoken && isCurrent()) {
+        await runTranscribeStage(entry, clip, requestId, token, isCurrent, spoken => {
           entry.transcript = spoken;
           accepted = { ...accepted, transcript: spoken };
           entry.snapshot = accepted;
-          notify();
-        }
+        });
       }
       stage = 'interpret';
       if (isCurrent()) { entry.phase = 'interpreting'; notify(); }
@@ -792,6 +821,67 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
     });
   };
 
+  // Transcribe-only stage for the recording-limit path and its retry: run the
+  // shared transcribe stage over the retained clip under the clip's existing
+  // request identity (never minting a new UUID), then wait here for the
+  // explicit Interpret request. An unchanged retry or double tap shares one
+  // promise; a late outcome after a content change or clip discard is silently
+  // discarded. Failure retains the clip bytes and typed text so the retry
+  // re-sends the same bytes under the same request id.
+  const clipTranscriptions = new Map<string, { clip: Float32Array; promise: Promise<RequestWork> }>();
+
+  const transcribeClip = (workspace: string, token: string): Promise<RequestWork> => {
+    const key = workspace;
+    const entry = ensureEntry(key);
+    const clip = entry.clip;
+    if (!clip || !entry.clipNeedsTranscription) return Promise.resolve(view(entry));
+    const running = clipTranscriptions.get(key);
+    if (running && running.clip === clip) return running.promise;
+    const requestId = entry.snapshot?.requestId ?? entry.requestId;
+    if (!requestId) return Promise.resolve(view(entry)); // never mint an identity here
+    const accepted = entry.snapshot;
+    // The clip and its request identity alone own acceptance: an edit, a
+    // scope/refs change, a new recording or a discard moves them and silently
+    // discards this outcome (submitRequest's isCurrent style).
+    const isCurrent = (): boolean => entries.get(key) === entry
+      && entry.clip === clip && entry.requestId === requestId && entry.snapshot === accepted;
+    const run = async (): Promise<void> => {
+      await runTranscribeStage(entry, clip, requestId, token, isCurrent, spoken => {
+        entry.transcript = spoken;
+        // The spoken text joins the same request: identity unchanged and an
+        // existing snapshot moves together exactly like submitRequest.
+        if (entry.snapshot) entry.snapshot = { ...entry.snapshot, transcript: spoken };
+      });
+    };
+    const promise = Promise.resolve()
+      .then(run)
+      .then(
+        () => {
+          if (isCurrent()) {
+            entry.failure = null;
+            entry.phase = entry.result ? 'result' : 'ready'; // limit path waits here
+          }
+          notify();
+          return view(entry);
+        },
+        (error: unknown) => {
+          // Failure retains clip bytes and typed text for the explicit retry.
+          if (isCurrent()) {
+            entry.failure = failureOf(error, 'transcribe');
+            entry.phase = 'failure';
+          }
+          notify();
+          throw error;
+        },
+      )
+      .finally(() => {
+        const running = clipTranscriptions.get(key);
+        if (running?.promise === promise) clipTranscriptions.delete(key);
+      });
+    clipTranscriptions.set(key, { clip, promise });
+    return promise;
+  };
+
   // Preview records the readiness signature; before launch a changed signature
   // means relevant facts moved since the preview.
   const enterPreview = (workspace: string, signature: string): RequestWork => {
@@ -802,6 +892,21 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
     return view(entry);
   };
 
+  // Shared capture-cancel semantics: bump the generation so a late acquisition
+  // or stop cannot install results, clear the acquiring latch, and cancel plus
+  // drop any installed handle. closePanel, discardRequest and cancelRecording
+  // all release the capture session through this block.
+  const cancelCapture = (key: string, entry: RequestEntry): void => {
+    newGeneration(key);
+    acquiring.delete(key);
+    const handle = handles.get(key);
+    if (handle) {
+      handles.delete(key);
+      handle.cancel();
+      entry.recording = false;
+    }
+  };
+
   // Close while recording cancels the capture session (tracks stop inside the
   // request-audio cleanup) and invalidates its generation so a late
   // acquisition or stop cannot install results into the closed entry; every
@@ -809,14 +914,7 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
   const closePanel = (workspace: string): RequestWork | undefined => {
     const entry = entries.get(workspace);
     if (!entry) return undefined;
-    newGeneration(workspace);
-    acquiring.delete(workspace);
-    const handle = handles.get(workspace);
-    if (handle) {
-      handles.delete(workspace);
-      handle.cancel();
-      entry.recording = false;
-    }
+    cancelCapture(workspace, entry);
     if (entry.phase === 'recording') entry.phase = entry.result ? 'result' : 'ready';
     notify();
     return view(entry);
@@ -827,14 +925,7 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
   // explicitly discarded bytes.
   const discardRequest = (workspace: string): RequestWork => {
     const entry = ensureEntry(workspace);
-    newGeneration(workspace);
-    acquiring.delete(workspace);
-    const handle = handles.get(workspace);
-    if (handle) {
-      handles.delete(workspace);
-      handle.cancel();
-      entry.recording = false;
-    }
+    cancelCapture(workspace, entry);
     entry.transcript = '';
     entry.clip = null;
     entry.clipNeedsTranscription = false;
@@ -848,6 +939,21 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
     entry.requestId = crypto.randomUUID();
     entry.phase = 'ready';
     entry.revision += 1;
+    notify();
+    return view(entry);
+  };
+
+  // Explicit cancel-recording (the recording path's Cancel action): shares
+  // closePanel's capture-cancel semantics and additionally discards the
+  // captured audio (clip bytes and their pending transcription) while typed
+  // transcript, scope, refs, result and identity stay untouched — no
+  // contentChanged minting. A late stop after this cancel never installs bytes.
+  const cancelRecording = (workspace: string): RequestWork => {
+    const entry = ensureEntry(workspace);
+    cancelCapture(workspace, entry);
+    entry.clip = null;
+    entry.clipNeedsTranscription = false;
+    entry.phase = entry.result ? 'result' : 'ready';
     notify();
     return view(entry);
   };
@@ -1227,6 +1333,8 @@ export function createRequestStore(options: RequestStoreOptions = {}): RequestSt
     changeRefs,
     beginRecording,
     finishRecording,
+    cancelRecording,
+    transcribeClip,
     submitRequest,
     enterPreview,
     closePanel,
@@ -1247,6 +1355,8 @@ export const changeScope = requestStore.changeScope;
 export const changeRefs = requestStore.changeRefs;
 export const beginRecording = requestStore.beginRecording;
 export const finishRecording = requestStore.finishRecording;
+export const cancelRecording = requestStore.cancelRecording;
+export const transcribeClip = requestStore.transcribeClip;
 export const submitRequest = requestStore.submitRequest;
 export const enterPreview = requestStore.enterPreview;
 export const closePanel = requestStore.closePanel;
