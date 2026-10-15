@@ -900,6 +900,9 @@ async function serviceHarness(t) {
     jobs: '',
     failShow: false,
     failJobs: false,
+    expansionHelp: '--expand-environment=BOOL',
+    expansionHelpExitCode: 0,
+    expansionHelpSignal: null,
     clock: Date.now(),
   };
   const env = {
@@ -908,6 +911,7 @@ async function serviceHarness(t) {
   };
   const spawnTransport = request => {
     state.spawnCalls.push({ command: request.command, args: [...request.args], env: { ...request.env }, cwd: request.cwd, stdio: request.stdio });
+    assert.ok(request.args.includes('--expand-environment=no'), 'service transport must disable manager argv expansion');
     const separator = request.args.indexOf('--');
     const execArgs = request.args.slice(separator + 1);
     const setenv = new Map();
@@ -935,6 +939,9 @@ async function serviceHarness(t) {
   const run = async request => {
     state.calls.push({ command: request.command, args: [...request.args], env: { ...request.env } });
     const args = request.args;
+    if (request.command === 'systemd-run' && args.includes('--help')) {
+      return { exitCode: state.expansionHelpExitCode, signal: state.expansionHelpSignal, stdout: state.expansionHelp, stderr: '' };
+    }
     if (request.command === 'systemctl' && args.includes('show')) {
       if (state.failShow) return { exitCode: 1, signal: null, stdout: '', stderr: 'show failed' };
       const mainPid = state.mainPidOverride ?? state.mainPid ?? 0;
@@ -1002,6 +1009,32 @@ async function serviceRecord(harness, overrides = {}) {
   };
 }
 
+test('wave resources: systemd start refuses absent or unreadable manager expansion protection', { timeout: CASE_TIMEOUT_MS }, async t => {
+  const { state, env, adapter, fixture } = await serviceHarness(t);
+  for (const capability of [
+    { expansionHelp: 'Usage: systemd-run [OPTIONS...] COMMAND', expansionHelpExitCode: 0, expansionHelpSignal: null },
+    { expansionHelp: '--expand-environment=BOOL', expansionHelpExitCode: 1, expansionHelpSignal: null },
+    { expansionHelp: '--expand-environment=BOOL', expansionHelpExitCode: 0, expansionHelpSignal: 'SIGTERM' },
+  ]) {
+    Object.assign(state, capability);
+    let registered = false;
+    const result = await adapter.start({
+      argv: [process.execPath, '-e', '', '${NAME}', '$NAME', '$$'],
+      cwd: fixture.dir,
+      env,
+      deadline: createWaveDeadline({ startedAtMs: state.clock, timeoutMs: 120_000 }),
+      register: async () => { registered = true; },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 'refused');
+    assert.equal(result.reason, 'manager-expansion-protection-unavailable');
+    assert.match(result.remedy, /--expand-environment=no/);
+    assert.equal(result.record, null);
+    assert.equal(registered, false);
+    assert.equal(state.spawnCalls.length, 0, 'unprotected commands must never be launched');
+  }
+});
+
 test('wave resources: systemd start authorizes the gate only after registration and preserves cwd, env and bounds', { timeout: CASE_TIMEOUT_MS }, async t => {
   const { state, env, adapter } = await serviceHarness(t);
   const cwd = mkdtempSync(join(tmpdir(), 'wave-service-cwd-'));
@@ -1029,7 +1062,7 @@ test('wave resources: systemd start authorizes the gate only after registration 
   let authorizationInsideRegister = null;
   let outputInsideRegister = null;
   const result = await adapter.start({
-    argv: [process.execPath, '-e', command, '', 'tail-arg'],
+    argv: [process.execPath, '-e', command, '', 'tail-arg', '${NAME}', '$NAME', '$$'],
     cwd,
     env: { ...env, SERVICE_TEST_MARKER: 'propagated', SERVICE_TEST_EMPTY: '' },
     register: async record => {
@@ -1110,6 +1143,7 @@ test('wave resources: systemd start authorizes the gate only after registration 
   assert.equal(marker.cwd, cwd);
   assert.ok(marker.argv.includes(''), 'an empty argument propagates unchanged');
   assert.ok(marker.argv.includes('tail-arg'));
+  assert.deepEqual(marker.argv.slice(-3), ['${NAME}', '$NAME', '$$'], 'literal dollars propagate unchanged');
   assert.equal(marker.marker, 'propagated');
   assert.equal(marker.empty, '');
   assert.equal(marker.invocation, state.invocationId, 'the synthetic INVOCATION_ID reaches the service');

@@ -2045,6 +2045,7 @@ function buildServiceRunArgs({ unit, cwd, limits, runtimeMaxSec, setenv, argv })
     '--wait',
     '--collect',
     '--service-type=exec',
+    '--expand-environment=no',
     `--unit=${unit}`,
     `--slice=${SERVICE_SLICE_UNIT}`,
     '--property=KillMode=control-group',
@@ -2376,6 +2377,22 @@ export function createSystemdServiceAdapter(options = {}) {
         remedy: currentIdentity === null
           ? 'run on Linux with readable /etc/machine-id, boot_id and effective uid'
           : 'run the managed systemd adapter as the effective non-root user',
+        record: null,
+      };
+    }
+    // Check the installed launcher before creating a gate or submitting any
+    // command. Older launchers must refuse rather than expand caller dollars.
+    const expansionSupport = await runCommand('systemd-run', ['--help'], { env: { ...callerEnv, ...bus.environment } });
+    if (
+      expansionSupport.exitCode !== 0 ||
+      expansionSupport.signal !== null ||
+      !/(?:^|\s)--expand-environment=BOOL(?:\s|$)/m.test(expansionSupport.stdout)
+    ) {
+      return {
+        ok: false,
+        status: 'refused',
+        reason: 'manager-expansion-protection-unavailable',
+        remedy: 'install a systemd-run supporting --expand-environment=no to preserve literal command arguments',
         record: null,
       };
     }
