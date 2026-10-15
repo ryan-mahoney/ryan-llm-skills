@@ -1,6 +1,9 @@
 import { For, Show, createEffect, createSignal, onCleanup, onMount, untrack } from 'solid-js';
 import { getJson, postJson, HttpError } from './api';
 import { str, time, stale, statusMarkdown } from './format';
+import { briefRoute, launchedAgents } from './agent-links';
+import { assignmentLabel, assignmentTone } from './observation-format';
+import type { WireRecord } from './model';
 import { consumeThreadDraft, getLaunchDraft, seedLaunchDraft, seedThreadDraft } from './launch-state';
 import { shouldResetAcknowledgedDraft } from './launch-picker-intent';
 import {
@@ -28,7 +31,7 @@ import {
   type NewThreadRequestCapture,
   type ReadError,
 } from './conversations-state';
-import { navigate } from './route';
+import { formatHash, navigate, type RouteState } from './route';
 import { ActionBar, EmptyState, MasterDetail, RegionalSkeleton, StateNotice, StatusText, type StatusTone } from './primitives';
 import { scopeLabel } from './scope';
 import type { DestinationProps } from './destinations';
@@ -44,7 +47,7 @@ type Thread = Record<string, any> & { thread_id: string; title?: string; queue?:
 type Entry = Record<string, any> & { id: string };
 // Route identity is the only selection input; the retained per-thread owners
 // (draft/retry, reading position, return id) live in conversations-state.ts.
-type Props = Pick<DestinationProps, 'route' | 'workspace' | 'catalog' | 'token' | 'live' | 'refreshKey' | 'onNavigate'>;
+type Props = Pick<DestinationProps, 'route' | 'workspace' | 'catalog' | 'token' | 'live' | 'assignments' | 'refreshKey' | 'onNavigate'>;
 const LIMIT = 100;
 const labels: Record<string, string> = { active: 'Responding', idle: 'Ready', paused: 'Paused', 'history-only': 'History only', uncertain: 'Delivery uncertain', stalled: 'Stalled', 'start-failed': 'Start failed', 'session-mismatch': 'Session mismatch', 'missing-directory': 'Directory missing', 'live-owner': 'Owner not confirmed dead', 'missing-context': 'Context missing', 'policy-refusal': 'Policy refusal' };
 const tones: Record<string, string> = { active: 'good', idle: 'good', paused: 'warn', stalled: 'warn', 'history-only': 'muted', uncertain: 'bad', 'start-failed': 'bad', 'session-mismatch': 'bad', 'missing-directory': 'bad', 'live-owner': 'bad', 'missing-context': 'bad', 'policy-refusal': 'bad' };
@@ -54,6 +57,29 @@ const roleOf = (e: Entry) => { const m = e?.message && typeof e.message === 'obj
 const textOf = (e: Entry) => { const m = e?.message && typeof e.message === 'object' ? e.message : e; return contentText(m?.content ?? m?.text ?? e?.content ?? ''); };
 const label = (s: string) => labels[s] || (s && s !== 'unknown' ? str(s) : 'Unknown');
 const tone = (s: string) => tones[s] || 'muted';
+// Launched-agent links mirror the memberAgentRoute shape
+// (destinations/epic-state.ts): the observed composite row key selects exactly
+// that observation row, while an unobserved handoff is only ever addressed by
+// its assignment id as a list filter. Both links are scoped to the selected
+// thread's workspace, never to an observation's own workspace field.
+const shortId = (value: unknown): string => {
+  const id = (typeof value === 'string' ? value : '').trim();
+  return id.length > 8 ? id.slice(0, 8) : id;
+};
+const modifiedClick = (event: MouseEvent) =>
+  event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0;
+const assignmentStatusTone = (value: string): StatusTone => value === 'good' ? 'success' : value === 'warn' ? 'warning' : 'neutral';
+const launchedAgentRoute = (row: WireRecord | null, handoff: WireRecord, ws: string): RouteState | null => {
+  const key = str(row?.key);
+  const assignment = str(row?.assignment_id) || str(handoff.assignment_id);
+  if (!key && !assignment) return null;
+  if (key) return { dest: 'agents', ws, id: key };
+  return { dest: 'agents', ws, q: assignment };
+};
+// A recorded handoff carries no workspace identity of its own, so the selected
+// thread's workspace is supplied as its scope only when the record names none.
+const handoffBriefRoute = (handoff: WireRecord, ws: string): RouteState | null =>
+  briefRoute(typeof handoff.workspace_id === 'string' && handoff.workspace_id !== '' ? handoff : { ...handoff, workspace_id: ws });
 
 export default function Conversations(props: Props) {
   const [threads, setThreads] = createSignal<Thread[] | null>(null);
@@ -134,6 +160,21 @@ export default function Conversations(props: Props) {
   const active = () => props.live && Boolean(wsId());
   const actionable = () => active() && Boolean(props.token);
   const thread = () => threads()?.find(t => t.thread_id === routeId());
+  // Launched relationships are re-derived from the selected thread record and
+  // the observation list on every read; nothing is retained across a thread
+  // change, so another thread's handoffs can never attach to this one.
+  const launchedWs = () => str(thread()?.workspace_id);
+  const launched = () => {
+    const selected = thread();
+    return selected ? launchedAgents(selected, props.assignments) : [];
+  };
+  // Modified clicks keep native href navigation; an ordinary click routes
+  // through the App navigation owner (AgentDetail/Designs precedent).
+  const routeClick = (route: RouteState) => (event: MouseEvent) => {
+    if (modifiedClick(event)) return;
+    event.preventDefault();
+    props.onNavigate(route);
+  };
   // Both sides of the elapsed comparison come from the same browser-local
   // clock: the recorded local instant and Date.now(). Server timestamps and
   // their clock offset never participate.
@@ -875,6 +916,11 @@ export default function Conversations(props: Props) {
           <div class="object-head">
             <div class="object-top detail-title"><h2 tabindex="-1" ref={el => (titleEl = el)}>{thread()?.title || `Thread ${routeId().slice(0, 8)}`}</h2><StatusText tone={statusTone(state())}>{label(state())}</StatusText></div>
             <p class="small muted mono thread-meta">Runs in {targetDescription(thread())} · {workspaceName()} · Thread {routeId()}{thread()?.generation != null ? ` · generation ${thread()?.generation}` : ''}{thread()?.updated_at ? ` · updated ${time(thread()?.updated_at)} ` : ''}</p>
+            <Show when={launched().length}>
+              <p class="small muted mono thread-launched" aria-label="Agents launched by this conversation"><span>Launched:</span>{' '}<For each={launched()}>{(entry, index) => (
+                <><Show when={index() > 0}>{' · '}</Show><Show when={launchedAgentRoute(entry.row, entry.handoff, launchedWs())} fallback={<span>Agent {shortId(entry.handoff.assignment_id)}</span>}>{route => <a class="text-link" href={formatHash(route())} onClick={routeClick(route())}>Agent {shortId(entry.handoff.assignment_id)}</a>}</Show>{' '}<StatusText tone={entry.row ? assignmentStatusTone(assignmentTone(entry.row)) : 'neutral'}>{entry.row ? assignmentLabel(entry.row) : 'not observed'}</StatusText>{' · '}<Show when={handoffBriefRoute(entry.handoff, launchedWs())} fallback={<span>Not recorded</span>}>{route => <a class="text-link" href={formatHash(route())} onClick={routeClick(route())}>Brief {str(entry.handoff.brief)}</a>}</Show></>
+              )}</For></p>
+            </Show>
             <p class="model-line">Model <span class="mid">{formatModelChoice(thread()?.model, 'Pi default')}</span><button type="button" class="text-link" data-thread-new-with-model onClick={() => props.onNavigate({ ...props.route, tab: 'new' })}>New thread with another model</button></p>
           </div>
           <Show when={help()[1]}><StateNotice tone={noticeTone(help()[2])} title={help()[0]}>{help()[1]}</StateNotice></Show>
