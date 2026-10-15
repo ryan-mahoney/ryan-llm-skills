@@ -45,8 +45,12 @@ test('a reasoning-only final response continues twice at most and text resets th
   const pi = { on: (name, fn) => handlers[name] = fn, appendEntry: (_kind, data) => entries.push(data) };
   installContextBudget(pi);
   const thinking = { role: 'assistant', stopReason: 'stop', content: [{ type: 'thinking', thinking: 'plan' }] };
-  const settle = (last, extra = {}) => handlers.agent_before_settle({ outcome: 'completed', continue: false, entries: [],
-    context: { pendingMessages: [], contextMessages: [{ role: 'user', content: 'task' }, last] }, ...extra });
+  // Pi omits a `length` response from the settle context, so only message_end shows it.
+  const settle = (last, extra = {}) => {
+    handlers.message_end({ message: { usage: {}, ...last } });
+    return handlers.agent_before_settle({ outcome: 'completed', continue: false, entries: [],
+      context: { pendingMessages: [], contextMessages: [{ role: 'user', content: 'task' }] }, ...extra });
+  };
   const first = settle(thinking);
   assert.equal(first.continue, true);
   assert.match(first.entries[0].content, /next tool call/);

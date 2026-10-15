@@ -176,10 +176,13 @@ export function installContextBudget(pi, { compact, retrySettings } = {}) {
   // MiMo produced these (stop with zero output, or length inside reasoning) and three
   // spec workers exited without results on 2026-10-15. Ask for the next action, twice
   // at most in a row; any response with text or a tool call resets the allowance.
-  let emptyStreak = 0;
+  // Track the final response at message_end: Pi drops a `length` response from the
+  // settle context, so the context alone cannot show that the run ended empty.
+  let emptyStreak = 0, lastAssistant;
   pi.on('agent_before_settle', event => {
     if (event.continue || event.outcome !== 'completed' || event.context?.pendingMessages?.length) return;
-    const last = event.context?.contextMessages?.findLast?.(m => m.role === 'assistant');
+    const last = lastAssistant;
+    lastAssistant = undefined;
     if (!last || !['stop', 'length'].includes(last.stopReason) || !reasoningOnly(last)) return;
     if (emptyStreak >= 2) return;
     emptyStreak++;
@@ -190,6 +193,7 @@ export function installContextBudget(pi, { compact, retrySettings } = {}) {
   });
   pi.on('message_end', (event) => {
     if (event.message?.role !== 'assistant') return;
+    lastAssistant = event.message;
     if (!reasoningOnly(event.message)) emptyStreak = 0;
     const usage = event.message.usage;
     if (inputTokens(usage) > 0 && lastEstimate > 0)

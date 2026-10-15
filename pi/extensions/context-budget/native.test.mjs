@@ -11,7 +11,7 @@ const root = process.env.SPEC_PI_SDK;
 const sdk = root ? await import(pathToFileURL(join(root, 'dist/index.js'))) : null;
 const skip = sdk ? false : 'Set SPEC_PI_SDK to the installed Pi package for native boundary checks';
 
-async function fixture(t, { compaction = true, seed, toolTurn = false, toolInput = 80000, toolOutput = 30, thinking = '', toolText = 'Pending: retain the source change and evidence.', providerName = 'budget-fixture', summaryStop = 'stop', emptyResponses = 0 } = {}) {
+async function fixture(t, { compaction = true, seed, toolTurn = false, toolInput = 80000, toolOutput = 30, thinking = '', toolText = 'Pending: retain the source change and evidence.', providerName = 'budget-fixture', summaryStop = 'stop', emptyResponses = 0, emptyStop = 'stop' } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'context-native-'));
   const requests = [];
   const server = createServer(async (req, res) => {
@@ -24,7 +24,7 @@ async function fixture(t, { compaction = true, seed, toolTurn = false, toolInput
     const empty = !isSummary && requests.length <= emptyResponses;
     const chunk = { id: 'fixture', object: 'chat.completion.chunk', created: 1, model: 'large', choices: [{ index: 0, delta: empty ? { reasoning_content: 'Planning the next action.' } : toolCall ? { ...(thinking ? { reasoning_content: thinking } : {}), tool_calls: [{ index: 0, id: 'call_fixture', type: 'function', function: { name: 'fixture_read', arguments: '{}' } }] } : { content: text }, finish_reason: null }] };
     res.write(`data: ${JSON.stringify(chunk)}\n\n`);
-    res.write(`data: ${JSON.stringify({ ...chunk, choices: [{ index: 0, delta: {}, finish_reason: toolCall ? 'tool_calls' : isSummary ? summaryStop : 'stop' }], usage: { prompt_tokens: toolCall ? toolInput : 100, completion_tokens: toolCall ? toolOutput : 30, total_tokens: toolCall ? toolInput + toolOutput : 130 } })}\n\n`);
+    res.write(`data: ${JSON.stringify({ ...chunk, choices: [{ index: 0, delta: {}, finish_reason: toolCall ? 'tool_calls' : isSummary ? summaryStop : empty ? emptyStop : 'stop' }], usage: { prompt_tokens: toolCall ? toolInput : 100, completion_tokens: toolCall ? toolOutput : 30, total_tokens: toolCall ? toolInput + toolOutput : 130 } })}\n\n`);
     res.end('data: [DONE]\n\n');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -173,6 +173,9 @@ test('native Pi sends one more request after a reasoning-only response and stops
   const g = await fixture(t, { providerName: 'deepseek', emptyResponses: 10 });
   await g.session.prompt('Continue the assigned fixture.');
   assert.equal(g.requests.length, 3, 'two continuations, then the run settles');
+  const h = await fixture(t, { providerName: 'deepseek', emptyResponses: 1, emptyStop: 'length' });
+  await h.session.prompt('Continue the assigned fixture.');
+  assert.equal(h.requests.length, 2, 'reasoning cut off at the output cap also continues');
 });
 
 test('DeepSeek summary truncation preserves history and does not retry the default summarizer', { skip, timeout: 15000 }, async t => {
