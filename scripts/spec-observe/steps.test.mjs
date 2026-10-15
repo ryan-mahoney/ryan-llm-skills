@@ -154,11 +154,11 @@ function makeLintFixture() {
       worktree: null,
     }],
   }, null, 2));
-  return { root, packageDir, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  return { root, storage, packageDir, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
-function runLint(packageDir) {
-  return spawnSync(process.execPath, [CLI, 'steps', 'lint', packageDir], {
+function runLint(...items) {
+  return spawnSync(process.execPath, [CLI, 'steps', 'lint', ...items], {
     encoding: 'utf8',
     timeout: CLI_TIMEOUT,
   });
@@ -535,5 +535,30 @@ test('steps lint CLI: unresolvable package exits 2', { timeout: CLI_TIMEOUT }, (
     assert.equal(result.status, 2, cliFailure(result));
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('steps lint CLI: package reference resolves against isolated alternate storage root', { timeout: CLI_TIMEOUT }, () => {
+  const fixture = makeLintFixture();
+  const empty = realpathSync(mkdtempSync(join(tmpdir(), 'steps-lint-empty-root-')));
+  try {
+    writeFileSync(join(fixture.packageDir, 'spec-steps.json'), JSON.stringify(sixStepIndex(), null, 2));
+    writeFileSync(join(fixture.packageDir, 'evidence-plan.json'), JSON.stringify({
+      version: 2,
+      spec: 'spec.md',
+      gates: completePlan().gates,
+    }, null, 2));
+
+    const resolved = runLint('demo/linted', '--root', fixture.storage);
+    assert.equal(resolved.status, 0, cliFailure(resolved));
+    const document = JSON.parse(resolved.stdout.trim());
+    assert.equal(document.ok, true);
+    assert.deepEqual(document.errors, []);
+
+    const isolated = runLint('demo/linted', '--root', empty);
+    assert.equal(isolated.status, 2, cliFailure(isolated));
+  } finally {
+    fixture.cleanup();
+    rmSync(empty, { recursive: true, force: true });
   }
 });

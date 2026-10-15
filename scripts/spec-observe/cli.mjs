@@ -23,7 +23,8 @@ const usage = `Usage: node scripts/spec-observe/cli.mjs list|runs|report|metrics
   epic wait --workspace W --epic SLUG [--minutes N] [--interval-seconds N] [--root PATH]
                          Block until a member's status, attention or launched session changes, or N minutes
                          pass (default 10, at most 60; checks every 60 seconds); print members and what changed
-  steps lint PACKAGE     Validate the package step index against its targets and evidence plan (exit 1 when invalid)
+  steps lint PACKAGE [--root PATH]
+                         Validate the package step index against its targets and evidence plan (exit 1 when invalid); --root resolves PACKAGE against an alternate storage root
   metrics --package PATH  Calls, role/model response time, steps, test submissions and cost
   --format text|json     Metrics output (default json)
   --all-sessions         Metrics across all recorded coordinator sessions, including pauses
@@ -96,8 +97,9 @@ try {
   }
   if (command === 'steps') {
     const [action, ...rest] = args;
-    if (action !== 'lint' || rest.length !== 1) { console.error(usage); process.exit(2); }
-    const checked = await checkPackage(rest[0]);
+    const withRoot = rest.length === 3 && rest[1] === '--root' && rest[2] && !rest[2].startsWith('-');
+    if (action !== 'lint' || (!withRoot && rest.length !== 1)) { console.error(usage); process.exit(2); }
+    const checked = await checkPackage(rest[0], { root: withRoot ? rest[2] : undefined });
     if (!checked.ok) { console.error(`${checked.code}: ${checked.message}`); process.exit(2); }
     let index;
     let evidencePlan;
