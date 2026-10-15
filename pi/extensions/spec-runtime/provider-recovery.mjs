@@ -12,6 +12,13 @@ export function transientProviderFailure(message) {
   return /no healthy deployments|overloaded|temporarily unavailable|service unavailable|rate.limit|too many requests|\b(?:429|500|502|503|504)\b|\b(?:ECONNRESET|ETIMEDOUT|EAI_AGAIN)\b|upstream timeout|connection (?:reset|closed)|fetch failed/i.test(error);
 }
 
+export function emptyProviderResponse(message) {
+  return message?.stopReason === 'stop' && Array.isArray(message.content)
+    && message.content.every(block => block.type === 'thinking'
+      || (block.type === 'text' && typeof block.text === 'string' && !block.text.trim()));
+}
+const recoverableResponse = message => transientProviderFailure(message) || emptyProviderResponse(message);
+
 // Continue the failed request in the same native session. Never relaunch a step,
 // replay a successful tool call, or turn a failed check into a provider retry.
 // Native Pi gets first use of its retry policy. Its failed responses count toward
@@ -30,7 +37,7 @@ export function installProviderRecovery(pi, { requestedModel, assertActive = () 
     onEvent(value);
   };
   const notify = (ctx, message, level = 'info') => ctx.ui?.notify(message, level);
-  async function selectFallback(ctx, restoring = false) {
+  async function selectFallback(ctx, restoring = false, failureKind) {
     assertActive();
     const model = ctx.modelRegistry.find(fallback.provider, fallback.model);
     if (!model) throw new Error('Fallback model is not registered');
@@ -38,7 +45,7 @@ export function installProviderRecovery(pi, { requestedModel, assertActive = () 
     if (await pi.setModel(model) === false) throw new Error('Fallback authentication unavailable');
     pi.setThinkingLevel(thinking);
     record({ event: restoring ? 'fallback_restored' : 'fallback_selected',
-      effective_model: `${fallback.provider}/${fallback.model}` });
+      effective_model: `${fallback.provider}/${fallback.model}`, failure_kind: failureKind });
     notify(ctx, `Provider unavailable after retries; continuing with ${fallback.provider}/${fallback.model}.`);
   }
   pi.on('session_start', async (_event, ctx) => {
@@ -62,7 +69,7 @@ export function installProviderRecovery(pi, { requestedModel, assertActive = () 
       if (entry.type !== 'message') continue;
       if (entry.message.role === 'user') break;
       if (entry.message.role !== 'assistant') continue;
-      if (!transientProviderFailure(entry.message)) break;
+      if (!recoverableResponse(entry.message)) break;
       failures.push(entry);
     }
     return failures;
@@ -71,7 +78,7 @@ export function installProviderRecovery(pi, { requestedModel, assertActive = () 
   // boundary has no active request signal, so sleeping there delays cancellation.
   pi.on('message_end', async (event, ctx) => {
     const message = event.message;
-    if (message?.role !== 'assistant' || !transientProviderFailure(message)
+    if (message?.role !== 'assistant' || !recoverableResponse(message)
       || ctx.model?.provider !== requested.provider || ctx.model?.id !== requested.model
       || ctx.signal?.aborted || ctx.hasPendingMessages()) return;
     const attempt = priorFailures(ctx).length + 1;
@@ -81,6 +88,7 @@ export function installProviderRecovery(pi, { requestedModel, assertActive = () 
     try { assertActive(); } catch { return; }
     const delay = PROVIDER_RECOVERY.delays[attempt - 1];
     record({ event: 'retry_scheduled', attempt, delay_ms: delay,
+      failure_kind: emptyProviderResponse(message) ? 'empty_response' : 'provider_error',
       effective_model: `${requested.provider}/${requested.model}` });
     notify(ctx, `Provider temporarily unavailable; retry ${attempt}/3 in ${delay / 1000}s.`);
     pendingWait = new AbortController();
@@ -89,16 +97,18 @@ export function installProviderRecovery(pi, { requestedModel, assertActive = () 
     finally { pendingWait = undefined; }
   });
   pi.on('agent_before_settle', async (event, ctx) => {
-    if (restoreFailed || event.outcome !== 'error' || event.continue
+    if (restoreFailed || !['error', 'completed'].includes(event.outcome) || event.continue
       || event.context?.pendingMessages?.length || ctx.hasPendingMessages()
       || ctx.signal?.aborted || ctx.model?.provider !== requested.provider
       || ctx.model?.id !== requested.model) return;
     const failures = priorFailures(ctx);
     if (!failures.length) return;
+    if (event.outcome === 'completed' && !emptyProviderResponse(failures[0].message)) return;
     const inputGeneration = generation;
     try { assertActive(); } catch { return; }
     if (failures.length > PROVIDER_RECOVERY.delays.length) {
-      try { await selectFallback(ctx); }
+      try { await selectFallback(ctx, false,
+        emptyProviderResponse(failures[0].message) ? 'empty_response' : 'provider_error'); }
       catch {
         record({ event: 'fallback_unavailable' });
         notify(ctx, 'Provider retries exhausted and deepseek/deepseek-flash is unavailable. Preserved the session; repair fallback configuration.', 'error');
@@ -106,7 +116,7 @@ export function installProviderRecovery(pi, { requestedModel, assertActive = () 
       }
     }
     if (ctx.signal?.aborted || generation !== inputGeneration || ctx.hasPendingMessages()) return;
-    // Raw errors remain durable. Omit only failed assistant responses from the
+    // Raw errors and empty responses remain durable. Omit only failed responses from the
     // next request; the preceding user/tool result is the native continuation.
     return { entries: [...event.entries, ...failures.map(entry => ({ type: 'context_edit',
       targetId: entry.id, replacement: null }))], continue: true };

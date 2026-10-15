@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createServer } from 'node:http';
-import { installProviderRecovery, transientProviderFailure } from './provider-recovery.mjs';
+import { installProviderRecovery, transientProviderFailure, emptyProviderResponse } from './provider-recovery.mjs';
 import { installContextBudget } from '../context-budget/policy.mjs';
 
 test('deployment outages retry despite HTTP 400; configuration, funds, context and abort failures do not', () => {
@@ -21,6 +21,18 @@ test('deployment outages retry despite HTTP 400; configuration, funds, context a
   assert.equal(transientProviderFailure({ stopReason: 'length', errorMessage: '503' }), false);
 });
 
+test('only a normal stop with no answer or action is an empty response', () => {
+  for (const content of [[], [{ type: 'thinking', thinking: 'Unfinished reasoning' }],
+    [{ type: 'text', text: ' \n' }]])
+    assert.equal(emptyProviderResponse({ stopReason: 'stop', content }), true);
+  for (const content of [[{ type: 'text', text: 'Done.' }],
+    [{ type: 'toolCall', name: 'write', arguments: {} }], [{ type: 'image', data: 'fixture' }]])
+    assert.equal(emptyProviderResponse({ stopReason: 'stop', content }), false);
+  for (const stopReason of ['aborted', 'length', 'error', 'toolUse'])
+    assert.equal(emptyProviderResponse({ stopReason, content: [] }), false);
+  assert.equal(emptyProviderResponse({ stopReason: 'stop' }), false);
+});
+
 const root = process.env.SPEC_PI_SDK;
 const sdk = root ? await import(pathToFileURL(join(root, 'dist/index.js'))) : null;
 const compat = root ? await import(pathToFileURL(join(root, '../pi-ai/dist/compat.js'))) : null;
@@ -29,7 +41,7 @@ const selected = 'primalabs/primalabs-ai/MiMo-V2.6-Pro:high';
 const outage = '400: litellm.BadRequestError: There are no healthy deployments for this model.';
 
 async function fixture(t, { toolFirst = false, primaryFailures = Infinity, fallbackPresent = true,
-  wait, seed, fallbackFails = false, nativeRetry = false } = {}) {
+  wait, seed, fallbackFails = false, nativeRetry = false, primaryEmpty = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'provider-recovery-'));
   const requests = [], delays = [], events = [];
   let mutations = 0, primaryCount = 0;
@@ -39,14 +51,17 @@ async function fixture(t, { toolFirst = false, primaryFailures = Infinity, fallb
     const primary = payload.model === 'primalabs-ai/MiMo-V2.6-Pro';
     if (primary) primaryCount++;
     const tool = primary && toolFirst && primaryCount === 1;
-    if ((!tool && primary && primaryCount - (toolFirst ? 1 : 0) <= primaryFailures) || (!primary && fallbackFails)) {
+    const failedPrimary = !tool && primary && primaryCount - (toolFirst ? 1 : 0) <= primaryFailures;
+    if ((failedPrimary && !primaryEmpty) || (!primary && fallbackFails)) {
       res.writeHead(400, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: { message: nativeRetry ? '503 Service Unavailable' : outage } })); return;
     }
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     const chunk = { id: 'fixture', object: 'chat.completion.chunk', created: 1, model: payload.model,
       choices: [{ index: 0, delta: tool ? { tool_calls: [{ index: 0, id: 'call_write', type: 'function',
-        function: { name: 'fixture_write', arguments: '{}' } }] } : { content: 'Retained work completed.' }, finish_reason: null }] };
+        function: { name: 'fixture_write', arguments: '{}' } }] }
+        : failedPrimary && primaryEmpty ? { reasoning_content: 'Reasoning with no final answer.' }
+        : { content: 'Retained work completed.' }, finish_reason: null }] };
     res.write(`data: ${JSON.stringify(chunk)}\n\n`);
     res.write(`data: ${JSON.stringify({ ...chunk, choices: [{ index: 0, delta: {}, finish_reason: tool ? 'tool_calls' : 'stop' }],
       usage: { prompt_tokens: 100, completion_tokens: 10, total_tokens: 110 } })}\n\n`);
@@ -144,4 +159,17 @@ test('native retries count toward fallback instead of receiving a second retry b
   assert.deepEqual(f.requests.map(r => r.model), [...Array(4).fill('primalabs-ai/MiMo-V2.6-Pro'), 'deepseek-flash']);
   assert.deepEqual(f.delays, [], 'native backoff already supplied the three waits');
   assert.equal(f.events.filter(e => e.event === 'fallback_selected').length, 1);
+});
+
+test('native reasoning-only normal stops back off and fall back without replaying completed tools', { skip, timeout: 15000 }, async t => {
+  const f = await fixture(t, { toolFirst: true, primaryEmpty: true });
+  await f.session.prompt('Apply the fixture change once, then finish.');
+  assert.deepEqual(f.delays, [5000, 10000, 20000]);
+  assert.deepEqual(f.requests.map(r => r.model), [...Array(5).fill('primalabs-ai/MiMo-V2.6-Pro'), 'deepseek-flash']);
+  assert.equal(f.mutations(), 1);
+  assert.match(JSON.stringify(f.requests.at(-1)), /Durable change already applied/);
+  assert.doesNotMatch(JSON.stringify(f.requests.at(-1)), /Reasoning with no final answer/);
+  assert.equal(f.manager.getEntries().filter(e => e.type === 'message' && emptyProviderResponse(e.message)).length, 4);
+  assert.equal(f.events.at(-1).event, 'fallback_selected');
+  assert.equal(f.events.at(-1).failure_kind, 'empty_response');
 });

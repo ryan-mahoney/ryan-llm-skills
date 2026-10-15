@@ -401,12 +401,13 @@ are unchanged. Those requirements do not apply to the global runtime-mode interf
 
 Managed owners and editors using the `primalabs` provider recover transient request
 failures in their existing native session. This includes the gateway's HTTP 400
-`no healthy deployments` response. Errors Pi does not recognize receive three
-retries after 5, 10 and 20 seconds. Recognized errors first use Pi's configured
+`no healthy deployments` response and normal-stop responses containing only reasoning
+or whitespace, with no answer or tool call. These empty responses and errors Pi does
+not recognize receive three retries after 5, 10 and 20 seconds. Recognized errors first use Pi's configured
 retry budget and backoff; those failed responses count toward the three retries,
 so the extension does not add a second full budget. After exhaustion, the runtime
 selects exactly `deepseek/deepseek-flash` and retains the thinking level and context
-policy. Successful responses end the failure streak.
+policy. A response with an answer or tool call ends the failure streak.
 Authentication, billing, model configuration, context limits, aborts and failed
 verification commands do not trigger this recovery.
 
