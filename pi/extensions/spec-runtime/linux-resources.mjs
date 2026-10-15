@@ -1059,7 +1059,8 @@ function pathInside(child, ancestor) {
 }
 
 // Effective ancestor limits are the minimum over the whole chain from the user
-// manager cgroup up to (and including) the cgroup root. The start path must be
+// manager cgroup up to (but excluding) the cgroup root, which has no resource
+// limit files. Root controller availability is checked separately. The start path must be
 // inside the root; the walk never reads above the root, and any unreadable or
 // malformed limit blocks admission instead of collapsing to "unlimited".
 function inspectAncestorLimits(start, stopAt) {
@@ -1074,6 +1075,7 @@ function inspectAncestorLimits(start, stopAt) {
   let current = start;
   for (;;) {
     chain.push(current);
+    if (current === stopAt) break;
     for (const [file, unit] of [['memory.max', 'memory'], ['pids.max', 'tasks']]) {
       const limit = readCgroupLimit(join(current, file));
       if (limit.status === 'unreadable') unreadable.push(join(current, file));
@@ -1083,7 +1085,7 @@ function inspectAncestorLimits(start, stopAt) {
         else tasks = tasks === null ? limit.value : Math.min(tasks, limit.value);
       }
     }
-    if (current === stopAt || dirname(current) === current) break;
+    if (dirname(current) === current) break;
     current = dirname(current);
   }
   const blocked = unreadable.length > 0 ? 'cgroup-unreadable' : invalid.length > 0 ? 'cgroup-limit-invalid' : null;

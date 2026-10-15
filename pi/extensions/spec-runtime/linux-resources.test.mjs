@@ -331,7 +331,8 @@ async function hostFixture(t, { hostControllers = 'cpu memory pids', managerCont
   for (const dir of [cgroupRoot, userSlice, uidSlice, managerPath, binDir]) mkdirSync(dir, { recursive: true });
   mkdirSync(runtimeDir, { recursive: true, mode: 0o700 });
   chmodSync(runtimeDir, 0o700);
-  for (const dir of [cgroupRoot, userSlice, uidSlice, managerPath]) {
+  // The cgroup-v2 hierarchy root does not expose resource-limit files.
+  for (const dir of [userSlice, uidSlice, managerPath]) {
     writeFileSync(join(dir, 'memory.max'), 'max\n');
     writeFileSync(join(dir, 'pids.max'), 'max\n');
   }
