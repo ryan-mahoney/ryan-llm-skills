@@ -995,6 +995,62 @@ test('wave workspaces: staged prepared dependency output reaches the frozen lowe
   assert.equal(existsSync(join(target.worktree, 'node_modules')), false, 'the live checkout is never used as the lower');
 });
 
+for (const backend of ['overlayfs', 'worktree']) {
+  test(`wave workspaces: ${backend} provisioning failure releases its reserved claim`, async t => {
+    const target = makeTargetRepo(t, `wave-release-${backend}-target`);
+    const waveRoot = freshRoot(t, `wave-release-${backend}-root`);
+    const registry = makeOwnership(t, `wave-release-${backend}`);
+    let reservations = 0;
+    const ownership = {
+      ...registry,
+      async reserveCheckout(args) {
+        const result = await registry.reserveCheckout(args);
+        assert.equal(result.status, 'reserved');
+        assert.equal((await registry.inspectClaims()).claims.length, 1, 'the fault follows a real reservation');
+        reservations++;
+        return result;
+      },
+    };
+    const attemptId = `attempt-release-${backend}`;
+    const baseCommit = target.c2;
+    const setup = { command: 'node --version', lockfiles: [], environment: [] };
+    const staging = stagePreparedInput(t, target, baseCommit);
+    const { snapshotId } = setupIdentity({ baseCommit, setup, targetRoot: target.worktree });
+    const options = phaseToken => ({
+      ...workspaceOptions({
+        target, waveRoot, ownership, packageId: 'wave-release', label: `release-${backend}`,
+        attemptId, baseCommit, mode: backend, setup, phaseToken,
+        preparationReceipt: {
+          ok: true, drain: 'confirmed', baseCommit, trackedClean: true,
+          snapshotId, stagingDigest: stagingDigest(staging),
+        },
+      }),
+      staging,
+    });
+    // Both backend provisioners reconcile this record inside their reserved
+    // phase. An invalid record fails there, not in pre-reservation validation.
+    const identityPath = join(waveRoot, 'attempts', `${attemptId}.workspace-identity.json`);
+    mkdirSync(join(waveRoot, 'attempts'), { recursive: true });
+    writeFileSync(identityPath, '[]\n');
+    await assert.rejects(() => prepareStepWorkspace(options('phase-release-fault')), error => {
+      refusal('layer-identity-mismatch')(error);
+      assert.match(error.message, /attempt identity record is malformed/);
+      return true;
+    });
+    assert.equal(reservations, 1);
+    assert.deepEqual((await registry.inspectClaims()).claims, [], 'failed provisioning releases its claim');
+
+    rmSync(identityPath);
+    // A new phase for the same attempt cannot replay or bypass a leaked claim.
+    const retry = await prepareStepWorkspace(options('phase-release-retry'));
+    assert.equal(reservations, 2);
+    assert.equal(retry.backend, backend);
+    assert.equal((await registry.inspectClaims()).claims[0].token, retry.claim.token);
+    await createOverlayPhases({ ownership }).endPhase({ ...retry.claim, drain: 'confirmed' });
+    assert.deepEqual((await registry.inspectClaims()).claims, [], 'ordinary retry cleanup also releases');
+  });
+}
+
 test('wave workspaces: preparation receipts bind identity and validated staging input', async t => {
   const target = makeTargetRepo(t, 'wave-workspaces-bind-target');
   const waveRoot = freshRoot(t, 'wave-workspaces-bind-root');
