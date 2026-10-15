@@ -1,7 +1,7 @@
 // Relaunch a re-entrant spec with the standard package prompt. The browser supplies
 // identities and approval only; execution settings remain owned by the record.
 import {addMaterial} from './store.mjs';
-import {plannedBriefContent,plannedBriefTitle} from './spec-prompt.mjs';
+import {implementationBriefContent,implementationBriefTitle} from './spec-prompt.mjs';
 import {prepareAssignmentSpecTarget,findAssignment,listAssignments,resolveAssignment,launchAssignment} from './assignments.mjs';
 import {assertNoAssignmentWorkers} from './worker-guard.mjs';
 import {observeAssignment} from './reconcile.mjs';
@@ -20,7 +20,7 @@ export function createAssignmentRelaunch({storageRoot,adapters={},resolveOptions
         specPackage:old.spec_package,supersedes:old.assignment_id,probes:adapters.observationProbes});
     }
     const material=await addMaterial(storageRoot,old.workspace_id,{kind:'brief',
-      request_id:input.retry_id,title:plannedBriefTitle(old.package_ref),content:plannedBriefContent(old.package_ref)});
+      request_id:input.retry_id,title:implementationBriefTitle(old.package_ref),content:implementationBriefContent(old.package_ref)});
     const trusted={assignment_id:input.retry_id,workspace_id:old.workspace_id,storageRoot,
       brief:material.path,instructions:'Perform the attached assignment brief.',skill:'spec-end-to-end',
       target:old.repository_id,specPackage:old.spec_package,provider:old.provider,model:old.model,thinking:old.thinking,

@@ -1,18 +1,3 @@
-// Standard package prompt shared by first launch and relaunch.
-export const plannedBriefTitle = (packageRef) =>
-  `Resume ${packageRef} through PR publication`.slice(0, 200);
-
-export const plannedBriefContent = (packageRef) =>
-  `/spec-end-to-end Resume after spec-write for ${packageRef}.\n` +
-  `Continue through PR publication.\n\n` +
-  `DEFAULT_OWNER: meta/muse-spark-1.3-contributor:xhigh from openrouter\n` +
-  `STRONG_OWNER: gpt-6.1-sol:medium from openai-codex\n` +
-  `EDITOR_AGENT: deepseek-flash:max from deepseek\n` +
-  `REVIEW_AGENT: gpt-6.1-sol:medium from openai-codex\n` +
-  `SCOUT_AGENT: gpt-6-luna:low from openai-codex\n` +
-  `FINAL_REVIEWER: gpt-6.1-sol:xhigh from openai-codex\n` +
-  `PACKAGE: ${packageRef}`;
-
 // Planning brief stages are skill ids; the brief pairs each with its human label.
 const planningStageLabels={'spec-architect-initial':'Architecture','spec-architect-critics':'Critique','spec-write':'Specification and preparation'};
 const stageSequence=(stages)=>stages.map((skill,index)=>`${index+1} ${planningStageLabels[skill]??skill} (${skill})`).join(' -> ');
@@ -58,10 +43,18 @@ export const planningBriefContent=(packageRef,plan)=>{
 export const implementationBriefTitle=(packageRef)=>
   `Implement ${packageRef} through draft PR`.slice(0,200);
 
-// Implementation resumes prepared work to a draft PR on the host default model;
-// the legacy plannedBrief model overrides stay exclusive to relaunch.
+// The one spec-end-to-end launch brief, shared by first launch and relaunch. The
+// model lines are this host's standing assignments; the brief stays editable
+// before it is saved, so a run-specific selector is changed there.
 export const implementationBriefContent=(packageRef)=>
-  `/spec-end-to-end Resume prepared implementation for ${packageRef}.\n` +
-  `Stop at a draft pull request. Do not merge or deploy; merge stays with the operator.\n` +
-  `Use the host default model and execution settings.\n\n` +
+  `/spec-end-to-end Implement ${packageRef} from its prepared specs.\n` +
+  `Create a new branch/worktree and continue through PR publication.\n\n` +
+  `Use the configured step-owner difficulty routing and retained owner/editor\n` +
+  `pairs through the installed Pi spec runtime. Use bounded editor assignments\n` +
+  `and separate commit assignments. Use REVIEW_AGENT for independent reviews.\n\n` +
+  `DEFAULT_OWNER: deepseek-flash:max from deepseek\n` +
+  `STRONG_OWNER: gpt-5.6-sol:high from openai-codex\n` +
+  `EDITOR_AGENT: mimo-v2.6-pro-ultraspeed:off from xiaomi\n` +
+  `REVIEW_AGENT: gpt-6.1-sol:medium from openai-codex\n` +
+  `SCOUT_AGENT: gpt-6-luna:low from openai-codex\n` +
   `PACKAGE: ${packageRef}`;

@@ -83,7 +83,7 @@ test('readiness separates ready, waiting, incomplete, not-planned, decision and 
   assert.equal(waiting.label, 'Prepared · waiting');
   assert.equal(waiting.tone, 'neutral');
   assert.deepEqual(waiting.waitingOn, ['super2']);
-  assert.equal(waiting.reason, 'Available when super2 is merged');
+  assert.equal(waiting.reason, 'super2 is prepared but not observed as merged');
   // A waiting prerequisite is a concern the operator weighs; the action stays available.
   assert.equal(waiting.launchable, true);
 

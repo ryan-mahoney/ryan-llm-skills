@@ -143,7 +143,10 @@ async function composeHost(options, signal) {
     // created after it did.
     if (signal?.aborted || closing) throw new StartupCancelledError();
     dashboard = createDirectDashboard({ agentDir: canonicalAgentDir, port, publicHost: normalizedPublicHost, storageRoot: configuredStorageRoot, discussion });
-    observer = createSentinelObserver({ agentDir: canonicalAgentDir, scope, headless: true, isolateReader: true, dashboard, storageRoot: configuredStorageRoot ?? null });
+    // The host's reader is replaced after a failed scan, which drops in-memory
+    // merge evidence; persisting sentinel-merge.json keeps merged prerequisites
+    // observed as merged across those restarts.
+    observer = createSentinelObserver({ agentDir: canonicalAgentDir, scope, headless: true, isolateReader: true, dashboard, storageRoot: configuredStorageRoot ?? null, persistMergeMetadata: true });
     const lifecycle = await observer.lifecycle({ action: 'observe', root: canonicalRoot });
     if (signal?.aborted) {
       await close();

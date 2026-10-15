@@ -173,7 +173,7 @@ export function EpicMembersTable(props: {
   onPlan: MemberActionHandler;
   onImplement: MemberActionHandler;
   onNavigate: (route: RouteState) => void;
-  actionReason: (member: WireRecord, row: EpicMemberPlanning) => string;
+  actionRefusal: (member: WireRecord, row: EpicMemberPlanning) => string;
   handoffBusy: '' | 'plan' | 'implement';
 }) {
   const members = () => list(props.epic.members);
@@ -208,7 +208,11 @@ export function EpicMembersTable(props: {
                 const observed = () => epicMemberPlanningRow(props.epic, member, props.records, assignments());
                 const matched = () => memberRecords(props.records, workspace(), name()).length > 0;
                 const remembered = () => Boolean(name()) && props.rememberedMember === name();
-                const reason = () => props.actionReason(member, observed());
+                // The refusal disables the control; the row's advisory reason
+                // (coverage, unlanded prerequisite) is shown beside it and the
+                // operator may still start.
+                const refusal = () => props.actionRefusal(member, observed());
+                const reason = () => refusal() || observed().action.reason || '';
                 const reasonId = () => `epic-member-action-${index()}`;
                 return (
                   <tr data-remembered-member={remembered() ? 'true' : undefined}>
@@ -244,7 +248,7 @@ export function EpicMembersTable(props: {
                           type="button"
                           class="text-link"
                           data-action="plan"
-                          disabled={Boolean(reason()) || props.handoffBusy === 'plan'}
+                          disabled={Boolean(refusal()) || props.handoffBusy === 'plan'}
                           aria-describedby={reason() ? reasonId() : undefined}
                           onClick={() => props.onPlan(member)}
                         >
@@ -256,7 +260,7 @@ export function EpicMembersTable(props: {
                           type="button"
                           class="text-link"
                           data-action="implement"
-                          disabled={Boolean(reason()) || props.handoffBusy === 'implement'}
+                          disabled={Boolean(refusal()) || props.handoffBusy === 'implement'}
                           aria-describedby={reason() ? reasonId() : undefined}
                           onClick={() => props.onImplement(member)}
                         >
@@ -531,7 +535,7 @@ export function EpicDetail(props: {
     }
     return '';
   };
-  const actionReason = (member: WireRecord, row: EpicMemberPlanning): string => {
+  const actionRefusal = (member: WireRecord, row: EpicMemberPlanning): string => {
     if (row.action.kind !== 'plan' && row.action.kind !== 'implement') return row.action.reason ?? '';
     // A missing package directory is the row's own observed reason: the record
     // gates below only see an absent record and must not replace it.
@@ -539,18 +543,20 @@ export function EpicDetail(props: {
     const record = epicMemberRecord(props.epic, member, props.records);
     const handoff = handoffReason(record);
     if (handoff) return handoff;
-    // The row's own readiness reason (prerequisite, coverage, unavailable
-    // preparation) stays the observed explanation; the planning-stage gate
-    // only adds its refusal when the row would otherwise commit.
+    // Only a row the readiness model itself withholds (unavailable preparation,
+    // an unresolved planning prerequisite) refuses here. An advisory reason on
+    // an enabled row (coverage, an unlanded prerequisite) is displayed by the
+    // row and never disables the control; the planning-stage gate adds its
+    // refusal only when the row would otherwise commit.
     const stage = row.action.kind === 'plan' ? planStageReason(memberPlanning(member)) : '';
-    return row.action.reason || stage || '';
+    return (row.action.disabled ? row.action.reason ?? '' : '') || stage;
   };
   async function startHandoff(kind: 'plan' | 'implement', member: WireRecord) {
     if (handoffBusy()) return;
     const record = epicMemberRecord(props.epic, member, props.records);
     if (!record || !props.token || !props.live) return;
     const facts = memberPlanning(member);
-    const blocked = actionReason(member, epicMemberPlanningRow(props.epic, member, props.records, assignments()));
+    const blocked = actionRefusal(member, epicMemberPlanningRow(props.epic, member, props.records, assignments()));
     if (blocked) {
       setHandoffError(blocked);
       return;
@@ -611,7 +617,7 @@ export function EpicDetail(props: {
       if (stats().total > 0 && stats().landed >= stats().total) return 'All members have landed; there is no member to plan.';
       return 'No unplanned member is eligible in this observation.';
     }
-    return actionReason(next, epicMemberPlanningRow(props.epic, next, props.records, assignments()));
+    return actionRefusal(next, epicMemberPlanningRow(props.epic, next, props.records, assignments()));
   };
   const planNextMember = () => {
     const next = nextMember();
@@ -710,7 +716,7 @@ export function EpicDetail(props: {
           onPlan={member => void startHandoff('plan', member)}
           onImplement={member => void startHandoff('implement', member)}
           onNavigate={props.onNavigate}
-          actionReason={actionReason}
+          actionRefusal={actionRefusal}
           handoffBusy={handoffBusy()}
         />
         <EpicDocuments epic={props.epic} catalog={props.catalog} preferredWs={props.preferredWs} onNavigate={props.onNavigate} />

@@ -12,7 +12,8 @@ const head='a'.repeat(40), merged='b'.repeat(40), learning='c'.repeat(40);
 function fixture(t){const pkg=realpathSync(mkdtempSync(join(tmpdir(),'merge-reconcile-')));t.after(()=>rmSync(pkg,{recursive:true,force:true}));return {package:pkg,ref:'demo/feature',target:'alpha',primary:pkg,pr:{url:'https://github.com/o/r/pull/7',branch:'feature',base:'main'},commits:[learning],receipts:[['run','cancelled','2026-10-08T10:00:00Z']],checkpoints:[['waiting-worker','2026-10-08T10:05:00Z']]};}
 test('merge reconciliation binds current branch despite stale draft publication and reuses stable evidence',async t=>{
  const input=fixture(t);let api=0,tip=head;
- const command=async(program,args)=>{if(program==='gh'){api++;return JSON.stringify({url:input.pr.url,state:'MERGED',mergedAt:'2026-10-08T11:00:00Z',mergeCommit:{oid:merged},headRefOid:head,headRefName:'feature',baseRefName:'main'});}return args[0]==='rev-parse'?tip:'';};
+ // The moved tip is not contained in the merge: git exits non-zero for `merge-base --is-ancestor`.
+ const command=async(program,args)=>{if(program==='gh'){api++;return JSON.stringify({url:input.pr.url,state:'MERGED',mergedAt:'2026-10-08T11:00:00Z',mergeCommit:{oid:merged},headRefOid:head,headRefName:'feature',baseRefName:'main'});}if(args.includes('merge-base'))throw Object.assign(new Error('not an ancestor'),{code:1});return args[0]==='rev-parse'?tip:'';};
  const reconcile=createMergeReconciler({persist:true,now:()=>Date.parse('2026-10-08T12:00:00Z'),command,readBranch:async()=>({state:'present',head:tip})});
  const record=await reconcile(input);assert.equal(record.state,'merged');assert.equal(applicableMerge(record,input),true);
  assert.equal((await reconcile(input)).state,'merged');assert.equal(api,1);assert.equal(JSON.parse(readFileSync(join(input.package,'sentinel-merge.json'))).targets.alpha.merge_commit,merged);
@@ -124,4 +125,25 @@ test('merge reconciliation keeps one record per target in the same sentinel-merg
  const file=JSON.parse(readFileSync(join(alpha.package,'sentinel-merge.json')));
  assert.deepEqual(Object.keys(file.targets).sort(),['alpha','beta']);assert.equal(file.targets.beta.url,beta.pr.url);assert.equal(file.package_ref,'demo/feature');
  assert.equal(applicableMerge(file.targets.alpha,beta),false,'a target record never answers for another target');
+});
+
+// Run independently: node --test --test-name-pattern='behind the merged PR head' scripts/spec-observe/merge-reconciliation.test.mjs
+test('a local branch left behind the merged PR head is merged by the API and by local evidence; a branch ahead of it is not',async t=>{
+ const now=()=>Date.parse('2026-10-08T12:00:00Z');
+ // API path: the PR merged a head this checkout never fetched; the local branch is an ancestor of the merge commit.
+ const api=gitFixture(t);const remoteHead='d'.repeat(40);
+ const authoritative=async(program,args,cwd,timeout)=>program==='gh'?JSON.stringify({url:api.input.pr.url,state:'MERGED',mergedAt:'2026-10-08T11:00:00Z',mergeCommit:{oid:api.merge},headRefOid:remoteHead,headRefName:'feature',baseRefName:'main'}):api.command(program,args,cwd,timeout);
+ api.git(['update-ref','refs/remotes/origin/main',api.base]);// local main alone cannot certify, so the API answers
+ const record=await createMergeReconciler({command:authoritative,now})(api.input);
+ assert.equal(record.state,'merged');assert.equal(record.reason,'authoritative-pr');assert.equal(record.head,remoteHead);assert.equal(record.tip,api.head);
+ assert.equal(await validateMergeCache(record,api.input),true,'the behind tip stays a valid cache while the branch does not move');
+ // Local path: the branch ref was rewound to the first of two merged commits.
+ const local=gitFixture(t);local.git(['checkout','-q','feature']);writeFileSync(join(local.root,'more'),'more');local.git(['add','more']);local.git(['commit','-qm','Second feature commit'],'2026-10-08T10:30:00Z');const second=local.git(['rev-parse','HEAD']);
+ local.git(['checkout','-q','main']);local.git(['reset','-q','--hard',local.base]);local.git(['merge','--no-ff','feature','-m','Merge pull request #7 from o/feature'],'2026-10-08T11:00:00Z');const merge=local.git(['rev-parse','HEAD']);
+ local.git(['update-ref','refs/remotes/origin/main',merge]);local.git(['update-ref','refs/heads/feature',local.head]);
+ const behind=await createMergeReconciler({command:local.command,now})(local.input);
+ assert.equal(behind.state,'merged');assert.equal(behind.reason,'local-pr-merge');assert.equal(behind.head,second);assert.equal(behind.tip,local.head);assert.equal(local.api,0);
+ assert.equal(await validateMergeCache(behind,local.input),true);
+ local.git(['checkout','-q','feature']);writeFileSync(join(local.root,'ahead'),'ahead');local.git(['add','ahead']);local.git(['commit','-qm','Unmerged work'],'2026-10-08T11:30:00Z');
+ assert.equal((await createMergeReconciler({command:local.command,now})(local.input)).local_reason,'local-head-mismatch');
 });

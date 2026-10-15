@@ -56,6 +56,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
   now = Date.now, watchDirectory = watchSpecTree, setTimer = setTimeout, clearTimer = clearTimeout, repeat = setInterval, cancelRepeat = clearInterval,
   nativeRun = null, maxWatchers = MAX_WATCHERS, enablePolicy = null, disablePolicy: disableAuthority = null,
   isolateReader = false, readerFactory = createSentinelReaderProcess, dashboard = null, startMode = null, stopMode = NOOP_STOP_MODE, modeStatus = () => null,
+  persistMergeMetadata = false,
   headless = false }) {
   if (headless && (startMode != null || stopMode !== NOOP_STOP_MODE || enablePolicy != null || disableAuthority != null))
     throw new Error('Headless sentinel observation cannot carry authority callbacks.');
@@ -231,7 +232,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
         let snapshot, roots, discovery, enrollmentErrors;
         if (isolatedReader) {
           ({ snapshot, roots, discovery, enrollmentErrors } = await isolatedReader.read({
-            agentDir, scope, indexDir, storageRoot, packages: [...ownPackages], root: discoveryRootOverride, includeInactive, mergeLookup: !readOnly, reconcileMergeMetadata: !readOnly && ['shadow','recover'].includes(modeStatus()?.options?.mode),
+            agentDir, scope, indexDir, storageRoot, packages: [...ownPackages], root: discoveryRootOverride, includeInactive, mergeLookup: !readOnly, reconcileMergeMetadata: !readOnly && (persistMergeMetadata || ['shadow','recover'].includes(modeStatus()?.options?.mode)),
           }));
         } else {
           const enrolled = await readEnrollments({ agentDir, scope });
@@ -240,7 +241,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
           roots = [...new Set([...(enrolled.roots ?? []), ...discovery.roots])];
           snapshot = await collectWorkspace({
             roots, packages: [...ownPackages], enrollmentErrors, discovery, indexDir, agentDir, scope, now, includeInactive, storageRoot,
-            reconcileMerge: readOnly ? null : createMergeReconciler({ persist: ['shadow','recover'].includes(modeStatus()?.options?.mode), now }),
+            reconcileMerge: readOnly ? null : createMergeReconciler({ persist: persistMergeMetadata || ['shadow','recover'].includes(modeStatus()?.options?.mode), now }),
           });
         }
         // History is a one-shot view, never the live alert/export state.

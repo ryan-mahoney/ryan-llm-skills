@@ -222,7 +222,8 @@ newest specification edit first (`planned_at` from `spec.md`, falling back to
 and planned folders can open their package files.
 
 On a planned spec's live detail page, **Start implementation** provides an editable
-brief prefilled with `/spec-end-to-end Resume after spec-write` and the package's
+brief prefilled with the standard `/spec-end-to-end Implement … from its prepared specs`
+prompt from the top-level README, including its model assignment lines, and the package's
 reference. The orchestrator uses `deepseek:deepseek-flash:high`; the initial
 step-owner and other worker model roles remain in the editable brief. **Preview settings**
 prepares the package’s separate worktree, saves the brief and shows the package,

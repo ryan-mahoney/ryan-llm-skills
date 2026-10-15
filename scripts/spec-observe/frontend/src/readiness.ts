@@ -207,8 +207,10 @@ export const coverageStateOf = (record: WireRecord | null | undefined, context: 
   return text(coverage?.state) || 'unknown';
 };
 
+// States what the observer has seen, never what the operator may do: a
+// prerequisite's merge can be confirmed later than it happened.
 const prerequisiteReason = (fact: PrerequisiteFact): string => fact.state === 'prepared'
-  ? `Available when ${fact.name} is merged`
+  ? `${fact.name} is prepared but not observed as merged`
   : fact.state === 'unresolved' ? `Waiting on ${fact.name}` : `${fact.name} is not observed`;
 
 function result(state: ReadinessState, facts: PlanningFacts | null, context: ReadinessContext, extra: Partial<ReadinessFacts> = {}): ReadinessFacts {
