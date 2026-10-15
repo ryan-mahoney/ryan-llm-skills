@@ -8,7 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
@@ -421,6 +421,191 @@ test('wave workspaces: retained remount preserves dirty state and blocks unclean
   assert.equal(readFileSync(join(remounted.upper, 'untracked.txt'), 'utf8'), 'scratch\n', 'the untracked file survives remount');
   assert.ok(!existsSync(join(remounted.upper, 'docs', 'remove-me.txt')), 'the deletion stands after remount');
   assert.ok(existsSync(join(record.lower, 'docs', 'remove-me.txt')), 'the lower deletion source is untouched');
+});
+
+// F6: a retained record is re-mountable only while it still describes the
+// requested attempt and a real, intact workspace on disk. These cases tamper
+// with the record's agreement with the requested attempt or with the retained
+// paths themselves; each must refuse with one named reason, take no claim and
+// leave every surviving retained byte untouched (non-destructive refusal).
+
+function retainedRequest(record, waveRoot, overrides = {}) {
+  return {
+    backend: record.backend,
+    waveRoot,
+    attemptId: record.retained.upperId,
+    snapshotId: record.snapshotId,
+    baseCommit: record.baseCommit,
+    ...overrides,
+  };
+}
+
+// Byte-level snapshot of a retained path tree (files, directories, symlink
+// targets) so a refused remount can be proven non-destructive.
+function treeSnapshot(root) {
+  const entries = new Map();
+  const walk = (dir, prefix) => {
+    for (const name of readdirSync(dir).sort()) {
+      const abs = join(dir, name);
+      const rel = prefix ? `${prefix}/${name}` : name;
+      const stat = lstatSync(abs);
+      if (stat.isSymbolicLink()) entries.set(rel, `symlink:${readlinkSync(abs)}`);
+      else if (stat.isDirectory()) { entries.set(rel, 'dir'); walk(abs, rel); }
+      else entries.set(rel, readFileSync(abs));
+    }
+  };
+  walk(root, '');
+  return entries;
+}
+
+async function assertNoClaims(ownership, label) {
+  const { claims } = await ownership.inspectClaims();
+  assert.deepEqual(claims, [], `${label}: no phase claim may be taken`);
+}
+
+test('wave workspaces: a retained record whose identity no longer matches refuses to remount', async t => {
+  const target = makeTargetRepo(t, 'wave-workspaces-retained-identity-target');
+  const waveRoot = freshRoot(t, 'wave-workspaces-retained-identity-root');
+  const ownership = makeOwnership(t, 'wave-workspaces-retained-identity');
+  const phases = createOverlayPhases({ ownership });
+
+  const record = await prepareStepWorkspace(workspaceOptions({
+    target, waveRoot, ownership, packageId: 'wave-retained-identity', label: 'retained-identity',
+    attemptId: 'attempt-retained-identity', baseCommit: target.c2, mode: 'overlayfs',
+  }));
+  assert.equal(record.backend, 'overlayfs');
+  const expected = {
+    lower: record.lower, upper: record.upper, work: record.work, merged: record.merged,
+    gitDir: record.gitDir, baseCommit: record.baseCommit, snapshotId: record.snapshotId,
+  };
+  const released = await phases.endPhase({ token: record.claim.token, epoch: record.claim.epoch, drain: 'confirmed' });
+  assert.equal(released.status, 'released', 'the prior phase is positively drained');
+
+  const before = {
+    lower: treeSnapshot(record.lower), upper: treeSnapshot(record.upper), work: treeSnapshot(record.work),
+    merged: treeSnapshot(record.merged), gitDir: treeSnapshot(record.gitDir),
+  };
+
+  const remount = request => remountRetainedWorkspace({
+    retained: JSON.parse(JSON.stringify(record.retained)),
+    expected,
+    previous: { token: record.claim.token, epoch: record.claim.epoch },
+    phaseToken: 'phase-retained-identity-next',
+    coordinator: coordinatorFor('retained-identity'),
+    ownership,
+    request,
+  });
+
+  for (const [label, request] of [
+    ['a different attempt identity', retainedRequest(record, waveRoot, { attemptId: 'attempt-someone-else' })],
+    ['a different snapshot', retainedRequest(record, waveRoot, { snapshotId: 'snapshot-someone-else' })],
+    ['a different base commit', retainedRequest(record, waveRoot, { baseCommit: target.c1 })],
+    ['a different wave root', retainedRequest(record, waveRoot, { waveRoot: freshRoot(t, 'wave-workspaces-retained-identity-other') })],
+  ]) {
+    await assertRefusalAsync('retained-workspace-invalid', () => remount(request));
+    await assertNoClaims(ownership, label);
+  }
+
+  assert.deepEqual({
+    lower: treeSnapshot(record.lower), upper: treeSnapshot(record.upper), work: treeSnapshot(record.work),
+    merged: treeSnapshot(record.merged), gitDir: treeSnapshot(record.gitDir),
+  }, before, 'every retained path is byte-identical after the refused remounts');
+
+  // A request that still agrees with the record remounts exactly as today.
+  const remounted = await remount(retainedRequest(record, waveRoot));
+  assert.equal(remounted.backend, 'overlayfs');
+  assert.equal(remounted.upper, record.upper);
+  assert.equal(remounted.merged, record.merged);
+});
+
+test('wave workspaces: a retained record with missing or redirected layers refuses to remount', async t => {
+  const target = makeTargetRepo(t, 'wave-workspaces-retained-layers-target');
+  const waveRoot = freshRoot(t, 'wave-workspaces-retained-layers-root');
+  const ownership = makeOwnership(t, 'wave-workspaces-retained-layers');
+  const phases = createOverlayPhases({ ownership });
+
+  const prepare = attemptId => prepareStepWorkspace(workspaceOptions({
+    target, waveRoot, ownership, packageId: 'wave-retained-layers', label: 'retained-layers',
+    attemptId, baseCommit: target.c2, mode: 'overlayfs',
+  }));
+  const remountFor = record => remountRetainedWorkspace({
+    retained: JSON.parse(JSON.stringify(record.retained)),
+    expected: {
+      lower: record.lower, upper: record.upper, work: record.work, merged: record.merged,
+      gitDir: record.gitDir, baseCommit: record.baseCommit, snapshotId: record.snapshotId,
+    },
+    previous: { token: record.claim.token, epoch: record.claim.epoch },
+    phaseToken: `phase-${record.retained.upperId}-next`,
+    coordinator: coordinatorFor('retained-layers'),
+    ownership,
+    request: retainedRequest(record, waveRoot),
+  });
+  const drain = async record => {
+    const released = await phases.endPhase({ token: record.claim.token, epoch: record.claim.epoch, drain: 'confirmed' });
+    assert.equal(released.status, 'released', 'the prior phase is positively drained');
+  };
+
+  // Sub-case one: the merged layer directory is gone.
+  const missing = await prepare('attempt-retained-missing-merged');
+  await drain(missing);
+  const missingLower = treeSnapshot(missing.lower);
+  const missingUpper = treeSnapshot(missing.upper);
+  rmSync(missing.merged, { recursive: true, force: true });
+  await assertRefusalAsync('retained-workspace-invalid', () => remountFor(missing));
+  await assertNoClaims(ownership, 'missing merged');
+  assert.ok(!existsSync(missing.merged), 'the refused remount never recreates the merged layer');
+  assert.deepEqual(treeSnapshot(missing.lower), missingLower, 'the surviving retained bytes are unchanged');
+  assert.deepEqual(treeSnapshot(missing.upper), missingUpper, 'the surviving retained bytes are unchanged');
+
+  // Sub-case two: a layer is replaced by a symbolic link pointing outside the
+  // wave root.
+  const redirected = await prepare('attempt-retained-redirected-work');
+  await drain(redirected);
+  const outside = freshRoot(t, 'wave-workspaces-retained-layers-outside');
+  writeFileSync(join(outside, 'outside.txt'), 'outside\n');
+  const redirectedLower = treeSnapshot(redirected.lower);
+  const redirectedUpper = treeSnapshot(redirected.upper);
+  rmSync(redirected.work, { recursive: true, force: true });
+  symlinkSync(outside, redirected.work);
+  await assertRefusalAsync('retained-workspace-invalid', () => remountFor(redirected));
+  await assertNoClaims(ownership, 'redirected work');
+  assert.equal(lstatSync(redirected.work).isSymbolicLink(), true, 'the refused remount deletes nothing');
+  assert.equal(readlinkSync(redirected.work), outside, 'the redirection is left exactly as it is');
+  assert.deepEqual(treeSnapshot(redirected.lower), redirectedLower, 'the surviving retained bytes are unchanged');
+  assert.deepEqual(treeSnapshot(redirected.upper), redirectedUpper, 'the surviving retained bytes are unchanged');
+  assert.deepEqual(treeSnapshot(outside), new Map([['outside.txt', Buffer.from('outside\n')]]), 'the outside target is untouched');
+});
+
+test('wave workspaces: a retained fallback worktree whose path vanished refuses to remount', async t => {
+  const target = makeTargetRepo(t, 'wave-workspaces-retained-worktree-target');
+  const waveRoot = freshRoot(t, 'wave-workspaces-retained-worktree-root');
+  const ownership = makeOwnership(t, 'wave-workspaces-retained-worktree');
+  const phases = createOverlayPhases({ ownership });
+
+  const record = await prepareStepWorkspace(workspaceOptions({
+    target, waveRoot, ownership, packageId: 'wave-retained-worktree', label: 'retained-worktree',
+    attemptId: 'attempt-retained-worktree', baseCommit: target.c2, mode: 'worktree',
+  }));
+  assert.equal(record.backend, 'worktree');
+  assert.ok(record.worktree, 'the fallback attempt records its worktree path');
+  const released = await phases.endPhase({ token: record.claim.token, epoch: record.claim.epoch, drain: 'confirmed' });
+  assert.equal(released.status, 'released', 'the prior phase is positively drained');
+  rmSync(record.worktree, { recursive: true, force: true });
+
+  await assertRefusalAsync('retained-workspace-invalid', () => remountRetainedWorkspace({
+    retained: JSON.parse(JSON.stringify(record.retained)),
+    expected: {
+      lower: record.lower, upper: record.upper, work: record.work, merged: record.merged,
+      gitDir: record.gitDir, baseCommit: record.baseCommit, snapshotId: record.snapshotId,
+    },
+    previous: { token: record.claim.token, epoch: record.claim.epoch },
+    phaseToken: 'phase-retained-worktree-next',
+    coordinator: coordinatorFor('retained-worktree'),
+    ownership,
+    request: retainedRequest(record, waveRoot),
+  }));
+  await assertNoClaims(ownership, 'vanished worktree');
+  assert.ok(!existsSync(record.worktree), 'the refused remount does not recreate the vanished worktree');
 });
 
 test('wave workspaces: index setup declaration preserves command and environment names', async t => {

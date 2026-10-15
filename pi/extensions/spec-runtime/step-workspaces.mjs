@@ -956,13 +956,102 @@ async function heldClaim(ownership, previous) {
   return claims.find(claim => claim.token === previous.token && claim.epoch === previous.epoch) ?? null;
 }
 
+// F6: a retained record is only trustworthy while it still describes the
+// requested attempt and a real, intact workspace. Before any claim is taken
+// or returned the record is validated against the remount request and the
+// filesystem: the recorded backend, snapshot identity, base commit, wave root
+// and attempt identity must agree with what is being remounted and with each
+// other's recorded layout, and every recorded path (the overlay layers, or the
+// fallback worktree) must exist, be a real directory, never be a symbolic
+// link, and resolve inside the recorded wave root. A stale, half-deleted or
+// tampered record refuses with retained-workspace-invalid before any phase
+// claim exists: nothing is recreated, deleted or converted, and the dirty
+// state of a surviving workspace is left byte-for-byte alone.
+function validateRetainedWorkspace(retained, request) {
+  const invalid = detail => refuse('retained-workspace-invalid', detail);
+  const { backend, snapshotId, baseCommit, upperId } = retained;
+  if (backend !== 'overlayfs' && backend !== 'worktree') {
+    invalid(`retained record carries an unknown backend: ${backend}`);
+  }
+  for (const [field, value] of [['snapshot identity', snapshotId], ['base commit', baseCommit], ['attempt identity', upperId]]) {
+    if (typeof value !== 'string' || value.length === 0) invalid(`retained record carries no ${field}`);
+  }
+  if (request !== undefined && request !== null) {
+    if (typeof request !== 'object' || Array.isArray(request)) invalid('the remount request must be a plain object');
+    for (const [field, recorded] of [['backend', backend], ['snapshotId', snapshotId], ['baseCommit', baseCommit], ['attemptId', upperId]]) {
+      if (request[field] !== undefined && request[field] !== recorded) {
+        invalid(`retained record ${field} ${recorded} differs from the requested attempt ${request[field]}`);
+      }
+    }
+  }
+  const paths = backend === 'worktree'
+    ? [['worktree', retained.worktree]]
+    : [['lower', retained.lower], ['upper', retained.upper], ['work', retained.work], ['merged', retained.merged], ['gitDir', retained.gitDir]];
+  for (const [field, value] of paths) {
+    if (typeof value !== 'string' || !isAbsolute(value)) invalid(`retained record carries no ${field} path`);
+  }
+  // The recorded layout must still name the recorded wave root, attempt and
+  // snapshot: every layer (or the fallback worktree) sits at exactly its
+  // recorded location under waveRoot/attempts/<attemptId>, and the overlay
+  // lower under waveRoot/snapshots/<snapshotId>.
+  const attemptRoot = backend === 'worktree' ? dirname(retained.worktree) : dirname(retained.upper);
+  const waveRoot = dirname(dirname(attemptRoot));
+  if (request && request.waveRoot !== undefined && resolve(request.waveRoot) !== resolve(waveRoot)) {
+    invalid(`retained record wave root ${waveRoot} differs from the requested attempt ${request.waveRoot}`);
+  }
+  if (attemptRoot !== join(waveRoot, 'attempts', upperId)) {
+    invalid(`retained record attempt identity ${upperId} does not match its recorded paths: ${attemptRoot}`);
+  }
+  if (backend === 'worktree') {
+    if (retained.worktree !== join(attemptRoot, 'worktree')) {
+      invalid(`retained record worktree path is not the expected directory: ${retained.worktree}`);
+    }
+  } else {
+    for (const [field, directory] of [['work', 'work'], ['merged', 'merged'], ['gitDir', 'git']]) {
+      const value = retained[field];
+      if (value !== join(attemptRoot, directory)) invalid(`retained record ${field} path is not the expected layer directory: ${value}`);
+    }
+    if (retained.lower !== join(waveRoot, 'snapshots', snapshotId, 'lower')) {
+      invalid(`retained record lower ${retained.lower} does not match the recorded snapshot identity ${snapshotId}`);
+    }
+  }
+  let rootStat;
+  try {
+    rootStat = lstatSync(waveRoot);
+  } catch {
+    invalid(`the recorded wave root is missing: ${waveRoot}`);
+  }
+  if (rootStat.isSymbolicLink()) invalid(`the recorded wave root is a symbolic link: ${waveRoot}`);
+  if (!rootStat.isDirectory()) invalid(`the recorded wave root is not a directory: ${waveRoot}`);
+  const realRoot = realpathSync(waveRoot);
+  for (const [field, value] of paths) {
+    let stat;
+    try {
+      stat = lstatSync(value);
+    } catch {
+      invalid(`retained ${field} path is missing: ${value}`);
+    }
+    if (stat.isSymbolicLink()) invalid(`retained ${field} path is a symbolic link: ${value}`);
+    if (!stat.isDirectory()) invalid(`retained ${field} path is not a directory: ${value}`);
+    const real = realpathSync(value);
+    if (real !== realRoot && !real.startsWith(`${realRoot}${sep}`)) {
+      invalid(`retained ${field} path resolves outside the wave root: ${value}`);
+    }
+  }
+}
+
 // A positive drain is the only authority to remount: an identity mismatch
 // refuses before touching any state, and a still-held claim refuses without
 // resetting the upper, so dirty edits, deletions and untracked files survive
 // both refusals and a successful re-claim.
-export async function remountRetainedWorkspace({ retained, expected, previous, phaseToken, coordinator, ownership }) {
+export async function remountRetainedWorkspace({ retained, expected, previous, phaseToken, coordinator, ownership, request }) {
   if (!retained || typeof retained !== 'object') throw new Error('retained layer identity is required');
   if (!expected || typeof expected !== 'object') throw new Error('expected layer identity is required');
+  // The retained record's own trustworthiness is established first (F6): a
+  // record that no longer matches the requested attempt or whose recorded
+  // workspace is missing, redirected or outside its wave root refuses here,
+  // before any claim is taken or returned.
+  validateRetainedWorkspace(retained, request);
   for (const field of IDENTITY_FIELDS) {
     if (retained[field] !== expected[field]) {
       refuse('layer-identity-mismatch', `${field} differs from the expected retained identity`);
