@@ -136,7 +136,7 @@ recorded run still has a live coordinator.
 It uses the assigned models directly and sends a completion event to the orchestrator.
 See the [runtime setup and API](pi/extensions/spec-runtime/README.md) and
 [run observation guide](docs/spec-runtime-observation.md) for installation and recovery.
-The editor defaults to `deepseek/deepseek-flash:max`.
+The editor defaults to `deepseek/deepseek-flash:low`.
 Optional coordinator, owner and reviewer scouting uses the installed `pi-subagents` scout profile with
 `openai-codex/gpt-6-luna:low`, restricted to read/search tools. See
 [scouting setup and scope](skills/spec-run/references/scouting.md). `SCOUT_AGENT` in the
@@ -180,7 +180,7 @@ and separate commit assignments. Use REVIEW_AGENT for independent reviews.
 
 DEFAULT_OWNER: deepseek-flash:max from deepseek
 STRONG_OWNER: gpt-6.1-sol:medium from openai-codex
-EDITOR_AGENT: deepseek-flash:max from deepseek
+EDITOR_AGENT: deepseek-flash:low from deepseek
 REVIEW_AGENT: gpt-6.1-sol:medium from openai-codex
 SCOUT_AGENT: gpt-6-luna:low from openai-codex
 PACKAGE: <package folder or workspace/slug>

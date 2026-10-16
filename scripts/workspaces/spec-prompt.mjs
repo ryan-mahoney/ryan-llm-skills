@@ -60,7 +60,7 @@ export const implementationBriefContent=(packageRef)=>
   `and separate commit assignments. Use REVIEW_AGENT for independent reviews.\n\n` +
   `DEFAULT_OWNER: deepseek-flash:max from deepseek\n` +
   `STRONG_OWNER: gpt-6.1-sol:medium from openai-codex\n` +
-  `EDITOR_AGENT: deepseek-flash:max from deepseek\n` +
+  `EDITOR_AGENT: deepseek-flash:low from deepseek\n` +
   `REVIEW_AGENT: gpt-6.1-sol:medium from openai-codex\n` +
   `SCOUT_AGENT: gpt-6-luna:low from openai-codex\n` +
   `PACKAGE: ${packageRef}`;

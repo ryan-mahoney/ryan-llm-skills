@@ -48,7 +48,7 @@ merges remain outside this default authority.
 
 DEFAULT_OWNER: meta/muse-spark-1.3-contributor:xhigh from openrouter
 STRONG_OWNER: gpt-6.1-sol:medium from openai-codex
-EDITOR_AGENT: deepseek-flash:max from deepseek
+EDITOR_AGENT: deepseek-flash:low from deepseek
 REVIEW_AGENT: gpt-6.1-sol:medium from openai-codex
 SCOUT_AGENT: gpt-6-luna:low from openai-codex
 FINAL_REVIEWER: gpt-6.1-sol:xhigh from openai-codex

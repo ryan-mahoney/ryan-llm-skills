@@ -166,6 +166,11 @@ For a step that promises runtime- or user-observable behavior, include at least 
 
 Do not write complete routine test bodies in the subspec. A minimal harness skeleton is allowed only when fake-timer ordering, fixture construction, or a non-obvious mock boundary is itself the key planning risk; justify that skeleton in Setup.
 
+When Architecture gives an outcome table for a component this step owns, copy its rows
+into the card's verification cases. Include one case per action class and at least one
+unknown or contradictory result that must block, so the test-first cases reject the
+permissive classifier before implementation.
+
 For a refusal or failure case, identify the prerequisite that proves the fixture reaches
 the boundary under test. Assert that prerequisite before attributing failure downstream;
 use production-shaped identities and selection data, not convenient substitutes. For a
@@ -253,6 +258,17 @@ Give a short ordered launch sequence. Each item names a file, symbol, and operat
 For `Visual: yes`, begin by opening the selected reference or production precedent and
 its relevant region, then map it to the named production components and behavior before
 editing. End with the focused Playwright capture-and-inspection loop.
+
+### Decisions
+
+For medium and hard steps, list every choice the owner would otherwise make mid-step: public
+interface shapes, persisted record fields, refusal/fallback/retry policy, naming and
+normalization, and test seams. Give each as `- <question>: <chosen option> — <one-line
+reason>`. Under `Consumed contracts:`, name each prerequisite API this step calls or extends,
+with its planned shape and owning step; the owner checks these against the dispatch-time
+context pack, and the as-built shape wins. Each `verification.cases` entry names its fixture
+or seam, the action, and the exact observable assertion. A card whose owner would still need
+to choose, rediscover a contract, or invent an assertion is not `ready`.
 
 ### Setup and Hazards
 

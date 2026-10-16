@@ -1050,8 +1050,35 @@ export class Runtime {
   }
 }
 
-export async function runEditor(record, assignment, signal, launchProcess = launch, { stopGroup = terminateGroup } = {}) {
+const THINKING = /^(off|minimal|low|medium|high|xhigh|max)$/;
+const EXCERPT_LINES = 600;
+const EXCERPT_CHARS = 120000;
+
+// Attach the owner's chosen source ranges so a fresh editor edits immediately
+// instead of rediscovering them; only checkout and package files are readable.
+export function contextExcerpts(record, context = []) {
+  if (!Array.isArray(context) || !context.length) return '';
+  const roots = [record.checkout, record.package].filter(Boolean).map(root => resolve(root));
+  let total = 0;
+  const blocks = context.map(({ path, start = 1, end }) => {
+    const full = resolve(isAbsolute(path) ? path : join(record.checkout, path));
+    if (!roots.some(root => full === root || full.startsWith(`${root}/`))) throw new Error(`context path ${path} is outside the checkout and package`);
+    const lines = readFileSync(full, 'utf8').split('\n');
+    const first = Math.max(1, Math.floor(start));
+    const last = Math.min(lines.length, Math.floor(end ?? lines.length), first + EXCERPT_LINES - 1);
+    const body = lines.slice(first - 1, last).join('\n');
+    total += body.length;
+    if (total > EXCERPT_CHARS) throw new Error(`context excerpts exceed ${EXCERPT_CHARS} characters; send narrower ranges`);
+    return `--- ${relative(record.checkout, full) || path}:${first}-${last}\n${body}`;
+  });
+  return `CONTEXT EXCERPTS (exact current bytes chosen by the owner; edit against them and read further only when an edit anchor does not match):\n${blocks.join('\n')}\n--- end of excerpts\n`;
+}
+
+export async function runEditor(record, assignment, signal, launchProcess = launch, { stopGroup = terminateGroup, context = [], reasoning } = {}) {
   assertLease(record);
+  if (reasoning !== undefined && !THINKING.test(reasoning)) throw new Error(`reasoning must be one of off, minimal, low, medium, high, xhigh, max`);
+  const excerpts = contextExcerpts(record, context);
+  const editorModel = reasoning ? (({ provider, model }) => `${provider}/${model}:${reasoning}`)(splitModelSelector(record.editor_model)) : record.editor_model;
   const configFile = join(record.package, 'runtime/runs', `${record.id}-editor-configuration.json`);
   if (existsSync(configFile)) {
     const failure = read(configFile);
@@ -1070,8 +1097,11 @@ export async function runEditor(record, assignment, signal, launchProcess = laun
     const sessions = existsSync(sessionsFile) ? read(sessionsFile) : [];
     sessions.push(session);
     atomic(sessionsFile, sessions);
-    task = launchProcess({ ...record, editor_session: session }, 'editor', `PACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${targetFacts(record)}FRESH EDITOR: This packet is your complete assignment, not a continuation of prior editor chat. Preserve existing working-tree changes. Read the relevant card contracts and current named source; ask the owner for a missing decision. Do not repeat prior work or verification.\n${assignment}`);
-    event(record, 'editor_started', { pid: task.child.pid, editor_session: session });
+    const orientation = excerpts
+      ? 'The owner attached the exact source you need below; start editing from it. Ask the owner for a missing decision.'
+      : 'Read the relevant card contracts and current named source; ask the owner for a missing decision.';
+    task = launchProcess({ ...record, editor_session: session, editor_model: editorModel }, 'editor', `PACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${targetFacts(record)}FRESH EDITOR: This packet is your complete assignment, not a continuation of prior editor chat. Preserve existing working-tree changes. ${orientation} Do not repeat prior work or verification.\n${assignment}\n${excerpts}`);
+    event(record, 'editor_started', { pid: task.child.pid, editor_session: session, ...(reasoning ? { reasoning } : {}), ...(context?.length ? { context_ranges: context.length } : {}) });
     let stopping;
     let reportUnconfirmed;
     const unconfirmed = new Promise(resolveFailure => { reportUnconfirmed = resolveFailure; });

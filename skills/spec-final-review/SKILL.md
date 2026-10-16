@@ -21,7 +21,7 @@ question, rather than reconstructing the spec audit:
 of edits. Use a fresh session with its exact assigned model selector. `EDITOR_MODEL`
 is the editing subagent; reuse the run's recorded editor when no separate override
 is given (`EDITOR_AGENT` is the existing alias). With no recorded editor, Pi uses
-`deepseek/deepseek-flash:max`; other harnesses use their editor default.
+`deepseek/deepseek-flash:low`; other harnesses use their editor default.
 Record the effective selectors and pass them on every launch. Do not silently
 substitute an explicitly assigned model after a launch failure.
 

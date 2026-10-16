@@ -2,7 +2,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
 import { constants as osConstants, homedir, hostname } from 'node:os';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { configurationFailure, splitModelSelector } from '../../pi/extensions/spec-runtime/model-selector.mjs';
 import { Runtime, groupAlive, launch, loadRun, summary } from '../../pi/extensions/spec-runtime/runtime.mjs';
 import { gitFacts } from '../spec-facts/core.mjs';
@@ -27,8 +27,25 @@ const MANAGED_INSTRUCTION_PATHS = ['pi/agents/spec-step-owner.md', 'pi/agents/sp
 
 const toPosix = path => path.split(sep).join('/');
 
+// Cells under the gym checkout can walk up into scenarios/ and read the expected
+// answers; one real cell was graded invalid for a grader read that way. Runs therefore
+// default to the user state directory and never live inside the checkout.
 export function runRootFor(repoRoot, override) {
-  return resolve(override ?? join(repoRoot, 'tmp', 'spec-gym'));
+  const runRoot = resolve(override ?? join(process.env.XDG_STATE_HOME || join(homedir(), '.local', 'state'), 'spec-gym'));
+  const real = path => { try { return realpathSync(path); } catch { return path; } };
+  const inside = relative(real(resolve(repoRoot)), real(runRoot));
+  if (inside === '' || (!inside.startsWith('..') && !isAbsolute(inside))) {
+    throw new Error(`run root ${runRoot} is inside the gym checkout ${repoRoot}; cells there can read the scenarios. Choose a directory outside it.`);
+  }
+  return runRoot;
+}
+
+// Each spec_editor call starts a fresh session listed in <id>-editor-sessions.json;
+// the legacy editor_session path is only a directory anchor and usually never exists.
+export function editorSessionsFor(record) {
+  let listed = [];
+  try { listed = JSON.parse(readFileSync(join(record.package, 'runtime/runs', `${record.id}-editor-sessions.json`), 'utf8')); } catch { /* no editor ran */ }
+  return [...new Set([...(Array.isArray(listed) ? listed : []), record.editor_session].filter(path => typeof path === 'string'))];
 }
 
 export function cellId(scenarioId, selector, repeat) {
@@ -368,7 +385,7 @@ export async function runManagedCell(run, cell, scenario, materialized, hooks = 
 
   const record = loadRun(packageDir, runId);
   const sessions = [record.owner_session, record.editor_session];
-  const usage = await readUsage(sessions.filter(existsSync));
+  const usage = await readUsage([record.owner_session, ...editorSessionsFor(record)].filter(existsSync));
   let outcome, reason;
   if (record.state === 'completed') {
     outcome = 'finished';

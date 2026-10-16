@@ -182,7 +182,7 @@ or another provider, including when a selector omits its provider, a recorded as
 names another provider, or a launch fails; report the selector instead of substituting.
 Actual launch validates availability. Use discovery
 only for an ambiguous selector or a concrete launch error, without silently substituting
-a model. The Pi step editor defaults to `deepseek/deepseek-flash:max`; other
+a model. The Pi step editor defaults to `deepseek/deepseek-flash:low`; other
 unassigned roles use agent/settings defaults. A legacy step-implementation assignment
 selects the capable owner model; an explicit editor assignment overrides that default.
 Record owner/editor models separately.

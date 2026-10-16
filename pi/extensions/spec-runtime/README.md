@@ -27,7 +27,7 @@ Call `spec_dispatch` once:
   "package": "sample-workspace/feature",
   "step": "<storage root>/projects/sample-workspace/specs/feature/step-001-subspec.md",
   "owner_model": "deepseek/deepseek-flash:max",
-  "editor_model": "deepseek/deepseek-flash:max"
+  "editor_model": "deepseek/deepseek-flash:low"
 }
 ```
 

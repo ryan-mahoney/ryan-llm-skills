@@ -39,6 +39,26 @@ test('request guard calibrates to reported input so it cannot fire before native
   assert.equal(send(276000), false, 'a response without reported usage keeps the prior calibration');
 });
 
+// Run alone: node --test --test-name-pattern='compaction preflight' pi/extensions/context-budget/policy.test.mjs
+test('compaction preflight sizes the sent summary text and context, not raw message JSON', async () => {
+  const handlers = {}, entries = [];
+  const pi = { on: (name, fn) => handlers[name] = fn, appendEntry: (_kind, data) => entries.push(data) };
+  // Summarizers send text without thinking blocks; the fake keeps only visible text.
+  installContextBudget(pi, { serialize: messages => messages.map(m => m.text ?? '').join('\n') });
+  const compact = async (preparation) => {
+    let aborted = false;
+    const result = await handlers.session_before_compact({ preparation }, { abort: () => { aborted = true; } });
+    return { cancelled: result?.cancel === true, aborted };
+  };
+  // A Sol owner: ~600k bytes of encrypted reasoning, 73k real context, short visible text.
+  const owner = { messagesToSummarize: [{ text: 'read src/runtime.mjs', thinking: 'e'.repeat(600000) }], turnPrefixMessages: [], tokensBefore: 73000 };
+  assert.deepEqual(await compact(owner), { cancelled: false, aborted: false });
+  assert.deepEqual(await compact({ ...owner, tokensBefore: 95000 }), { cancelled: true, aborted: true }, 'context past the limit');
+  assert.deepEqual(await compact({ ...owner, tokensBefore: 40000, turnPrefixMessages: [{ text: 'x'.repeat(300000) }] }),
+    { cancelled: true, aborted: true }, 'a ~100k split-turn prefix request');
+  assert.equal(entries.at(-1).context_tokens, 40000);
+});
+
 // Run alone: node --test --test-name-pattern='reasoning-only' pi/extensions/context-budget/policy.test.mjs
 test('a reasoning-only final response continues twice at most and text resets the allowance', () => {
   const handlers = {}, entries = [];
