@@ -284,8 +284,12 @@ test('wave resources: foreign or invalid environment refuses with an exact remed
 
 // ---------------------------------------------------------------------------
 // Host check/setup fixtures. The cgroup tree, runtime directory, unix socket
-// and bwrap executable are real files; only the external command transport is
-// substituted, so emitted command strings and host paths stay representative.
+// and bwrap executable are real files. Adapter fixtures substitute systemd
+// client transport, flock/bwrap probes, and setup ownership.inspectClaims.
+// Positive CLI composition runs the production parser/dispatch in subprocesses;
+// a test-only loader supplies fixture host facts/paths and that command transport.
+// CLI setup keeps real ownership inspection (an isolated registry), calculator,
+// config writes and verification logic. This is not native enforcement (EV-14).
 // ---------------------------------------------------------------------------
 
 const HOST_POOL_BYTES = 21 * GIB; // 30 GiB physical - 9 GiB reserve
@@ -443,6 +447,56 @@ function setupOptions(fixture, run, overrides = {}) {
     ownership: { inspectClaims: async () => ({ claims: [] }) },
     ...overrides,
   };
+}
+
+// Intercept only the CLI's adapter import, not the adapter's implementation.
+// Flags/action are forwarded untouched: parser/dispatch mistakes reach the oracle.
+function hostCli(fixture, args, { mutation = null } = {}) {
+  const cliUrl = new URL('../../../scripts/spec-observe/cli.mjs', import.meta.url);
+  const adapterUrl = new URL('./linux-resources.mjs', import.meta.url);
+  const options = hostOptions(fixture, undefined, { registryRoot: join(fixture.base, 'registry') });
+  const wrapper = `
+    import { runtimeHostCommand as production } from ${JSON.stringify(adapterUrl.href)};
+    const fixture = ${JSON.stringify(fixture)};
+    const HOST_PROPERTY_LINES = ${JSON.stringify(HOST_PROPERTY_LINES)};
+    const HOST_SLICE_VALUES = ${JSON.stringify(HOST_SLICE_VALUES)};
+    const BWRAP_HELP = ${JSON.stringify(BWRAP_HELP)};
+    const hostTransport = ${hostTransport.toString()};
+    const { run } = hostTransport(fixture, { bwrapAvailable: false });
+    export const runtimeHostCommand = (action, flags) =>
+      production(action, flags, { ...${JSON.stringify(options)}, run });
+  `;
+  const wrapperUrl = `data:text/javascript,${encodeURIComponent(wrapper)}`;
+  const preload = `
+    import { registerHooks } from 'node:module';
+    registerHooks({
+      resolve(specifier, context, nextResolve) {
+        if (context.parentURL === ${JSON.stringify(cliUrl.href)}
+            && specifier.endsWith('/linux-resources.mjs')) {
+          return { url: ${JSON.stringify(wrapperUrl)}, shortCircuit: true };
+        }
+        return nextResolve(specifier, context);
+      },
+      load(url, context, nextLoad) {
+        const loaded = nextLoad(url, context);
+        const mutation = ${JSON.stringify(mutation)};
+        if (url === ${JSON.stringify(cliUrl.href)} && mutation) {
+          const source = String(loaded.source);
+          if (!source.includes(mutation[0])) throw new Error('CLI mutation target missing');
+          return { ...loaded, source: source.replace(mutation[0], mutation[1]) };
+        }
+        return loaded;
+      }
+    });
+  `;
+  return spawnSync(process.execPath, [
+    '--import', `data:text/javascript,${encodeURIComponent(preload)}`,
+    fileURLToPath(cliUrl), 'runtime-host', ...args,
+  ], {
+    env: { ...process.env, XDG_CONFIG_HOME: fixture.configHome },
+    encoding: 'utf8',
+    timeout: 20_000,
+  });
 }
 
 test('wave resources: host check derives the bus, stays read-only and reports the probe remedy', { timeout: CASE_TIMEOUT_MS }, async t => {
@@ -811,6 +865,72 @@ test('wave resources: runtimeHostCommand composes validated flags into the host 
   const unsupported = await runtimeHostCommand('check', { zzz: true }, hostOptions(fixture, idle.run));
   assert.equal(unsupported.exitCode, 2);
   assert.equal(unsupported.result.reason, 'unsupported-flags');
+});
+
+test('wave resources: runtime-host CLI composes positive flags and real setup effects', { timeout: CASE_TIMEOUT_MS }, async t => {
+  const fixture = await hostFixture(t);
+  const checkArgs = ['check',
+    '--lifecycle-memory-mib', '2048', '--lifecycle-tasks', '384', '--probe'];
+  const assertCheck = checked => {
+    assert.equal(checked.status, 0, checked.stdout + checked.stderr);
+    const result = JSON.parse(checked.stdout);
+    assert.equal(result.mode, 'probe');
+    assert.equal(result.ok, true);
+    assert.equal(result.policy.lifecycleMemoryMib, 2048);
+    assert.equal(result.policy.lifecycleTasks, 384);
+    assert.equal(result.policy.provenance.lifecycleMemoryMib, 'explicit');
+    assert.equal(result.policy.provenance.lifecycleTasks, 'explicit');
+    assert.equal(result.properties.source, 'probe');
+  };
+  assertCheck(hostCli(fixture, checkArgs));
+  // Test-only source mutations demonstrate that the same positive oracle
+  // rejects a valid-flag mis-map and a silently ignored boolean flag.
+  for (const mutation of [
+    ["'--lifecycle-memory-mib': 'lifecycleMemoryMib'", "'--lifecycle-memory-mib': 'lifecycleTasks'"],
+    ['flags.probe = true;', 'flags.probe = false;'],
+  ]) {
+    const changed = hostCli(fixture, checkArgs, { mutation });
+    assert.equal(changed.status, 0, changed.stdout + changed.stderr);
+    assert.throws(() => assertCheck(changed), { code: 'ERR_ASSERTION' });
+  }
+  const setup = hostCli(fixture, ['setup',
+    '--lifecycle-memory-mib', '2048', '--lifecycle-tasks', '384']);
+  assert.equal(setup.status, 0, setup.stdout + setup.stderr);
+  const installed = JSON.parse(setup.stdout);
+  const assertInstalled = (result, target) => {
+    assert.equal(result.mode, 'setup');
+    assert.equal(result.ok, true);
+    assert.equal(result.reason, 'installed');
+    assert.equal(result.installed.policy, 'written');
+    assert.equal(result.installed.slice, 'written');
+    assert.equal(result.installed.daemonReload, 'reloaded');
+    assert.equal(result.installed.verified, true);
+    const stored = JSON.parse(readFileSync(result.paths.policyPath, 'utf8'));
+    assert.equal(stored.lifecycle.memoryBytes, 2048 * MIB);
+    assert.equal(stored.lifecycle.tasksMax, 384);
+    assert.match(readFileSync(result.paths.slicePath, 'utf8'), /# spec-runtime-host-slice\/v1/);
+    assert.equal(statSync(result.paths.policyPath).mode & 0o777, 0o600);
+    assert.equal(statSync(result.paths.slicePath).mode & 0o777, 0o644);
+    assert.ok(result.paths.policyPath.startsWith(`${target.configHome}/`));
+    assert.ok(result.paths.slicePath.startsWith(`${target.configHome}/`));
+  };
+  assertInstalled(installed, fixture);
+  // Flagless production dispatch must read back what setup really installed.
+  const saved = hostCli(fixture, ['check']);
+  assert.equal(saved.status, 0, saved.stdout + saved.stderr);
+  const savedResult = JSON.parse(saved.stdout);
+  assert.equal(savedResult.policy.lifecycleMemoryMib, 2048);
+  assert.equal(savedResult.policy.lifecycleTasks, 384);
+  assert.notEqual(savedResult.properties.source, 'probe');
+
+  // A successful but disconnected setup dispatch is not installation evidence.
+  const disconnectedFixture = await hostFixture(t);
+  const disconnected = hostCli(disconnectedFixture, ['setup'], {
+    mutation: ['runtimeHostCommand(action, flags)', "runtimeHostCommand('check', flags)"],
+  });
+  assert.equal(disconnected.status, 0, disconnected.stdout + disconnected.stderr);
+  assert.throws(() => assertInstalled(JSON.parse(disconnected.stdout), disconnectedFixture), { code: 'ERR_ASSERTION' });
+  assert.equal(existsSync(join(disconnectedFixture.configHome, 'spec-runtime', 'host-policy.json')), false);
 });
 
 test('wave resources: runtime-host CLI rejects unsupported arguments with exit 2', { timeout: CASE_TIMEOUT_MS }, () => {
