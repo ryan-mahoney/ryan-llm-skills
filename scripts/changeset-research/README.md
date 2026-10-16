@@ -19,6 +19,8 @@ repair conversation. Deterministic operations require no model call. Failed oper
 produce explicit exceptions; failed batches leave the caller's workspace unchanged.
 
 Observed results and their limits are in [FINDINGS.md](FINDINGS.md), with compact receipts and frozen-plan identity in [results.json](results.json).
+The later [matched study](../changeset-study/FINDINGS.md) compares complete workflows
+against native coding-agent tools with the same models.
 
 ## Execution boundary
 

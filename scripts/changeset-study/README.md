@@ -3,6 +3,8 @@
 This harness compares the changeset runtime with a native Pi coding-agent loop on
 the same tasks and models. Read [PROTOCOL.md](PROTOCOL.md) before interpreting results.
 The earlier [executor findings](../changeset-research/FINDINGS.md) remain separate.
+The completed [matched findings](FINDINGS.md) explain the measured result and its limits;
+[results.json](results.json) retains the compact campaign evidence.
 
 Requirements: Node 22, the configured managed Pi SDK and authorized provider models,
 Linux bubblewrap, Python 3, and Git history containing the two historical fixtures.
@@ -24,6 +26,13 @@ node scripts/changeset-study/cli.mjs run --phase eval --root "$STUDY_ROOT" \
   --model openrouter/inception/mercury-2.5:low
 
 node scripts/changeset-study/report.mjs "$RUN_DIRECTORY" "$REPORT_PREFIX"
+
+# A separately labeled coverage audit of already frozen candidates:
+node scripts/changeset-study/posthoc.mjs "$RUN_DIRECTORY" "$AUDIT_DIRECTORY"
+node scripts/changeset-study/report.mjs "$RUN_DIRECTORY" "$REPORT_PREFIX" \
+  "$AUDIT_DIRECTORY/results.json"
+uv run --with matplotlib==3.11.2 python scripts/changeset-study/plot.py \
+  "$REPORT_PREFIX.json" "$FIGURE_PREFIX"
 ```
 
 The runner freezes source, prompts, task bytes and the schedule before inference.

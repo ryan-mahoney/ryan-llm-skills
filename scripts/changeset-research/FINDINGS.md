@@ -1,5 +1,8 @@
 # Changeset experiment findings
 
+These are the original PoC findings. The subsequent [matched end-to-end study](../changeset-study/FINDINGS.md)
+adds a conventional coding-agent baseline and a broader frozen evaluation.
+
 Prepared plans can execute without an editor conversation. A staged workspace gives
 later edits current content, deterministic operations avoid inference, and independent
 model operations can run together. Behavior checks and an impact reviewer decide
