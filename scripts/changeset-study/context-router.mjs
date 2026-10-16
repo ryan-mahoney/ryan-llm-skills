@@ -15,7 +15,7 @@ export async function routeContext(plan, files, { ledger, signal, library } = {}
     const pairs = mergeCandidates(plan, files).slice(0, 16);
     // Context choices apply only to uniquely owned files, whose packets cannot
     // be contracted. Grouping and context remain one independent-question batch.
-    const small = plan.operations.filter(op => plan.operations.filter(other => other.writes[0] === op.writes[0]).length === 1 && [...new Set([...op.reads, ...op.writes])].every(p => files[p] == null || files[p].length <= 8000)).slice(0, 16);
+    const small = plan.operations.filter(op => !plan.operations.some(other => other.id !== op.id && other.writes.some(path => [...op.reads, ...op.writes].includes(path))) && [...new Set([...op.reads, ...op.writes])].every(p => files[p] == null || files[p].length <= 8000)).slice(0, 16);
     const state = { pairs: pairs.map(p => ({ key: p.key, first: { objective: p.first.objective, instruction: p.first.instruction }, second: { objective: p.second.objective, instruction: p.second.instruction } })),
       packets: small.map(op => ({ id: op.id, objective: op.objective, instruction: op.instruction,
         files: [...new Set([...op.reads, ...op.writes])].map(path => ({ path, characters: files[path]?.length ?? 0 })) })) };

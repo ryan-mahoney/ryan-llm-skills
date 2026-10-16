@@ -12,7 +12,9 @@ const packet = (id, path = 'a.txt', depends_on = []) => ({ id, executor: 'simple
 const plan = operations => ({ schema_version: 1, operations });
 
 test('contraction retains ordered instructions, external dependencies and every consumer', () => {
-  const p = plan([packet('prerequisite', 'b.txt'), packet('first'), packet('second', 'a.txt', ['prerequisite']), packet('consumer', 'c.txt', ['second'])]);
+  const first = { ...packet('first'), requirements: ['One.', 'Two.', 'Three.'] };
+  const second = { ...packet('second', 'a.txt', ['prerequisite']), requirements: ['Four.', 'Five.', 'Six.'] };
+  const p = plan([packet('prerequisite', 'b.txt'), first, second, packet('consumer', 'c.txt', ['second'])]);
   const r = optimizePlan(p, { 'a.txt': 'source', 'b.txt': 'b', 'c.txt': 'c' });
   assert.equal(r.plan.operations.length, 3);
   const merged = r.plan.operations.find(op => op.id === 'first');
@@ -21,6 +23,7 @@ test('contraction retains ordered instructions, external dependencies and every 
   assert.deepEqual(merged.depends_on, ['prerequisite']);
   assert.deepEqual(compile(r.plan).at(-1).depends_on, ['first']);
   assert.equal(merged.context.length, 1);
+  for (const requirement of [...first.requirements, ...second.requirements]) assert.ok(merged.requirements.join('\n').includes(requirement));
   assert.equal(p.operations.length, 4);
 });
 
@@ -55,5 +58,8 @@ test('context decisions stay bounded and a failed judge retains the fixed policy
     assert.equal(entry.status, 'unknown'); assert.ok(entry.reserved_usd > 0);
     const expanded = optimizePlan(plan([packet('first')]), { 'a.txt': 'x'.repeat(8001) }, { mode: 'contextual', contextChoices: { first: 'whole-small-files' } });
     assert.equal(expanded.metrics.changes.length, 0);
+    const growing = plan([packet('grow', 'b.txt'), { ...packet('consume'), reads: ['b.txt'], depends_on: ['grow'], context: [{ path: 'a.txt', start: null, end: null }, { path: 'b.txt', start: 'stable', end: null }] }]);
+    const bounded = optimizePlan(growing, { 'a.txt': 'a', 'b.txt': 'stable' }, { mode: 'contextual', contextChoices: { consume: 'whole-small-files' } });
+    assert.equal(bounded.metrics.changes.length, 0, 'Earlier writes can grow a read file beyond the initial whole-file bound');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

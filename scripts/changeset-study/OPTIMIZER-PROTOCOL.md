@@ -27,13 +27,13 @@ check feeds that retry. At most four independent assignments run concurrently.
 1. `none`: run the bounded query plan unchanged except deterministic conflict
    ordering and duplicate context removal.
 2. `deterministic`: contract adjacent compatible assignments to the same file,
-   retaining every instruction, obligation and dependency. At most three original
+   retaining every instruction, obligation and dependency. At most two original
    assignments may combine, and the original packet size limits still apply.
    Refuse contraction when an intermediate state is observed, preconditions need
    independent enforcement, or initial combined source excerpts cannot resolve.
 3. `contextual`: the same local optimizer, with one batched Jev request choosing
    whether eligible pairs should stay separate and whether uniquely owned small
-   files benefit from full context. Whole-file expansion is capped at 8,000
+   files with no other writer of their read/write paths benefit from full context. Whole-file expansion is capped at 8,000
    characters per file and 16,000 total. Files eligible for contraction do not get
    individual context questions. Jev never decides dependency safety or removes
    requirements. Advice below 0.7 confidence falls back to fixed policy; this is
@@ -101,3 +101,14 @@ node scripts/changeset-study/iterate.mjs \
 For contextual routing substitute `--optimization contextual`. The installed
 Typesafe module can be selected with `JEV_TYPESAFE_MODULE`; credentials are resolved
 by its library and are never copied into run artifacts.
+
+## Grouping representation correction
+
+The first raw calibration plan exposed a representation issue: combining two short
+assignments exceeded the five requirement-string limit even while all text fit
+the character bound. The optimizer now retains each original requirement list
+verbatim in one labeled string per original assignment. Total assignment limits
+remain unchanged, and groups contain at most two original assignments so Jev
+judges the actual pair. This is a new optimizer freeze; the original unoptimized
+run remains unchanged. Replays reuse its plans with the corrected optimizer code,
+so code hashes differ only as recorded in each manifest.

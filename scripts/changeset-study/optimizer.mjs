@@ -13,7 +13,7 @@ export function planMetrics(plan) {
 function mergedPair(ops, index, files) {
   const a = ops[index], b = ops[index + 1];
   if (!b || a.writes[0] !== b.writes[0] || a.preconditions || b.preconditions ||
-      (a.members?.length ?? 1) + (b.members?.length ?? 1) > 3) return null;
+      (a.members?.length ?? 1) + (b.members?.length ?? 1) > 2) return null;
   // A consumer needing A's intermediate state must still run before B. Contract
   // only when every other descendant of A is already a descendant of B.
   const descendants = id => {
@@ -25,7 +25,7 @@ function mergedPair(ops, index, files) {
   if ([...da].some(id => id !== a.id && !db.has(id))) return null;
   const merged = { ...a, objective: 'Apply the following related edits in order.',
     instruction: `${a.objective}\n${a.instruction}\n\nThen: ${b.objective}\n${b.instruction}`,
-    requirements: unique([...a.requirements, ...b.requirements]), reads: unique([...a.reads, ...b.reads]),
+    requirements: [`${a.objective}:\n${a.requirements.join('\n')}`, `${b.objective}:\n${b.requirements.join('\n')}`], reads: unique([...a.reads, ...b.reads]),
     depends_on: unique([...a.depends_on, ...b.depends_on]).filter(id => id !== a.id),
     context: contexts([...a.context, ...b.context]), members: [...(a.members ?? [a.id]), ...(b.members ?? [b.id])] };
   try {
@@ -57,6 +57,7 @@ export function optimizePlan(plan, files, { mode = 'deterministic', mergeChoices
     if (mode === 'contextual') for (const op of ops) {
       if (contextChoices[op.id] !== 'whole-small-files') continue;
       const paths = unique([...op.reads, ...op.writes]);
+      if (ops.some(other => other.id !== op.id && other.writes.some(path => paths.includes(path)))) continue;
       // The only expansion policy is bounded, complete small files. It never
       // removes context or reads an undeclared file. Current staged text is used.
       if (paths.some(p => files[p] != null && files[p].length > 8000) ||
