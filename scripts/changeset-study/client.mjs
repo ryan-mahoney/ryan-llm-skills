@@ -26,6 +26,10 @@ export class Client {
     const { provider, id, reasoning } = parseSelector(selector);
     this.model = runtime.getModel(provider, id); this.reasoning = reasoning;
     if (!this.model || !runtime.hasConfiguredAuth(provider)) throw new Error(`Unavailable model: ${selector}`);
+    // The subscription adapter omits maxTokens from its payload. Reserve against
+    // the full advertised context/output capacity instead of that unenforced limit.
+    this.reservationOutputTokens = provider === 'openai-codex'
+      ? Math.max(maxTokens, this.model.maxTokens ?? 0, this.model.contextWindow ?? 0) : maxTokens;
     this.budget = new Budget(ledger, 50); this.receipts = []; this.calls = 0;
   }
   begin(context, externalSignal, stage) {
@@ -36,7 +40,7 @@ export class Client {
     const inputRate = Math.max(...rates.flatMap(r => [r.input, r.cacheRead ?? 0, r.cacheWrite ?? 0]));
     const outputRate = Math.max(...rates.map(r => r.output));
     const bytes = Buffer.byteLength(JSON.stringify(context)) + 8192;
-    const reservation = this.budget.reserve(this.selector, (bytes * inputRate + this.maxTokens * outputRate) / 1e6 * 1.25);
+    const reservation = this.budget.reserve(this.selector, (bytes * inputRate + this.reservationOutputTokens * outputRate) / 1e6 * 1.25);
     counter.calls++; if (counter !== this) this.calls++;
     appendFileSync(this.receiptPath.replace(/receipts\.jsonl$/, 'requests.jsonl'), JSON.stringify({ reservation, selector: this.selector, stage, context }) + '\n');
     const signal = AbortSignal.any([AbortSignal.timeout(this.callMs), ...[this.signal, externalSignal].filter(Boolean)]);

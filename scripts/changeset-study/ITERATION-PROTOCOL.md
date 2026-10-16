@@ -81,3 +81,8 @@ is inclusive and end exclusive (`null` means EOF). `compose` creates an absent
 owned file from literal text and source ranges; `replace-range` replaces a selected
 range in an owned file. Normal syntax checks, dependency staging and publication
 rules still apply. Neither primitive provides source discovery or hidden feedback.
+
+From the source-range iteration onward, subscription-model reservations use the
+advertised full context/output capacity because the adapter does not enforce the
+requested output limit. This strengthens the existing $50 guard without changing
+request options or token-based comparison costs. Earlier frozen runs remain intact.

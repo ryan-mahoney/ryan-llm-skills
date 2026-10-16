@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { recoverAccounting } from './accounting.mjs';
+import { Client } from './client.mjs';
 
 test('killed study workers retain completed charges and unresolved reservations', () => {
   const dir=mkdtempSync(join(tmpdir(),'study-accounting-'));
@@ -17,4 +18,18 @@ test('killed study workers retain completed charges and unresolved reservations'
     assert.equal(recovered.known_catalog_usd,0.02);assert.equal(recovered.retained_budget_exposure_usd,2.02);
     assert.equal(recovered.equivalent_usd,null);assert.equal(recovered.tokens.output,null);assert.equal(recovered.known_tokens.output,20);
   } finally {rmSync(dir,{recursive:true,force:true});}
+});
+
+// node --test --test-name-pattern='unenforced output limit' scripts/changeset-study/accounting.test.mjs
+test('an unenforced output limit cannot underreserve the remaining campaign allowance', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'study-output-reservation-'));
+  try {
+    const ledger = join(dir, 'budget.json');
+    writeFileSync(ledger, JSON.stringify({ limit_usd: 50, entries: [{ charged_usd: 49.9, reserved_usd: 49.9 }] }));
+    const client = new Client({ selector: 'openai-codex/test', ledger, receiptPath: join(dir, 'receipts.jsonl'), maxTokens: 32000,
+      runtime: { hasConfiguredAuth: () => true, getModel: () => ({ contextWindow: 128000, maxTokens: 128000, cost: { input: 0, output: 1 } }) } });
+    // 32k would reserve $0.04 and incorrectly fit; actual capacity reserves $0.16.
+    assert.throws(() => client.begin({}, null, 'offline-test'), /Campaign budget exhausted/);
+    assert.equal(client.calls, 0);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
