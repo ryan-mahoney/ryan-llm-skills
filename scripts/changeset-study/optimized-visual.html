@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <link rel="icon" href="data:,">
+  <title>Changeset execution study</title>
+  <style>
+    :root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color:#17202a;background:#f4f6f8;font-synthesis:none;text-rendering:optimizeLegibility;--line:#d4dbe2;--muted:#526170;--blue:#21618c;--blue-pale:#d6eaf8;--gold:#9a6700;--gold-pale:#fff1c2;--green:#176b45;--green-pale:#dff3e8;--red:#a12b27;--red-pale:#fde8e7;--slate:#64748b}
+    *{box-sizing:border-box}body{margin:0;line-height:1.45}button,select{font:inherit;color:inherit}button:focus-visible,select:focus-visible,a:focus-visible{outline:3px solid #005fcc;outline-offset:2px}
+    .shell{max-width:1240px;margin:auto;padding:28px 24px 60px}.eyebrow{font-size:.76rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:750}.title{font-size:clamp(1.8rem,3vw,2.5rem);line-height:1.1;margin:.35rem 0 .6rem;letter-spacing:-.035em}.lede{max-width:850px;color:#334155;margin:0 0 20px}.notice{border-left:4px solid var(--gold);background:#fff9e8;padding:12px 15px;margin:18px 0 24px;color:#4f3c0b}.notice strong{color:#3c2d08}.controls{display:flex;align-items:end;gap:16px;flex-wrap:wrap;padding:16px 0 20px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);min-width:0}.control{min-width:0}.controls .control:first-child{flex:1 1 260px}.control label{display:block;font-size:.78rem;font-weight:700;color:var(--muted);margin:0 0 5px}.control select{width:100%;min-width:0;max-width:100%;padding:9px 34px 9px 10px;border:1px solid #8795a3;background:white;border-radius:3px}.toggle{display:flex;border:1px solid #8795a3;border-radius:3px;overflow:hidden;background:white}.toggle button{border:0;background:white;padding:9px 13px;cursor:pointer}.toggle button[aria-pressed="true"]{background:#17202a;color:#fff}.section{margin-top:28px}.section-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:12px}.section h2{font-size:1.18rem;letter-spacing:-.015em;margin:0}.subtle{font-size:.84rem;color:var(--muted)}
+    .roleline{display:grid;grid-template-columns:repeat(5,minmax(120px,1fr));align-items:stretch;border:1px solid var(--line);background:white}.role{padding:14px;border-right:1px solid var(--line);position:relative}.role:last-child{border-right:0}.role:not(:last-child):after{content:"→";position:absolute;right:-10px;top:22px;background:white;color:var(--blue);font-weight:800;padding:0 3px;z-index:1}.role b{display:block;font-size:.9rem}.role span{display:block;color:var(--muted);font-size:.78rem;margin-top:4px}.role.query{background:#f1f7fb}.role.local{background:#f5f8f7}.role.outer{background:#fafafa}
+    .kpis{display:grid;grid-template-columns:repeat(5,minmax(120px,1fr));gap:1px;border:1px solid var(--line);background:var(--line)}.kpi{background:white;padding:14px}.kpi .value{font-variant-numeric:tabular-nums;font-size:1.45rem;font-weight:750;letter-spacing:-.025em}.kpi .label{color:var(--muted);font-size:.76rem}.kpi.quality{background:#f5fbf7}.kpi.warn{background:#fffaf0}.status{display:inline-flex;align-items:center;gap:5px;font-size:.76rem;font-weight:750;padding:3px 7px;border-radius:2px}.pass{background:var(--green-pale);color:#115538}.fail{background:var(--red-pale);color:#83221e}.partial{background:var(--gold-pale);color:#6f4b00}.neutral{background:#e8edf2;color:#334155}
+    .chart{border:1px solid var(--line);background:white;padding:16px}.bar-row{display:grid;grid-template-columns:108px 1fr 80px;gap:10px;align-items:center;margin:10px 0;font-size:.82rem}.bar-label{color:#334155}.track{height:18px;background:#edf1f4;position:relative}.bar{height:100%;background:var(--blue);min-width:0}.bar.borrowed{background:#86a8bd}.bar-value{text-align:right;font-variant-numeric:tabular-nums;font-weight:650}.legend{display:flex;gap:16px;flex-wrap:wrap;color:var(--muted);font-size:.78rem;margin-top:12px}.key{display:inline-block;width:11px;height:11px;margin-right:5px;vertical-align:-1px;background:var(--blue)}.key.borrowed{background:#86a8bd}
+    .table-wrap{max-width:100%;overflow:auto;overscroll-behavior-inline:contain;border:1px solid var(--line);background:white}table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;font-size:.82rem}th,td{text-align:right;padding:9px 10px;border-bottom:1px solid #e5e9ed;white-space:nowrap}th{font-size:.72rem;color:#465464;text-transform:uppercase;letter-spacing:.035em;background:#f7f9fa}th:first-child,td:first-child{text-align:left}tbody tr:last-child td{border-bottom:0}.phase-name{font-weight:700}.dim{color:var(--muted)}.quality-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.quality-box{border:1px solid var(--line);padding:14px;background:white}.quality-box h3{font-size:.88rem;margin:0 0 8px}.quality-box p{font-size:.83rem;color:#334155;margin:5px 0}.callout{border:1px solid var(--line);background:white;padding:14px;color:#334155;font-size:.86rem}.callout p{margin:5px 0}.mobile-table-hint{display:none}.foot{margin-top:30px;border-top:1px solid var(--line);padding-top:14px;color:var(--muted);font-size:.78rem}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.78em;overflow-wrap:anywhere}
+    @media(max-width:850px){.roleline{grid-template-columns:1fr}.role{border-right:0;border-bottom:1px solid var(--line);padding:10px 14px}.role:last-child{border-bottom:0}.role:not(:last-child):after{content:"↓";right:15px;top:auto;bottom:-11px}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.kpi:last-child{grid-column:span 2}.quality-grid{grid-template-columns:1fr}.bar-row{grid-template-columns:90px 1fr 72px}.mobile-table-hint{display:block;margin:0 0 8px}.section-head{flex-wrap:wrap}}@media(max-width:520px){.shell{padding:20px 14px 40px}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.bar-row{grid-template-columns:75px 1fr 66px}}
+  </style>
+</head>
+<body>
+<main class="shell">
+  <header>
+    <div class="eyebrow">Frozen runtime evidence · research only</div>
+    <h1 class="title">Changeset execution study</h1>
+    <p class="lede">The tested workflow keeps implementation ownership with DeepSeek, uses Sol to plan source context, then applies bounded DeepSeek writes. The local optimizer can group safe edits and Jev can advise on eligible context choices. Required tests and independent review remain separate outer gates.</p>
+    <div class="notice"><strong>Read the outcome before the timing.</strong> A fast run that did not finish applying its changes is not a winner. The display reports application completion, integrity, visible checks, candidate tests, and external outcomes separately; it does not rank runs.</div>
+  </header>
+  <section class="roleline" aria-label="Workflow roles">
+    <div class="role"><b>1 · DeepSeek owner</b><span>Produces the implementation brief and settles the task.</span></div>
+    <div class="role query"><b>2 · Sol query planner</b><span>Compiles the brief and source evidence into scoped writer packets.</span></div>
+    <div class="role local"><b>3 · Local optimizer + optional Jev</b><span>Groups deterministic safe edits; Jev advises only where configured.</span></div>
+    <div class="role"><b>4 · DeepSeek writers</b><span>Apply bounded edits from their assigned packets.</span></div>
+    <div class="role outer"><b>Outer gates</b><span>Required tests, acceptance checks, and downstream independent review.</span></div>
+  </section>
+  <section class="controls" aria-label="Report controls">
+    <div class="control"><label for="run-select">Run</label><select id="run-select"></select></div>
+    <div class="control"><label>Accounting view</label><div class="toggle" role="group" aria-label="Actual or allocated accounting"><button id="actual-btn" type="button" aria-pressed="true">Actual incurred</button><button id="allocated-btn" type="button" aria-pressed="false">Allocated</button></div></div>
+    <div id="run-note" class="subtle"></div>
+  </section>
+  <section class="section" aria-labelledby="quality-title">
+    <div class="section-head"><h2 id="quality-title">Quality and completion</h2><span class="subtle">Application completion is not the same as acceptance.</span></div>
+    <div id="quality-kpis" class="kpis"></div>
+    <div id="quality-detail" class="quality-grid" style="margin-top:12px"></div>
+  </section>
+  <section class="section" aria-labelledby="time-title">
+    <div class="section-head"><h2 id="time-title">Time by phase</h2><span class="subtle" id="time-caption"></span></div>
+    <div id="time-chart" class="chart" role="img" aria-label="Elapsed time by workflow phase"></div>
+  </section>
+  <section class="section" aria-labelledby="phase-title">
+    <div class="section-head"><h2 id="phase-title">Phase accounting</h2><span class="subtle">Calls, input/output/cache tokens, phase time, and allocated planning are shown independently.</span></div>
+    <p class="mobile-table-hint subtle">Swipe or scroll within the table to see all columns.</p>
+    <div class="table-wrap"><table><thead><tr><th>Phase</th><th>Time (s)</th><th>Calls</th><th>Input</th><th>Output</th><th>Cache read</th><th>Cache write</th><th>Total tokens</th><th>Accounting</th></tr></thead><tbody id="phase-body"></tbody></table></div>
+    <p class="subtle" id="allocation-note"></p>
+  </section>
+  <section class="section" aria-labelledby="cost-title">
+    <div class="section-head"><h2 id="cost-title">Run totals</h2><span class="subtle">Jev estimates are separate from normalized provider cost.</span></div>
+    <div id="totals" class="callout"></div>
+  </section>
+  <section class="section" aria-labelledby="historical-title">
+    <div class="section-head"><h2 id="historical-title">Historical controls</h2><span class="subtle">Unmatched workflows and cases; context only.</span></div>
+    <div id="historical" class="table-wrap"></div>
+  </section>
+  <footer class="foot">Source: embedded <span class="mono">optimized-report.json</span>. The page runs offline and makes no network requests. Results describe these frozen cases only. Candidate tests and any outer acceptance result remain distinct from the fact that a write was applied; no global winner is inferred from these observations.</footer>
+</main>
+<!-- OPTIMIZED_REPORT_DATA -->
+<script>
+(() => {
+  const report = JSON.parse(document.getElementById('report-data').textContent);
+  const $ = id => document.getElementById(id);
+  const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  const phases = ['owner','query','routing','optimization','writing','checks','other'];
+  const labels = {owner:'Owner',query:'Query planner',routing:'Context routing',optimization:'Optimizer',writing:'Writers',checks:'Checks',other:'Other'};
+  const fmt = (x, n=1) => Number.isFinite(x) ? x.toLocaleString(undefined,{maximumFractionDigits:n,minimumFractionDigits:n}) : 'unknown';
+  const integer = x => Number.isFinite(x) ? Math.round(x).toLocaleString() : 'unknown';
+  const money = x => Number.isFinite(x) ? `$${x.toFixed(4)}` : 'unknown';
+  const pct = (n,d) => d ? `${n}/${d}` : 'unknown';
+  const status = (kind,text) => `<span class="status ${kind}">${text}</span>`;
+  let allocated = false;
+  const runs = report.runs || [];
+  const preferred = runs.findIndex(r => r.run === '07-catalog-deterministic');
+  const initial = preferred >= 0 ? preferred : Math.max(0,runs.length-1);
+  runs.forEach((r,i) => { const o=document.createElement('option'); o.value=String(i); o.textContent=`${r.run} · ${r.optimization}/${r.query_mode}`; $('run-select').append(o); });
+  $('run-select').value=String(initial);
+  const usageFields=['calls','input','output','cacheRead','cacheWrite','totalTokens'];
+  function usageView(u){return {calls:u?.calls??null,input:u?.tokens?.input??null,output:u?.tokens?.output??null,cacheRead:u?.tokens?.cacheRead??null,cacheWrite:u?.tokens?.cacheWrite??null,totalTokens:u?.tokens?.totalTokens??null,complete:u?.accounting_complete??null};}
+  function subtractUsage(total,owner){const all=usageView(total),own=usageView(owner);const out={};for(const k of usageFields)out[k]=Number.isFinite(all[k])&&Number.isFinite(own[k])?all[k]-own[k]:null;out.complete=all.complete===true&&own.complete===true;return out;}
+  function aggregateUsage(usages){const out={};for(const k of usageFields){const values=usages.map(u=>u[k]);out[k]=values.every(Number.isFinite)?values.reduce((a,b)=>a+b,0):null;}out.complete=usages.every(u=>u.complete===true);return out;}
+  function phaseSeconds(c,p){return allocated?c.allocated_phase_seconds?.[p]??null:c.phase_seconds?.[p]??null;}
+  function usageFor(c,phase){
+    if(allocated&&phase==='owner')return usageView(c.allocated_owner?.usage);
+    if(allocated&&phase==='query')return subtractUsage(c.allocated_planning?.usage,c.allocated_owner?.usage);
+    return usageView(c.model_usage_by_stage?.[phase]);
+  }
+  function render(){
+    const run=runs[Number($('run-select').value)] || runs[0]; if(!run)return;
+    const cells=run.cells||[], denom=run.expected||cells.length;
+    const count=(key)=>cells.filter(c=>c[key]===true).length;
+    const applied=count('application_complete'), integrity=count('integrity_valid'), visible=count('visible_accepted'), ext=count('external_accepted'), hidden=count('hidden_pass');
+    const tokens=allocated?run.allocated_model_usage:run.model_usage;
+    const seconds=allocated?run.allocated_seconds:run.incurred_seconds;
+    $('run-note').textContent=`${run.query_mode} · ${run.optimization} · ${run.pending?.length||0} pending · ${run.integrity_valid?'integrity valid':'integrity issues'}`;
+    $('quality-kpis').innerHTML=[
+      ['Application applied',pct(applied,denom),applied===denom&&denom>0?'pass':'partial'],
+      ['Integrity valid',pct(integrity,denom),integrity===denom&&denom>0?'pass':'fail'],
+      ['Visible accepted',pct(visible,denom),visible===denom&&denom>0?'pass':'partial'],
+      ['Candidate tests pass',cells.reduce((a,c)=>a+(c.candidate_tests?.count||0)-(c.candidate_tests?.failed||0),0)+' / '+cells.reduce((a,c)=>a+(c.candidate_tests?.count||0),0),'neutral'],
+      ['External accepted',pct(ext,denom),ext===denom&&denom>0?'pass':'partial']
+    ].map(([l,v,s])=>`<div class="kpi quality"><div class="value">${v}</div><div class="label">${l} ${status(s,s==='pass'?'PASS':s==='fail'?'CHECK':'PARTIAL')}</div></div>`).join('');
+    $('quality-detail').innerHTML=cells.map(c=>{
+      const ck=c.candidate_tests||{count:0,failed:0};
+      const klass=c.application_complete?'pass':'partial';
+      return `<article class="quality-box"><h3>${esc(c.task||c.cell)}</h3><p>Application: ${status(klass,c.application_complete?'APPLIED':'NOT APPLIED')}</p><p>Integrity: ${status(c.integrity_valid?'pass':'fail',c.integrity_valid?'VALID':'ISSUES')}</p><p>Visible result: ${c.visible_accepted===null?'unknown':c.visible_accepted?'accepted':'rejected'} · candidate tests ${integer(ck.count-ck.failed)}/${integer(ck.count)} pass</p><p>External: ${c.external_accepted===null?'unknown':c.external_accepted?'accepted':'rejected'} · hidden: ${c.hidden_pass===null?'unknown':c.hidden_pass?'pass':'fail'}</p>${c.error?`<p class="mono">${esc(c.error)}</p>`:''}</article>`;
+    }).join('');
+    const bars=phases.map(p=>{
+      const values=cells.map(c=>phaseSeconds(c,p));
+      return [p,values.every(Number.isFinite)?values.reduce((a,b)=>a+b,0):null];
+    });
+    const max=Math.max(1,...bars.map(x=>Number.isFinite(x[1])?x[1]:0));
+    $('time-chart').innerHTML=bars.map(([p,v])=>`<div class="bar-row"><span class="bar-label">${labels[p]}</span><div class="track" aria-hidden="true"><div class="bar" style="width:${Number.isFinite(v)?Math.max(0,Math.min(100,v/max*100)):0}%"></div></div><span class="bar-value">${fmt(v)} s</span></div>`).join('')+`<div class="legend"><span><i class="key"></i>Phase time in selected accounting view</span><span>Run elapsed: <b>${fmt(seconds)} s</b></span></div>`;
+    $('time-caption').textContent=allocated?'Allocated time includes original owner/query work where available.':'Actual process phase time for this run.';
+    $('phase-body').innerHTML=phases.map(p=>{
+      const sv=cells.map(c=>phaseSeconds(c,p));const secs=sv.every(Number.isFinite)?sv.reduce((a,b)=>a+b,0):null;
+      const u=aggregateUsage(cells.map(c=>usageFor(c,p)));
+      const complete=u.complete;
+      return `<tr><td class="phase-name">${labels[p]}</td><td>${fmt(secs)}</td><td>${integer(u.calls)}</td><td>${integer(u.input)}</td><td>${integer(u.output)}</td><td>${integer(u.cacheRead)}</td><td>${integer(u.cacheWrite)}</td><td>${integer(u.totalTokens)}</td><td>${complete?status('pass','COMPLETE'):status('partial','PARTIAL')}</td></tr>`;
+    }).join('');
+    $('allocation-note').textContent=allocated?'Allocated owner/query calls and tokens include the original source planning where the report records a reusable brief or plan. Other phases remain the current run. Seconds include allocated planning time; checks are the current run’s separate outer checks.':'Actual incurred provider usage for this run. Reused owner/query work is excluded; Jev usage is shown separately below.';
+    $('totals').innerHTML=`<p><b>${allocated?'Allocated':'Actual incurred'} elapsed:</b> ${fmt(seconds)} s · <b>provider calls:</b> ${integer(tokens?.calls)} · <b>tokens:</b> ${integer(tokens?.tokens?.totalTokens)} (input ${integer(tokens?.tokens?.input)}, output ${integer(tokens?.tokens?.output)}, cache read ${integer(tokens?.tokens?.cacheRead)}, cache write ${integer(tokens?.tokens?.cacheWrite)})</p><p><b>Normalized provider cost:</b> ${money(tokens?.equivalent_usd)} · reported provider cost ${money(tokens?.reported_usd)} · <b>Jev:</b> ${integer(run.jev?.calls)} call(s), ${integer(run.jev?.tokens)} tokens, estimated ${money(run.jev?.estimated_usd)}</p><p><b>Application complete:</b> ${integer(run.application_complete)}/${integer(run.expected)} · <b>Pending:</b> ${integer(run.pending?.length||0)} · <b>Integrity:</b> ${run.integrity_valid?'valid':'issues'} · usage accounting ${tokens?.accounting_complete?'complete':'incomplete/unknown'}.</p><p class="dim">Allocated cost adds borrowed planning at the original stage attribution. Jev’s estimate is not included in normalized provider cost.</p>`;
+  }
+  const hist=report.historical_baselines||[];
+  $('historical').innerHTML=`<table><thead><tr><th>Historical control (unmatched)</th><th>Elapsed s</th><th>Calls</th><th>Tokens</th><th>Equivalent USD</th></tr></thead><tbody>${hist.map(x=>`<tr><td>${esc(x.label)} ${status('neutral','UNMATCHED')}</td><td>${fmt(x.seconds)}</td><td>${integer(x.calls)}</td><td>${integer(x.tokens)}</td><td>${money(x.equivalent_usd)}</td></tr>`).join('')}</tbody></table>`;
+  $('run-select').addEventListener('change',render);
+  $('actual-btn').addEventListener('click',()=>{allocated=false;$('actual-btn').setAttribute('aria-pressed','true');$('allocated-btn').setAttribute('aria-pressed','false');render();});
+  $('allocated-btn').addEventListener('click',()=>{allocated=true;$('actual-btn').setAttribute('aria-pressed','false');$('allocated-btn').setAttribute('aria-pressed','true');render();});
+  render();
+})();
+</script>
+</body>
+</html>

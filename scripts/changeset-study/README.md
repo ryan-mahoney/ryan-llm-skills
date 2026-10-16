@@ -26,6 +26,14 @@ Three configurations delivered 2/3, 1/3 and 0/3 tasks; none improved on the succ
 Sol-only runs. See the [results](owner-editor-results.md) and
 [owner/editor protocol](OWNER-EDITOR-PROTOCOL.md) for roles, settings and retained failures.
 
+The current [three-role optimizer study](OPTIMIZER-FINDINGS.md) separates a DeepSeek
+implementation owner, Sol query planner and DeepSeek writers. Deterministic grouping
+halved writer calls on calibration; no treatment completed all three cases. Jev
+selected the same plans as fixed policy, and the first catalog-only queries blocked
+the larger cases. See the [offline results visual](optimized-results.html),
+[measurements](optimized-results.md), [JSON evidence](optimized-results.json) and
+[comparison protocol](OPTIMIZER-PROTOCOL.md). This research is still in progress.
+
 ## Read the explanation
 
 - [Offline HTML visual](visual.html): interactive dependency walkthrough, performance
@@ -36,7 +44,7 @@ Sol-only runs. See the [results](owner-editor-results.md) and
 - [Integration notes](INTEGRATION.md): runtime seams and an opt-in rollout into
   `spec-end-to-end`. This integration is proposed, not implemented.
 
-The HTML includes compiled Tailwind CSS, JavaScript and Matplotlib SVG figures.
+The earlier `visual.html` includes compiled Tailwind CSS, JavaScript and Matplotlib SVG figures.
 It makes no network requests and needs no server. Its companion-document links work
 when the repository files remain alongside it. The figures are also available as
 standalone SVGs in [visual/](visual/).
@@ -54,6 +62,20 @@ without adding project dependencies. The charts derive from `results.json`; the
 prose describes this frozen campaign and must be reviewed if the dataset changes.
 
 ## Run the study
+
+### Three-role optimizer reporting
+
+The reporter reads retained runs without model calls. Rebuild the new offline
+visual from its JSON; the template is `optimized-visual.html`:
+
+```sh
+node scripts/changeset-study/optimized-report.mjs "$OPTIMIZER_RUNS" "$REPORT_PREFIX"
+node scripts/changeset-study/optimized-visual.mjs "$REPORT_PREFIX.json" "$VISUAL_OUTPUT"
+```
+
+Actual usage counts new calls. Allocated usage adds inherited owner/query work,
+or only owner work for a brief reuse. Application completion and downstream
+acceptance remain separate; faster incomplete runs are not ranked as winners.
 
 ### Sol owner / DeepSeek editor
 
