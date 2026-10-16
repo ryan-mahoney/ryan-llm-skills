@@ -45,7 +45,7 @@ node scripts/spec-gym/cli.mjs run --skill spec-step-run --scenario missing-requi
 Options: `--repeat N` repeats every cell; `--timeout-ms N` records the run
 fallback deadline in the manifest, while each scenario's required `timeout_ms` is
 the effective cell deadline — inspect it before authorizing a run; `--root DIR`
-overrides `tmp/spec-gym/`; `--pi PATH` selects the Pi executable;
+overrides the default `$XDG_STATE_HOME/spec-gym/` (else `~/.local/state/spec-gym/`) and is refused inside the gym checkout, where cells could read the scenarios; `--pi PATH` selects the Pi executable;
 `--editor-model`/`--scout-model` fix auxiliary selectors for managed-step cells;
 `--child-extension PATH` (repeatable) passes managed child extensions. The
 command refuses a draft scenario, a missing index, or an invalid selector before
@@ -80,7 +80,7 @@ Temporary repositories isolate state; they are not an operating-system sandbox.
 Admit only curated, trusted scenarios. The editor launched inside a managed owner
 keeps the runtime's default flags; the gym sanitizes the environment and refuses
 managed cells with ambient context files, but those are limits, not a sandbox.
-Runs are retained under `tmp/spec-gym/<run-id>/`; the runner never deletes them.
+Runs are retained under `<run root>/<run-id>/`; the runner never deletes them. Cell cost and tokens include the owner and every fresh editor session.
 
 See [scenario-contract.md](references/scenario-contract.md) for the curated scenario
 format, ready rules and check semantics.
