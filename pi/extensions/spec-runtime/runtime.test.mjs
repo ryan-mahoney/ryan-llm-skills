@@ -1253,11 +1253,12 @@ test(`wave runtime: ${compositionName} executes the submitted bootstrap and obse
   assert.match(checkout.pointer, /^gitdir: /);
   assert.equal(checkout.head, w.wave.target.base_commit);
   if (portable) {
-    assert.equal(checkout.setup, null, 'KNOWN GAP: real setup output was not published to fallback');
+    await t.test('prepared fallback output reaches portable worker (not EV-14)', () => {
+      assert.equal(checkout.setup, 'prepared', 'real setup output is published to fallback');
+    });
     assert.equal(w.launches[0].argv[0], process.execPath);
     const staging = join(w.workspace.worktree, '..', '..', '..', 'staging', 'attempt-1', 'dependencies', 'deps', 'setup-output');
-    assert.equal(readFileSync(staging, 'utf8'), 'prepared', 'real setup produced bytes in staging before fallback lost them');
-    t.diagnostic(`setup publication NOT verified; outside-step-6 defect in step-workspaces.mjs; fallback output=${checkout.setup}`);
+    assert.equal(readFileSync(staging, 'utf8'), 'prepared', 'real setup produced bytes in staging before publication');
   } else {
     assert.equal(checkout.setup, 'prepared');
   }
@@ -1336,7 +1337,7 @@ for (const drainStatus of ['confirmed', 'unknown']) {
     const actual = JSON.parse(readFileSync(observed, 'utf8'));
     assert.equal(actual.retained, 'dirty retained bytes', 'second real worker sees first worker dirty state');
     if (portable) {
-      assert.equal(actual.setup, null, 'KNOWN GAP: fallback remount still lacks real setup output');
+      assert.equal(actual.setup, 'prepared', 'published setup output survives phase remount');
     } else {
       assert.equal(actual.setup, 'prepared', 'published setup output survives phase remount');
     }

@@ -780,7 +780,7 @@ async function provisionOverlayWorkspace({ kind, selection, snapshotId, baseComm
   });
 }
 
-async function provisionWorktree({ kind, selection, snapshotId, baseCommit, target, waveRoot, attemptId, setup, ownership, packageId, coordinator, phaseToken }) {
+async function provisionWorktree({ kind, selection, snapshotId, baseCommit, target, waveRoot, attemptId, setup, ownership, packageId, coordinator, phaseToken, identity, staging }) {
   const attemptRoot = join(waveRoot, 'attempts', attemptId);
   const worktree = join(attemptRoot, 'worktree');
   // The fallback backend reserves the attempt's ownership through the same
@@ -805,10 +805,39 @@ async function provisionWorktree({ kind, selection, snapshotId, baseCommit, targ
     // before any workspace is provisioned (F5): a refused conversion creates no
     // fallback worktree and leaves every attached byte untouched.
     reconcileAttemptRecord({ attemptRoot, waveRoot, attemptId, kind, packageId, baseCommit, snapshotId, target, selection, setup });
+    // The fallback backend shares the overlay path's frozen lower: a published
+    // snapshot at snapshots/<snapshotId> plus its lower subdirectory. The
+    // publisher is the same ensureSnapshot helper the overlay path uses, so a
+    // repaired fallback publication produces byte-identical frozen lowers and
+    // never a competing staged-copy mechanism. A pending marker records that a
+    // new publication was interrupted; its presence refuses the attempt rather
+    // than adopting partial bytes.
+    const snapshotRoot = join(waveRoot, 'snapshots', snapshotId);
+    const lower = join(snapshotRoot, 'lower');
+    const publicationMarker = join(attemptRoot, 'worktree-publication.pending');
+    if (existsSync(publicationMarker)) {
+      refuse('snapshot-publication-incomplete', `fallback publication was interrupted for ${attemptRoot}`);
+    }
     mkdirSync(dirname(worktree), { recursive: true });
     const existingHead = existsSync(worktree) ? gitMaybe(['-C', worktree, 'rev-parse', 'HEAD']) : null;
+    let publishedNew = false;
     if (existingHead === null) {
-      execFileSync('git', ['-C', target.worktree, 'worktree', 'add', '--detach', worktree, baseCommit], GIT_RUN);
+      await ensureSnapshot({
+        snapshotRoot,
+        snapshotId,
+        lower,
+        identity,
+        source: target.worktree,
+        baseCommit,
+        staging,
+      });
+      // The marker is written exclusively before the first worktree write and
+      // removed only after a new publication passes common-dir validation.
+      writeFileSync(publicationMarker, `${JSON.stringify({ snapshotId, baseCommit })}\n`, { flag: 'wx' });
+      execFileSync('git', ['-C', target.worktree, 'worktree', 'add', '--detach', '--no-checkout', worktree, baseCommit], GIT_RUN);
+      gitText(['-C', worktree, 'read-tree', baseCommit]);
+      copyTreeInto(lower, worktree);
+      publishedNew = true;
     } else if (existingHead !== baseCommit) {
       throw new Error(`fallback worktree already exists at a different head: ${worktree}`);
     }
@@ -817,6 +846,7 @@ async function provisionWorktree({ kind, selection, snapshotId, baseCommit, targ
     if (commonDir !== realpathSync(target.gitCommonDir)) {
       throw new Error(`fallback worktree lost the canonical common dir: ${commonDir}`);
     }
+    if (publishedNew) rmSync(publicationMarker, { force: true });
     const retained = Object.freeze({
       backend: 'worktree',
       lower: null,
@@ -941,6 +971,8 @@ async function prepare(kind, options = {}) {
       packageId,
       coordinator,
       phaseToken: options.phaseToken ?? `phase-${attemptId}`,
+      identity,
+      staging: stagingInput,
     });
   }
   return provisionOverlay({

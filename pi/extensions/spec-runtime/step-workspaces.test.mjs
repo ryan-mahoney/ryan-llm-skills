@@ -1057,6 +1057,136 @@ test('wave workspaces: staged prepared dependency output reaches the frozen lowe
   assert.equal(existsSync(join(target.worktree, 'node_modules')), false, 'the live checkout is never used as the lower');
 });
 
+test('wave workspaces: staged prepared dependency output reaches fallback worktree and replay preserves attempt bytes', async t => {
+  const target = makeTargetRepo(t, 'wave-workspaces-staged-fallback-target');
+  const waveRoot = freshRoot(t, 'wave-workspaces-staged-fallback-root');
+  const ownership = makeOwnership(t, 'wave-workspaces-staged-fallback');
+  symlinkSync('README.md', join(target.worktree, 'readme-link'));
+  git(target.worktree, ['add', 'readme-link']);
+  git(target.worktree, ['commit', '-m', 'track readme-link symlink']);
+  const baseCommit = git(target.worktree, ['rev-parse', 'HEAD']);
+  const declaration = { command: 'npm ci --ignore-scripts', lockfiles: [], environment: [] };
+  const staging = stagePreparedInput(t, target, baseCommit);
+  mkdirSync(join(staging.dependencies, 'node_modules', 'leftpad'), { recursive: true });
+  writeFileSync(join(staging.dependencies, 'node_modules', 'leftpad', 'index.js'), 'module.exports = 1;\n');
+  const { snapshotId } = setupIdentity({ baseCommit, setup: declaration, targetRoot: target.worktree });
+  const preparationReceipt = {
+    ok: true, drain: 'confirmed', baseCommit, trackedClean: true,
+    snapshotId, stagingDigest: stagingDigest(staging),
+  };
+  const options = {
+    ...workspaceOptions({
+      target, waveRoot, ownership, packageId: 'wave-staged-fallback', label: 'staged-fallback',
+      attemptId: 'attempt-staged-fallback-1', baseCommit, mode: 'worktree', setup: declaration,
+      env: { HOME: process.env.HOME, PATH: process.env.PATH }, preparationReceipt,
+    }),
+    staging,
+  };
+
+  const record = await prepareStepWorkspace(options);
+  assert.equal(record.backend, 'worktree');
+  const artifact = join(record.worktree, 'node_modules', 'leftpad', 'index.js');
+  assert.equal(existsSync(artifact), true, 'staged prepared dependency output reaches the fallback worktree');
+  assert.equal(readFileSync(artifact, 'utf8'), 'module.exports = 1;\n', 'the validated staged contents are published verbatim');
+  assert.equal(readFileSync(join(record.worktree, 'README.md'), 'utf8'), readFileSync(join(staging.source, 'README.md'), 'utf8'), 'the prepared source tree matches the staged base source');
+  assert.equal(readFileSync(join(record.worktree, 'README.md'), 'utf8'), 'base\n', 'the published source is the base commit contents');
+  assert.equal(readlinkSync(join(record.worktree, 'readme-link')), 'README.md', 'the lower copies tracked symlinks into a fresh empty worktree');
+  assert.equal(git(record.worktree, ['diff', '--cached', '--name-only']), '', 'the seeded index matches the base commit tree');
+  assert.equal(existsSync(join(target.worktree, 'node_modules')), false, 'the canonical checkout never receives the dependency artifact');
+  assert.throws(
+    () => git(target.worktree, ['cat-file', '-e', `${baseCommit}:node_modules/leftpad/index.js`]),
+    'the source commit does not contain the dependency artifact',
+  );
+
+  // Cross-step repair: a later attempt with the same phase token edits its own
+  // dependency bytes in the attempt worktree; replay must not disturb this
+  // attempt's publication or the attempt's other files.
+  writeFileSync(join(record.worktree, 'node_modules', 'leftpad', 'index.js'), 'module.exports = 2;\n');
+  writeFileSync(join(record.worktree, 'attempt-owned.txt'), 'attempt bytes\n');
+
+  const replay = await prepareStepWorkspace(options);
+  assert.equal(readFileSync(join(replay.worktree, 'node_modules', 'leftpad', 'index.js'), 'utf8'), 'module.exports = 2;\n', 'replay preserves the attempt-edited dependency contents');
+  assert.equal(readFileSync(join(replay.worktree, 'attempt-owned.txt'), 'utf8'), 'attempt bytes\n', 'replay preserves attempt-owned files');
+});
+
+test('wave workspaces: interrupted fallback publication refuses and never adopts partial bytes', t => {
+  const target = makeTargetRepo(t, 'wave-interrupted-fallback-target');
+  const waveRoot = freshRoot(t, 'wave-interrupted-fallback-root');
+  const registryRoot = freshRoot(t, 'wave-interrupted-fallback-ownership');
+  const baseCommit = target.c2;
+  const declaration = { command: 'npm ci --ignore-scripts', lockfiles: [], environment: [] };
+  const staging = stagePreparedInput(t, target, baseCommit);
+  mkdirSync(join(staging.dependencies, 'node_modules', 'leftpad'), { recursive: true });
+  writeFileSync(join(staging.dependencies, 'node_modules', 'leftpad', 'index.js'), 'module.exports = 1;\n');
+  const { snapshotId } = setupIdentity({ baseCommit, setup: declaration, targetRoot: target.worktree });
+  const preparationReceipt = {
+    ok: true, drain: 'confirmed', baseCommit, trackedClean: true,
+    snapshotId, stagingDigest: stagingDigest(staging),
+  };
+  const options = {
+    ...workspaceOptions({
+      target, waveRoot, packageId: 'wave-interrupted-fallback', label: 'interrupted-fallback',
+      attemptId: 'attempt-interrupted-fallback-1', baseCommit, mode: 'worktree', setup: declaration,
+      env: { HOME: process.env.HOME, PATH: process.env.PATH }, preparationReceipt,
+    }),
+    staging,
+  };
+  const script = `
+    import assert from 'node:assert/strict';
+    import { registerHooks } from 'node:module';
+    import { execFileSync } from 'node:child_process';
+    import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+    import { join } from 'node:path';
+    import { createOwnership } from ${JSON.stringify(new URL('./ownership.mjs', import.meta.url).href)};
+    const moduleUrl = ${JSON.stringify(new URL('./step-workspaces.mjs', import.meta.url).href)};
+    const sentinel = Object.assign(new Error('injected interrupted fallback publication'), { code: 'EINTR' });
+    let injected = false;
+    globalThis.__waveInterrupt = (lower, worktree, real) => {
+      if (injected) return real(lower, worktree);
+      injected = true;
+      mkdirSync(join(worktree, 'node_modules', 'leftpad'), { recursive: true });
+      writeFileSync(join(worktree, 'node_modules', 'leftpad', 'index.js'), 'module.exports = ');
+      throw sentinel;
+    };
+    const hooks = registerHooks({
+      load(url, context, nextLoad) {
+        const loaded = nextLoad(url, context);
+        if (url !== moduleUrl) return loaded;
+        const source = String(loaded.source)
+          .replace('copyTreeInto(lower, worktree);',
+            'globalThis.__waveInterrupt(lower, worktree, copyTreeInto);');
+        return { ...loaded, source };
+      },
+    });
+    const { prepareStepWorkspace } = await import(moduleUrl);
+    const ownership = createOwnership({ registryRoot: ${JSON.stringify(registryRoot)} });
+    const options = { ...${JSON.stringify(options)}, ownership };
+    await assert.rejects(() => prepareStepWorkspace(options), error => {
+      assert.strictEqual(error, sentinel, 'preserve the original interruption error');
+      return true;
+    });
+    assert.equal(injected, true, 'interrupted publication fault was reached');
+    assert.equal((await ownership.inspectClaims()).claims.length, 0, 'failed publisher releases its new claim');
+    const worktree = join(options.waveRoot, 'attempts', options.attemptId, 'worktree');
+    const marker = join(options.waveRoot, 'attempts', options.attemptId, 'worktree-publication.pending');
+    const partial = join(worktree, 'node_modules', 'leftpad', 'index.js');
+    assert.equal(existsSync(marker), true, 'interrupted publication leaves the pending marker');
+    assert.equal(execFileSync('git', ['-C', worktree, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), options.baseCommit,
+      'the interrupted worktree remains at the requested base HEAD');
+    assert.equal(readFileSync(partial, 'utf8'), 'module.exports = ', 'the interrupted publication left partial dependency bytes');
+    hooks.deregister();
+    await assert.rejects(() => prepareStepWorkspace({ ...options, phaseToken: 'phase-interrupted-fallback-retry' }), error => {
+      assert.equal(error?.code, 'workspace-refusal');
+      assert.equal(error?.reason, 'snapshot-publication-incomplete');
+      return true;
+    });
+    assert.equal(readFileSync(partial, 'utf8'), 'module.exports = ', 'refusal never adopts the partial dependency bytes');
+    assert.equal((await ownership.inspectClaims()).claims.length, 0, 'refusal leaks no attempt claim');
+    delete globalThis.__waveInterrupt;
+  `;
+  execFileSync(process.execPath, ['--input-type=module', '-e', script], GIT);
+});
+
 for (const backend of ['overlayfs', 'worktree']) {
   test(`wave workspaces: ${backend} provisioning failure releases its reserved claim`, async t => {
     const target = makeTargetRepo(t, `wave-release-${backend}-target`);
