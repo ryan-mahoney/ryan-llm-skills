@@ -93,7 +93,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
         finally { for (const [name, count] of Object.entries(scout.counts)) toolCalls[name] = (toolCalls[name] ?? 0) + count; scout.dispose(); }
       } else plan = await stage(feedback ? 'repair-planning' : 'planning', () => client.json(plannerPrompt, planningInput, 'planning'));
       writeFileSync(join(directory, `plan-${executions.length}.json`), JSON.stringify(plan, null, 2));
-      if (strategy === 'direct-edits' && plan.operations?.some(op => op.executor !== 'deterministic')) throw new Error('Direct strategy requires deterministic operations');
+      if (strategy && strategy !== 'patch-editors' && plan.operations?.some(op => op.executor !== 'deterministic')) throw new Error('Direct strategy requires deterministic operations');
       const editor = (model, stageName) => ({ operation, files }) => strategy
         ? patchEditor(model, stageName, task.spec, { operation, files })
         : model.json(editorPrompt, { task_contract: task.spec, instruction: operation.instruction, writes: operation.writes, files }, stageName);

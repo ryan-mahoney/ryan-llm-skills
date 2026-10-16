@@ -1,6 +1,10 @@
 import { transform } from '../changeset/engine.mjs';
 
-export const strategyNames = ['patch-editors', 'direct-edits'];
+export const strategyNames = ['patch-editors', 'direct-edits', 'source-ranges'];
+const rangeContract = `Additional deterministic edits avoid regenerating unchanged source:
+{"kind":"compose","path":"absent/new-file","parts":[{"text":"new header\\n"},{"path":"source/file","start":"unique inclusive start anchor","end":"unique exclusive end anchor"},{"text":"new footer\\n"}]}
+{"kind":"replace-range","path":"source/file","start":"unique inclusive start anchor","end":"unique exclusive end anchor","text":"replacement"}
+Each anchor must occur exactly once in its source file; end must follow start. Set end:null for EOF. Declare source paths in reads or writes. Compose requires an absent owned destination. Edits apply sequentially to current content. Compose the moved text before removing its source ranges. Use small exact replacements afterward for declaration/import/delegation wiring. Preserve the original receiver and helper dependencies. Never copy a large unchanged body into JSON when a source range can carry it.`;
 const editContract = `Return only JSON {"edits":[...]}. Each edit is one of:
 {"kind":"replace","path":"owned/file","search":"exact existing text","text":"replacement","count":1}
 {"kind":"create","path":"absent/file","text":"new contents"}
@@ -10,10 +14,12 @@ Replacements apply in order and require the exact declared match count. Use smal
 
 export function strategyPlanner(strategy, original) {
   if (!strategyNames.includes(strategy)) throw new Error(`Unknown strategy: ${strategy}`);
-  return original + '\n\n' + (strategy === 'direct-edits'
+  return original + '\n\n' + (strategy !== 'patch-editors'
     ? 'For this experiment, produce only deterministic operations with concrete edits. Resolve implementation details during read-only discovery. Do not delegate or return instructions for another editor. Batch all settled implementation and required test edits in the final executable plan.'
     : 'Editors return bounded exact edits, not entire existing files. Use deterministic edits when already settled; delegate only unresolved local work. Editors cannot run commands or investigate beyond declared files. Their assignment must include required tests as edits, not ask them to run tests.') +
-    '\nPreserve the complete task contract. The harness runs visible checks and impact review after execution. Do not run test commands during read-only planning; inspect source and existing tests instead.';
+    '\nPreserve the complete task contract. The harness runs visible checks and impact review after execution. Do not run test commands during read-only planning; inspect source and existing tests instead.' +
+    (strategy === 'source-ranges' ? '\n' + rangeContract +
+      '\nBefore emitting the plan, audit it against every requested implementation and regression-test artifact. Include the required tests in the first batch, unless the task forbids test edits. Preserve distinctions between absent values, intentional null values, and unknown states; check each required return shape and rejection case. This is an internal completeness pass, not another model call or a request for prose.' : '');
 }
 
 export async function patchEditor(model, stage, task, { operation, files }) {

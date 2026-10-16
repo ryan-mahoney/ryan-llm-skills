@@ -57,3 +57,27 @@ runner copies and verifies that iteration's exact frozen bytes. There is no
 automatic resume of an unfinished trial: reconcile its
 process and accounting before scheduling more work. The code frozen for an active
 iteration is immutable even while the next strategy is being developed.
+
+## Strategy development record
+
+1. `patch-editors`: model editors return exact replacements rather than whole files;
+   reviewer receives execution status. One of three tasks delivered. The extraction
+   repair moved only part of the required code; dependency handoff missed two
+   terminal checks. No terminal feedback entered either trial's repair loop.
+2. `direct-edits`: the planner settles concrete edits and emits only deterministic
+   operations, removing separate editor calls. The exact same three cases run.
+3. `source-ranges`: add `compose` and `replace-range` edits to the direct plan
+   vocabulary. Uniquely anchored source spans carry unchanged code without copying
+   its text into model output. This addresses incomplete large extractions seen in
+   the earlier workflows. The shared engine contains these primitives in iteration
+   2, but only this strategy advertises them; retained plans show actual usage.
+   After direct planning omitted required tests and mishandled an intentional null,
+   this strategy also asks for an internal completeness pass over required artifacts,
+   return shapes and absent/null/unknown states. This bundles vocabulary and prompt
+   changes; it cannot isolate either one's individual causal effect.
+
+Range edits require unique start/end anchors in declared current source. The start
+is inclusive and end exclusive (`null` means EOF). `compose` creates an absent
+owned file from literal text and source ranges; `replace-range` replaces a selected
+range in an owned file. Normal syntax checks, dependency staging and publication
+rules still apply. Neither primitive provides source discovery or hidden feedback.

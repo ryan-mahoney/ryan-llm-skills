@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { patchEditor } from './strategies.mjs';
+import { transform } from '../changeset/engine.mjs';
 
 test('bounded editor edits preserve unrelated source and reject stale anchors or unowned writes', async () => {
   const files = { 'source.txt': 'preserve\nold\ntail\n', 'foreign.txt': 'private' };
@@ -13,4 +14,16 @@ test('bounded editor edits preserve unrelated source and reject stale anchors or
   await assert.rejects(patchEditor(model([{ ...edit, search: 'stale' }]), 'editor', 'contract', { operation, files }), /count mismatch/);
   await assert.rejects(patchEditor(model([{ ...edit, path: 'foreign.txt', search: 'private' }]), 'editor', 'contract', { operation, files }), /Unowned write/);
   assert.equal(files['source.txt'], 'preserve\nold\ntail\n');
+});
+
+test('source ranges move exact bytes and refuse ambiguous or reversed boundaries', () => {
+  const files = { 'old.txt': 'header\nSTART\nkeep exactly\nEND\ntail\n', 'new.txt': null };
+  const operation = { writes: ['old.txt', 'new.txt'], edits: [
+    { kind: 'compose', path: 'new.txt', parts: [{ text: 'prefix\n' }, { path: 'old.txt', start: 'START\n', end: 'END\n' }, { text: 'suffix\n' }] },
+    { kind: 'replace-range', path: 'old.txt', start: 'START\n', end: 'END\n', text: 'delegate\n' },
+  ] };
+  assert.deepEqual({ ...transform(operation, files) }, { 'new.txt': 'prefix\nSTART\nkeep exactly\nsuffix\n', 'old.txt': 'header\ndelegate\nEND\ntail\n' });
+  assert.throws(() => transform(operation, { ...files, 'old.txt': files['old.txt'] + 'START\n' }), /unique/);
+  assert.throws(() => transform({ writes: ['old.txt'], edits: [{ kind: 'replace-range', path: 'old.txt', start: 'END\n', end: 'START\n', text: '' }] }, files), /ordering/);
+  assert.equal(files['new.txt'], null);
 });

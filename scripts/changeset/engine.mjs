@@ -58,6 +58,16 @@ export function transform(op, context) {
     if (!op.writes.includes(path)) throw new Error(`Unowned write: ${path}`);
     files[path] = value; changed[path] = value;
   };
+  const range = part => {
+    const text = read(safePath(part.path));
+    const anchor = value => {
+      if (typeof value !== 'string' || !value || text.split(value).length !== 2) throw new Error(`Range anchor must be unique: ${part.path}`);
+      return text.indexOf(value);
+    };
+    const start = anchor(part.start), end = part.end === null ? text.length : anchor(part.end);
+    if (end <= start) throw new Error(`Invalid range ordering: ${part.path}`);
+    return { text, start, end };
+  };
   for (const edit of op.edits) {
     const path = safePath(edit.path);
     switch (edit.kind) {
@@ -71,6 +81,23 @@ export function transform(op, context) {
         const parts = text.split(edit.search);
         if (parts.length - 1 !== (edit.count ?? 1)) throw new Error(`Replacement count mismatch: ${path}`);
         write(path, parts.join(edit.text)); break;
+      }
+      case 'compose': {
+        if (!Object.hasOwn(files, path) || files[path] !== null) throw new Error(`Compose requires absent owned path: ${path}`);
+        if (!Array.isArray(edit.parts) || !edit.parts.length) throw new Error('Compose requires parts');
+        const text = edit.parts.map(part => {
+          if (Object.hasOwn(part, 'text')) {
+            if (typeof part.text !== 'string' || Object.hasOwn(part, 'path')) throw new Error('Invalid literal part');
+            return part.text;
+          }
+          const { text, start, end } = range(part); return text.slice(start, end);
+        }).join('');
+        write(path, text); break;
+      }
+      case 'replace-range': {
+        if (typeof edit.text !== 'string') throw new Error('Range replacement requires text');
+        const { text, start, end } = range(edit);
+        write(path, text.slice(0, start) + edit.text + text.slice(end)); break;
       }
       case 'delete': read(path); write(path, null); break;
       case 'rename': {
