@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readdirSync, writeFileSync, readFileSync, existsSync, rmSync, realpathSync, chmodSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, writeFileSync, readFileSync, existsSync, rmSync, realpathSync, chmodSync, symlinkSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
@@ -1005,6 +1005,15 @@ test('native recovery after a length stop can finish without inheriting the earl
 
 async function waveSetup(t, source, composition = false) {
   const f = await fixture(t, source);
+  if (composition === 'portable') {
+    // A normal separate-git-dir integration checkout: fallback worktrees'
+    // shared admin storage must not be nested inside the integration tree.
+    const common = join(f.dir, 'common.git');
+    renameSync(join(f.repo, '.git'), common);
+    writeFileSync(join(f.repo, '.git'), `gitdir: ${common}\n`);
+    f.locations.targets[0].common = common;
+    writeFileSync(join(f.packagePath, 'locations.json'), JSON.stringify(f.locations, null, 2));
+  }
   const ownershipRoot = join(f.dir, 'ownership');
   const ownership = createOwnership({ registryRoot: ownershipRoot });
   const coordinator = { session: 'coord-1', epoch: 1, pid: process.pid, started_at: new Date().toISOString() };
@@ -1118,12 +1127,29 @@ async function waitForExit(child) {
   });
 }
 
-async function composedWave(t, source) {
-  const w = await waveSetup(t, source, true);
+async function composedWave(t, source, portable = false) {
+  const originalPath = process.env.PATH;
+  t.after(() => { process.env.PATH = originalPath; });
+  const w = await waveSetup(t, source, portable ? 'portable' : true);
+  if (portable) {
+    // Real executable discovery, not a probe runner/result override: neither
+    // bwrap nor a directory containing it is reachable through this PATH.
+    const bin = join(w.f.dir, 'portable-bin');
+    mkdirSync(bin);
+    for (const command of ['git', 'sh', 'mkdir', 'flock', 'tar']) {
+      const executable = execFileSync('/bin/sh', ['-c', `command -v ${command}`], { encoding: 'utf8' }).trim();
+      symlinkSync(executable, join(bin, command));
+    }
+    process.env.PATH = bin;
+  }
   // Use production capability classification and selection, never a fabricated
   // unavailable result. This is NOT a systemd/cgroup or EV-14 rehearsal.
   const probe = await runCapabilityProbe({ fixtureRoot: w.f.dir });
   w.capability = probe.result;
+  if (portable) {
+    assert.equal(probe.result.status, 'unavailable');
+    assert.equal(probe.result.reason, 'bwrap-absent');
+  }
   assert.notEqual(probe.result.status, 'blocked', JSON.stringify(probe));
   w.wave.target.backend = 'auto';
   w.wave.target.capability = probe.result;
@@ -1142,7 +1168,6 @@ async function composedWave(t, source) {
   chmodSync(pi, 0o700);
   const previous = process.env.PATH;
   process.env.PATH = `${bin}:${previous}`;
-  t.after(() => { process.env.PATH = previous; });
   const runtime = waveRuntime(w);
   const prepared = await runtime.prepareWaveMember(w.input);
   w.workspace = prepared.workspace;
@@ -1150,6 +1175,13 @@ async function composedWave(t, source) {
   assert.equal(prepared.preparation_receipt.trackedClean, true);
   assert.equal(w.workspace.selectedBackend, probe.result.status === 'supported' ? 'overlayfs' : 'worktree');
   assert.equal(w.workspace.backendReason, probe.result.reason);
+  if (portable) {
+    assert.equal(w.workspace.selectedBackend, 'worktree');
+    assert.equal(w.workspace.backend, 'worktree');
+    assert.ok(w.launches.every(({ argv }) => argv[0] === process.execPath && !argv.includes('bwrap')));
+  }
+  t.diagnostic(portable ? 'portable contract: production worktree fallback, bwrap absent from PATH; kernel_proof:false; not EV-14'
+    : 'host-dependent/native auto-selection evidence only; not the portable contract; kernel_proof:false; not EV-14');
   t.diagnostic(`composition backend=${w.workspace.selectedBackend}; capability=${probe.result.reason}; probe boundary=${probe.boundary}; no systemd/cgroup or EV-14 certification`);
   const durable = JSON.parse(readFileSync(w.wavePath, 'utf8')).members['1'];
   assert.equal(durable.workspace.snapshotId, w.workspace.snapshotId);
@@ -1281,6 +1313,26 @@ for (const drainStatus of ['confirmed', 'unknown']) {
     await runtime.cancel(w.f.packagePath, next.run_id);
   });
 }
+
+test('wave runtime: production fallback workspace binds and starts without an overlay upper (not EV-14)', async t => {
+  const w = await composedWave(t, 'setInterval(() => {}, 1000);', true);
+  assert.equal(w.workspace.upper, null);
+  assert.equal(existsSync(join(w.workspace.worktree, '..', 'upper')), false);
+  const started = await w.runtime.start(w.input);
+  const record = loadRun(w.f.packagePath, started.run_id);
+  assert.equal(record.state, 'running');
+  assert.equal(record.wave_bindings.backend, 'worktree');
+  assert.equal(record.wave_bindings.layers, null);
+  assert.equal(record.checkout, w.workspace.worktree);
+  await w.runtime.cancel(w.f.packagePath, started.run_id);
+});
+
+test('wave runtime: overlay workspace with a missing upper still throws before launch', async t => {
+  const w = await waveSetup(t);
+  rmSync(w.workspace.upper, { recursive: true });
+  await assert.rejects(() => waveRuntime(w).start(w.input), { code: 'ENOENT' });
+  assert.equal(w.launches.length, 0);
+});
 
 test('wave runtime: a validated member binds its run and bypasses only the serial latest-run exclusion', async t => {
   const w = await waveSetup(t, 'setInterval(() => {}, 1000);');

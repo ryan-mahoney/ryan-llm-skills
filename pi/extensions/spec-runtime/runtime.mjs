@@ -297,9 +297,17 @@ async function resolveWaveBinding(input, { packagePath, packageRef, target }, ow
   if (!checkoutClaim || String(checkoutClaim.epoch) !== String(identity.claim.epoch) || checkoutClaim.packageId !== packageRef)
     throw waveInvalid('wave-checkout-claim', 'No live checkout claim matches the retained workspace.', 'Re-provision or recover the member workspace claim.');
   const claimed = checkoutClaim.checkout || {};
-  const upperReal = realpathSync(identity.upper);
-  if (realOrNull(claimed.gitCommonDir) !== upperReal || realOrNull(claimed.worktreeGitDir) !== upperReal)
-    throw waveInvalid('wave-checkout-mismatch', 'Checkout claim does not cover the retained attempt upper.', 'Re-provision the member workspace.');
+  if (identity.backend === 'overlayfs') {
+    const upperReal = realpathSync(identity.upper);
+    if (realOrNull(claimed.gitCommonDir) !== upperReal || realOrNull(claimed.worktreeGitDir) !== upperReal)
+      throw waveInvalid('wave-checkout-mismatch', 'Checkout claim does not cover the retained attempt upper.', 'Re-provision the member workspace.');
+  } else {
+    // Worktree fallback reserves this same ownership key without creating an
+    // overlay upper directory. Compare the canonical key, not its realpath.
+    const upperKey = join(realpathSync(identity.attemptRoot), 'upper');
+    if (claimed.gitCommonDir !== upperKey || claimed.worktreeGitDir !== upperKey)
+      throw waveInvalid('wave-checkout-mismatch', 'Checkout claim does not cover the retained attempt upper.', 'Re-provision the member workspace.');
+  }
   return { checkout: identity.checkout, primary: target.primary, target: target.id,
     wave: { wave_id: input.wave_id, generation: record.generation, step_number: input.step_number, attempt_id: input.attempt_id,
       phase: input.phase, claim_token: claimToken, coordinator_epoch: epoch, coordinator, package_ref: packageRef, target: target.id,
