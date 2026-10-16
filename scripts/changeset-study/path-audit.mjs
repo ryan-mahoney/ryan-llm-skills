@@ -29,7 +29,29 @@ function visit(node) {
   for (const value of Object.values(node)) if (Array.isArray(value)) value.forEach(visit); else if (value && typeof value === 'object') visit(value);
 }
 visit(tree);
-if (slices.length !== 1) throw new Error('Diagnostic requires one dirty-state block; inspect this candidate before adapting the diagnostic');
+// Editors may extract the entire calculation to a same-file function instead of
+// retaining the original inline declaration. Execute that exact function when
+// its return shape and call site identify it unambiguously.
+const returnsDirtyState = node => {
+  if (!node || typeof node !== 'object') return false;
+  if (node.type === 'ReturnStatement' && node.argument?.type === 'ObjectExpression' &&
+      ['dirty_paths', 'dirty_count'].every(key => node.argument.properties.some(p => (p.key?.name ?? p.key?.value) === key))) return true;
+  return Object.values(node).some(value => Array.isArray(value) ? value.some(returnsDirtyState) : returnsDirtyState(value));
+};
+const helpers = functions.filter(n => n.params.length === 1 && n.params[0].name === 'record' && returnsDirtyState(n.body));
+const callsWithRecord = (node, name) => {
+  if (!node || typeof node !== 'object') return false;
+  if (node.type === 'CallExpression' && node.callee?.name === name && node.arguments.length === 1 && node.arguments[0].name === 'record') return true;
+  return Object.values(node).some(value => Array.isArray(value) ? value.some(n => callsWithRecord(n, name)) : callsWithRecord(value, name));
+};
+let calculation, selection;
+if (slices.length === 1) {
+  calculation = '(() => {' + slices[0] + ';return {dirty_paths,dirty_count};})()';
+  selection = 'inline-dirty-state-block';
+} else if (slices.length === 0 && helpers.length === 1 && callsWithRecord(tree, helpers[0].id.name)) {
+  calculation = `${helpers[0].id.name}(record)`;
+  selection = `same-file-function:${helpers[0].id.name}`;
+} else throw new Error('Diagnostic requires one identifiable dirty-state block or function; inspect candidate before adapting diagnostic');
 const cases = [
   ['unstaged', ['file.txt']], ['staged', ['file.txt']], ['rename', ['new.txt']],
   ['mixed', ['staged.txt', 'unstaged.txt', 'new.txt']], ['leading-space-name', [' leading.txt']], ['git-error', null],
@@ -53,13 +75,13 @@ for (const [name, expected] of cases) {
     const context = vm.createContext({ execFileSync, spawnSync, record: { checkout: name === 'git-error' ? join(root, 'missing') : root } });
     let actual, error;
     try {
-      actual = vm.runInContext(declarations + '\n(() => {' + slices[0] + ';return {dirty_paths,dirty_count};})()', context, { timeout: 3000 });
+      actual = vm.runInContext(declarations + '\n' + calculation, context, { timeout: 3000 });
     } catch (e) { error = e.message; }
     rows.push({ case: name, expected, actual, error,
       passed: !error && JSON.stringify(actual.dirty_paths) === JSON.stringify(expected) && actual.dirty_count === (expected?.length ?? null) });
   } finally { rmSync(root, { recursive: true, force: true }); }
 }
-const result = { schema_version: 2, scope: 'Exact candidate dirty-state block and same-file functions against real disposable Git repositories. Does not exercise prompt launch or receipt loading. Posthoc only; no model feedback.',
+const result = { schema_version: 3, selection, scope: 'Exact candidate dirty-state block or function against real disposable Git repositories. Does not exercise prompt launch or receipt loading. Posthoc only; no model feedback.',
   candidate_hash: createHash('sha256').update(bytes).digest('hex'), passed: rows.every(r => r.passed), rows, elapsed_ms: performance.now() - began };
 writeFileSync(output, JSON.stringify(result, null, 2) + '\n');
 console.log(JSON.stringify(result));
