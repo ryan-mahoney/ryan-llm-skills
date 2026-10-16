@@ -160,7 +160,8 @@ Dispatch `instructions` must not narrow the owner's scope below its profile. Do 
 undeclared path": same-directory split modules and minimal, regression-tested repairs to an earlier
 step's file for a reproduced defect that blocks this step's gate are within scope. The owner lists
 them in its handoff and you declare them in `spec-steps.json`. In one run such a clause stopped a
-hard step four times for authority it already had.
+hard step four times for authority it already had. Fix and repair packets follow the same rule:
+files of the steps whose findings the packet fixes are in scope for minimal, regression-tested repairs.
 
 Normally select remaining assigned steps in ascending order. Before dispatch, use their prepared dependency boundaries and current producer evidence to determine which are executable. When a known outside dependency blocks the earliest step's implementation or required gate, preserve that step's ID, learning/checkpoint, acceptance obligations, and blocked/pending evidence; select only an already prepared independent step whose contracts and proof do not rely on the missing producer. Pass that exact canonical card to dispatch instead of relying on startup's first-unfinished selection. Do not renumber steps, re-plan a speculative dependency graph, overlap writers, or expand this package to build the outside producer.
 
