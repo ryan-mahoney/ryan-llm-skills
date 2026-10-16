@@ -8,7 +8,7 @@ import { join, resolve, realpathSync } from 'node:path';
 import { homedir } from 'node:os';
 import { Runtime, loadRun, summary, assertLease, assertManagedModel, ROLE_CONTRACT, waveSiblingConflict, runEditor, runCommand, runVerification, runAdvice, runCompletion, packageDirOf, assertIdleWriter, event as runtimeEvent } from './runtime.mjs';
 import { assertModelSelector } from './model-selector.mjs';
-import { submitStage, recordStageFingerprint } from './wave-review.mjs';
+import { submitStage, recordStageFingerprint, REVIEW_CATEGORIES } from './wave-review.mjs';
 import { createCommunication } from './communication.mjs';
 import { createMonitor, publicHint } from './monitor.mjs';
 import { createSentinelObserver, createVerificationRecorder, readVerificationIncidents, recordCheckpoint as recordSentinelCheckpoint, readInboxGuard, readCheckpointRecord, observeInput, reconcileRuntimeReturn, checkpointPath, createSentinelAuthority, createDiagnosisController, activatePolicy, activateRuntimePolicy, disablePolicy, handleBeforeSettle, finishIntent, considerCancellation } from './sentinel.mjs';
@@ -242,7 +242,7 @@ export default function (pi: any) {
             verdict: Type.Union([Type.Literal('pass'), Type.Literal('needs-fix')]),
             findings: Type.Array(Type.Object({
               id: Type.String(), severity: Type.Union(['HIGH', 'MED', 'LOW'].map(v => Type.Literal(v))),
-              category: Type.Union(['correctness', 'security', 'performance', 'maintainability', 'tests', 'scope'].map(v => Type.Literal(v))),
+              category: Type.Union(REVIEW_CATEGORIES.map(v => Type.Literal(v))),
               actionable: Type.Boolean(), file: Type.String(), line: Type.Number({ minimum: 1 }), symbol: Type.String(),
               signature: Type.String(), explanation: Type.String(), correction: Type.Optional(Type.String()), commit: Type.String() })),
             fix_verdicts: Type.Array(Type.Object({ fix: Type.String(), id: Type.String(),

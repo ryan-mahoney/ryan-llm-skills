@@ -237,7 +237,12 @@ export function createWaveReviewRuntime(deps) {
       const previousRunId = wave?.members?.[String(input.step_number)]?.run_id ?? null;
       if (previousRunId !== null) {
         const previous = loadRun(input.package, previousRunId);
-        if (previous?.phase_drain?.status !== 'confirmed')
+        // A run from this same assignment is the stage being replayed, not the
+        // preceding member phase; its drain state belongs to the live stage and
+        // must not refuse the replay. Runtime.start below remains authoritative
+        // for the identity, lease and assignment contract/summary return.
+        const sameAssignment = previous?.assignment_id === assignmentId;
+        if (!sameAssignment && previous?.phase_drain?.status !== 'confirmed')
           throw waveInvalid('phase-not-drained', 'The preceding member phase has not positively drained.', 'Drain and remount the preceding phase before starting a stage.');
       }
       const implementation = loadRun(input.package, input.implementation_run_id);

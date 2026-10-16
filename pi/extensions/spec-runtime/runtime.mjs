@@ -457,6 +457,14 @@ function readOwnershipClaimsSync(root) {
 // provider_recovery fallback is an accepted recorded model). run.json is never
 // consulted for wave authority.
 function assertWaveLease(record) {
+  // A candidate command phase carries no wave member binding; the run's own
+  // running/blocked state and revocation marker are its only lease. Validate
+  // those explicitly and stop before the member/claim checks that require
+  // wave_bindings.
+  if (!record.wave_bindings && record.command_phase?.subject?.kind === 'candidate') {
+    assertLease(record);
+    return;
+  }
   const binding = record.wave_bindings;
   const wavePath = record.wave_path || join(record.package, 'runtime', 'waves', `${binding.wave_id}.json`);
   let wave;

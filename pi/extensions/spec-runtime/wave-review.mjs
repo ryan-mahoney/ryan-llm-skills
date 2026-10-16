@@ -12,7 +12,11 @@ import { parseReviewFindings, planFixes } from '../../../skills/spec-branch-fix/
 
 const WAVE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const SEVERITIES = new Set(['HIGH', 'MED', 'LOW']);
-const CATEGORIES = new Set(['correctness', 'security', 'perf', 'simplification', 'design', 'guardrail', 'evidence']);
+// Single source of truth for the canonical review categories. The reviewer
+// tool schema and the submission validator both derive from this frozen list so
+// they cannot drift apart.
+export const REVIEW_CATEGORIES = Object.freeze(['correctness', 'security', 'perf', 'simplification', 'design', 'guardrail', 'evidence']);
+const CATEGORIES = new Set(REVIEW_CATEGORIES);
 const DISMISSALS = new Set(['false-positive', 'intentional', 'accepted-risk', 'deferred', 'unfixable']);
 const SHA = /^[0-9a-f]{40}$/;
 const MAX_BYTES = 48000;
