@@ -737,6 +737,7 @@ function promotionValidation({ promotion, fresh, ctx }) {
   requireSha(promotion.candidate ?? '', 'promotion.candidate');
   if (!integration || integration.status !== 'verified') refuse('candidate-unverified', `integration status ${integration?.status ?? 'none'} is not verified`);
   if (!sameInputs(integration, ctx)) refuse('integration-input-changed', 'promotion inputs changed since verification');
+  verifyMembers(ctx, ctx.target.worktree);
   if (promotion.expected_old !== ctx.baseCommit) refuse('journal-corrupt', 'promotion expected_old does not match ctx.baseCommit');
   if (candidate !== promotion.candidate) refuse('journal-corrupt', 'promotion candidate does not match the record candidate');
   if (promotion.candidate_tree !== (fresh.target?.candidate_tree ?? null)) refuse('journal-corrupt', 'promotion candidate_tree does not match the record candidate tree');

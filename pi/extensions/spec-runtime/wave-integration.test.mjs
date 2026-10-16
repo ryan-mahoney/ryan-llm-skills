@@ -1099,6 +1099,76 @@ test('wave integration: recovery refuses moved inputs after a before-cas crash',
   assert.equal(git(canonical.worktree, ['rev-parse', 'refs/heads/main']), canonical.base, 'main stays at B after refusal');
 });
 
+test('wave integration: recovery refuses a live-only retention ref change', { timeout: TIMEOUT }, async t => {
+  const { canonical, ctx, recordPath } = await promotionBaseline(t, 'live-only-ref-recovery');
+  const member = ctx.members[0];
+  // Run promotion in this process but trip a sentinel at before-cas so the
+  // journal is left at intent with the checkout still at B.
+  const sentinel = new Error('before-cas-sentinel');
+  const crashed = await promoteWave({ ...ctx, onBoundary: name => { if (name === 'before-cas') throw sentinel; } })
+    .then(() => null, error => error);
+  assert.equal(crashed, sentinel, 'the before-cas sentinel is caught by the test');
+  assert.equal(readWaveRecord(recordPath).target.promotion.state, 'intent', 'the crash leaves the journal at intent');
+  // Move ONLY the live retention ref to base; ctx.members and the durable
+  // integration record keep the original sealed head.
+  git(canonical.worktree, ['update-ref', member.retentionRef, canonical.base, member.sealedHead]);
+  const journalBefore = readFileSync(recordPath);
+  const indexBefore = cachedIndexStatus(canonical.worktree);
+  const rawIndexBefore = readFileSync(join(canonical.worktree, '.git', 'index'));
+  const bytesBefore = snapshotTreeDigest(canonical.worktree);
+  ctx.revision = readWaveRecord(recordPath).revision;
+  await assert.rejects(
+    () => recoverPromotion(ctx),
+    error => {
+      assert.equal(error.reason, 'sealed-head-changed', 'recovery refuses the live-only ref change');
+      assert.equal(error.code, 'integration-refusal', 'the refusal names integration-refusal');
+      return true;
+    },
+  );
+  assert.deepEqual(readFileSync(recordPath), journalBefore, 'the raw journal is unchanged by the refused recovery');
+  assert.equal(snapshotTreeDigest(canonical.worktree), bytesBefore, 'the canonical bytes are unchanged');
+  assert.equal(cachedIndexStatus(canonical.worktree), indexBefore, 'the raw index status is unchanged');
+  assert.deepEqual(readFileSync(join(canonical.worktree, '.git', 'index')), rawIndexBefore, 'the raw index is unchanged');
+  assert.equal(git(canonical.worktree, ['rev-parse', 'refs/heads/main']), canonical.base, 'main stays at B after refusal');
+  assert.equal(git(canonical.worktree, ['rev-parse', member.retentionRef]), canonical.base, 'the moved retention ref stays at B');
+});
+
+test('wave integration: before-cas refuses a live-only retention ref change', { timeout: TIMEOUT }, async t => {
+  const { canonical, ctx, recordPath } = await promotionBaseline(t, 'live-only-ref-before-cas');
+  const member = ctx.members[0];
+  let hookRan = false;
+  const snapshots = {};
+  await assert.rejects(
+    () => promoteWave({
+      ...ctx,
+      onBoundary: name => {
+        if (name === 'before-cas') {
+          hookRan = true;
+          // Move ONLY the live retention ref, leaving ctx.members intact.
+          git(canonical.worktree, ['update-ref', member.retentionRef, canonical.base, member.sealedHead]);
+          snapshots.journal = readFileSync(recordPath);
+          snapshots.digest = snapshotTreeDigest(canonical.worktree);
+          snapshots.index = cachedIndexStatus(canonical.worktree);
+          snapshots.rawIndex = readFileSync(join(canonical.worktree, '.git', 'index'));
+        }
+      },
+    }),
+    error => {
+      assert.equal(error.reason, 'sealed-head-changed', 'before-cas refuses the live-only ref change');
+      assert.equal(error.code, 'integration-refusal', 'the refusal names integration-refusal');
+      return true;
+    },
+  );
+  assert.equal(hookRan, true, 'the before-cas hook ran');
+  assert.equal(readWaveRecord(recordPath).target.promotion.state, 'intent', 'the journal was written to intent before the check');
+  assert.deepEqual(readFileSync(recordPath), snapshots.journal, 'the raw journal is unchanged');
+  assert.equal(snapshotTreeDigest(canonical.worktree), snapshots.digest, 'the canonical bytes are unchanged');
+  assert.equal(cachedIndexStatus(canonical.worktree), snapshots.index, 'the raw index status is unchanged');
+  assert.deepEqual(readFileSync(join(canonical.worktree, '.git', 'index')), snapshots.rawIndex, 'the raw index is unchanged');
+  assert.equal(git(canonical.worktree, ['rev-parse', 'refs/heads/main']), canonical.base, 'main stays at B after refusal');
+  assert.equal(git(canonical.worktree, ['rev-parse', member.retentionRef]), canonical.base, 'the moved retention ref stays at B');
+});
+
 test('wave integration: promoted replay returns the same branch ref', { timeout: TIMEOUT }, async t => {
   const { canonical, ctx, candidate, recordPath } = await promotionBaseline(t, 'promoted-replay-ref');
   const promoted = await promoteWave(ctx);
