@@ -6,8 +6,7 @@ import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { randomUUID, createHash } from 'node:crypto';
 import { join, resolve, realpathSync } from 'node:path';
 import { homedir } from 'node:os';
-import { Runtime, loadRun, summary, assertLease, runEditor, runCommand, runVerification, runAdvice, runCompletion, packageDirOf, assertIdleWriter, event as runtimeEvent } from './runtime.mjs';
-import { assertModelSelector } from './model-selector.mjs';
+import { Runtime, loadRun, summary, assertLease, assertManagedModel, waveSiblingConflict, runEditor, runCommand, runVerification, runAdvice, runCompletion, packageDirOf, assertIdleWriter, event as runtimeEvent } from './runtime.mjs';
 import { createCommunication } from './communication.mjs';
 import { createMonitor, publicHint } from './monitor.mjs';
 import { createSentinelObserver, createVerificationRecorder, readVerificationIncidents, recordCheckpoint as recordSentinelCheckpoint, readInboxGuard, readCheckpointRecord, observeInput, reconcileRuntimeReturn, checkpointPath, createSentinelAuthority, createDiagnosisController, activatePolicy, activateRuntimePolicy, disablePolicy, handleBeforeSettle, finishIntent, considerCancellation } from './sentinel.mjs';
@@ -67,7 +66,7 @@ function assignmentRunId(packagePath: string, assignmentId: string): string | nu
 // steps reuse one workflow). An unreadable run cannot prove the writer exited,
 // so it stays a conflict until a coordinator checkpoint reconciles it. A
 // resume of the same assignment or of the ledger's own run is not a conflict.
-function activeAssignmentConflict(packagePath: string, record: any, args: any): { id: string; state: string } | null {
+function activeAssignmentConflict(packagePath: string, record: any, args: any, allowedSibling?: ((conflict: { id: string; state: string; runId: string | null }) => boolean) | null): { id: string; state: string; runId: string | null } | null {
   const candidateKey = typeof args?.assignment_id === 'string' && args.assignment_id ? args.assignment_id
     : args?.action === 'start' && typeof args?.step === 'string' && args.step ? realpathStep(args.step) : null;
   let ledgerRunId: string | null = null;
@@ -84,7 +83,12 @@ function activeAssignmentConflict(packagePath: string, record: any, args: any): 
     let state: string | null = null;
     try { state = summary(loadRun(packagePath, runId))?.state ?? null; } catch { state = null; }
     if (state === null || !['completed', 'failed', 'cancelled'].includes(state)) {
-      return { id: worker.id, state: state ?? 'unresolved' };
+      const conflict = { id: worker.id, state: state ?? 'unresolved', runId };
+      // Each candidate conflict is offered to the optional sibling predicate;
+      // only a validated live sibling is skipped, and the first genuinely
+      // conflicting writer is returned.
+      if (allowedSibling?.(conflict)) continue;
+      return conflict;
     }
   }
   return null;
@@ -111,7 +115,7 @@ export default function (pi: any) {
       // Apply the process guard only to a managed worker with a run record.
       if (!['owner', 'editor'].includes(role) || !record.id) return;
       assertLease(record);
-      try { assertModelSelector(record[`${role}_model`], ctx.model); }
+      try { assertManagedModel(record, role, ctx.model, ctx.sessionManager.getBranch()); }
       catch (error: any) {
         // Extension hook errors are caught by Pi. Exit this managed child before
         // an API request can use a fuzzy match or a restored session's model.
@@ -124,7 +128,7 @@ export default function (pi: any) {
       assertActive: () => assertLease(record),
       nativeRetryable: isRetryableAssistantError,
       retrySettings: () => SettingsManager.inMemory(pi.getSettings()).getRetrySettings(),
-      onEvent: (data: any) => runtimeEvent(record, 'provider_recovery', { role, ...data }) });
+      onEvent: (data: any) => runtimeEvent(record, 'provider_recovery', { role, recovery: data }) });
     pi.on('tool_call', (event: any) => {
       try {
         assertLease(record);
@@ -205,6 +209,37 @@ export default function (pi: any) {
     }
     return;
   }
+  // Coordinator-only stage plumbing for wave members. Registered after the
+  // worker-role early return, so managed owners/editors never receive it. It
+  // only prepares or remounts a member workspace and returns the prepared
+  // receipt: it accepts no step result and makes no phase transition. The
+  // caller must durably select the member's current phase and supply the exact
+  // package claim token and coordinator epoch from the durable wave record;
+  // backend, capability, setup command, layers, target and base come from that
+  // record, never from the caller.
+  pi.registerTool({ name: 'spec_wave_stage', label: 'Prepare wave member stage', description: 'Coordinator-only stage plumbing for a wave member. action=prepare provisions the retained workspace from the durable wave target policy; action=remount re-claims a retained workspace whose previous phase positively drained. The prepared receipt only confirms preparation/remount; it accepts no step result and makes no phase transition. The caller must durably select the member\'s current phase and supply the exact package claim_token and coordinator_epoch from the durable wave record; backend, capability, setup command, layers, target and base come from that record, never the caller. Idempotent for the same membership identity.',
+    parameters: Type.Object({ action: Type.Union([Type.Literal('prepare'), Type.Literal('remount')]),
+      package: Type.String({ description: 'The spec package (a `workspace/slug` ref or its folder)' }),
+      step: Type.String({ description: 'Absolute canonical prepared subspec path; must match the indexed step card' }),
+      wave_id: Type.String({ description: 'Validated wave ID; must match the durable wave record' }),
+      expected_generation: Type.Number({ description: 'Expected durable wave generation (integer); must match the wave record' }),
+      step_number: Type.Number({ description: 'Wave member step number (integer); must match the step card' }),
+      attempt_id: Type.String({ description: 'Durable wave member attempt ID; must match the wave record' }),
+      phase: Type.String({ description: 'Durable wave member phase; the caller selects the current phase, this tool never advances it' }),
+      claim_token: Type.String({ description: 'Exact package claim token from the durable wave record; required and validated' }),
+      coordinator_epoch: Type.Number({ description: 'Wave coordinator epoch; must match the durable wave record' }) }),
+    async execute(_id: string, args: any) {
+      try {
+        const packagePath = await packageDirOf(args.package);
+        const input = { ...args, package: packagePath };
+        const receipt = args.action === 'remount'
+          ? await runtime.remountWaveMember(input)
+          : await runtime.prepareWaveMember(input);
+        return result(receipt);
+      } catch (error: any) {
+        return result({ error: error.message, next: 'Correct this specific wave stage error; this tool never launches or accepts a member result.' }, true);
+      }
+    } });
   const progress = installProgressContext(pi);
   const ownedWorkflow = createWorkflowContinuation(pi);
   pi.on('session_start', (_event: any, ctx: any) => ownedWorkflow.restore(ctx));
@@ -707,6 +742,7 @@ export default function (pi: any) {
       step: optional('Absolute canonical prepared subspec path; required for start'), owner_model: optional('provider/model[:thinking]; required unless owner_override is supplied'), editor_model: optional('provider/model[:thinking]; required for start'), scout_model: optional('SCOUT_AGENT selector as provider/model[:thinking]; default openai-codex/gpt-6-luna:low'),
       base: optional('Start ref for a new branch, default HEAD'),
       assignment_id: optional('Stable ID for this step attempt. Omit to use step path. Use a new ID only for an intentional subsequent attempt.'), run_id: optional('Existing run ID, otherwise latest'), workflow_id: optional('Registered workflow ID from a prior spec_sentinel_checkpoint; binds this real dispatch to its checkpoint'),
+      wave_id: optional('Validated wave ID; explicit wave member start binds to the durable wave record'), expected_generation: Type.Optional(Type.Number({ description: 'Expected durable wave generation (integer); must match the wave record' })), step_number: Type.Optional(Type.Number({ description: 'Wave member step number (integer); must match the step card' })), attempt_id: optional('Durable wave member attempt ID; must match the wave record'), phase: optional('Durable wave member phase; must match the wave record'), claim_token: optional('Wave claim token; must match the durable wave record'), coordinator_epoch: optional('Wave coordinator epoch; must match the durable wave record'),
       attempt_kind: Type.Optional(Type.Union(['implementation', 'verification-continuation', 'implementation-repair', 'review-repair', 'launch-retry'].map(value => Type.Literal(value)), { description: 'Explicit reason for this assignment; observation only, grants no retry authority.' })),
       session_scope: Type.Optional(Type.Union([Type.Literal('package'), Type.Literal('step')], { description: 'New steps default to step: separate retained sessions per canonical step. Omitted scope preserves an existing attempt or the latest same-step retry scope. Explicit package preserves cross-step reuse.' })),
       instructions: optional('Scoped task direction, acceptance constraints and publication authority'), timeout_ms: Type.Optional(Type.Number({ minimum: 1000, maximum: 86400000, description: 'Whole assignment deadline, default 7200000 (2 hours)' })), child_extensions: Type.Optional(Type.Array(Type.String({ description: 'Explicit trusted pi-intercom and provider/compat extension paths; discovery is disabled in managed children' }))) }),
@@ -717,6 +753,14 @@ export default function (pi: any) {
         const packagePath = await packageDirOf(args.package); progress.attach(packagePath);
         if (args.action === 'status') { const record = loadRun(packagePath, args.run_id); monitor.attach(record, ctx); return result(summary(record)); }
         if (args.action === 'cancel') return result(await runtime.cancel(packagePath, args.run_id));
+        const configFile = join(homedir(), '.pi/agent/spec-runtime.json');
+        const config = existsSync(configFile) ? JSON.parse(readFileSync(configFile, 'utf8')) : {};
+        const input = { ...args, package: packagePath, scout_model: args.scout_model ?? config.scout_model ?? SCOUT_MODEL, child_extensions: args.child_extensions ?? config.child_extensions ?? [] };
+        // An explicit wave member start is validated against the durable wave
+        // record (target, generation, member, claims) before any conflict
+        // bookkeeping; a raw wave_id never bypasses the serial guard.
+        const waveConfig: any = args.action === 'start' && input.wave_id !== undefined && input.wave_id !== null
+          ? await runtime.validateWaveAssignment(input) : null;
         // A supplied workflow_id is a registered mapping key, validated before any
         // dispatch side effect. Dispatch never mints workflow ownership: a missing,
         // malformed, differently-owned or checkout-conflicting checkpoint is refused
@@ -742,14 +786,16 @@ export default function (pi: any) {
           // run record or process precedes a refusal; terminal
           // assignments free the workflow for its next assignment while the
           // per-run notification mappings stay retained.
-          const conflict = activeAssignmentConflict(packagePath, registeredWorkflow, args);
+          // A validated wave may run its distinct siblings concurrently; the
+          // predicate waives only a live sibling of the same wave/package/
+          // generation/epoch/target, evaluated per candidate conflict. Every
+          // other unknown, stale or serial conflict still refuses the dispatch.
+          const conflict = activeAssignmentConflict(packagePath, registeredWorkflow, args,
+            waveConfig ? (candidate: { id: string; state: string; runId: string | null }) => waveSiblingConflict(packagePath, candidate, waveConfig) : null);
           if (conflict) {
             return result({ error: `workflow ${workflowId} still has active assignment ${conflict.id} (run state ${conflict.state}); refusing a concurrent dispatch`, next: 'await its completion or confirmed cancellation, or reconcile the assignment with spec_sentinel_checkpoint before dispatching the next one' }, true);
           }
         }
-        const configFile = join(homedir(), '.pi/agent/spec-runtime.json');
-        const config = existsSync(configFile) ? JSON.parse(readFileSync(configFile, 'utf8')) : {};
-        const input = { ...args, package: packagePath, scout_model: args.scout_model ?? config.scout_model ?? SCOUT_MODEL, child_extensions: args.child_extensions ?? config.child_extensions ?? [] };
         receipt = args.action === 'startup' ? await runtime.startup(input, ctx.sessionManager.getSessionFile()) : await runtime.start(input, ctx.sessionManager.getSessionFile());
         if (receipt.run_id) monitor.attach(loadRun(packagePath, receipt.run_id), ctx);
         if (receipt.run_id && !ownPackages.includes(packagePath)) ownPackages.push(packagePath);
@@ -774,11 +820,18 @@ export default function (pi: any) {
           // worker is the caller's explicit attempt ID or the real run UUID;
           // the runtime assignment key stays in the receipt untouched.
           const assignmentId = args.assignment_id ?? receipt.run_id;
-          const boundCheckoutValue = receipt.checkout ?? existing.checkout ?? null;
+          // A wave member keeps the canonical integration checkout on its
+          // workflow binding; the isolated member attempt checkout is retained
+          // only as per-run provenance and never becomes the workflow checkout.
+          const waveIntegration = waveConfig?.wave_bindings?.integration_checkout ?? null;
+          const boundCheckoutValue = waveConfig
+            ? (waveIntegration ?? existing.checkout ?? null)
+            : (receipt.checkout ?? existing.checkout ?? null);
           // Retain the real run identity before checkpoint I/O: a failed update
           // must neither hide a launched worker nor lose its terminal mapping.
           const binding = { package: packagePath, run_id: receipt.run_id, workflow_id: workflowId,
-            assignment_id: assignmentId, checkout: boundCheckoutValue, coordinator_session };
+            assignment_id: assignmentId, checkout: boundCheckoutValue, coordinator_session,
+            ...(waveConfig ? { wave: receipt.wave ?? null, attempt_checkout: receipt.checkout ?? null } : {}) };
           dispatchBindings.set(`${packagePath}\u0000${receipt.run_id}`, binding);
           dispatchBindings.set(workflowId, binding);
           receipt.workflow_id = workflowId;

@@ -1,9 +1,10 @@
 import test from 'node:test';
 import { EventEmitter } from 'node:events';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
-import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, existsSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { execFileSync, spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { setWorktree } from '../../../scripts/spec-location/index.mjs';
 import { makePackageFixture } from './package-fixture.mjs';
 import { submitCompletion, completionStatus, recordVerification, verificationReceipts, revision, refreshProgress, recordCheckpoint, installProgressContext, watchProgress, reminder } from './completion.mjs';
@@ -29,6 +30,49 @@ async function fixture(t) {
   const input = { outcome: 'as-specified', strategy: 'implementation-first', decisions: ['Preserve existing caller contract.'], gaps: [], findings: [], introduced: [{ symbol: 'value', path: 'source.js', purpose: 'shared fixture value' }],
     evidence: [{ id: 'EV-1', status: 'passed', receipt_id: receipt.id, proof_boundary: 'isolated focused behavior only' }] };
   return { root, pkg, git, r, input, evidence };
+}
+
+// Wave attempts keep their own retained checkout, Git history and evidence, plus the
+// runtime `wave_bindings` that name the target/attempt identity used by completion.mjs.
+async function waveRuns(t, specs) {
+  const f = await fixture(t);
+  const runs = [];
+  for (const { id, attempt_id, started_at, decisions = ['Wave attempt records its own immutable learning.'] } of specs) {
+    const checkout = join(dirname(f.pkg), 'wave-attempts', attempt_id);
+    mkdirSync(join(checkout, 'evidence'), { recursive: true });
+    const agit = (...args) => execFileSync('git', ['-C', checkout, ...args], { encoding: 'utf8', stdio: 'pipe' }).trim();
+    agit('init', '-q'); agit('config', 'user.name', 'Wave Attempt'); agit('config', 'user.email', 'wave@example.invalid');
+    writeFileSync(join(checkout, 'source.js'), `export const value = '${attempt_id}';\n`);
+    writeFileSync(join(checkout, 'evidence/check.txt'), `${attempt_id} local check result\n`);
+    agit('add', '.'); agit('commit', '-qm', `Wave attempt ${attempt_id}`);
+    const base_commit = agit('rev-parse', 'HEAD');
+    const wave_bindings = { wave_id: 'wave-1', generation: 1, step_number: 1, attempt_id, phase: 'implementing',
+      target: 'repo', backend: 'overlayfs', base_commit };
+    const r = { id, completion_contract: 1, step: join(f.pkg, 'step-001-subspec.md'), package: f.pkg, primary: f.root,
+      checkout, state: 'running', started_at, wave_bindings };
+    writeFileSync(join(f.pkg, 'runtime/runs', `${id}.json`), JSON.stringify(r));
+    const receipt = recordVerification(r, `node ${attempt_id}-check.js`, revision(r), revision(r),
+      { exit_code: 0, full_output_path: join(checkout, 'evidence/check.txt') });
+    const input = { outcome: 'as-specified', strategy: 'implementation-first', decisions, gaps: [], findings: [],
+      introduced: [{ symbol: 'value', path: 'source.js', purpose: `wave ${attempt_id} value` }],
+      evidence: [{ id: 'EV-1', status: 'passed', receipt_id: receipt.id, artifact: 'repo:evidence/check.txt', proof_boundary: 'isolated wave attempt behavior only' }] };
+    runs.push({ r, input, checkout, git: agit, base_commit, attempt_id });
+  }
+  return { ...f, runs };
+}
+
+// Spawn workers exactly as refreshProgress does: the fixed direct-exec helper under flock.
+function refreshWorker(packagePath) {
+  const lock = join(packagePath, 'runtime', 'progress.lock');
+  return new Promise((resolve, reject) => {
+    const child = spawn('flock', ['-x', lock, process.execPath, fileURLToPath(new URL('./completion.mjs', import.meta.url)), 'refresh-progress']);
+    let out = '', err = '';
+    child.stdout.on('data', chunk => { out += chunk; });
+    child.stderr.on('data', chunk => { err += chunk; });
+    child.on('error', reject);
+    child.on('close', code => code === 0 ? resolve(JSON.parse(out)) : reject(new Error(`refresh worker exited ${code}: ${err}`)));
+    child.stdin.end(JSON.stringify({ package: packagePath }));
+  });
 }
 
 test('structured handoff writes canonical learning and index without converting process exit into acceptance', async t => {
@@ -283,4 +327,79 @@ test('session restore clears input and package bindings from the previous branch
   handlers.session_tree({}, { sessionManager: { getBranch: () => [] } });
   assert.equal(handlers.context({ messages: [] }), undefined);
   await handlers.session_shutdown();
+});
+
+// Run alone: node --test --test-name-pattern='^wave runtime:' pi/extensions/spec-runtime/completion.test.mjs
+test('wave runtime: concurrent same-step attempts retain immutable per-run learning while the canonical pointer stays deterministic', async t => {
+  const w = await waveRuns(t, [
+    { id: 'wave-a', attempt_id: 'attempt-a', started_at: '2026-01-01T00:00:00.000Z', decisions: ['Attempt a keeps its own learning.'] },
+    { id: 'wave-b', attempt_id: 'attempt-b', started_at: '2026-01-02T00:00:00.000Z', decisions: ['Attempt b keeps its own learning.'] },
+  ]);
+  const [a, b] = w.runs;
+  assert.equal(submitCompletion(a.r, a.input).status, 'recorded');
+  assert.equal(submitCompletion(b.r, b.input).status, 'recorded');
+  const aLearning = join(w.pkg, 'runtime/runs', `${a.r.id}-learning.md`);
+  const bLearning = join(w.pkg, 'runtime/runs', `${b.r.id}-learning.md`);
+  assert.match(readFileSync(aLearning, 'utf8'), /Attempt a keeps its own learning/);
+  assert.match(readFileSync(bLearning, 'utf8'), /Attempt b keeps its own learning/);
+  assert.equal(completionStatus(a.r).status, 'recorded');
+  assert.equal(completionStatus(b.r).status, 'recorded');
+  await refreshProgress(w.pkg);
+  const canonical = join(w.pkg, 'learnings', 'step-001-learning.md');
+  assert.equal(readFileSync(canonical, 'utf8'), readFileSync(bLearning, 'utf8'));
+  await refreshProgress(w.pkg);
+  assert.equal(readFileSync(canonical, 'utf8'), readFileSync(bLearning, 'utf8'));
+  assert.match(readFileSync(aLearning, 'utf8'), /Attempt a keeps its own learning/, 'earlier attempt learning is immutable');
+});
+
+test('wave runtime: concurrent cross-process refresh workers produce both run entries without corrupting history or the ledger', async t => {
+  const w = await waveRuns(t, [
+    { id: 'wave-a', attempt_id: 'attempt-a', started_at: '2026-01-01T00:00:00.000Z' },
+    { id: 'wave-b', attempt_id: 'attempt-b', started_at: '2026-01-02T00:00:00.000Z' },
+  ]);
+  for (const run of w.runs) submitCompletion(run.r, run.input);
+  const ledgers = await Promise.all([refreshWorker(w.pkg), refreshWorker(w.pkg)]);
+  for (const ledger of ledgers) {
+    assert.deepEqual(ledger.runs.map(r => r.run_id).sort(), ['attempt-1', 'wave-a', 'wave-b']);
+    assert.equal(ledger.runs.find(r => r.run_id === 'wave-a').wave.wave_id, 'wave-1');
+    assert.equal(ledger.runs.find(r => r.run_id === 'wave-a').wave.attempt_id, 'attempt-a');
+    assert.equal(ledger.runs.find(r => r.run_id === 'attempt-1').wave, null);
+  }
+  const progress = JSON.parse(readFileSync(join(w.pkg, 'runtime/progress.json'), 'utf8'));
+  assert.equal(progress.runs.length, 3);
+  const index = JSON.parse(readFileSync(join(w.pkg, 'history-index.json'), 'utf8'));
+  assert.ok(Array.isArray(index.records));
+  for (const run of w.runs) assert.match(readFileSync(join(w.pkg, 'runtime/runs', `${run.r.id}-learning.md`), 'utf8'), /learning:/);
+});
+
+test('wave runtime: worker target artifacts resolve the attempt checkout and reject a foreign target', async t => {
+  const w = await waveRuns(t, [{ id: 'wave-a', attempt_id: 'attempt-a', started_at: '2026-01-01T00:00:00.000Z' }]);
+  const [a] = w.runs;
+  // The canonical integration worktree lacks the wave-relative evidence; only the attempt checkout has it.
+  assert.equal(existsSync(join(w.root, 'evidence/check.txt')), false);
+  assert.equal(submitCompletion(a.r, a.input).status, 'recorded');
+  assert.throws(() => submitCompletion(a.r, { ...a.input, evidence: [{ ...a.input.evidence[0], artifact: 'other:evidence/check.txt' }] }), /foreign target/);
+});
+
+test('wave runtime: a drained overlay is checked via the same-run revision receipt, and forged or missing provenance fails', async t => {
+  const w = await waveRuns(t, [{ id: 'wave-a', attempt_id: 'attempt-a', started_at: '2026-01-01T00:00:00.000Z' }]);
+  const [a] = w.runs;
+  assert.equal(submitCompletion(a.r, a.input).status, 'recorded');
+  const receiptFile = join(w.pkg, 'runtime/runs', `${a.r.id}-revision.json`);
+  const receipt = JSON.parse(readFileSync(receiptFile, 'utf8'));
+  assert.equal(receipt.run_id, a.r.id);
+  assert.equal(receipt.wave_id, 'wave-1');
+  assert.equal(receipt.attempt_id, 'attempt-a');
+  assert.equal(receipt.target, 'repo');
+  assert.equal(receipt.commit, a.base_commit);
+  // Confirmed drain: the overlay is gone and the outside checkout is unmounted/empty.
+  rmSync(a.checkout, { recursive: true, force: true });
+  a.r.phase_drain = { status: 'confirmed' };
+  assert.equal(completionStatus(a.r, { checkHead: true }).status, 'recorded');
+  writeFileSync(receiptFile, JSON.stringify({ ...receipt, wave_id: 'wave-forged' }));
+  assert.equal(completionStatus(a.r, { checkHead: true }).status, 'handoff_incomplete');
+  writeFileSync(receiptFile, JSON.stringify({ ...receipt, commit: '0'.repeat(40) }));
+  assert.equal(completionStatus(a.r, { checkHead: true }).status, 'handoff_incomplete');
+  rmSync(receiptFile);
+  assert.equal(completionStatus(a.r, { checkHead: true }).status, 'handoff_incomplete');
 });

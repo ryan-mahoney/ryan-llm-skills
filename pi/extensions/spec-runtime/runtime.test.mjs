@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readdirSync, writeFileSync, readFileSync, existsSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { Runtime, launch, loadRun, summary, groupAlive, runEditor, runCommand, runVerification, runCompletion, runAdvice, activeGroups, spawnManaged, settleGroup, assertLease, assertIdleWriter, editorSlot, revoke } from './runtime.mjs';
+import { Runtime, launch, loadRun, summary, groupAlive, runEditor, runCommand, runVerification, runCompletion, runAdvice, activeGroups, spawnManaged, settleGroup, assertLease, assertIdleWriter, editorSlot, revoke, event, assertManagedModel, waveSiblingMatches, waveSiblingConflict } from './runtime.mjs';
 import { createVerificationRecorder, readVerificationIncidents } from './sentinel.mjs';
 import { makePackageFixture } from './package-fixture.mjs';
+import { createOwnership } from './ownership.mjs';
 
 async function fixture(t, source) {
   const base = await makePackageFixture();
@@ -21,8 +22,18 @@ async function fixture(t, source) {
   const options = { indexDir: join(dir, 'index'), notify: notified, location, launchProcess: (record, role, prompt, launchOptions = {}) => {
     const task = launch(record, role, prompt, { command: process.execPath, prefix: [fake], ...launchOptions }); pids.push(task.child.pid); return task;
   } };
-  t.after(() => { for (const pid of pids) { try { process.kill(-pid, 'SIGKILL'); } catch {} } rmSync(dir, { recursive: true, force: true }); });
-  return { ...base, step, options, finished, pids, input: { package: packagePath, step, owner_model: 'test/owner', editor_model: 'test/editor' } };
+  const runtimes = new Set();
+  // Cancel every runtime this fixture's tests created BEFORE removing the
+  // directory: a retained deadline timer owns the run record and would outlive
+  // an rm, firing against a deleted package.
+  t.after(async () => {
+    for (const runtime of runtimes) {
+      try { await Promise.allSettled([...runtime.active.values()].map(({ record }) => runtime.cancel(record.package, record.id))); } catch {}
+    }
+    for (const pid of pids) { try { process.kill(-pid, 'SIGKILL'); } catch {} }
+    rmSync(dir, { recursive: true, force: true });
+  });
+  return { ...base, step, options, finished, pids, runtimes, input: { package: packagePath, step, owner_model: 'test/owner', editor_model: 'test/editor' } };
 }
 
 function prepare(f, difficulty = 'hard') {
@@ -986,3 +997,396 @@ test('native recovery after a length stop can finish without inheriting the earl
   assert.equal(outcome.error, undefined);
   assert.equal(outcome.result, 'Recovered');
 });
+
+// ---------------------------------------------------------------------------
+// Wave runtime: input/ownership binding only.
+// ---------------------------------------------------------------------------
+
+async function waveSetup(t, source) {
+  const f = await fixture(t, source);
+  const ownershipRoot = join(f.dir, 'ownership');
+  const ownership = createOwnership({ registryRoot: ownershipRoot });
+  const coordinator = { session: 'coord-1', epoch: 1, pid: process.pid, started_at: new Date().toISOString() };
+  const acquired = await ownership.acquirePackage({ packageId: f.ref, packagePath: f.packagePath, coordinator });
+  const packageClaim = acquired.claim ?? acquired.result?.claim;
+  const waveRoot = join(f.dir, 'wave-root');
+  const base = execFileSync('git', ['-C', f.repo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  const common = realpathSync(execFileSync('git', ['-C', f.repo, 'rev-parse', '--absolute-git-dir'], { encoding: 'utf8' }).trim());
+  const fake = join(f.dir, 'fake-pi.cjs');
+  const reserveMember = async (step, attemptId) => {
+    const attemptRoot = join(waveRoot, 'attempts', attemptId);
+    for (const name of ['lower', 'upper', 'work', 'merged', 'git']) mkdirSync(join(attemptRoot, name), { recursive: true });
+    const reserved = await ownership.reserveCheckout({ packageId: f.ref, attempt: attemptId,
+      checkout: { gitCommonDir: join(attemptRoot, 'upper'), worktreeGitDir: join(attemptRoot, 'upper') }, coordinator });
+    const checkoutClaim = reserved.claim ?? reserved.result?.claim;
+    return { kind: 'step', backend: 'overlayfs', snapshotId: `snap-${step}`, baseCommit: base,
+      lower: join(attemptRoot, 'lower'), upper: join(attemptRoot, 'upper'), work: join(attemptRoot, 'work'),
+      merged: join(attemptRoot, 'merged'), gitDir: join(attemptRoot, 'git'), worktree: null,
+      claim: { token: checkoutClaim.token, epoch: checkoutClaim.epoch }, packageId: f.ref, setup: 'none',
+      requestedBackend: 'auto', selectedBackend: 'overlayfs', backendReason: 'overlay-supported', backendRemedy: 'overlayfs-mount' };
+  };
+  // Transport double only: it records the sanitized env/argv it receives, reports no
+  // kernel proof and launches a real disposable Node child that writes the native
+  // stream. Its stop/drain status is the sole cleanup authority the runtime sees.
+  const launches = [];
+  const children = new Set();
+  const services = new Map();
+  const adapter = {
+    kind: 'fake', kernel_proof: false, drainOutcome: { status: 'confirmed' }, beforeRegister: null,
+    async start(request) {
+      if (adapter.beforeRegister) adapter.beforeRegister();
+      launches.push({ argv: [...request.argv], env: { ...request.env }, cwd: request.cwd, deadline: request.deadline, limits: request.limits });
+      const service = { unit: `fake-unit-${launches.length}`, invocation: `fake-invocation-${launches.length}`, main_pid: null, terminal: false };
+      const child = spawn(process.execPath, [fake], { cwd: request.cwd, env: { ...request.env }, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
+      child.on('error', () => {});
+      service.main_pid = child.pid;
+      services.set(service.unit, { service, child });
+      children.add(child);
+      try {
+        // A refused registration must not authorize a live bootstrap.
+        if (!request.register(service)) throw new Error('contained registration refused');
+      } catch (error) {
+        try { process.kill(-child.pid, 'SIGKILL'); } catch {}
+        throw error;
+      }
+      return { ok: true, status: 'running', child, main_pid: child.pid, record: service };
+    },
+    async stop(service) {
+      const entry = services.get(service.unit);
+      if (entry && entry.child.exitCode === null && entry.child.signalCode === null) { try { process.kill(-entry.child.pid, 'SIGTERM'); } catch {} }
+      return { status: 'confirmed', service, kernel_proof: false };
+    },
+    async drain(service) {
+      const entry = services.get(service.unit);
+      if (entry && entry.child.exitCode === null && entry.child.signalCode === null) { try { process.kill(-entry.child.pid, 'SIGKILL'); } catch {} }
+      return { ...adapter.drainOutcome, service, kernel_proof: false };
+    },
+  };
+  t.after(async () => {
+    for (const child of children) {
+      try { process.kill(-child.pid, 'SIGKILL'); } catch {}
+      if (child.exitCode === null && child.signalCode === null)
+        await new Promise(resolve => { const timer = setTimeout(resolve, 2000); child.once('exit', () => { clearTimeout(timer); resolve(); }); });
+    }
+  });
+  const target = f.locations.targets[0];
+  const wave = { version: 1, package_ref: f.ref, claim_token: packageClaim.token,
+    coordinator: { session: coordinator.session, epoch: coordinator.epoch }, generation: 1,
+    target: { id: target.id, base_commit: base, common, integration_checkout: realpathSync(f.repo) }, members: {} };
+  const attachMember = (step, attemptId, memberWorkspace) => {
+    wave.members[String(step)] = { step, attempt_id: attemptId, phase: 'implementing', run_id: null, workspace: memberWorkspace };
+  };
+  const workspace = await reserveMember(1, 'attempt-1');
+  attachMember(1, 'attempt-1', workspace);
+  mkdirSync(join(f.packagePath, 'runtime', 'waves'), { recursive: true });
+  const wavePath = join(f.packagePath, 'runtime', 'waves', 'wave-1.json');
+  writeFileSync(wavePath, JSON.stringify(wave, null, 2));
+  const input = { ...f.input, wave_id: 'wave-1', expected_generation: 1, step_number: 1, attempt_id: 'attempt-1',
+    phase: 'implementing', claim_token: packageClaim.token, coordinator_epoch: 1 };
+  const addMember = async (step, attemptId = `attempt-${step}`) => {
+    const memberWorkspace = await reserveMember(step, attemptId);
+    attachMember(step, attemptId, memberWorkspace);
+    writeFileSync(wavePath, JSON.stringify(wave, null, 2));
+    const memberStep = join(f.packagePath, `step-${String(step).padStart(3, '0')}-subspec.md`);
+    writeFileSync(memberStep, 'Prepared step');
+    const stepsFile = join(f.packagePath, 'spec-steps.json');
+    const steps = existsSync(stepsFile) ? JSON.parse(readFileSync(stepsFile, 'utf8')).steps : [];
+    if (!steps.some(entry => entry.step === step)) steps.push({ step, difficulty: 'hard' });
+    writeFileSync(stepsFile, JSON.stringify({ steps }));
+    return { workspace: memberWorkspace, input: { ...input, step: memberStep, step_number: step, attempt_id: attemptId, assignment_id: `wave-member-${step}` } };
+  };
+  return { f, ownershipRoot, ownership, coordinator, waveRoot, wave, wavePath, workspace, input, adapter, launches, children, addMember, fake };
+}
+
+const waveRuntime = w => {
+  const runtime = new Runtime({ ...w.f.options, ownershipRoot: w.ownershipRoot, serviceAdapter: w.adapter });
+  w.f.runtimes.add(runtime);
+  return runtime;
+};
+
+test('wave runtime: a validated member binds its run and bypasses only the serial latest-run exclusion', async t => {
+  const w = await waveSetup(t, 'setInterval(() => {}, 1000);');
+  writeFileSync(join(w.f.packagePath, 'runtime', 'run.json'), JSON.stringify({ id: 'prior-run', state: 'running', coordinator_pid: process.pid, package: w.f.packagePath, step: w.f.step }));
+  const runtime = waveRuntime(w);
+  const started = await runtime.start(w.input);
+  const record = loadRun(w.f.packagePath, started.run_id);
+  assert.equal(record.state, 'running');
+  assert.equal(record.wave_bindings.wave_id, 'wave-1');
+  assert.equal(record.wave_bindings.generation, 1);
+  assert.equal(record.wave_bindings.backend, 'overlayfs');
+  assert.equal(summary(record).wave.wave_id, 'wave-1');
+  assert.equal(JSON.parse(readFileSync(w.wavePath, 'utf8')).members['1'].run_id, started.run_id);
+  assert.equal(JSON.parse(readFileSync(join(w.f.packagePath, 'runtime', 'run.json'), 'utf8')).id, 'prior-run');
+  const replayed = await runtime.start(w.input);
+  assert.equal(replayed.run_id, started.run_id, 'the wave binding is idempotent for the same assignment');
+});
+
+test('wave runtime: the start prompt uses the frozen base without probing the empty merged overlay', async t => {
+  const w = await waveSetup(t, 'setInterval(() => {}, 1000);');
+  const base = execFileSync('git', ['-C', w.f.repo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  // The fixture's joined overlay is an intentionally empty external mountpoint with
+  // no .git; the coordinator must build the prompt without reading it.
+  assert.equal(existsSync(join(w.workspace.merged, '.git')), false, 'fixture keeps the external merged mountpoint empty');
+  const runtime = waveRuntime(w);
+  const started = await runtime.start(w.input);
+  const request = JSON.parse(readFileSync(join(w.f.packagePath, 'runtime', 'runs', `${started.run_id}-owner-request.json`), 'utf8'));
+  const prompt = request.args.find(value => typeof value === 'string' && value.includes('CURRENT:'));
+  const current = JSON.parse(prompt.match(/CURRENT: ([^\n]+)/)[1]);
+  assert.equal(current.revision.commit, base, 'CURRENT revision is the durable frozen base');
+  assert.equal(current.revision.dirty, null, 'the coordinator never measures dirtiness against an unmounted overlay');
+  assert.equal(existsSync(join(w.workspace.merged, '.git')), false, 'the coordinator did not initialize the empty external merged mountpoint');
+  await runtime.cancel(w.f.packagePath, started.run_id);
+});
+
+test('wave runtime: a stale generation is refused', async t => {
+  const w = await waveSetup(t, 'setInterval(() => {}, 1000);');
+  await assert.rejects(() => waveRuntime(w).start({ ...w.input, expected_generation: 2 }), /expected_generation/);
+});
+
+test('wave runtime: a member reusing the integration checkout is refused', async t => {
+  const w = await waveSetup(t, 'setInterval(() => {}, 1000);');
+  w.wave.target.integration_checkout = w.workspace.merged;
+  writeFileSync(w.wavePath, JSON.stringify(w.wave, null, 2));
+  await assert.rejects(() => waveRuntime(w).start(w.input), /integration checkout/);
+});
+
+test('wave runtime: a serial start refuses any active package wave claim', async t => {
+  const w = await waveSetup(t, 'setInterval(() => {}, 1000);');
+  await assert.rejects(() => waveRuntime(w).start(w.f.input), /active wave claim/);
+});
+
+test('wave runtime: revoking the wave member binding fails the writer lease', async t => {
+  const w = await waveSetup(t, 'setInterval(() => {}, 1000);');
+  const started = await waveRuntime(w).start(w.input);
+  const record = loadRun(w.f.packagePath, started.run_id);
+  w.wave.members['1'].run_id = null;
+  writeFileSync(w.wavePath, JSON.stringify(w.wave, null, 2));
+  assert.throws(() => assertLease(record), /Wave member binding/);
+});
+
+test('wave runtime: a refused registration blocks the run and leaves no live bootstrap', { timeout: 120000 }, async t => {
+  const w = await waveSetup(t, 'setInterval(() => {}, 1000);');
+  w.adapter.beforeRegister = () => {
+    const current = JSON.parse(readFileSync(w.wavePath, 'utf8'));
+    current.members['1'].run_id = 'forged-run';
+    writeFileSync(w.wavePath, JSON.stringify(current, null, 2));
+  };
+  await assert.rejects(() => waveRuntime(w).start(w.input), /Wave member binding/);
+  const runsDir = join(w.f.packagePath, 'runtime', 'runs');
+  const runFile = readdirSync(runsDir).find(name => /^[0-9a-f-]{36}\.json$/.test(name));
+  const record = JSON.parse(readFileSync(join(runsDir, runFile), 'utf8'));
+  assert.equal(record.state, 'blocked');
+  assert.equal(record.pid ?? null, null, 'a wave launcher pid is never recorded as the run pid');
+  for (const child of w.children) {
+    if (child.exitCode === null && child.signalCode === null)
+      await new Promise(resolve => { const timer = setTimeout(resolve, 2000); child.once('exit', () => { clearTimeout(timer); resolve(); }); });
+    assert.equal(groupAlive(child.pid), false, 'no bootstrap survives a refused registration');
+  }
+});
+
+test('wave runtime: two members run concurrently in distinct workspaces and cancelling one leaves the sibling active', { timeout: 120000 }, async t => {
+  const w = await waveSetup(t, 'setInterval(() => {}, 1000);');
+  const second = await w.addMember(2);
+  const runtime = waveRuntime(w);
+  const [first, other] = await Promise.all([runtime.start(w.input), runtime.start(second.input)]);
+  const firstRecord = loadRun(w.f.packagePath, first.run_id);
+  const otherRecord = loadRun(w.f.packagePath, other.run_id);
+  assert.notEqual(firstRecord.checkout, otherRecord.checkout, 'members have distinct retained workspaces');
+  assert.equal(firstRecord.state, 'running');
+  assert.equal(otherRecord.state, 'running');
+  assert.equal(groupAlive(firstRecord.pid), true);
+  assert.equal(groupAlive(otherRecord.pid), true);
+  // Readiness barrier: each member's durable wave binding names its own run before cancellation.
+  const bound = JSON.parse(readFileSync(w.wavePath, 'utf8'));
+  assert.equal(bound.members['1'].run_id, first.run_id);
+  assert.equal(bound.members['2'].run_id, other.run_id);
+  const siblingGroupsBefore = activeGroups(loadRun(w.f.packagePath, other.run_id)).map(group => group.pid);
+  await runtime.cancelRun(w.f.packagePath, first.run_id);
+  assert.equal(loadRun(w.f.packagePath, first.run_id).state, 'cancelled');
+  const siblingAfter = loadRun(w.f.packagePath, other.run_id);
+  assert.equal(siblingAfter.state, 'running');
+  assert.equal(groupAlive(siblingAfter.pid), true, 'the sibling bootstrap was never signalled');
+  assert.deepEqual(activeGroups(siblingAfter).map(group => group.pid), siblingGroupsBefore);
+  await runtime.cancelRun(w.f.packagePath, other.run_id);
+});
+
+test('wave runtime: an unknown drain retains capacity and checkout and a confirmed retry releases only that member', { timeout: 120000 }, async t => {
+  const w = await waveSetup(t);
+  const runtime = waveRuntime(w);
+  const started = await runtime.start(w.input);
+  w.adapter.drainOutcome = { status: 'stop-requested', reason: 'inspect-error' };
+  const blocked = await w.f.finished;
+  assert.equal(blocked.state, 'blocked', 'a non-confirmed drain cannot finish the run');
+  const inspect = async () => (await w.ownership.inspectClaims({ packageId: w.f.ref })).claims;
+  const before = await inspect();
+  assert.ok(before.some(claim => claim.kind === 'capacity' && claim.attempt === 'wave-1:attempt-1:implementing'));
+  assert.ok(before.some(claim => claim.kind === 'checkout' && claim.attempt === 'attempt-1'));
+  assert.equal(loadRun(w.f.packagePath, started.run_id).state, 'blocked');
+  w.adapter.drainOutcome = { status: 'confirmed' };
+  await runtime.finish(loadRun(w.f.packagePath, started.run_id), { result: 'Done' });
+  const after = await inspect();
+  const released = claim => before.some(old => old.token === claim.token) && !after.some(next => next.token === claim.token);
+  const capacity = before.filter(claim => claim.kind === 'capacity' && claim.attempt === 'wave-1:attempt-1:implementing');
+  const checkout = before.filter(claim => claim.kind === 'checkout' && claim.attempt === 'attempt-1');
+  assert.equal(capacity.length, 1);
+  assert.equal(checkout.length, 1);
+  assert.equal(released(capacity[0]), true);
+  assert.equal(released(checkout[0]), true);
+  assert.equal(after.filter(claim => claim.kind === 'package').length, 1, 'the wave package claim is never released');
+  const record = loadRun(w.f.packagePath, started.run_id);
+  assert.equal(record.state, 'completed');
+  assert.equal(record.phase_drain.status, 'confirmed');
+  assert.ok(record.phase_drain.path && existsSync(record.phase_drain.path));
+  const receipt = JSON.parse(readFileSync(record.phase_drain.path, 'utf8'));
+  assert.equal(receipt.status, 'confirmed');
+  assert.deepEqual(receipt.released.map(item => item.kind).sort(), ['capacity', 'checkout']);
+});
+
+test('wave runtime: the private request carries Warden, SPEC_RUNTIME and intercom while the adapter transport stays sanitized', { timeout: 120000 }, async t => {
+  const w = await waveSetup(t, 'setInterval(() => {}, 1000);');
+  const secret = 'wave-private-secret-token';
+  const previous = process.env.SPEC_RUNTIME_TEST_SECRET;
+  process.env.SPEC_RUNTIME_TEST_SECRET = secret;
+  t.after(() => { if (previous === undefined) delete process.env.SPEC_RUNTIME_TEST_SECRET; else process.env.SPEC_RUNTIME_TEST_SECRET = previous; });
+  const runtime = waveRuntime(w);
+  const started = await runtime.start(w.input);
+  const launch = w.launches.at(-1);
+  assert.equal(launch.env.SPEC_RUNTIME_TEST_SECRET, undefined, 'secrets never reach the transport env');
+  assert.equal(launch.env.SPEC_RUNTIME_ROLE, undefined);
+  assert.equal(launch.env.PI_INTERCOM_SCOPE_ID, undefined);
+  assert.equal(launch.env.PI_WARDEN_HOST_PATHS, undefined);
+  assert.ok(!launch.argv.some(part => String(part).includes(secret)), 'secrets never reach the transport argv');
+  const record = loadRun(w.f.packagePath, started.run_id);
+  const request = JSON.parse(readFileSync(record.service_request, 'utf8'));
+  assert.equal(request.env.SPEC_RUNTIME_TEST_SECRET, secret, 'the mode-0600 private request forwards the full environment');
+  assert.equal(request.env.SPEC_RUNTIME_ROLE, 'owner');
+  assert.equal(request.env.SPEC_RUNTIME_RECORD, join(w.f.packagePath, 'runtime', 'runs', `${started.run_id}.json`));
+  assert.equal(request.env.PI_INTERCOM_SCOPE_ID, started.run_id);
+  assert.equal(request.env.PI_INTERCOM_STABLE_ID, `spec-owner-${started.run_id}`);
+  assert.equal(request.env.PI_WARDEN_HOST_PATHS, realpathSync(w.f.packagePath));
+  await runtime.cancelRun(w.f.packagePath, started.run_id);
+});
+
+test('wave runtime: a sibling member aliasing the same checkout is refused', { timeout: 120000 }, async t => {
+  const w = await waveSetup(t, 'setInterval(() => {}, 1000);');
+  const second = await w.addMember(2);
+  w.wave.members['2'].workspace = { ...w.workspace };
+  writeFileSync(w.wavePath, JSON.stringify(w.wave, null, 2));
+  await assert.rejects(() => waveRuntime(w).start(second.input), /same checkout or private git dir/i);
+});
+
+test('wave runtime: a caller presenting a replaced checkout claim is refused', { timeout: 120000 }, async t => {
+  const w = await waveSetup(t, 'setInterval(() => {}, 1000);');
+  const claimsFile = join(w.ownershipRoot, 'claims.json');
+  const registry = JSON.parse(readFileSync(claimsFile, 'utf8'));
+  registry.claims.find(claim => claim.kind === 'checkout').epoch += 1000;
+  writeFileSync(claimsFile, JSON.stringify(registry, null, 2));
+  await assert.rejects(() => waveRuntime(w).start(w.input), /checkout claim/i);
+});
+
+test('wave runtime: only a recorded role fallback is admitted and it never rewrites the requested selector', async () => {
+  const record = { owner_model: 'primalabs/owner-model', editor_model: 'primalabs/editor-model' };
+  const fallback = { provider: 'deepseek', id: 'deepseek-flash' };
+  const recovery = requested_model => ({ type: 'custom', customType: 'spec-provider-recovery',
+    data: { version: 1, requested_model, event: 'fallback_selected', effective_model: 'deepseek/deepseek-flash' } });
+  assert.doesNotThrow(() => assertManagedModel(record, 'owner', { provider: 'primalabs', id: 'owner-model' }, []), 'the exact requested selector passes');
+  assert.doesNotThrow(() => assertManagedModel(record, 'owner', fallback, [recovery('primalabs/owner-model')]), 'the recorded owner fallback passes');
+  assert.doesNotThrow(() => assertManagedModel(record, 'editor', fallback, [recovery('primalabs/editor-model')]), 'the recorded editor fallback passes');
+  assert.throws(() => assertManagedModel(record, 'owner', fallback, []), /SPEC_MODEL_SELECTOR_MISMATCH/, 'an unrecorded fallback is refused');
+  assert.throws(() => assertManagedModel(record, 'editor', fallback, [recovery('primalabs/owner-model')]), /SPEC_MODEL_SELECTOR_MISMATCH/, "another role's entry does not authorize the editor");
+  assert.throws(() => assertManagedModel(record, 'owner', { provider: 'deepseek', id: 'deepseek-chat' }, [recovery('primalabs/owner-model')]), /SPEC_MODEL_SELECTOR_MISMATCH/, 'an arbitrary model swap is refused');
+  assert.throws(() => assertManagedModel(record, 'owner', fallback, [{ type: 'custom', customType: 'spec-provider-recovery',
+    data: { version: 1, requested_model: 'primalabs/owner-model', event: 'fallback_selected', effective_model: 'deepseek/deepseek-chat' } }]), /SPEC_MODEL_SELECTOR_MISMATCH/, 'a mismatched effective model is refused');
+  assert.throws(() => assertManagedModel({ owner_model: 'test/owner' }, 'owner', fallback, [recovery('test/owner')]), /SPEC_MODEL_SELECTOR_MISMATCH/, 'only a primalabs requested selector is recovery-eligible');
+});
+
+test('wave runtime: sibling identity requires the same generation and a distinct member', async () => {
+  const validated = { wave_id: 'wave-1', package_ref: 'pkg', generation: 1, coordinator_epoch: 1, target: 'target-1', step_number: 1 };
+  assert.equal(waveSiblingMatches(validated, { ...validated, step_number: 2 }), true, 'a distinct member of the same generation matches');
+  assert.equal(waveSiblingMatches(validated, { ...validated }), false, 'the same member is not a sibling');
+  assert.equal(waveSiblingMatches(validated, { ...validated, step_number: 2, generation: 2 }), false, 'a stale generation is refused');
+  assert.equal(waveSiblingMatches(validated, { ...validated, step_number: 2, coordinator_epoch: 2 }), false, 'another coordinator epoch is refused');
+  assert.equal(waveSiblingMatches(validated, { ...validated, step_number: 2, target: 'target-2' }), false, 'another target is refused');
+  assert.equal(waveSiblingMatches(validated, { ...validated, step_number: 2, package_ref: 'other' }), false, 'another package is refused');
+  assert.equal(waveSiblingMatches(validated, null), false, 'a serial conflict is never a sibling');
+});
+
+test('wave runtime: a numeric shared deadline stays running with finite future remaining time', { timeout: 120000 }, async t => {
+  const w = await waveSetup(t, 'setInterval(() => {}, 1000);');
+  const runtime = waveRuntime(w);
+  const started = await runtime.start(w.input);
+  // Explicit ready barrier: the contained launch is registered before start
+  // returns, and a zero-delay (NaN) deadline timer fires before this later
+  // zero-delay timer, so a numerically mis-parsed deadline is observable here.
+  assert.ok(w.launches.length >= 1, 'the contained member launch is registered');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const record = loadRun(w.f.packagePath, started.run_id);
+  assert.equal(record.state, 'running', 'a numeric shared deadline does not cancel the run');
+  assert.ok(Number.isSafeInteger(record.deadline.expires_at), 'the shared expiry is a safe integer');
+  assert.equal(record.deadline.expires_at, record.deadline.started_at + record.deadline.timeout_ms, 'the recorded deadline is internally consistent');
+  const wave = JSON.parse(readFileSync(w.wavePath, 'utf8'));
+  assert.deepEqual(record.deadline, wave.deadline, 'the run retains the shared wave deadline unchanged');
+  const remaining = record.deadline.expires_at - Date.now();
+  assert.ok(Number.isFinite(remaining) && remaining > 0, 'the shared deadline retains finite future time');
+});
+
+test('wave runtime: a live distinct sibling conflict is waived while stale and same-member conflicts are refused', { timeout: 120000 }, async t => {
+  const w = await waveSetup(t, 'setInterval(() => {}, 1000);');
+  const runtime = waveRuntime(w);
+  const started = await runtime.start(w.input);
+  const bound = loadRun(w.f.packagePath, started.run_id).wave_bindings;
+  const siblingConfig = { wave_bindings: { ...bound, step_number: 2 } };
+  assert.equal(waveSiblingConflict(w.f.packagePath, { runId: started.run_id }, siblingConfig), true, 'a live distinct sibling is waived');
+  assert.equal(waveSiblingConflict(w.f.packagePath, { runId: started.run_id }, { wave_bindings: bound }), false, 'the same member stays a conflict');
+  assert.equal(waveSiblingConflict(w.f.packagePath, { runId: 'missing-run' }, siblingConfig), false, 'an unknown run is refused');
+  await runtime.cancelRun(w.f.packagePath, started.run_id);
+  assert.equal(waveSiblingConflict(w.f.packagePath, { runId: started.run_id }, siblingConfig), false, 'a cancelled sibling no longer holds a lease');
+});
+
+test('wave runtime: simultaneous event appenders lose no valid line', { timeout: 120000 }, async t => {
+  const f = await fixture(t, 'setInterval(() => {}, 1000);');
+  mkdirSync(join(f.packagePath, 'runtime'), { recursive: true });
+  const script = join(f.dir, 'append-events.mjs');
+  writeFileSync(script, `import { event } from ${JSON.stringify(new URL('./runtime.mjs', import.meta.url).href)};\nevent({ package: process.argv[2], id: process.argv[3] }, 'probe', {});`);
+  await Promise.all(Array.from({ length: 16 }, (_, i) => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [script, f.packagePath, `run-${i}`], { stdio: ['ignore', 'ignore', 'pipe'] });
+    let err = '';
+    child.stderr.on('data', chunk => { err += chunk; });
+    child.on('error', reject);
+    child.on('exit', code => code === 0 ? resolve() : reject(new Error(`append ${i} exited ${code}: ${err}`)));
+  })));
+  const lines = readFileSync(join(f.packagePath, 'runtime', 'events.jsonl'), 'utf8').split('\n').filter(Boolean);
+  assert.equal(lines.length, 16, 'no append is lost');
+  assert.deepEqual(lines.map(line => JSON.parse(line).run_id).sort(), Array.from({ length: 16 }, (_, i) => `run-${i}`).sort(), 'every line stays valid JSON');
+});
+
+test('wave runtime: a failed event lock append surfaces an explicit error', async t => {
+  const f = await fixture(t, 'setInterval(() => {}, 1000);');
+  mkdirSync(join(f.packagePath, 'runtime'), { recursive: true });
+  const emptyPath = join(f.dir, 'empty-path');
+  mkdirSync(emptyPath, { recursive: true });
+  const previousPath = process.env.PATH;
+  process.env.PATH = emptyPath;
+  t.after(() => { process.env.PATH = previousPath; });
+  assert.throws(() => event({ package: f.packagePath, id: 'run-lock' }, 'probe'), /Cannot append runtime event probe/, 'a missing lock command is surfaced, not silently dropped');
+});
+
+for (const code of [137, 143]) {
+  test(`wave runtime: wait cleanup maps a confirmed stop that exits ${code} to cleanup, not a crash`, { timeout: 120000 }, async t => {
+    const f = await fixture(t, `
+      process.on('SIGTERM', () => { process.exit(${code}); });
+      console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'Retained handoff'}]}}));
+      console.log(JSON.stringify({type:'agent_settled',aborted:false}));
+      setInterval(() => {}, 1000);
+    `);
+    const launchProcess = f.options.launchProcess;
+    f.options.launchProcess = (r, role, prompt, opts) => launchProcess(r, role, prompt, { ...opts, shutdownGraceMs: 25 });
+    const runtime = new Runtime(f.options);
+    const started = await runtime.start(f.input);
+    const result = await f.finished;
+    assert.equal(result.state, 'completed');
+    assert.equal(result.shutdown_cleanup, true);
+    assert.equal(result.error, undefined, 'a numeric cleanup exit is not reported as a crash');
+    assert.equal(loadRun(f.packagePath, started.run_id).state, 'completed');
+  });
+}

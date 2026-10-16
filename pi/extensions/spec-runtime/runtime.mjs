@@ -1,7 +1,7 @@
-import { spawn, execFileSync } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync, appendFileSync, renameSync, existsSync, realpathSync, rmSync, readdirSync, statSync } from 'node:fs';
+import { spawn, spawnSync, execFileSync } from 'node:child_process';
+import { mkdirSync, readFileSync, writeFileSync, appendFileSync, renameSync, existsSync, realpathSync, lstatSync, rmSync, readdirSync, statSync, openSync, closeSync } from 'node:fs';
 import { dirname, basename, join, resolve, relative, isAbsolute } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, totalmem } from 'node:os';
 import { randomUUID, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { activityRecorder } from './monitor.mjs';
@@ -12,10 +12,16 @@ import { artifactEnvironment } from '../../../scripts/spec-location/artifact-env
 import { prepareSpecWorktree } from '../../../scripts/spec-location/worktree.mjs';
 import { decide, collectFacts } from '../../../scripts/jev/core.mjs';
 import { preparedEntry } from './startup.mjs';
-import { splitModelSelector, configurationFailure, configurationAction } from './model-selector.mjs';
+import { splitModelSelector, assertModelSelector, configurationFailure, configurationAction } from './model-selector.mjs';
 import { submitCompletion, completionStatus, refreshProgress, revision, recordVerification, invalidateCompletion } from './completion.mjs';
+import { createOwnership } from './ownership.mjs';
+import { prepareStepWorkspace, remountRetainedWorkspace, setupIdentity, stagingDigest, resolveBackend } from './step-workspaces.mjs';
+import { createSystemdServiceAdapter, createWaveDeadline, calculateResourcePolicy, deadlineRemainingMs } from './linux-resources.mjs';
+import { buildOverlayArgv } from './overlay.mjs';
+import { PROVIDER_RECOVERY } from './provider-recovery.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
+const RUNTIME_MODULE_PATH = resolve(fileURLToPath(import.meta.url));
 const terminal = new Set(['completed', 'failed', 'cancelled', 'stale']);
 const timestamp = () => new Date().toISOString();
 const read = file => JSON.parse(readFileSync(file, 'utf8'));
@@ -32,6 +38,16 @@ function observedRuns(packagePath, coverageGaps = []) {
       return [];
     }
   });
+}
+// CURRENT revision identity for the launch prompt. The prompt is built before any
+// contained service exists, and a wave member's merged overlay is not mounted in the
+// coordinator, so a wave never runs git status/rev-parse against that external empty
+// mountpoint. Its durable frozen base is the revision identity; the private git
+// object store is only queried if a caller needs it. Serial runs are unchanged.
+function promptRevision(record) {
+  const binding = record.wave_bindings;
+  if (!binding) return revision(record);
+  return { commit: binding.base_commit, dirty: null };
 }
 // The card determines relevance; the latest attempt supplies observations. Do not
 // infer prerequisite acceptance or carry every historical blocker into a new step.
@@ -97,7 +113,7 @@ function currentHandoff(record) {
       assessment: 'Observation only; inspect the full handoff and latest review/fix evidence for applicability.' };
   });
   while (JSON.stringify(observations).length > 10000 && observations.length) observations.pop();
-  return `CURRENT: ${JSON.stringify({ step: record.step, checkout: record.checkout, revision: revision(record), observations,
+  return `CURRENT: ${JSON.stringify({ step: record.step, checkout: record.checkout, revision: promptRevision(record), observations,
     omitted_steps: Math.max(0, steps.length - observations.length), coverage_gaps: coverageGaps.slice(0, 8).map(gap => gap.slice(0, 300)),
     sources: [join(record.package, 'runtime/progress.json'), join(record.package, 'history-index.json')],
     obligations: 'Read all card prerequisites. Reconcile historical gaps against latest evidence; worker exit and handoff outcome do not establish acceptance. Preserve original evidence revisions.' })}\n`;
@@ -115,16 +131,218 @@ function inside(parent, child) {
   const rel = relative(parent, child);
   return rel && !rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) && rel !== '..' && !isAbsolute(rel);
 }
+
+// ---------------------------------------------------------------------------
+// Wave-member provenance binding.
+//
+// A wave run takes its checkout authority from the durable wave record under
+// runtime/waves, never from the caller. The caller supplies only the membership
+// identity (wave id, generation, step, attempt, phase, package claim token and
+// coordinator epoch); the retained step-workspaces object supplies the
+// workspace and the ownership registry confirms the package and checkout
+// claims. This is input binding only: it neither schedules phases nor changes
+// serial launch behavior.
+// ---------------------------------------------------------------------------
+
+const WAVE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+const WAVE_VERSION_FIELDS = ['version', 'schema_version'];
+const WAVE_INPUT_FIELDS = ['wave_id', 'expected_generation', 'step_number', 'attempt_id', 'phase', 'claim_token', 'coordinator_epoch'];
+
+const waveInvalid = (code, message, remedy) => refusalError({ code, message, remedy });
+
+function realOrNull(path) {
+  if (typeof path !== 'string' || !path) return null;
+  try { return realpathSync(path); } catch { return null; }
+}
+
+function readWaveRecord(packagePath, waveId) {
+  if (typeof waveId !== 'string' || !WAVE_ID_PATTERN.test(waveId))
+    throw waveInvalid('wave-id-invalid', 'wave_id must be 1-128 ASCII letters/digits/underscore/hyphen.', 'Pass the wave id recorded under runtime/waves.');
+  const file = join(packagePath, 'runtime', 'waves', `${waveId}.json`);
+  if (!existsSync(file)) throw waveInvalid('wave-record-missing', `No wave record at runtime/waves/${waveId}.json.`, 'Prepare the wave record before binding a run to it.');
+  let record;
+  try { record = read(file); } catch { throw waveInvalid('wave-record-unreadable', `Wave record runtime/waves/${waveId}.json is not valid JSON.`, 'Repair the wave record.'); }
+  const declared = WAVE_VERSION_FIELDS.filter(key => record[key] !== undefined).map(key => record[key]);
+  if (!declared.length || declared.some(value => value !== 1) || new Set(declared).size > 1)
+    throw waveInvalid('wave-record-version', 'Wave record version must be 1.', 'Rewrite the wave record at version 1.');
+  return record;
+}
+
+// One canonical claim token: a top-level claim_token or coordinator.claim_token,
+// never both with conflicting values.
+function waveClaimToken(record) {
+  const top = record.claim_token;
+  const nested = record.coordinator?.claim_token;
+  if (top !== undefined && nested !== undefined && top !== nested)
+    throw waveInvalid('wave-claim-conflict', 'Wave record declares two different claim tokens.', 'Keep one canonical claim_token.');
+  const token = top ?? nested;
+  if (typeof token !== 'string' || token.length === 0)
+    throw waveInvalid('wave-claim-missing', 'Wave record declares no claim_token.', 'Record the package claim token on the wave.');
+  return token;
+}
+
+function requireMemberPath(value, label) {
+  if (typeof value !== 'string' || !value) throw waveInvalid('wave-workspace-malformed', `Wave member workspace ${label} is missing.`, 'Record the retained step-workspaces object.');
+  return value;
+}
+
+// The retained step-workspaces object is the sole checkout authority: its
+// backend selects the editable path and its phase claim is keyed on the attempt
+// upper. Public run provenance is normalised to snake_case while the full
+// workspace object is retained on the wave record for a later remount.
+function workspaceIdentity(workspace) {
+  if (!workspace || typeof workspace !== 'object' || Array.isArray(workspace))
+    throw waveInvalid('wave-workspace-malformed', 'Wave member workspace is not the retained step-workspaces object.', 'Record the retained object.');
+  const isOverlay = workspace.backend === 'overlayfs';
+  if (!isOverlay && workspace.backend !== 'worktree')
+    throw waveInvalid('wave-workspace-backend', 'Wave member workspace has an unknown backend.', 'Provision an overlayfs or worktree workspace.');
+  const attemptRoot = isOverlay
+    ? dirname(requireMemberPath(workspace.upper, 'workspace.upper'))
+    : dirname(requireMemberPath(workspace.worktree, 'workspace.worktree'));
+  const checkout = isOverlay ? requireMemberPath(workspace.merged, 'workspace.merged') : requireMemberPath(workspace.worktree, 'workspace.worktree');
+  const gitDir = isOverlay ? requireMemberPath(workspace.gitDir, 'workspace.gitDir') : git(workspace.worktree, 'rev-parse', '--absolute-git-dir');
+  const upper = isOverlay ? requireMemberPath(workspace.upper, 'workspace.upper') : join(attemptRoot, 'upper');
+  const work = isOverlay ? requireMemberPath(workspace.work, 'workspace.work') : join(attemptRoot, 'work');
+  const lower = isOverlay ? requireMemberPath(workspace.lower, 'workspace.lower') : null;
+  const claim = workspace.claim;
+  if (!claim || typeof claim !== 'object' || typeof claim.token !== 'string' || !claim.token || claim.epoch === undefined || claim.epoch === null || claim.epoch === '')
+    throw waveInvalid('wave-workspace-claim', 'Wave member workspace carries no phase claim.', 'Record the retained claim token and epoch.');
+  return { backend: workspace.backend, attemptRoot, checkout, gitDir, upper, work, lower,
+    baseCommit: workspace.baseCommit ?? null, packageId: workspace.packageId ?? null, claim: { token: claim.token, epoch: claim.epoch } };
+}
+
+// All wave phase reservations reuse the coordinator identity normalized from the
+// live package claim: the ownership registry requires a complete
+// { session, epoch, pid, started_at } identity and a wave never invents a pid or
+// start time. The claim coordinator must still match the durable wave record.
+function waveCoordinator(record, packageClaim) {
+  const coordinator = packageClaim?.coordinator;
+  if (!coordinator || typeof coordinator !== 'object')
+    throw waveInvalid('wave-coordinator-missing', 'The live package claim carries no validated coordinator identity.', 'Reacquire the package claim with its full coordinator identity before binding.');
+  if (String(coordinator.epoch) !== String(record.coordinator?.epoch) || coordinator.session !== record.coordinator?.session)
+    throw waveInvalid('wave-coordinator-mismatch', 'The live package claim coordinator does not match the durable wave coordinator.', 'Reacquire the package claim under the wave coordinator.');
+  return { session: coordinator.session, epoch: coordinator.epoch, pid: coordinator.pid, started_at: coordinator.started_at };
+}
+
+async function resolveWaveBinding(input, { packagePath, packageRef, target }, ownershipRoot) {
+  for (const field of WAVE_INPUT_FIELDS) {
+    if (input[field] === undefined || input[field] === null || input[field] === '')
+      throw waveInvalid('wave-input-incomplete', `Wave run requires ${field}.`, 'Pass the validated wave membership identity.');
+  }
+  if (typeof ownershipRoot !== 'string' || !ownershipRoot)
+    throw waveInvalid('wave-ownership-unavailable', 'Wave binding requires the ownership registry root.', 'Construct Runtime with an ownership registry or ownership root.');
+  const record = readWaveRecord(packagePath, input.wave_id);
+  const claimToken = waveClaimToken(record);
+  if (input.claim_token !== claimToken) throw waveInvalid('wave-claim-mismatch', 'Supplied claim_token does not match the wave record.', 'Pass the canonical wave claim token.');
+  const epoch = record.coordinator?.epoch;
+  if (epoch === undefined || epoch === null || epoch === '' || String(input.coordinator_epoch) !== String(epoch))
+    throw waveInvalid('wave-epoch-mismatch', 'Supplied coordinator_epoch does not match the wave record.', 'Pass the wave coordinator epoch.');
+  if (record.package_ref !== packageRef)
+    throw waveInvalid('wave-package-mismatch', 'Wave record package_ref does not match the located package.', 'Bind the wave to the located package.');
+  if (!record.target || record.target.id !== target.id)
+    throw waveInvalid('wave-target-mismatch', 'Wave record target does not match the step target.', 'Record the wave target for this step.');
+  if (typeof record.target.base_commit !== 'string' || !record.target.base_commit)
+    throw waveInvalid('wave-base-missing', 'Wave target records no base commit.', 'Record the wave target base commit.');
+  if (typeof record.generation !== 'number' || !Number.isInteger(record.generation) || record.generation !== input.expected_generation)
+    throw waveInvalid('wave-generation-mismatch', 'Supplied expected_generation does not match the wave record.', 'Pass the current wave generation.');
+  const cardStep = Number(basename(input.step).match(/^step-(\d+)-subspec\.md$/)?.[1]);
+  if (!Number.isInteger(cardStep) || input.step_number !== cardStep)
+    throw waveInvalid('wave-step-mismatch', 'Supplied step_number does not match the step card.', 'Pass the card step number.');
+  const member = record.members?.[String(input.step_number)];
+  if (!member || typeof member !== 'object')
+    throw waveInvalid('wave-member-missing', `Wave record has no member for step ${input.step_number}.`, 'Record the member before binding a run.');
+  if (Number(member.step) !== input.step_number || member.attempt_id !== input.attempt_id || member.phase !== input.phase)
+    throw waveInvalid('wave-member-mismatch', 'Wave member attempt or phase does not match the supplied identity.', 'Pass the recorded member attempt and phase.');
+  const identity = workspaceIdentity(member.workspace);
+  if (identity.baseCommit !== record.target.base_commit)
+    throw waveInvalid('wave-base-mismatch', 'Wave member workspace base commit does not match the target base.', 'Provision the member at the wave target base.');
+  if (identity.packageId !== null && identity.packageId !== packageRef)
+    throw waveInvalid('wave-workspace-package', 'Wave member workspace package does not match the wave package.', 'Bind the member workspace to this package.');
+  const sourceCommon = realOrNull(record.target.common);
+  if (!sourceCommon) throw waveInvalid('wave-source-missing', 'Wave target records no canonical source common dir.', 'Record target.common.');
+  const targetCommon = realOrNull(target.common);
+  if (targetCommon && targetCommon !== sourceCommon)
+    throw waveInvalid('wave-source-mismatch', 'Wave target common dir does not match the located target.', 'Record the canonical target common dir.');
+  const integration = realOrNull(record.target.integration_checkout);
+  // The recorded integration checkout must be the located target's canonical
+  // checkout: its worktree when one exists, otherwise its primary checkout. A
+  // wave cannot name an arbitrary checkout as its integration identity.
+  const locatedIntegration = realOrNull(target.worktree) || realOrNull(target.primary);
+  if (integration && locatedIntegration && integration !== locatedIntegration)
+    throw waveInvalid('wave-integration-mismatch', 'Wave target integration checkout does not match the located target.', 'Record the canonical integration checkout for this target.');
+  const checkoutReal = realpathSync(identity.checkout);
+  const gitDirReal = realpathSync(identity.gitDir);
+  if (integration && (checkoutReal === integration || inside(integration, checkoutReal)))
+    throw waveInvalid('wave-checkout-integration', 'Wave member workspace reuses the integration checkout.', 'Provision a retained attempt workspace.');
+  if (integration && (gitDirReal === integration || inside(integration, gitDirReal)))
+    throw waveInvalid('wave-gitdir-integration', 'Wave member workspace private git dir reuses the integration checkout.', 'Provision a retained attempt workspace.');
+  if (!inside(identity.attemptRoot, checkoutReal))
+    throw waveInvalid('wave-checkout-outside-attempt', 'Wave member checkout is outside its retained attempt root.', 'Provision the member under the wave attempt root.');
+  for (const [step, other] of Object.entries(record.members || {})) {
+    if (Number(step) === input.step_number || !other || typeof other !== 'object' || !other.workspace) continue;
+    let otherIdentity;
+    try { otherIdentity = workspaceIdentity(other.workspace); } catch { continue; }
+    const otherCheckout = realOrNull(otherIdentity.checkout);
+    const otherGitDir = realOrNull(otherIdentity.gitDir);
+    if ((otherCheckout && otherCheckout === checkoutReal) || (otherGitDir && otherGitDir === gitDirReal))
+      throw waveInvalid('wave-workspace-alias', 'Two wave members reuse the same checkout or private git dir.', 'Give each member a distinct retained workspace.');
+  }
+  // Raw registry claims carry the checkout identity keys that projected claims omit.
+  const claims = readOwnershipClaimsSync(ownershipRoot);
+  const packageClaim = claims.find(claim => claim.kind === 'package' && claim.token === claimToken && String(claim.epoch) === String(epoch));
+  if (!packageClaim)
+    throw waveInvalid('wave-package-claim', 'No live package claim matches the wave token and epoch.', 'Recover or reacquire the package claim before binding.');
+  const coordinator = waveCoordinator(record, packageClaim);
+  const checkoutClaim = claims.find(claim => claim.kind === 'checkout' && claim.token === identity.claim.token);
+  if (!checkoutClaim || String(checkoutClaim.epoch) !== String(identity.claim.epoch) || checkoutClaim.packageId !== packageRef)
+    throw waveInvalid('wave-checkout-claim', 'No live checkout claim matches the retained workspace.', 'Re-provision or recover the member workspace claim.');
+  const claimed = checkoutClaim.checkout || {};
+  const upperReal = realpathSync(identity.upper);
+  if (realOrNull(claimed.gitCommonDir) !== upperReal || realOrNull(claimed.worktreeGitDir) !== upperReal)
+    throw waveInvalid('wave-checkout-mismatch', 'Checkout claim does not cover the retained attempt upper.', 'Re-provision the member workspace.');
+  return { checkout: identity.checkout, primary: target.primary, target: target.id,
+    wave: { wave_id: input.wave_id, generation: record.generation, step_number: input.step_number, attempt_id: input.attempt_id,
+      phase: input.phase, claim_token: claimToken, coordinator_epoch: epoch, coordinator, package_ref: packageRef, target: target.id,
+      base_commit: record.target.base_commit, backend: identity.backend, source_common: sourceCommon, git_dir: gitDirReal,
+      integration_checkout: integration,
+      upper_id: member.workspace.upperId ?? null, checkout_claim: identity.claim.token,
+      checkout_claim_epoch: checkoutClaim.epoch, checkout_claim_attempt: checkoutClaim.attempt ?? null,
+      layers: identity.backend === 'overlayfs' ? { lower: identity.lower, upper: identity.upper, work: identity.work, merged: identity.checkout, gitDir: identity.gitDir } : null,
+      worktree: identity.backend === 'worktree' ? identity.checkout : null } };
+}
+
+async function bindWaveMemberRun(config, runId) {
+  const result = await runLockedMutation(`${config.wave_path}.lock`, 'bind-wave-member', {
+    file: config.wave_path, generation: config.wave_bindings.generation, claimToken: config.wave_bindings.claim_token,
+    coordinatorEpoch: config.wave_bindings.coordinator_epoch, stepNumber: config.wave_bindings.step_number,
+    attemptId: config.wave_bindings.attempt_id, phase: config.wave_bindings.phase,
+    checkoutClaim: config.wave_bindings.checkout_claim, runId,
+  });
+  if (!result || result.ok !== true)
+    throw waveInvalid(result?.code || 'wave-bind-failed', result?.message || 'Could not bind the wave member run.', 'Repair the wave record and retry.');
+}
+
 export function groupAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 1) return true;
   try { process.kill(-pid, 0); return true; }
   catch (error) { if (error.code === 'ESRCH') return false; return true; }
 }
 export function event(record, name, detail = {}) {
-  appendFileSync(join(record.package, 'runtime/events.jsonl'), `${JSON.stringify({ timestamp: timestamp(), event: name, run_id: record.id, ...detail })}\n`, { mode: 0o600 });
+  const line = `${JSON.stringify({ timestamp: timestamp(), event: name, run_id: record.id, ...detail })}\n`;
+  const file = join(record.package, 'runtime/events.jsonl');
+  // Every writer, serial or wave, appends through the same flock: no data is
+  // interpolated into a shell, a serial writer cannot interleave with a
+  // concurrent wave member, and a failed append is surfaced rather than lost.
+  const appended = spawnSync('flock', ['-x', `${file}.lock`, process.execPath, RUNTIME_MODULE_PATH, 'append-event'],
+    { input: JSON.stringify({ file, line }), encoding: 'utf8' });
+  if (appended.error || appended.status !== 0)
+    throw new Error(`Cannot append runtime event ${name}: ${appended.error?.message || `flock exited ${appended.status}`}${appended.stderr ? `; ${String(appended.stderr).trim().slice(0, 200)}` : ''}`);
 }
 function save(record) {
   atomic(join(record.package, 'runtime/runs', `${record.id}.json`), record);
+  // A wave run never replaces the serial latest pointer; only its own durable
+  // run record is written.
+  if (record.wave_bindings) return;
   atomic(join(record.package, 'runtime/run.json'), record);
 }
 // A spec-location refusal as an Error that keeps the machine-readable code and remedy.
@@ -144,10 +362,10 @@ export function loadRun(packagePath, id) {
   return read(join(packageFolder(packagePath), 'runtime', id ? `runs/${id}.json` : 'run.json'));
 }
 export function summary(record) {
-  return { run_id: record.id, assignment_id: record.assignment_id, workflow_id: record.workflow_id ?? null,
+  return { run_id: record.id, assignment_id: record.assignment_id, workflow_id: record.workflow_id ?? null, wave: record.wave_bindings ?? null,
     attempt_kind: record.attempt_kind ?? null, session_scope: record.session_scope ?? 'package', state: record.state, package: record.package, package_ref: record.package_ref ?? null, step: record.step,
     target: record.target ?? null, checkout: record.checkout, owner_session: record.owner_session, editor_session: record.editor_session,
-    ledger: join(record.package, 'runtime/progress.json'), run_receipt: join(record.package, 'runtime/run.json'), events: join(record.package, 'runtime/events.jsonl'),
+    ledger: join(record.package, 'runtime/progress.json'), run_receipt: runFileOf(record), events: join(record.package, 'runtime/events.jsonl'),
     checks: ['canonical package', 'checkout repository and target branch', 'no live coordinator already running this package'],
     owner_model: record.owner_model, editor_model: record.editor_model, routing_reason: record.routing_reason,
     environment: record.environment,
@@ -160,12 +378,129 @@ export function summary(record) {
 // process group) and nothing has revoked it. Revocation is a marker file so a worker
 // process can revoke without rewriting the coordinator's run record.
 const runFileOf = record => join(record.package, 'runtime/runs', `${record.id}.json`);
+const waveFileOf = record => record.wave_path || join(record.package, 'runtime', 'waves', `${record.wave_bindings?.wave_id}.json`);
 const revokedFile = record => join(record.package, 'runtime/runs', `${record.id}-revoked.json`);
 export const editorSlot = record => join(record.package, 'runtime/runs', `${record.id}-editor-slot`);
 export function assertLease(record) {
   let current;
   try { current = read(runFileOf(record)); } catch { /* absent */ }
   if (!['running', 'blocked'].includes(current?.state) || existsSync(revokedFile(record))) throw new Error('Writer lease is absent, replaced, or revoked; stop this assignment.');
+  if (current.wave_bindings) assertWaveLease(current);
+}
+
+function readOwnershipClaimsSync(root) {
+  if (typeof root !== 'string' || !root) return [];
+  try { const state = read(join(root, 'claims.json')); return Array.isArray(state.claims) ? state.claims : []; } catch { return []; }
+}
+
+// Synchronously revalidate the durable wave generation, member and run binding
+// plus the registry token/epoch and the recorded model (an explicit
+// provider_recovery fallback is an accepted recorded model). run.json is never
+// consulted for wave authority.
+function assertWaveLease(record) {
+  const binding = record.wave_bindings;
+  const wavePath = record.wave_path || join(record.package, 'runtime', 'waves', `${binding.wave_id}.json`);
+  let wave;
+  try { wave = read(wavePath); } catch { throw new Error('Wave lease is absent: the durable wave record cannot be read; stop this assignment.'); }
+  const declared = WAVE_VERSION_FIELDS.filter(key => wave[key] !== undefined).map(key => wave[key]);
+  if (!declared.length || declared.some(value => value !== 1) || new Set(declared).size > 1
+    || wave.generation !== binding.generation || waveClaimToken(wave) !== binding.claim_token
+    || wave.coordinator?.epoch !== binding.coordinator_epoch || wave.coordinator?.session !== binding.coordinator?.session || wave.package_ref !== binding.package_ref
+    || wave.target?.id !== binding.target || wave.target?.base_commit !== binding.base_commit)
+    throw new Error('Wave lease is absent or replaced; stop this assignment.');
+  const member = wave.members?.[String(binding.step_number)];
+  if (!member || member.attempt_id !== binding.attempt_id || member.phase !== binding.phase || member.run_id !== record.id)
+    throw new Error('Wave member binding is absent or replaced; stop this assignment.');
+  const claims = readOwnershipClaimsSync(binding.ownership_root);
+  if (!claims.some(claim => claim.kind === 'package' && claim.token === binding.claim_token && String(claim.epoch) === String(binding.coordinator_epoch) && claim.packageId === binding.package_ref))
+    throw new Error('Wave package claim is absent or replaced; stop this assignment.');
+  if (!claims.some(claim => claim.kind === 'checkout' && claim.token === binding.checkout_claim && claim.packageId === binding.package_ref
+    && String(claim.epoch) === String(binding.checkout_claim_epoch) && claim.attempt === binding.checkout_claim_attempt))
+    throw new Error('Wave checkout claim is absent or replaced; stop this assignment.');
+  // Capacity is reserved before the root launches; its token/epoch/attempt must
+  // still match this run's reservation and the wave membership attempt.
+  const capacityKey = `${binding.wave_id}:${binding.attempt_id}:${binding.phase}`;
+  const capacity = record.capacity_claim;
+  if (!capacity || typeof capacity.token !== 'string' || capacity.epoch === undefined || capacity.attempt !== capacityKey)
+    throw new Error('Wave capacity claim is absent or replaced; stop this assignment.');
+  if (!claims.some(claim => claim.kind === 'capacity' && claim.token === capacity.token && String(claim.epoch) === String(capacity.epoch)
+    && claim.attempt === capacity.attempt && claim.packageId === binding.package_ref))
+    throw new Error('Wave capacity claim is absent or replaced; stop this assignment.');
+  if (!record.deadline || !wave.deadline || record.deadline.expires_at !== wave.deadline.expires_at || record.deadline.started_at !== wave.deadline.started_at)
+    throw new Error('Wave deadline is absent or replaced; stop this assignment.');
+  // Each role's recorded model must match that role's own original model. The
+  // provider fallback is accepted only for a role whose recovery event was
+  // actually recorded; there is no cross-role or unconditional fallback.
+  const fallback = `${PROVIDER_RECOVERY.fallback.provider}/${PROVIDER_RECOVERY.fallback.model}`;
+  const recordedModel = (value, expected, role) => typeof value === 'string' && value.length > 0
+    && (value === expected || (value === fallback && providerRecoveryRecorded(record, role, expected)));
+  if (!recordedModel(record.owner_model, binding.owner_model, 'owner') || !recordedModel(record.editor_model, binding.editor_model, 'editor'))
+    throw new Error('Wave recorded model is absent or replaced; stop this assignment.');
+}
+
+// The only admissible evidence for a role's provider fallback is a recorded
+// recovery event for this run, role and original model. The current event keeps
+// the wrapper name provider_recovery and nests the recovery detail under
+// `recovery`; historical lines spread the detail at the top level and overwrote
+// `event`, so both shapes count.
+function providerRecoveryRecorded(record, role, requestedModel) {
+  let text;
+  try { text = readFileSync(join(record.package, 'runtime/events.jsonl'), 'utf8'); } catch { return false; }
+  const fallback = `${PROVIDER_RECOVERY.fallback.provider}/${PROVIDER_RECOVERY.fallback.model}`;
+  return text.split('\n').some(line => {
+    if (!line) return false;
+    try {
+      const value = JSON.parse(line);
+      const detail = value?.recovery && typeof value.recovery === 'object' ? value.recovery : value;
+      return detail.version === 1 && ['fallback_selected', 'fallback_restored'].includes(detail.event)
+        && value.run_id === record.id && value.role === role
+        && detail.requested_model === requestedModel && detail.effective_model === fallback;
+    } catch { return false; }
+  });
+}
+
+// The provider fallback is admissible only as the fixed recovery model backed by
+// a recorded recovery entry for this run's exact role selector. Any other
+// selected model must match the requested selector exactly; there is no
+// arbitrary swap or cross-role substitution.
+export function assertManagedModel(record, role, model, branchEntries = []) {
+  const selector = record[`${role}_model`];
+  const fallback = `${PROVIDER_RECOVERY.fallback.provider}/${PROVIDER_RECOVERY.fallback.model}`;
+  if (model?.provider === PROVIDER_RECOVERY.fallback.provider && model?.id === PROVIDER_RECOVERY.fallback.model) {
+    const requested = splitModelSelector(selector);
+    const recorded = requested.provider === 'primalabs' && Array.isArray(branchEntries) && branchEntries.some(entry =>
+      entry?.type === 'custom' && entry.customType === 'spec-provider-recovery'
+      && entry.data?.version === 1 && entry.data?.requested_model === selector
+      && ['fallback_selected', 'fallback_restored'].includes(entry.data?.event)
+      && entry.data?.effective_model === fallback);
+    if (recorded) return;
+  }
+  assertModelSelector(selector, model);
+}
+
+// A wave dispatch may run concurrently with its own durable siblings. Only a
+// distinct member of the same wave generation, package, coordinator epoch and
+// target qualifies; a serial, unknown or same-member assignment never does.
+export function waveSiblingMatches(validated, sibling) {
+  return Boolean(validated && sibling
+    && sibling.wave_id === validated.wave_id && sibling.package_ref === validated.package_ref
+    && sibling.generation === validated.generation
+    && String(sibling.coordinator_epoch) === String(validated.coordinator_epoch)
+    && sibling.target === validated.target
+    && sibling.step_number !== validated.step_number);
+}
+
+// The conflict is waived only when the durable sibling record belongs to the
+// same wave and still holds a valid current lease; a stale, unresolved or serial
+// conflict is never waived.
+export function waveSiblingConflict(packagePath, conflict, waveBinding) {
+  const validated = waveBinding?.wave_bindings ?? waveBinding?.wave ?? null;
+  if (!validated || !conflict?.runId) return false;
+  let run;
+  try { run = loadRun(packagePath, conflict.runId); } catch { return false; }
+  if (!waveSiblingMatches(validated, run?.wave_bindings)) return false;
+  try { assertLease(run); } catch { return false; }
+  return true;
 }
 export function revoke(record) {
   atomic(revokedFile(record), { revoked_at: timestamp() });
@@ -245,7 +580,165 @@ function stepTarget(locations, packagePath, step) {
   return target;
 }
 
-export async function resolveInput(input, location = {}) {
+// ---------------------------------------------------------------------------
+// Contained snapshot preparation for one wave member.
+//
+// The caller supplies only the membership identity already used by start():
+// wave id, generation, step, attempt, phase, package claim token and
+// coordinator epoch. Backend, capability, setup command, layers and target come
+// from the durable wave record and the prepared step card, never from the
+// caller. prepareWaveMember provisions a retained step-workspaces attempt and
+// returns a preparation receipt; it neither accepts a step nor advances a phase.
+// ---------------------------------------------------------------------------
+
+// The same pre-worktree identity checks resolveWaveBinding performs, without
+// requiring the member workspace the preparation is about to create.
+function resolveWaveMemberRequest(input, { packagePath, packageRef, target }, ownershipRoot) {
+  for (const field of WAVE_INPUT_FIELDS) {
+    if (input[field] === undefined || input[field] === null || input[field] === '')
+      throw waveInvalid('wave-input-incomplete', `Wave preparation requires ${field}.`, 'Pass the validated wave membership identity.');
+  }
+  if (typeof ownershipRoot !== 'string' || !ownershipRoot)
+    throw waveInvalid('wave-ownership-unavailable', 'Wave preparation requires the ownership registry root.', 'Construct Runtime with an ownership registry or ownership root.');
+  const record = readWaveRecord(packagePath, input.wave_id);
+  const claimToken = waveClaimToken(record);
+  if (input.claim_token !== claimToken) throw waveInvalid('wave-claim-mismatch', 'Supplied claim_token does not match the wave record.', 'Pass the canonical wave claim token.');
+  const epoch = record.coordinator?.epoch;
+  if (epoch === undefined || epoch === null || epoch === '' || String(input.coordinator_epoch) !== String(epoch))
+    throw waveInvalid('wave-epoch-mismatch', 'Supplied coordinator_epoch does not match the wave record.', 'Pass the wave coordinator epoch.');
+  if (record.package_ref !== packageRef)
+    throw waveInvalid('wave-package-mismatch', 'Wave record package_ref does not match the located package.', 'Bind the wave to the located package.');
+  if (!record.target || record.target.id !== target.id)
+    throw waveInvalid('wave-target-mismatch', 'Wave record target does not match the step target.', 'Record the wave target for this step.');
+  if (typeof record.target.base_commit !== 'string' || !record.target.base_commit)
+    throw waveInvalid('wave-base-missing', 'Wave target records no base commit.', 'Record the wave target base commit.');
+  if (typeof record.generation !== 'number' || !Number.isInteger(record.generation) || record.generation !== input.expected_generation)
+    throw waveInvalid('wave-generation-mismatch', 'Supplied expected_generation does not match the wave record.', 'Pass the current wave generation.');
+  const cardStep = Number(basename(input.step).match(/^step-(\d+)-subspec\.md$/)?.[1]);
+  if (!Number.isInteger(cardStep) || input.step_number !== cardStep)
+    throw waveInvalid('wave-step-mismatch', 'Supplied step_number does not match the step card.', 'Pass the card step number.');
+  const member = record.members?.[String(input.step_number)];
+  if (!member || typeof member !== 'object')
+    throw waveInvalid('wave-member-missing', `Wave record has no member for step ${input.step_number}.`, 'Record the member before preparing its workspace.');
+  if (Number(member.step) !== input.step_number || member.attempt_id !== input.attempt_id || member.phase !== input.phase)
+    throw waveInvalid('wave-member-mismatch', 'Wave member attempt or phase does not match the supplied identity.', 'Pass the recorded member attempt and phase.');
+  // The phase's coordinator identity is the validated package-claim coordinator,
+  // revalidated against the durable wave record session/epoch.
+  const packageClaim = readOwnershipClaimsSync(ownershipRoot).find(claim => claim.kind === 'package'
+    && claim.token === claimToken && String(claim.epoch) === String(epoch));
+  if (!packageClaim)
+    throw waveInvalid('wave-package-claim', 'No live package claim matches the wave token and epoch.', 'Recover or reacquire the package claim before preparing.');
+  return { record, claimToken, epoch, member, coordinator: waveCoordinator(record, packageClaim) };
+}
+
+// The top-level `setup` declaration for a target, defaulting to the empty
+// declaration; normalizeSetup inside setupIdentity rejects anything malformed.
+function targetSetup(packagePath, targetId) {
+  let index;
+  try { index = read(join(packagePath, 'spec-steps.json')); } catch { return undefined; }
+  return index?.setup?.[targetId];
+}
+
+function declaredEnvironment(setup) {
+  if (!setup || setup === 'none' || typeof setup !== 'object' || !Array.isArray(setup.environment)) return [];
+  return setup.environment.filter(name => typeof name === 'string');
+}
+
+function shQuote(value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
+}
+
+// The fixed contained script: run the declared command, then record the frozen
+// base revision and the tracked-clean status of the prepared tree. Only
+// untracked (including ignored) setup output is permitted; a nonzero setup exit
+// is preserved for the coordinator.
+function waveSetupScript({ setup, source, gitDir, receiptFile, headFile, statusFile }) {
+  const command = setup && typeof setup === 'object' && typeof setup.command === 'string' && setup.command.trim() !== '' ? setup.command : ':';
+  const gitCall = `git --git-dir=${shQuote(gitDir)} --work-tree=${shQuote(source)}`;
+  return [
+    `( ${command} )`,
+    'setup_rc=$?',
+    `${gitCall} rev-parse HEAD > ${shQuote(headFile)} 2>/dev/null`,
+    'head_rc=$?',
+    `${gitCall} status --porcelain --untracked-files=no > ${shQuote(statusFile)} 2>/dev/null`,
+    'status_rc=$?',
+    `printf '%s %s %s\\n' "$setup_rc" "$head_rc" "$status_rc" > ${shQuote(receiptFile)}`,
+    'exit 0',
+  ].join('\n');
+}
+
+function readSetupReceipt({ receiptFile, headFile, statusFile }) {
+  if (!existsSync(receiptFile)) return null;
+  const [setupExit, headRc, statusRc] = readFileSync(receiptFile, 'utf8').trim().split(/\s+/).map(Number);
+  if (![setupExit, headRc, statusRc].every(Number.isInteger)) return null;
+  const head = headRc === 0 && existsSync(headFile) ? readFileSync(headFile, 'utf8').trim() : null;
+  const status = statusRc === 0 && existsSync(statusFile) ? readFileSync(statusFile, 'utf8') : null;
+  return { setup_exit: setupExit, head, tracked_clean: statusRc === 0 && status !== null && status.trim() === '' };
+}
+
+// Wait for a contained setup child to close, bounded by the durable shared
+// wave deadline. The adapter owns termination; this never signals a pid.
+function waitForSetupClose(child, deadline) {
+  return new Promise(resolveClose => {
+    if (!child) { resolveClose({ timedOut: false }); return; }
+    let settled = false;
+    const remaining = Number.isSafeInteger(deadline?.expires_at) ? Math.max(1, deadline.expires_at - Date.now()) : null;
+    const timer = remaining === null ? null : setTimeout(() => finish(true), remaining);
+    function finish(timedOut) {
+      if (settled) return;
+      settled = true; clearTimeout(timer); resolveClose({ timedOut });
+    }
+    child.once('error', () => finish(true));
+    child.once('close', () => finish(false));
+    if (child.exitCode !== null || child.signalCode !== null) finish(false);
+  });
+}
+
+// The frozen base commit is extracted from the canonical repository without
+// hardlinks and re-homed into a private standalone git dir: no alternates, no
+// .git inside the prepared source tree, so tracked-base validation never
+// touches the canonical checkout.
+function buildWaveStaging({ targetCommon, baseCommit, source, gitDir }) {
+  mkdirSync(source, { recursive: true });
+  mkdirSync(gitDir, { recursive: true });
+  const run = args => execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 256 * 1024 * 1024 });
+  const archive = spawnSync('git', ['-c', 'tar.umask=0022', '-C', targetCommon, 'archive', '--format=tar', baseCommit], { maxBuffer: 256 * 1024 * 1024 });
+  if (archive.error || archive.status !== 0)
+    throw waveInvalid('wave-staging-archive', 'Could not archive the frozen wave base commit.', 'Verify the wave base commit and canonical checkout.');
+  const extract = spawnSync('tar', ['-x', '-p', '-f', '-', '-C', source], { input: archive.stdout, maxBuffer: 256 * 1024 * 1024 });
+  if (extract.error || extract.status !== 0)
+    throw waveInvalid('wave-staging-extract', 'Could not extract the frozen wave base tree.', 'Verify the runtime staging root is writable.');
+  run(['init', '--bare', '--quiet', gitDir]);
+  run(['--git-dir', gitDir, 'config', 'core.bare', 'false']);
+  run(['--git-dir', gitDir, 'config', 'core.worktree', source]);
+  run(['--git-dir', gitDir, 'config', 'core.fileMode', 'true']);
+  run(['--git-dir', gitDir, 'fetch', '--no-tags', '--quiet', targetCommon, '+refs/heads/*:refs/remotes/origin/*']);
+  run(['--git-dir', gitDir, 'cat-file', '-e', `${baseCommit}^{commit}`]);
+  run(['--git-dir', gitDir, 'update-ref', 'HEAD', baseCommit]);
+  run(['--git-dir', gitDir, '--work-tree', source, 'read-tree', baseCommit]);
+}
+
+function gitList(gitDir, source, extra) {
+  const output = execFileSync('git', ['--git-dir', gitDir, '--work-tree', source, 'ls-files', ...extra, '-z'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  return output.split('\0').filter(Boolean);
+}
+
+// Only untracked output (including ignored dependencies) moves into the
+// dependencies staging; the source tree remains byte-for-byte the tracked base
+// tree validated by the contained setup.
+function partitionUntracked({ gitDir, source, dependencies }) {
+  const moved = new Set([...gitList(gitDir, source, ['--others', '--exclude-standard']),
+    ...gitList(gitDir, source, ['--others', '--ignored', '--exclude-standard'])]);
+  for (const rel of moved) {
+    const from = join(source, rel);
+    try { lstatSync(from); } catch { continue; }
+    const to = join(dependencies, rel);
+    mkdirSync(dirname(to), { recursive: true });
+    renameSync(from, to);
+  }
+}
+
+export async function resolveInput(input, location = {}, { ownership, ownershipRoot } = {}) {
   if (input.attempt_kind !== undefined && !['implementation', 'verification-continuation', 'implementation-repair', 'review-repair', 'launch-retry'].includes(input.attempt_kind))
     throw new Error('Unknown attempt_kind');
   if (input.session_scope !== undefined && !['package', 'step'].includes(input.session_scope))
@@ -260,6 +753,12 @@ export async function resolveInput(input, location = {}) {
   const step = realpathSync(input.step);
   if (!inside(packagePath, step)) throw new Error('step must be inside the package');
   const target = stepTarget(locations, packagePath, step);
+  if (input.wave_id !== undefined && input.wave_id !== null) {
+    const bound = await resolveWaveBinding(input, { packagePath, packageRef: locations.package_ref, target }, ownershipRoot);
+    return { ...input, scout_model: input.scout_model || SCOUT_MODEL, package: packagePath, package_ref: locations.package_ref,
+      target: bound.target, primary: bound.primary, step, checkout: bound.checkout, other_targets: [], wave_bindings: bound.wave,
+      wave_path: join(packagePath, 'runtime', 'waves', `${input.wave_id}.json`) };
+  }
   const { primary, worktree: actual } = await prepareSpecWorktree(locations, target, { ...location, base: input.base || 'HEAD' });
   // Other targets' recorded worktrees are read-only context for the owner and editor.
   const others = locations.targets.filter(entry => entry.id !== target.id && entry.worktree).map(({ id, worktree }) => ({ id, worktree }));
@@ -270,7 +769,7 @@ export async function resolveInput(input, location = {}) {
 const targetFacts = record => record.target ? `TARGET: ${record.target}\n${record.other_targets?.length ? `OTHER TARGETS (read-only context, never edit): ${record.other_targets.map(entry => `${entry.id}=${entry.worktree}`).join('; ')}\n` : ''}` : '';
 
 export function environmentFacts(checkout, primary) {
-  const roots = [...new Set([checkout, primary])];
+  const roots = [...new Set([checkout, primary].filter(root => typeof root === 'string' && root.length > 0))];
   return { checkout, primary, observed_only: true,
     dependency_paths: roots.flatMap(root => ['deps', 'node_modules'].map(name => join(root, name))).filter(existsSync),
     build_paths: roots.flatMap(root => ['_build', 'dist'].map(name => join(root, name))).filter(existsSync),
@@ -278,10 +777,45 @@ export function environmentFacts(checkout, primary) {
     next: 'Resolve missing dependencies from these paths or repository setup instructions. Existence is not compatibility or permission to share writable build output. Do not search the filesystem root.' };
 }
 
+// Sanitized transport names are the only caller environment submitted to the
+// systemd unit (visible in systemd-run argv); the worker's full environment
+// travels in a mode-0600 request file read by the fixed root bootstrap.
+const TRANSPORT_ENV_NAMES = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'LANG', 'LC_ALL', 'TERM'];
+function sanitizeTransport(env) {
+  return Object.fromEntries(TRANSPORT_ENV_NAMES.filter(name => typeof env[name] === 'string').map(name => [name, env[name]]));
+}
+
+// Fixed inline bootstrap for a contained wave root. It carries no caller text:
+// the request path is positional and the full environment plus native command
+// arrive through a mode-0600 JSON file. It writes the overlay .git pointer when
+// asked and then spawns the native command with inherited stdio.
+const ROOT_BOOTSTRAP = [
+  "const fs = require('fs');",
+  "const { spawn } = require('child_process');",
+  "const path = require('path');",
+  'const requestFile = process.argv[1];',
+  'let request;',
+  'try { request = JSON.parse(fs.readFileSync(requestFile, "utf8")); }',
+  'catch (error) { process.stderr.write("root bootstrap cannot read its request: " + error.message + "\\n"); process.exit(70); }',
+  'if (request.gitDir && request.checkout) {',
+  '  const pointer = path.join(request.checkout, ".git");',
+  '  const expected = "gitdir: " + request.gitDir + "\\n";',
+  '  let current = null;',
+  '  try { current = fs.readFileSync(pointer, "utf8"); } catch { current = null; }',
+  '  if (current !== expected) fs.writeFileSync(pointer, expected);',
+  '}',
+  'const child = spawn(request.command, request.args, { cwd: request.checkout, env: request.env, stdio: "inherit" });',
+  'const forward = signal => { try { child.kill(signal); } catch {} };',
+  'process.on("SIGTERM", () => forward("SIGTERM"));',
+  'process.on("SIGINT", () => forward("SIGINT"));',
+  'child.on("error", error => { process.stderr.write("root bootstrap spawn failed: " + error.message + "\\n"); process.exit(70); });',
+  'child.on("exit", code => { process.exit(typeof code === "number" ? code : 70); });',
+];
+
 // Owners retain step state. Each editor packet has its own native session; its
 // questions continue in that same process, never in a competing writer.
 // Discovery stays disabled: no goal continuation, subagent fanout, or unrelated extension tools.
-export function launch(record, role, prompt, options = {}) {
+function nativeCommand(record, role, prompt, options = {}) {
   const session = record[`${role}_session`];
   const stream = join(record.package, 'runtime/runs', `${record.id}-${role}-${randomUUID()}.jsonl`);
   const errors = `${stream}.stderr`;
@@ -294,11 +828,15 @@ export function launch(record, role, prompt, options = {}) {
     ...(role === 'owner' ? ['--extension', join(homedir(), '.pi/agent/npm/node_modules/pi-subagents/index.js')] : []),
     '--extension', join(here, 'index.ts'), '--tools', role === 'owner' ? 'read,grep,find,ls,spec_editor,spec_answer,spec_verify,spec_scout,spec_search,spec_advice,spec_complete' : 'read,grep,find,ls,edit,write,bash,spec_question',
     '--append-system-prompt', profile, '--', prompt ];
-  const child = spawnManaged(record, role, options.command || 'pi', args);
+  return { command: options.command || 'pi', args, stream, errors };
+}
+
+function streamTask(record, role, child, options, paths) {
+  const { stream, errors } = paths;
   const activity = activityRecorder(record, role);
   let reportLifecycleFailure;
   const lifecycleFailure = new Promise(resolveFailure => { reportLifecycleFailure = resolveFailure; });
-  let pending = '', finalText = '', lastStop, failure, stderr = '', shutdownTimer, shutdownCleanup = false;
+  let pending = '', finalText = '', lastStop, failure, stderr = '', shutdownTimer, shutdownCleanup = false, shutdownAttempt;
   const clearShutdown = () => { clearTimeout(shutdownTimer); shutdownTimer = undefined; };
   child.stdout.on('data', chunk => {
     appendFileSync(stream, chunk, { mode: 0o600 });
@@ -340,9 +878,12 @@ export function launch(record, role, prompt, options = {}) {
                 return;
               }
               event(record, 'worker_shutdown_cleanup', { role, pid: child.pid, reason: 'settled print process did not exit' });
-              shutdownCleanup = true;
-              if (!await (options.stopSettledGroup || terminateGroup)(record, child.pid))
+              // Confirmed cleanup is the only authority to classify the eventual
+              // exit as cleanup; a failed or unconfirmed stop leaves it a real crash.
+              shutdownAttempt = Promise.resolve().then(() => (options.stopSettledGroup || terminateGroup)(record, child.pid));
+              if (!await shutdownAttempt)
                 reportLifecycleFailure('Settled worker termination unconfirmed; retain process ownership.');
+              else shutdownCleanup = true;
             } catch (error) { reportLifecycleFailure(`Settled worker cleanup failed: ${error.message}`); }
           }, options.shutdownGraceMs ?? 15000);
         }
@@ -352,9 +893,12 @@ export function launch(record, role, prompt, options = {}) {
   child.stderr.on('data', chunk => { appendFileSync(errors, chunk, { mode: 0o600 }); stderr = (stderr + chunk.toString()).slice(-8000); });
   const done = new Promise(resolveDone => {
     child.on('error', error => { failure = error.message; });
-    child.on('close', (code, signal) => {
+    const settle = async (code, signal) => {
       clearShutdown();
-      const cleanupExit = shutdownCleanup && ['SIGTERM', 'SIGKILL'].includes(signal);
+      // Wait for any in-flight confirmed-cleanup decision before classifying the
+      // exit; a real crash must never be masked by a later cleanup confirmation.
+      if (shutdownAttempt) { try { await shutdownAttempt; } catch { /* classified below */ } }
+      const cleanupExit = shutdownCleanup && (['SIGTERM', 'SIGKILL'].includes(signal) || code === 143 || code === 137);
       const error = child.launchError || failure || (code !== 0 && !cleanupExit ? `Pi exited ${code ?? signal}` : !finalText || lastStop === 'toolUse' ? 'Pi exited without a final assistant result' : undefined);
       activity.finish(error);
       const fullResultPath = `${stream}.result.txt`;
@@ -367,17 +911,466 @@ export function launch(record, role, prompt, options = {}) {
       } catch (cause) {
         resolveDone({ code, signal, stream, errors, error: `Cannot preserve full result: ${cause.message}${error ? `; ${error}` : ''}` });
       }
-    });
+    };
+    child.on('close', settle);
+    // A transport that already exited before this handler attached never emits
+    // close again; settle it once so done always resolves.
+    if (child.exitCode !== null || child.signalCode !== null) queueMicrotask(() => settle(child.exitCode, child.signalCode));
   });
   return { child, done, lifecycleFailure };
 }
 
+export function launch(record, role, prompt, options = {}) {
+  const { command, args, stream, errors } = nativeCommand(record, role, prompt, options);
+  const child = spawnManaged(record, role, command, args);
+  return streamTask(record, role, child, options, { stream, errors });
+}
+
 export class Runtime {
-  constructor({ launchProcess = launch, isAlive = groupAlive, kill = (pid, signal) => process.kill(-pid, signal), notify = () => {}, indexDir = join(homedir(), '.pi/agent/spec-runtime'), onWorkerEvent = () => {}, location = {} } = {}) {
+  constructor({ launchProcess = launch, isAlive = groupAlive, kill = (pid, signal) => process.kill(-pid, signal), notify = () => {}, indexDir = join(homedir(), '.pi/agent/spec-runtime'), ownership, ownershipRoot, serviceAdapter, onWorkerEvent = () => {}, location = {} } = {}) {
     // `location` carries spec-location options (root, env, home, hostname); tests inject them.
     this.location = location;
     this.launchProcess = launchProcess; this.isAlive = isAlive; this.kill = kill; this.notify = notify; this.indexDir = indexDir; this.active = new Map(); this.cancellations = new Map();
+    // The ownership registry confirms wave package/checkout claims; it defaults
+    // under the runtime index ownership root and is injectable for fixtures.
+    this.ownershipRoot = ownershipRoot || join(indexDir, 'ownership');
+    this.ownership = ownership || createOwnership({ registryRoot: this.ownershipRoot });
     this.onWorkerEvent = onWorkerEvent;
+    // Wave roots always launch through the containment adapter; the production
+    // adapter is the default and a test may inject a seam. Serial runs keep
+    // launchProcess unchanged.
+    this.serviceAdapter = serviceAdapter || createSystemdServiceAdapter();
+  }
+
+  // A contained wave root reserves capacity and binds the shared wave deadline
+  // before the adapter registers durable service identity. An unknown or failed
+  // start throws with the truthful blocked state; there is no plain-spawn fallback.
+  async containedRoot(record, prompt) {
+    const binding = record.wave_bindings;
+    const adapter = this.serviceAdapter;
+    const heldClaims = readOwnershipClaimsSync(this.ownershipRoot).filter(claim => claim.kind === 'capacity');
+    const policy = calculateResourcePolicy({ physicalMemoryBytes: totalmem(),
+      held: { memoryBytes: heldClaims.reduce((total, claim) => total + (claim.reservations?.memoryBytes || 0), 0),
+        tasks: heldClaims.reduce((total, claim) => total + (claim.reservations?.tasks || 0), 0) } });
+    const reserved = await this.ownership.reserveCapacity({ packageId: binding.package_ref,
+      attempt: `${binding.wave_id}:${binding.attempt_id}:${binding.phase}`,
+      request: { memoryBytes: policy.lifecycleMemoryBytes, tasks: policy.lifecycleTasks },
+      coordinator: binding.coordinator });
+    // The registry mutation returns its result object directly; a queued decision
+    // is a truthful refusal, not a claim to fabricate from an empty wrapper.
+    if (reserved?.status === 'queued')
+      throw waveInvalid('wave-capacity-queued', `Capacity reservation was refused (${reserved.constraint?.reason || 'queued'}); the run stays blocked and no worker started.`, 'Wait for capacity to drain or reduce the requested lifecycle budget, then relaunch.');
+    const claim = reserved?.claim;
+    if (reserved?.status !== 'reserved' || !claim || typeof claim.token !== 'string')
+      throw waveInvalid('wave-capacity-failed', `Capacity reservation was not confirmed (${reserved?.status || 'unknown'}); the run stays blocked and no worker started.`, 'Recover the wave capacity claim and relaunch.');
+    record.capacity_claim = { token: claim.token, epoch: claim.epoch, attempt: claim.attempt ?? binding.attempt_id };
+    record.deadline = await this.ensureWaveDeadline(record);
+    const { command, args, stream, errors } = nativeCommand(record, 'owner',
+      `${prompt}\nEnvironment paths (observations, not setup approval): ${JSON.stringify(record.environment)}`);
+    const workerEnv = { ...process.env, ...artifactEnvironment(record.package), SPEC_RUNTIME_ROLE: 'owner',
+      SPEC_RUNTIME_RECORD: runFileOf(record), PI_INTERCOM_SCOPE_ID: record.id, PI_INTERCOM_STABLE_ID: `spec-owner-${record.id}` };
+    // The full environment (which may hold secrets) stays in a mode-0600 file;
+    // only sanitized transport names travel in the unit's argv.
+    record.service_request = join(record.package, 'runtime/runs', `${record.id}-owner-request.json`);
+    writeFileSync(record.service_request, JSON.stringify({ env: workerEnv, command, args,
+      checkout: record.checkout, gitDir: binding.layers?.gitDir ?? null }), { mode: 0o600 });
+    const bootstrap = [process.execPath, '-e', ROOT_BOOTSTRAP.join('\n'), record.service_request];
+    const argv = binding.layers ? buildOverlayArgv({ token: binding.claim_token, lower: binding.layers.lower,
+      upper: binding.layers.upper, work: binding.layers.work, merged: binding.layers.merged, chdir: record.checkout, command: bootstrap }).argv : bootstrap;
+    const transport = sanitizeTransport(process.env);
+    const started = await adapter.start({ argv, cwd: record.checkout, env: transport, deadline: record.deadline, limits: policy,
+      register: serviceRecord => { record.service = serviceRecord; save(record); assertWaveLease(record); return true; } });
+    record.service = started?.record ?? record.service;
+    if (!started || started.ok !== true || !started.child) {
+      save(record);
+      throw waveInvalid('wave-service-refused', `Contained service launch was not confirmed (${started?.reason || started?.status || 'unknown'}); the run stays blocked and no worker started.`, 'Repair the host or wave binding and relaunch.');
+    }
+    save(record);
+    const state = { service: record.service ?? null };
+    const task = streamTask(record, 'owner', started.child, { onEvent: this.onWorkerEvent,
+      stopSettledGroup: async () => {
+        if (!state.service) return false;
+        // Only a confirmed stop is cleanup authority; "stop-requested" is not drain proof.
+        const stopped = await adapter.stop(state.service, { env: transport, ownershipVerified: true });
+        return stopped?.status === 'confirmed';
+      } }, { stream, errors });
+    task.service = state.service;
+    const mainPid = Number.isSafeInteger(started.main_pid) ? started.main_pid
+      : (Number.isSafeInteger(started.record?.main_pid) ? started.record.main_pid : null);
+    task.workerPid = mainPid;
+    return task;
+  }
+
+  async ensureWaveDeadline(record) {
+    const binding = record.wave_bindings;
+    const timeoutMs = Number.isSafeInteger(record.timeout_ms) && record.timeout_ms >= 1000 && record.timeout_ms <= 86400000
+      ? record.timeout_ms : undefined;
+    const result = await runLockedMutation(`${waveFileOf(record)}.lock`, 'ensure-wave-deadline', {
+      file: waveFileOf(record), generation: binding.generation, claimToken: binding.claim_token,
+      coordinatorEpoch: binding.coordinator_epoch, timeoutMs });
+    if (!result || result.ok !== true || !result.deadline)
+      throw waveInvalid(result?.code || 'wave-deadline-failed', result?.message || 'Could not bind the shared wave deadline.', 'Repair the wave record and relaunch.');
+    return result.deadline;
+  }
+
+  // The single contained-root release path. A cancellation stops the service; a
+  // normal finish drains it. Only a positively confirmed outcome is proof:
+  // systemd's "stop requested" or an inspect error is not drain. A confirmed
+  // drain writes its external receipt first, then releases this run's own
+  // capacity and checkout claims (never the wave package claim) while the
+  // recorded layer identity stays on the durable run and wave records.
+  async drainContainedService(record, { cancel = false } = {}) {
+    const adapter = this.serviceAdapter;
+    const binding = record.wave_bindings;
+    const service = record.service;
+    if (!service) return { status: 'unknown', reason: 'no-service-record' };
+    const transport = sanitizeTransport(process.env);
+    const outcome = cancel
+      ? await adapter.stop(service, { env: transport, ownershipVerified: true })
+      : await adapter.drain(service, { env: transport, ownershipVerified: true });
+    if (outcome?.status !== 'confirmed') return outcome;
+    const receiptFile = join(record.package, 'runtime', 'runs', `${record.id}-phase-drain.json`);
+    // A retry from the same run preserves the prior receipt's released list so
+    // an already-returned claim is never released twice.
+    const released = [];
+    try {
+      const prior = existsSync(receiptFile) ? read(receiptFile) : null;
+      if (prior && prior.run_id === record.id && Array.isArray(prior.released))
+        for (const item of prior.released)
+          if (item && typeof item.token === 'string' && item.epoch !== undefined) released.push(item);
+    } catch { /* an unreadable prior receipt is rebuilt from the claims */ }
+    const receipt = () => ({ schema_version: 1, run_id: record.id, wave_id: binding?.wave_id ?? null,
+      attempt_id: binding?.attempt_id ?? null, phase: binding?.phase ?? null, status: 'confirmed',
+      service: service ?? null, layers: binding?.layers ?? null, observed_at: timestamp(), released });
+    // Persist the drain proof before any claim can be returned.
+    atomic(receiptFile, receipt());
+    record.phase_drain = { path: receiptFile, status: 'confirmed' };
+    save(record);
+    const release = async (kind, token, epoch) => {
+      if (released.some(item => item.token === token && String(item.epoch) === String(epoch))) return;
+      const returned = await this.ownership.releaseClaim({ token, epoch, drain: 'confirmed' });
+      if (returned?.status !== 'released')
+        throw new Error(`${kind} claim release was not confirmed (${returned?.reason || returned?.status || 'unknown'}); drain proof is retained and the claim stays reserved.`);
+      released.push({ kind, token, epoch });
+      atomic(receiptFile, receipt());
+    };
+    if (record.capacity_claim?.token)
+      await release('capacity', record.capacity_claim.token, record.capacity_claim.epoch);
+    if (binding?.checkout_claim)
+      await release('checkout', binding.checkout_claim, binding.checkout_claim_epoch);
+    save(record);
+    return outcome;
+  }
+
+  // Prepare one wave member's retained workspace from the durable wave target
+  // policy and return a preparation receipt. The caller supplies only the
+  // membership identity used by start(); backend, capability, setup command,
+  // layers, target and base all come from the wave record and the step card.
+  // This provisions a workspace; it neither accepts a step nor advances a
+  // phase. A confirmed setup drain and an honest tracked-clean base are the
+  // only authority to publish; any unknown or failed outcome keeps the attempt,
+  // capacity, service and staging durable and blocks the member.
+  async prepareWaveMember(input) {
+    if (process.platform === 'win32') throw new Error('spec-runtime requires POSIX process groups');
+    if (!input || typeof input !== 'object') throw new Error('prepareWaveMember requires an input object');
+    const checked = await checkPackage(input.package, this.location);
+    if (!checked.ok) throw refusalError(checked);
+    const locations = checked.locations;
+    const packagePath = realpathSync(locations.package_dir);
+    const packageRef = locations.package_ref;
+    const step = realpathSync(input.step);
+    if (!inside(packagePath, step)) throw new Error('step must be inside the package');
+    const target = stepTarget(locations, packagePath, step);
+
+    // All identity checks fire before any filesystem effect: version, package,
+    // single target, base commit, generation, member attempt and phase.
+    const { record, claimToken, epoch, member, coordinator } = resolveWaveMemberRequest(input, { packagePath, packageRef, target }, this.ownershipRoot);
+    const baseCommit = record.target.base_commit;
+    const common = realOrNull(record.target.common);
+    if (!common)
+      throw waveInvalid('wave-source-missing', 'Wave target records no canonical source common dir.', 'Record target.common.');
+    const waveFile = join(packagePath, 'runtime', 'waves', `${input.wave_id}.json`);
+
+    // An already-prepared member of the same identity returns only a live,
+    // claimed workspace. A stale or half-built record is refused, never
+    // silently accepted and never overwritten.
+    if (member.workspace !== undefined && member.workspace !== null) {
+      const identity = workspaceIdentity(member.workspace);
+      if (identity.baseCommit !== baseCommit)
+        throw waveInvalid('wave-base-mismatch', 'Wave member workspace base commit does not match the target base.', 'Provision the member at the wave target base.');
+      if (identity.packageId !== null && identity.packageId !== packageRef)
+        throw waveInvalid('wave-workspace-package', 'Wave member workspace package does not match the wave package.', 'Bind the member workspace to this package.');
+      const live = readOwnershipClaimsSync(this.ownershipRoot).some(claim => claim.kind === 'checkout'
+        && claim.token === identity.claim.token && String(claim.epoch) === String(identity.claim.epoch) && claim.packageId === packageRef);
+      if (!live)
+        throw waveInvalid('wave-checkout-claim', 'No live checkout claim matches the retained workspace.', 'Re-provision or recover the member workspace claim.');
+      return { status: 'prepared', idempotent: true, wave_id: input.wave_id, step_number: input.step_number,
+        attempt_id: input.attempt_id, phase: input.phase, workspace: member.workspace,
+        preparation_receipt: member.preparation_receipt ?? null };
+    }
+
+    // Backend and capability are durable wave target policy only. The caller
+    // cannot override either; an unsupported or missing capability is refused
+    // here, before any staging directory exists.
+    const mode = record.target.backend ?? 'auto';
+    const capability = record.target.capability ?? null;
+    resolveBackend({ mode, capability });
+
+    const canonicalTarget = realpathSync(target.worktree || target.primary);
+    const waveRoot = join(this.indexDir, 'wave-workspaces',
+      createHash('sha256').update(packageRef).digest('hex').slice(0, 24), input.wave_id);
+    if (waveRoot === canonicalTarget || inside(canonicalTarget, waveRoot))
+      throw waveInvalid('wave-staging-in-target', 'Wave staging root would resolve inside the canonical target.', 'Choose a runtime index outside the canonical checkout.');
+    const stagingRoot = join(waveRoot, 'staging', input.attempt_id);
+    const source = join(stagingRoot, 'source');
+    const dependencies = join(stagingRoot, 'dependencies');
+    const gitDir = join(stagingRoot, 'git');
+    const receiptFile = join(stagingRoot, 'preparation-receipt.json');
+    const headFile = join(stagingRoot, 'setup-head');
+    const statusFile = join(stagingRoot, 'setup-status');
+    const setupReceiptFile = join(stagingRoot, 'setup-receipt');
+
+    // Freeze the declared setup and compute the identical snapshot identity the
+    // retained snapshot binds. normalizeSetup refuses a malformed declaration
+    // before any staging or claim exists.
+    const setup = targetSetup(packagePath, target.id);
+    if (setup === undefined)
+      throw waveInvalid('wave-setup-missing', `Target ${target.id} declares no setup in spec-steps.json.`, 'Declare a setup block for the target before preparing the member.');
+    const { snapshotId } = setupIdentity({ baseCommit, setup, targetRoot: canonicalTarget });
+    for (const name of declaredEnvironment(setup)) {
+      if (typeof process.env[name] !== 'string')
+        throw waveInvalid('wave-env-missing', `Declared setup environment variable is absent: ${name}.`, 'Export the declared setup environment before preparing the member.');
+    }
+
+    // A durable setup intent marks an in-flight attempt. An unresolved intent
+    // refuses a retry before any staging is rebuilt; the active source,
+    // dependencies and untracked setup output are never reset.
+    const intentFile = join(stagingRoot, 'setup-intent.json');
+    const priorIntent = existsSync(intentFile) ? read(intentFile) : null;
+    if (priorIntent && priorIntent.status !== 'confirmed')
+      throw waveInvalid('wave-setup-intent-unresolved', 'A previous setup attempt for this member is unresolved; refusing to reset its active staging.', 'Inspect or recover the existing setup service, then re-run preparation.');
+
+    // From here the attempt is durable. Build the runtime-owned staging and
+    // then reserve phase-specific capacity before the contained setup starts.
+    buildWaveStaging({ targetCommon: common, baseCommit, source, gitDir });
+    const waveStaging = { worktree: canonicalTarget, gitCommonDir: common };
+    const heldClaims = readOwnershipClaimsSync(this.ownershipRoot).filter(claim => claim.kind === 'capacity');
+    const policy = calculateResourcePolicy({ physicalMemoryBytes: totalmem(),
+      held: { memoryBytes: heldClaims.reduce((total, claim) => total + (claim.reservations?.memoryBytes || 0), 0),
+        tasks: heldClaims.reduce((total, claim) => total + (claim.reservations?.tasks || 0), 0) } });
+    const reserved = await this.ownership.reserveCapacity({ packageId: packageRef, attempt: `${input.wave_id}:${input.attempt_id}:setup`,
+      request: { memoryBytes: policy.lifecycleMemoryBytes, tasks: policy.lifecycleTasks },
+      coordinator });
+    if (reserved?.status === 'queued')
+      throw waveInvalid('wave-capacity-queued', `Setup capacity reservation was refused (${reserved.constraint?.reason || 'queued'}); the member stays blocked and no setup ran.`, 'Wait for capacity to drain then re-run preparation.');
+    const capacityClaim = reserved?.claim;
+    if (reserved?.status !== 'reserved' || !capacityClaim || typeof capacityClaim.token !== 'string')
+      throw waveInvalid('wave-capacity-failed', `Setup capacity reservation was not confirmed (${reserved?.status || 'unknown'}); the member stays blocked and no setup ran.`, 'Recover the wave capacity claim then re-run preparation.');
+
+    const setupIntent = { schema_version: 1, wave_id: input.wave_id, attempt_id: input.attempt_id, phase: input.phase,
+      setup, snapshot_id: snapshotId, capacity: { token: capacityClaim.token, epoch: capacityClaim.epoch },
+      status: 'launching', created_at: timestamp() };
+    atomic(intentFile, setupIntent);
+
+    let published = false;
+    try {
+      const deadline = await this.ensureWaveDeadline({ wave_bindings: { generation: record.generation, claim_token: claimToken, coordinator_epoch: epoch }, wave_path: waveFile });
+      const transport = sanitizeTransport(process.env);
+      const script = waveSetupScript({ setup, source, gitDir, receiptFile: setupReceiptFile, headFile, statusFile });
+      const requestFile = join(stagingRoot, 'setup-request.json');
+      writeFileSync(requestFile, JSON.stringify({ env: { ...process.env, ...artifactEnvironment(packagePath), SPEC_RUNTIME_ROLE: 'setup' },
+        command: '/bin/bash', args: ['-o', 'pipefail', '-c', script], checkout: source }), { mode: 0o600 });
+      const argv = [process.execPath, '-e', ROOT_BOOTSTRAP.join('\n'), requestFile];
+      // Durable service identity must be registered before the authorization
+      // gate opens; only sanitized transport travels in the unit argv. The
+      // registration rechecks the durable wave identity and the live package
+      // and capacity claims, so a revoked lease never authorizes a bootstrap.
+      const started = await this.serviceAdapter.start({ argv, cwd: source, env: transport, deadline, limits: policy,
+        register: serviceRecord => {
+          atomic(join(stagingRoot, 'service.json'), serviceRecord);
+          const current = readWaveRecord(packagePath, input.wave_id);
+          if (current.generation !== record.generation || waveClaimToken(current) !== claimToken
+            || String(current.coordinator?.epoch) !== String(epoch)) return false;
+          const live = readOwnershipClaimsSync(this.ownershipRoot);
+          const packageLive = live.some(claim => claim.kind === 'package' && claim.packageId === packageRef && claim.token === claimToken);
+          const capacityLive = live.some(claim => claim.kind === 'capacity' && claim.token === capacityClaim.token && String(claim.epoch) === String(capacityClaim.epoch));
+          return packageLive && capacityLive;
+        } });
+      const service = started?.record ?? null;
+      if (!started || started.ok !== true || !service)
+        throw waveInvalid('wave-service-refused', `Setup service launch was not confirmed (${started?.reason || started?.status || 'unknown'}); the member stays blocked and no setup ran.`, 'Repair the host or wave binding and re-run preparation.');
+      // Consume the setup transport into a runtime-owned log and wait for the
+      // contained child to close under the shared wave deadline before asking
+      // the adapter to drain; an immediate drain cannot observe a healthy
+      // long-running setup and would mislabel it unknown.
+      const setupLog = join(stagingRoot, 'setup.log');
+      const appendSetupLog = chunk => appendFileSync(setupLog, chunk, { mode: 0o600 });
+      started.child?.stdout?.on('data', appendSetupLog);
+      started.child?.stderr?.on('data', appendSetupLog);
+      const setupClose = await waitForSetupClose(started.child, deadline);
+      if (setupClose.timedOut) {
+        // The adapter owns termination. A confirmed stop keeps the member
+        // blocked without publishing; an unconfirmed stop retains everything.
+        const stopped = await this.serviceAdapter.stop(service, { env: transport, ownershipVerified: true });
+        if (stopped?.status !== 'confirmed')
+          throw waveInvalid('wave-setup-unconfirmed', `Contained setup exceeded the shared wave deadline and did not report a confirmed stop (${stopped?.reason || stopped?.status || 'unknown'}); the member stays blocked and its capacity claim is retained.`, 'Inspect the contained setup service, then re-run preparation.');
+        throw waveInvalid('wave-setup-timeout', 'Contained setup exceeded the shared wave deadline; the member stays blocked and its capacity claim is retained.', 'Inspect the contained setup output, then re-run preparation.');
+      }
+      const drained = await this.serviceAdapter.drain(service, { env: transport, ownershipVerified: true });
+      if (!drained || drained.status !== 'confirmed')
+        throw waveInvalid('wave-setup-unconfirmed', `Setup service did not report a confirmed drain (${drained?.status || drained?.reason || 'unknown'}); the member stays blocked and no snapshot was published.`, 'Inspect the contained setup service, then re-run preparation.');
+      // Only a confirmed drain authorizes reading the contained receipt.
+      const setupResult = readSetupReceipt({ receiptFile: setupReceiptFile, headFile, statusFile });
+      if (!setupResult)
+        throw waveInvalid('wave-setup-unconfirmed', 'Contained setup left no readable receipt; the member stays blocked and no snapshot was published.', 'Inspect the contained setup service, then re-run preparation.');
+      if (setupResult.setup_exit !== 0)
+        throw waveInvalid('wave-setup-failed', `Contained setup exited ${setupResult.setup_exit}; the member stays blocked and no snapshot was published.`, 'Inspect the contained setup output, then re-run preparation.');
+      if (setupResult.head !== baseCommit)
+        throw waveInvalid('wave-setup-head', 'Contained setup did not leave the frozen base commit checked out.', 'Re-run preparation against the recorded wave base.');
+      if (!setupResult.tracked_clean)
+        throw waveInvalid('wave-setup-tracked', 'Contained setup changed tracked files; no snapshot was published.', 'Repair the setup command so it only produces untracked dependency output.');
+      partitionUntracked({ gitDir, source, dependencies });
+      const staging = { source, dependencies };
+      const receipt = { ok: true, drain: 'confirmed', baseCommit, trackedClean: true, snapshotId, stagingDigest: stagingDigest(staging) };
+      atomic(receiptFile, receipt);
+      const workspace = await prepareStepWorkspace({ packageId: packageRef, attemptId: input.attempt_id, baseCommit,
+        waveRoot, target: waveStaging, ownership: this.ownership, mode, capability, setup, env: process.env,
+        phaseToken: `${input.wave_id}:${input.attempt_id}:${input.phase}`, coordinator,
+        preparationReceipt: receipt, staging });
+      const persisted = await runLockedMutation(`${waveFile}.lock`, 'persist-wave-member-workspace',
+        { file: waveFile, generation: record.generation, claimToken, coordinatorEpoch: epoch,
+          stepNumber: input.step_number, attemptId: input.attempt_id, phase: input.phase, workspace, receipt });
+      if (!persisted || persisted.ok !== true)
+        throw waveInvalid(persisted?.code || 'wave-workspace-persist', persisted?.message || 'Could not persist the prepared member workspace.', 'Repair the wave record then re-run preparation.');
+      published = true;
+      return { status: 'prepared', idempotent: false, wave_id: input.wave_id, step_number: input.step_number,
+        attempt_id: input.attempt_id, phase: input.phase, workspace, preparation_receipt: receipt };
+    } finally {
+      // Only a confirmed drain plus a published snapshot releases the setup
+      // capacity; the package claim is never touched.
+      if (published) {
+        const returned = await this.ownership.releaseClaim({ token: capacityClaim.token, epoch: capacityClaim.epoch, drain: 'confirmed' });
+        if (returned?.status !== 'released')
+          throw new Error(`setup capacity claim release was not confirmed (${returned?.reason || returned?.status || 'unknown'}); the claim stays reserved.`);
+      }
+    }
+  }
+
+  // Remount a retained step workspace whose previous run positively drained for
+  // this exact membership. The caller supplies only the membership identity used
+  // by start(); paths, command, backend and layers come from the durable member
+  // and the durable drain receipt. Nothing is recreated, deleted or converted:
+  // a dirty workspace is re-claimed byte-for-byte, the previous run binding is
+  // cleared under the wave lock only after revalidation, and a later Runtime.start
+  // drives the current phase normally. No recovered pid is ever an authority.
+  async remountWaveMember(input) {
+    if (process.platform === 'win32') throw new Error('spec-runtime requires POSIX process groups');
+    if (!input || typeof input !== 'object') throw new Error('remountWaveMember requires an input object');
+    const checked = await checkPackage(input.package, this.location);
+    if (!checked.ok) throw refusalError(checked);
+    const locations = checked.locations;
+    const packagePath = realpathSync(locations.package_dir);
+    const packageRef = locations.package_ref;
+    const step = realpathSync(input.step);
+    if (!inside(packagePath, step)) throw new Error('step must be inside the package');
+    const target = stepTarget(locations, packagePath, step);
+    const { record, claimToken, epoch, member, coordinator } = resolveWaveMemberRequest(input, { packagePath, packageRef, target }, this.ownershipRoot);
+    const waveFile = join(packagePath, 'runtime', 'waves', `${input.wave_id}.json`);
+
+    const workspace = member.workspace;
+    if (!workspace || typeof workspace !== 'object' || !workspace.retained)
+      throw waveInvalid('wave-remount-unprepared', 'Wave member has no retained workspace to remount.', 'Prepare the member workspace before remounting.');
+    const retained = workspace.retained;
+    const identity = workspaceIdentity(workspace);
+
+    const claims = readOwnershipClaimsSync(this.ownershipRoot);
+    const currentlyLive = claims.some(claim => claim.kind === 'checkout' && claim.token === identity.claim.token
+      && String(claim.epoch) === String(identity.claim.epoch) && claim.packageId === packageRef);
+    // Idempotent: an already-remounted member holds a live claim with the
+    // previous run cleared, so a replay never re-remounts.
+    if (currentlyLive && (member.run_id === undefined || member.run_id === null))
+      return { status: 'prepared', remounted: true, idempotent: true, wave_id: input.wave_id,
+        step_number: input.step_number, attempt_id: input.attempt_id, phase: input.phase, workspace };
+
+    const previousRunId = member.run_id;
+    if (typeof previousRunId !== 'string' || previousRunId === '')
+      throw waveInvalid('wave-remount-run', 'Wave member names no previous run to remount.', 'Drain the previous phase before remounting.');
+    let previousRun;
+    try { previousRun = read(join(packagePath, 'runtime', 'runs', `${previousRunId}.json`)); }
+    catch { throw waveInvalid('wave-remount-run', 'The previous member run record is unavailable.', 'Recover the drained run record before remounting.'); }
+    const binding = previousRun.wave_bindings;
+    if (!binding || binding.wave_id !== input.wave_id || binding.attempt_id !== input.attempt_id
+      || Number(binding.step_number) !== input.step_number || binding.generation !== record.generation
+      || binding.package_ref !== packageRef)
+      throw waveInvalid('wave-remount-run', 'The previous run binding does not match the member identity.', 'Remount the drained run named by the member.');
+    const drainRef = previousRun.phase_drain;
+    if (!drainRef || drainRef.status !== 'confirmed' || typeof drainRef.path !== 'string' || !drainRef.path)
+      throw waveInvalid('wave-remount-drain', 'The previous run has no confirmed phase drain receipt.', 'Drain the previous phase before remounting.');
+    let drain;
+    try { drain = read(drainRef.path); }
+    catch { throw waveInvalid('wave-remount-drain', 'The durable phase drain receipt cannot be read.', 'Recover the drain receipt before remounting.'); }
+    // The drain receipt proves the previous run's own phase drained; the current
+    // durable member phase is validated independently and never advanced here.
+    if (drain.status !== 'confirmed' || drain.run_id !== previousRunId || drain.wave_id !== input.wave_id
+      || drain.attempt_id !== input.attempt_id || drain.phase !== binding.phase)
+      throw waveInvalid('wave-remount-drain', 'The phase drain receipt is not confirmed for the retained workspace.', 'Recover the confirmed drain receipt before remounting.');
+    if (JSON.stringify(drain.service ?? null) !== JSON.stringify(previousRun.service ?? null))
+      throw waveInvalid('wave-remount-drain', 'The phase drain receipt names a different contained service.', 'Remount only the drained phase service.');
+    const layers = drain.layers && typeof drain.layers === 'object' ? drain.layers : null;
+    if (layers && layers.upper !== undefined && retained.upper !== undefined && layers.upper !== retained.upper)
+      throw waveInvalid('wave-remount-layers', 'The phase drain receipt names a different workspace upper.', 'Remount only the drained workspace.');
+    if (layers && layers.worktree !== undefined && retained.worktree !== undefined && layers.worktree !== retained.worktree)
+      throw waveInvalid('wave-remount-layers', 'The phase drain receipt names a different workspace worktree.', 'Remount only the drained workspace.');
+    const released = Array.isArray(drain.released) ? drain.released : [];
+    const prior = identity.claim;
+    if (!released.some(item => item && item.kind === 'checkout' && item.token === prior.token && String(item.epoch) === String(prior.epoch)))
+      throw waveInvalid('wave-remount-claim', 'The confirmed drain did not release the retained checkout claim.', 'Remount only from a confirmed drain of the retained claim.');
+    if (currentlyLive)
+      throw waveInvalid('wave-remount-held', 'The retained checkout claim is still held by a live holder.', 'Wait for the previous phase claim to drain.');
+
+    const phaseToken = `${input.wave_id}:${input.attempt_id}:${input.phase}`;
+    let remounted;
+    if (retained.backend === 'worktree') {
+      // Fallback backend: re-reserve the attempt under the same canonical
+      // synthetic upper keys the fallback has always used, never the real
+      // worktree gitdir, so the retained worktree bytes are untouched.
+      const attemptRoot = dirname(retained.worktree);
+      const reserved = await this.ownership.reserveCheckout({ packageId: packageRef, attempt: phaseToken,
+        checkout: { gitCommonDir: join(attemptRoot, 'upper'), worktreeGitDir: join(attemptRoot, 'upper') },
+        coordinator });
+      if (!reserved || reserved.status !== 'reserved' || !reserved.claim || typeof reserved.claim.token !== 'string')
+        throw waveInvalid('wave-remount-claim', `Fallback checkout re-reservation was not confirmed (${reserved?.status || 'unknown'}).`, 'Recover the ownership registry and retry the remount.');
+      remounted = { ...workspace, claim: { token: reserved.claim.token, epoch: reserved.claim.epoch } };
+    } else {
+      const expected = { lower: retained.lower, upper: retained.upper, work: retained.work,
+        merged: retained.merged, gitDir: retained.gitDir, baseCommit: retained.baseCommit, snapshotId: retained.snapshotId };
+      const remountWaveRoot = dirname(dirname(dirname(retained.upper)));
+      const result = await remountRetainedWorkspace({ retained, expected, previous: prior, phaseToken,
+        coordinator, ownership: this.ownership,
+        request: { backend: retained.backend, snapshotId: retained.snapshotId, baseCommit: retained.baseCommit,
+          attemptId: input.attempt_id, waveRoot: remountWaveRoot } });
+      remounted = { ...workspace, ...result, claim: result.claim,
+        retained: result.retained ?? retained, packageId: workspace.packageId ?? packageRef,
+        setup: result.setup ?? workspace.setup };
+    }
+
+    const persisted = await runLockedMutation(`${waveFile}.lock`, 'remount-wave-member', {
+      file: waveFile, generation: record.generation, claimToken, coordinatorEpoch: epoch,
+      stepNumber: input.step_number, attemptId: input.attempt_id, phase: input.phase,
+      previousRunId, retained, workspace: remounted });
+    if (!persisted || persisted.ok !== true)
+      throw waveInvalid(persisted?.code || 'wave-remount-persist', persisted?.message || 'Could not persist the remounted member workspace.', 'Repair the wave record then re-run the remount.');
+    return { status: 'prepared', remounted: true, idempotent: persisted.idempotent === true,
+      wave_id: input.wave_id, step_number: input.step_number, attempt_id: input.attempt_id,
+      phase: input.phase, workspace: remounted };
+  }
+
+  // Side-effect-free validation of an explicit wave member assignment before any
+  // dispatch bookkeeping. It resolves the wave binding only; serial inputs are
+  // left to the normal start path.
+  async validateWaveAssignment(input) {
+    if (!input || input.wave_id === undefined || input.wave_id === null) return null;
+    return resolveInput(input, this.location, { ownership: this.ownership, ownershipRoot: this.ownershipRoot });
   }
   async startup(input, parentSession) {
     const requestedAt = timestamp();
@@ -391,13 +1384,22 @@ export class Runtime {
   async start(input, parentSession) {
     const requestedAt = input.dispatch_requested_at || timestamp();
     if (process.platform === 'win32') throw new Error('spec-runtime requires POSIX process groups');
+    // Internal, validated run provenance is never accepted from a caller spread.
+    for (const field of ['wave_bindings', 'wave_path']) {
+      if (input[field] !== undefined) throw new Error(`internal run field ${field} is not accepted from callers`);
+    }
     // A supplied workflow_id is carried, never inferred; reject a malformed one
     // before any package or run side effect.
     if (input.workflow_id !== undefined
       && (typeof input.workflow_id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(input.workflow_id)))
       throw new Error('workflow_id must be 1-128 ASCII letters/digits/underscore/hyphen');
     // Everything after this await is synchronous, so the check-then-write below cannot interleave in this process.
-    const config = await resolveInput(input, this.location);
+    const config = await resolveInput(input, this.location, { ownership: this.ownership, ownershipRoot: this.ownershipRoot });
+    if (config.wave_bindings) {
+      config.wave_bindings.owner_model = config.owner_model;
+      config.wave_bindings.editor_model = config.editor_model;
+      config.wave_bindings.ownership_root = this.ownershipRoot;
+    }
     const key = input.assignment_id || config.step;
     const runtimeDir = join(config.package, 'runtime');
     mkdirSync(join(runtimeDir, 'runs'), { recursive: true });
@@ -412,7 +1414,8 @@ export class Runtime {
     // A supplied workflow_id joins the launch contract so an existing assignment
     // cannot be reused under another workflow; the legacy/no-workflow shape is
     // preserved exactly.
-    const contract = JSON.stringify(config.workflow_id == null ? contractParts : [...contractParts, config.workflow_id]);
+    const contractBase = config.workflow_id == null ? contractParts : [...contractParts, config.workflow_id];
+    const contract = JSON.stringify(config.wave_bindings ? [...contractBase, { wave: config.wave_bindings }] : contractBase);
     if (existsSync(assignmentFile)) {
       const previous = previousAssignment;
       const legacy = [...legacyParts];
@@ -425,8 +1428,16 @@ export class Runtime {
     }
     // No lock folders: a live coordinator pid in run.json is the writer claim. A dead
     // coordinator's run is marked stale. Two processes starting in the same instant can both pass.
+    // A serial run refuses any live package wave claim even when run.json looks
+    // terminal; a wave run bypasses only the serial latest-run exclusion.
+    if (!config.wave_bindings) {
+      const { claims } = await this.ownership.inspectClaims({ packageId: config.package_ref });
+      if (claims.some(claim => claim.kind === 'package'))
+        throw refusalError({ code: 'wave-active', message: `Package ${config.package_ref} holds an active wave claim; a serial run cannot replace it.`,
+          remedy: 'Finish or recover the wave before starting a serial run.' });
+    }
     const latest = join(runtimeDir, 'run.json');
-    if (existsSync(latest)) {
+    if (!config.wave_bindings && existsSync(latest)) {
       const prior = read(latest);
       if (['running', 'cancelling', 'blocked'].includes(prior.state)) {
         const pid = prior.coordinator_pid ?? prior.pid;
@@ -442,7 +1453,7 @@ export class Runtime {
     const pair = createHash('sha256').update(JSON.stringify(sessionKey)).digest('hex').slice(0, 16);
     const sessionDir = join(runtimeDir, 'sessions', pair);
     mkdirSync(sessionDir, { recursive: true });
-    const record = { schema_version: 1, completion_contract: 1, id, assignment_id: key, workflow_id: config.workflow_id ?? null, package: config.package, package_ref: config.package_ref, target: config.target, primary: config.primary, other_targets: config.other_targets,
+    const record = { schema_version: 1, completion_contract: 1, id, assignment_id: key, workflow_id: config.workflow_id ?? null, wave_bindings: config.wave_bindings ?? null, wave_path: config.wave_path ?? null, package: config.package, package_ref: config.package_ref, target: config.target, primary: config.primary, other_targets: config.other_targets,
       step: config.step, checkout: config.checkout, owner_model: config.owner_model, editor_model: config.editor_model, scout_model: config.scout_model,
       dispatch_requested_at: requestedAt, routing_reason: config.routing_reason,
       attempt_kind: config.attempt_kind ?? null, session_scope: scope,
@@ -455,13 +1466,32 @@ export class Runtime {
     atomic(join(this.indexDir, `${id}.json`), { run_id: id, package: config.package, package_ref: config.package_ref, manifest: join(runtimeDir, 'runs', `${id}.json`), parent_session: parentSession });
     let task;
     try {
+      // Bind the member run id under flock before the launch gate can release; a
+      // failed bind or launch keeps the run blocked with its truthful error and
+      // every ownership claim, never an unbound orphan.
+      if (config.wave_bindings) await bindWaveMemberRun(config, record.id);
       const prompt = `Implement this prepared step as its architect/owner using spec_editor.\nPACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${targetFacts(record)}${currentHandoff(record)}Read the card and required policy. Choose the implementation approach yourself, then send a short Change/Edits/Preserve/Return packet for a bounded transformation. Name affected symbols, the chosen approach and preservation constraints; let the editor choose local implementation details and batch related edits. The editor does not run tests, compile/lint checks or other executable verification. After it returns, use spec_verify for necessary focused checks and diagnose failures before assigning bounded corrections. Do not check every packet automatically; reuse valid evidence. Read/search missing source facts directly. The editor normally reads and edits in one assignment; reserve facts-only requests for a specific blocking fact unavailable through your tools. Request compact results with artifact paths, not source inventories. Do not delegate architecture, whole-step restoration, or an entire acceptance suite with open-ended repairs. Keep owner context bounded. Every editor call starts a fresh session: include the chosen decisions, relevant files and preservation constraints in each packet; never refer to prior chat. Assess each returned diff/result before the next packet; commit is a separate assignment after acceptance of the completed changes and required evidence. Use spec_scout only for a bounded discovery gap worth delegating; direct reads remain the default. Do not discover models, run startup suites, poll, or start other agents outside that scout tool. The runtime retains the owner session and records each fresh editor session. Before ending, call spec_complete with decisions, introduced symbols, gaps and step-owned evidence assessments. It writes the canonical learning from verification receipts; an evidence log is not a learning. Commit via the editor first when complete. Missing handoffs remain unfinished obligations. This owner assignment ends after this step; independent review belongs to the coordinator.\n${input.instructions || ''}`;
-      task = this.launchProcess(record, 'owner', `${prompt}\nEnvironment paths (observations, not setup approval): ${JSON.stringify(record.environment)}`, { onEvent: this.onWorkerEvent });
+      task = config.wave_bindings
+        ? await this.containedRoot(record, prompt)
+        : this.launchProcess(record, 'owner', `${prompt}\nEnvironment paths (observations, not setup approval): ${JSON.stringify(record.environment)}`, { onEvent: this.onWorkerEvent });
     }
-    catch (error) { record.state = 'failed'; record.finished_at = timestamp(); record.error = error.message; save(record); throw error; }
-    record.pid = task.child.pid;
+    catch (error) {
+      record.state = config.wave_bindings ? 'blocked' : 'failed';
+      record.finished_at = timestamp(); record.error = error.message; save(record); throw error;
+    }
+    // A wave service's identity is its recorded MainPID only; the systemd-run
+    // launcher pid is never signalled, liveness-tested or recorded as the run pid.
+    record.pid = config.wave_bindings ? (task.workerPid ?? null) : (task.workerPid ?? task.child.pid);
     save(record); refreshProgress(record.package).catch(error => { record.progress_error = error.message; }); event(record, 'run_started', { dispatch_requested_at: requestedAt, owner_session: record.owner_session, editor_session: record.editor_session, parent_session: parentSession, pid: record.pid });
-    const timer = setTimeout(() => { event(record, 'deadline_reached'); this.cancel(record.package, id).then(value => this.notify(value)).catch(error => this.notify({ ...summary(record), error: error.message })); }, record.timeout_ms);
+    // A wave run shares one original deadline: the timer fires at the retained
+    // expiry, never a renewed full timeout measured from the launch moment.
+    // The shared wave deadline persists a validated safe-integer millisecond
+    // expiry (createWaveDeadline), never an ISO string; remaining time is
+    // numeric arithmetic that revalidates the record before scheduling.
+    const remainingMs = config.wave_bindings && record.deadline
+      ? Math.max(0, deadlineRemainingMs(record.deadline))
+      : record.timeout_ms;
+    const timer = setTimeout(() => { event(record, 'deadline_reached'); this.cancel(record.package, id).then(value => this.notify(value)).catch(error => this.notify({ ...summary(record), error: error.message })); }, remainingMs);
     timer.unref();
     this.active.set(id, { record, task, timer });
     task.lifecycleFailure?.then(error => {
@@ -476,12 +1506,33 @@ export class Runtime {
   }
   async finish(record, result) {
     if (record.state === 'cancelling' || terminal.has(record.state)) return;
+    // A contained wave root releases only on a positively confirmed service
+    // drain. An unknown or still-populated service blocks the run and retains
+    // its capacity and checkout claims for a later recovery.
+    if (record.wave_bindings) {
+      let drained;
+      try { drained = await this.drainContainedService(record, { cancel: false }); }
+      catch (error) { drained = { status: 'unknown', reason: error.message }; }
+      if (drained?.status !== 'confirmed') {
+        record.state = 'blocked';
+        record.error = `Contained service drain unconfirmed (${drained?.reason || drained?.status || 'unknown'}); the run stays blocked and its claims are retained.`;
+        record.finished_at = timestamp();
+        save(record); event(record, 'run_finished', { state: record.state, error: record.error });
+        try { await refreshProgress(record.package); } catch (error) { record.progress_error = error.message; save(record); }
+        this.notify({ ...summary(record), progress_error: record.progress_error });
+        return;
+      }
+    }
     for (const group of activeGroups(record)) settleGroup(record, group.pid);
-    if (activeGroups(record).length || (record.pid && this.isAlive(record.pid))) {
+    // A wave run's recorded pid is a contained service identity, never a
+    // launcher pid to liveness-test after drain.
+    if (activeGroups(record).length || (!record.wave_bindings && record.pid && this.isAlive(record.pid))) {
       record.state = 'blocked'; record.error = 'A managed process group is still alive; the run stays active.';
     } else {
       record.state = result.error ? 'failed' : 'completed'; record.error = result.error; record.result = result.result; record.stop_reason = result.stop_reason;
-      record.handoff = completionStatus(record, { checkHead: true });
+      // A wave checkout is an overlay tree: its completion receipt is checked
+      // against the retained identity, not by running git outside the overlay.
+      record.handoff = completionStatus(record, { checkHead: !record.wave_bindings });
       record.result_truncated = result.result_truncated; record.full_result_path = result.full_result_path; record.finished_at = timestamp();
       record.shutdown_cleanup = result.shutdown_cleanup === true;
     }
@@ -506,18 +1557,27 @@ export class Runtime {
     if (!active) throw new Error('This runtime does not own the live process handle. The run stays active; recover the original coordinator or confirm termination manually.');
     revoke(record); record.state = 'cancelling'; save(record); event(record, 'cancel_requested');
     try {
-      let groups = activeGroups(record).map(group => group.pid);
-      for (const pid of groups.reverse()) { try { this.kill(pid, 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH') throw error; } }
-      if (!(await waitGroupsGone(record, groups, timeoutMs))) {
+      if (record.wave_bindings) {
+        // A wave run cancels exclusively through its contained service: stop
+        // then drain under the ownership-verified request. No POSIX kill branch
+        // and the launcher pid is never signalled or liveness-tested.
+        const stopped = await this.drainContainedService(record, { cancel: true });
+        if (stopped?.status !== 'confirmed')
+          throw new Error(`Contained service cancellation was not confirmed (${stopped?.reason || stopped?.status || 'unknown'})`);
+      } else {
+        let groups = activeGroups(record).map(group => group.pid);
+        for (const pid of groups.reverse()) { try { this.kill(pid, 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH') throw error; } }
+        if (!(await waitGroupsGone(record, groups, timeoutMs))) {
+          groups = activeGroups(record).map(group => group.pid);
+          for (const pid of groups.reverse()) { try { this.kill(pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; } }
+          if (!(await waitGroupsGone(record, groups, timeoutMs))) throw new Error('Process group still alive after cancellation');
+        }
+        // A child launcher may have registered a gated group during the first snapshot.
+        // Revocation prevents that gate opening; still join every newly registered group.
         groups = activeGroups(record).map(group => group.pid);
-        for (const pid of groups.reverse()) { try { this.kill(pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; } }
-        if (!(await waitGroupsGone(record, groups, timeoutMs))) throw new Error('Process group still alive after cancellation');
+        for (const pid of groups) { try { this.kill(pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; } }
+        if (!(await waitGroupsGone(record, groups, timeoutMs))) throw new Error('A newly registered process group has not stopped');
       }
-      // A child launcher may have registered a gated group during the first snapshot.
-      // Revocation prevents that gate opening; still join every newly registered group.
-      groups = activeGroups(record).map(group => group.pid);
-      for (const pid of groups) { try { this.kill(pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; } }
-      if (!(await waitGroupsGone(record, groups, timeoutMs))) throw new Error('A newly registered process group has not stopped');
       record.state = 'cancelled'; record.finished_at = timestamp(); save(record); event(record, 'run_finished', { state: 'cancelled' });
       clearTimeout(active.timer); this.active.delete(record.id);
       try { await refreshProgress(record.package); } catch (error) { record.progress_error = error.message; }
@@ -775,4 +1835,134 @@ export async function runCommand(record, command, timeout = 120, signal, { stopG
   }
   return { ...outcome, ...logSummary.finish(), full_output_path: output, error: child.launchError || error,
     ...(requiresCancellation ? { requires_cancellation: true } : {}) };
+}
+
+// ---------------------------------------------------------------------------
+// Direct-execution entry point: the fixed, flock-guarded runtime mutation child.
+// There is exactly one implementation behind flock for the short wave-member
+// bind transaction and for concurrent event appends. No caller data reaches a
+// shell; requests travel as JSON on stdin.
+// ---------------------------------------------------------------------------
+
+function runLockedMutation(lockPath, operation, request) {
+  mkdirSync(dirname(lockPath), { recursive: true });
+  closeSync(openSync(lockPath, 'a', 0o600));
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn('flock', ['-x', lockPath, process.execPath, RUNTIME_MODULE_PATH, operation], { stdio: ['pipe', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '';
+    child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.on('error', reject);
+    child.on('close', code => {
+      if (code !== 0) { reject(new Error(`runtime mutation ${operation} failed (exit ${code}): ${stderr.trim() || 'no diagnostics'}`)); return; }
+      try { resolvePromise(JSON.parse(stdout)); } catch (error) { reject(new Error(`runtime mutation ${operation} returned invalid JSON: ${stdout.trim().slice(0, 200)}`, { cause: error })); }
+    });
+    child.stdin.on('error', () => {});
+    child.stdin.end(JSON.stringify(request));
+  });
+}
+
+const RUNTIME_MUTATIONS = {
+  'bind-wave-member': request => {
+    const record = read(request.file);
+    if (record.generation !== request.generation) return { ok: false, code: 'wave-generation-mismatch', message: 'Wave generation moved before the run bound.' };
+    if (waveClaimToken(record) !== request.claimToken) return { ok: false, code: 'wave-claim-mismatch', message: 'Wave claim token changed before the run bound.' };
+    const epoch = record.coordinator?.epoch;
+    if (epoch === undefined || epoch === null || String(epoch) !== String(request.coordinatorEpoch))
+      return { ok: false, code: 'wave-epoch-mismatch', message: 'Wave coordinator epoch changed before the run bound.' };
+    const member = record.members?.[String(request.stepNumber)];
+    if (!member || typeof member !== 'object') return { ok: false, code: 'wave-member-missing', message: 'Wave member disappeared before the run bound.' };
+    if (Number(member.step) !== request.stepNumber || member.attempt_id !== request.attemptId || member.phase !== request.phase)
+      return { ok: false, code: 'wave-member-mismatch', message: 'Wave member identity changed before the run bound.' };
+    const workspace = member.workspace;
+    if (!workspace || typeof workspace !== 'object' || workspace.claim?.token !== request.checkoutClaim)
+      return { ok: false, code: 'wave-checkout-claim', message: 'Wave member checkout claim changed before the run bound.' };
+    if (member.run_id !== undefined && member.run_id !== null && member.run_id !== request.runId)
+      return { ok: false, code: 'wave-member-occupied', message: 'Wave member is already bound to another run.' };
+    if (member.run_id === request.runId) return { ok: true, status: 'bound', idempotent: true };
+    member.run_id = request.runId;
+    atomic(request.file, record);
+    return { ok: true, status: 'bound', idempotent: false };
+  },
+  'ensure-wave-deadline': request => {
+    const record = read(request.file);
+    if (record.generation !== request.generation) return { ok: false, code: 'wave-generation-mismatch', message: 'Wave generation moved before the deadline bound.' };
+    if (waveClaimToken(record) !== request.claimToken) return { ok: false, code: 'wave-claim-mismatch', message: 'Wave claim token changed before the deadline bound.' };
+    const epoch = record.coordinator?.epoch;
+    if (epoch === undefined || epoch === null || String(epoch) !== String(request.coordinatorEpoch))
+      return { ok: false, code: 'wave-epoch-mismatch', message: 'Wave coordinator epoch changed before the deadline bound.' };
+    if (!record.deadline || typeof record.deadline !== 'object') {
+      // The original shared deadline uses the validated requested timeout when
+      // present; it is written once and never replaced on replay.
+      const timeoutMs = Number.isSafeInteger(request.timeoutMs) && request.timeoutMs >= 1000 && request.timeoutMs <= 86400000
+        ? request.timeoutMs : undefined;
+      record.deadline = timeoutMs === undefined ? createWaveDeadline({}) : createWaveDeadline({ timeoutMs });
+      atomic(request.file, record);
+    }
+    return { ok: true, deadline: record.deadline };
+  },
+  // Project the prepared step-workspaces object onto the wave member under the
+  // flock-guarded generation/claim/epoch/attempt/phase check. A competing or
+  // moved member refuses instead of overwriting a retained workspace.
+  'persist-wave-member-workspace': request => {
+    const record = read(request.file);
+    if (record.generation !== request.generation) return { ok: false, code: 'wave-generation-mismatch', message: 'Wave generation moved before the workspace persisted.' };
+    if (waveClaimToken(record) !== request.claimToken) return { ok: false, code: 'wave-claim-mismatch', message: 'Wave claim token changed before the workspace persisted.' };
+    const epoch = record.coordinator?.epoch;
+    if (epoch === undefined || epoch === null || String(epoch) !== String(request.coordinatorEpoch))
+      return { ok: false, code: 'wave-epoch-mismatch', message: 'Wave coordinator epoch changed before the workspace persisted.' };
+    const member = record.members?.[String(request.stepNumber)];
+    if (!member || typeof member !== 'object') return { ok: false, code: 'wave-member-missing', message: 'Wave member disappeared before the workspace persisted.' };
+    if (Number(member.step) !== request.stepNumber || member.attempt_id !== request.attemptId || member.phase !== request.phase)
+      return { ok: false, code: 'wave-member-mismatch', message: 'Wave member identity changed before the workspace persisted.' };
+    if (member.workspace !== undefined && member.workspace !== null) {
+      if (JSON.stringify(member.workspace) !== JSON.stringify(request.workspace))
+        return { ok: false, code: 'wave-workspace-occupied', message: 'Wave member already retains a different workspace.' };
+      return { ok: true, status: 'persisted', idempotent: true };
+    }
+    member.workspace = request.workspace;
+    if (request.receipt !== undefined) member.preparation_receipt = request.receipt;
+    atomic(request.file, record);
+    return { ok: true, status: 'persisted', idempotent: false };
+  },
+  // Revalidate the exact wave identity for the remount under the wave lock,
+  // then swap the member workspace for the re-claimed one and clear the
+  // previous run binding so the current phase can start normally.
+  'remount-wave-member': request => {
+    const record = read(request.file);
+    if (record.generation !== request.generation) return { ok: false, code: 'wave-generation-mismatch', message: 'Wave generation moved before the remount persisted.' };
+    if (waveClaimToken(record) !== request.claimToken) return { ok: false, code: 'wave-claim-mismatch', message: 'Wave claim token changed before the remount persisted.' };
+    const epoch = record.coordinator?.epoch;
+    if (epoch === undefined || epoch === null || String(epoch) !== String(request.coordinatorEpoch))
+      return { ok: false, code: 'wave-epoch-mismatch', message: 'Wave coordinator epoch changed before the remount persisted.' };
+    const member = record.members?.[String(request.stepNumber)];
+    if (!member || typeof member !== 'object') return { ok: false, code: 'wave-member-missing', message: 'Wave member disappeared before the remount persisted.' };
+    if (Number(member.step) !== request.stepNumber || member.attempt_id !== request.attemptId || member.phase !== request.phase)
+      return { ok: false, code: 'wave-member-mismatch', message: 'Wave member identity changed before the remount persisted.' };
+    const prior = member.workspace;
+    if (!prior || typeof prior !== 'object' || !prior.retained) return { ok: false, code: 'wave-remount-unprepared', message: 'Wave member lost its retained workspace before the remount persisted.' };
+    if (JSON.stringify(prior.retained) !== JSON.stringify(request.retained)) return { ok: false, code: 'wave-remount-identity', message: 'Wave member retained identity moved before the remount persisted.' };
+    if (member.run_id !== null && member.run_id !== undefined && member.run_id !== request.previousRunId)
+      return { ok: false, code: 'wave-remount-run', message: 'Wave member run binding changed before the remount persisted.' };
+    if ((member.run_id === null || member.run_id === undefined) && JSON.stringify(prior.claim) === JSON.stringify(request.workspace.claim))
+      return { ok: true, status: 'remounted', idempotent: true };
+    member.workspace = request.workspace;
+    member.run_id = null;
+    atomic(request.file, record);
+    return { ok: true, status: 'remounted', idempotent: false };
+  },
+  'append-event': request => {
+    appendFileSync(request.file, Buffer.from(request.line), { mode: 0o600 });
+    return { ok: true };
+  },
+};
+
+if (process.argv[1] && resolve(process.argv[1]) === RUNTIME_MODULE_PATH && RUNTIME_MUTATIONS[process.argv[2]]) {
+  try {
+    process.stdout.write(`${JSON.stringify(RUNTIME_MUTATIONS[process.argv[2]](JSON.parse(readFileSync(0, 'utf8'))))}\n`);
+  } catch (error) {
+    process.stderr.write(`${(error && error.stack) || String(error)}\n`);
+    process.exitCode = 1;
+  }
 }
