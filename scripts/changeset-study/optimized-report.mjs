@@ -12,6 +12,7 @@ const sum = xs => xs.reduce((a, b) => a + b, 0);
 const exactSum = xs => xs.every(Number.isFinite) ? sum(xs) : null;
 const tokenKeys = ['input', 'output', 'cacheRead', 'cacheWrite', 'totalTokens'];
 const phase = stage => stage === 'implementation-planning' ? 'owner' : ['planning', 'discovery-planning'].includes(stage) ? 'query' : stage === 'editor' || stage === 'execution' ? 'writing' : stage === 'context-routing' ? 'routing' : stage === 'optimization' ? 'optimization' : ['visible-check', 'terminal-grading'].includes(stage) ? 'checks' : 'other';
+const safePlanArtifact = name => name === 'raw-plan.json' || (typeof name === 'string' && /^planning-attempt-\d+\.json$/.test(name));
 const phases = ['owner', 'query', 'routing', 'optimization', 'writing', 'checks', 'other'];
 const portable = (base, path) => relative(base, path).split('\\').join('/');
 const assert = (condition, text) => { if (!condition) throw new Error(text); };
@@ -59,6 +60,9 @@ export function buildReport(runRoot) {
     const artifactHash = name => existsSync(join(directory, name)) ? hash(readFileSync(join(directory, name))) : null;
     const plan = existsSync(join(directory, 'plan-0.json')) ? read(join(directory, 'plan-0.json')) : null;
     const rawHash = artifactHash('raw-plan.json'), briefHash = artifactHash('implementation-brief.md');
+    const planningArtifacts = readdirSync(directory).filter(safePlanArtifact).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+      .map(name => ({ name, hash: artifactHash(name), kind: name === 'raw-plan.json' ? 'raw-plan' : 'planning-attempt' }));
+    const ownOrigin = planningArtifacts.find(a => a.name === 'raw-plan.json') ?? planningArtifacts.at(-1) ?? null;
     verify(artifactHash('candidate.json') !== null && artifactHash('candidate.json') === r.candidate_hash, 'candidate hash');
     verify(r.selector === m.selector && r.editor_selector === m.editor_selector && m.strategy === 'owner-query-writer', 'result roles match manifest');
     verify((r.optimization ?? 'none') === (m.optimization ?? 'none'), 'result optimization matches manifest');
@@ -83,22 +87,28 @@ export function buildReport(runRoot) {
     const seconds = Object.fromEntries(phases.map(p => [p, sum((r.stages ?? []).filter(x => phase(x.name) === p).map(x => x.elapsed_ms)) / 1000]));
     const job = existsSync(join(directory, 'job.json')) ? read(join(directory, 'job.json')) : {};
     const source = r.planning_source ?? job.planningSource ?? null;
-    let donor = null;
+    let donor = null, sourceValid = false, selectedSourceArtifact = null;
     verify((m.plans_from ?? null) === (source?.run ?? null), 'manifest planning source matches cell');
     if (r.planning_source && job.planningSource) verify(JSON.stringify(r.planning_source) === JSON.stringify(job.planningSource), 'job and result planning source match');
     if (Number.isFinite(r.model_calls)) verify(r.model_calls === requests.length, 'recorded model calls match requests');
     if (source) {
+      const sourceChecks = [];
+      const verifySource = (ok, message) => { sourceChecks.push(Boolean(ok)); verify(ok, message); };
+      const selectedName = source.plan_artifact ?? 'raw-plan.json';
+      verifySource(safePlanArtifact(selectedName), 'safe planning source artifact name');
       donor = cell(source.run, source.cell);
-      verify(Boolean(donor), 'planning source completed');
+      verifySource(Boolean(donor), 'planning source completed');
       if (donor) {
-        verify(donor.raw_plan_hash === source.plan_hash && rawHash === source.plan_hash, 'shared raw plan hash');
-        verify(donor.result_hash === source.result_hash, 'planning source result hash');
-        verify(donor.provider_routing_valid, 'planning source provider routing');
-        verify(donor.implementation_brief_hash === briefHash && donor.task_hash === r.task_hash, 'shared task and brief');
-        verify(requests.every(x => !['owner', 'query'].includes(phase(x.stage))), 'replay incurs no owner/query calls');
+        selectedSourceArtifact = safePlanArtifact(selectedName) ? donor.planning_artifacts.find(a => a.name === selectedName) ?? null : null;
+        verifySource(selectedSourceArtifact?.hash === source.plan_hash && rawHash === source.plan_hash, 'shared selected planning artifact hash');
+        verifySource(donor.result_hash === source.result_hash, 'planning source result hash');
+        verifySource(donor.provider_routing_valid, 'planning source provider routing');
+        verifySource(donor.implementation_brief_valid && donor.implementation_brief_hash === briefHash && donor.task_hash === r.task_hash, 'shared task and frozen brief');
+        verifySource(requests.every(x => !['owner', 'query'].includes(phase(x.stage))), 'replay incurs no owner/query calls');
       }
+      sourceValid = sourceChecks.every(Boolean);
     } else verify(requests.some(x => phase(x.stage) === 'owner') && requests.some(x => phase(x.stage) === 'query'), 'original owner and query calls retained');
-    const planning = source ? donor?.allocated_planning ?? null : { seconds: seconds.owner + seconds.query, owner_seconds: seconds.owner, query_seconds: seconds.query, usage: plus(byStage.owner, byStage.query) };
+    const planning = source ? sourceValid ? donor?.allocated_planning ?? null : null : { seconds: seconds.owner + seconds.query, owner_seconds: seconds.owner, query_seconds: seconds.query, usage: plus(byStage.owner, byStage.query) };
     const incurred = usage(requests, receipts), jev = routingUsage(r);
     const allocated = source && planning ? plus(incurred, planning.usage) : source ? null : incurred;
     const visible = (r.checks ?? []).at(-1)?.visible;
@@ -112,7 +122,14 @@ export function buildReport(runRoot) {
       downstream_failures: { visible: typeof (visible?.base_ok ?? visible?.visible_check_ok) === 'boolean' ? !(visible.base_ok ?? visible.visible_check_ok) : visible && !candidateTests.some(t => t.ok !== true) ? visible.ok !== true : null, candidate: candidateTests.some(t => t.ok !== true), external: typeof r.accepted === 'boolean' ? !r.accepted : null },
       integrity_valid: checks.every(c => c.ok), validation: checks, provider_routing_valid: providerValid,
       result_hash: artifactHash('result.json'), raw_plan_hash: rawHash, plan_hash: artifactHash('plan-0.json'), candidate_hash: r.candidate_hash,
-      implementation_brief_hash: briefHash, planning_source: source, reused_planning: Boolean(source), allocated_planning: planning,
+      implementation_brief_hash: briefHash, implementation_brief_valid: briefHash !== null && briefHash === r.implementation_brief_hash,
+      planning_artifacts: planningArtifacts,
+      planning_origin: source ? { kind: selectedSourceArtifact?.kind === 'planning-attempt' ? 'reused-candidate-planning-attempt' : 'reused-raw-plan',
+        run: source.run, cell: source.cell, artifact: source.plan_artifact ?? 'raw-plan.json', hash: selectedSourceArtifact?.hash ?? null,
+        donor_integrity_valid: donor?.integrity_valid ?? null, donor_application_complete: donor?.application_complete ?? null }
+        : ownOrigin ? { kind: ownOrigin.kind === 'planning-attempt' ? 'undispatched-candidate-planning-attempt' : 'original-raw-plan',
+          run, cell: cellName, artifact: ownOrigin.name, hash: ownOrigin.hash } : null,
+      planning_source: source, planning_source_valid: source ? sourceValid : null, reused_planning: Boolean(source), allocated_planning: planning,
       incurred: { seconds: r.process_elapsed_ms / 1000, model_usage: incurred, jev, equivalent_plus_jev_estimated_usd: exactSum([incurred.equivalent_usd, jev.estimated_usd]) },
       allocated: { seconds: source ? planning ? r.process_elapsed_ms / 1000 + planning.seconds : null : r.process_elapsed_ms / 1000,
         model_usage: allocated, equivalent_plus_jev_estimated_usd: allocated ? exactSum([allocated.equivalent_usd, jev.estimated_usd]) : null },

@@ -4,7 +4,7 @@ import { compile } from '../changeset/engine.mjs';
 export const focusedPacketRules = `Every operation must have exactly ONE writable file, plus:
 - objective: one outcome, at most 240 characters. A helper, one behavior in a function,
   one regression scenario, one profile update, or one mechanical source move is an outcome.
-- instruction: resolved local recipe, at most 2400 characters. Do not bundle independent
+- instruction: resolved local recipe within the total assignment character bound. Do not bundle independent
   algorithms or all tests into one packet. Prefer 1-3 concrete implementation steps.
 - requirements: 1-5 short strings with the relevant interface, edge cases and preservation
   obligations. objective + instruction + requirements together must fit 4000 characters.
@@ -48,7 +48,7 @@ export function validateFocusedPlan(plan) {
   for (const op of plan.operations) {
     if (op.writes?.length !== 1) throw new Error(`Focused packet must own exactly one file: ${op.id}`);
     if (typeof op.objective !== 'string' || !op.objective.trim() || op.objective.length > 240 ||
-        typeof op.instruction !== 'string' || !op.instruction.trim() || op.instruction.length > 2400 ||
+        typeof op.instruction !== 'string' || !op.instruction.trim() || op.instruction.length > 4000 ||
         !Array.isArray(op.requirements) || !op.requirements.length || op.requirements.length > 5 ||
         op.requirements.some(x => typeof x !== 'string' || !x.trim()) ||
         op.objective.length + op.instruction.length + op.requirements.join('').length > 4000 || op.contract !== undefined) {

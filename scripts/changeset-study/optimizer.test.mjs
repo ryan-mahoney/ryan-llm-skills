@@ -30,7 +30,7 @@ test('contraction retains ordered instructions, external dependencies and every 
 test('optimizer preserves intermediate observations, packet limits and unknown future context', () => {
   const p = plan([packet('first'), packet('observer', 'b.txt', ['first']), packet('second', 'a.txt', ['observer'])]);
   assert.equal(optimizePlan(p, { 'a.txt': 'a', 'b.txt': 'b' }).plan.operations.length, 3);
-  const huge = { ...packet('second'), instruction: 'x'.repeat(2400) };
+  const huge = { ...packet('second'), instruction: 'x'.repeat(3940) };
   assert.equal(optimizePlan(plan([packet('first'), huge]), { 'a.txt': 'a' }).plan.operations.length, 2);
   const future = { ...packet('second'), context: [{ path: 'a.txt', start: 'future', end: null }] };
   assert.equal(optimizePlan(plan([packet('first'), future]), { 'a.txt': 'a' }).plan.operations.length, 2);

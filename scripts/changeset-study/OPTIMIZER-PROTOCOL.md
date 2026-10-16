@@ -123,3 +123,14 @@ Use a fresh unoptimized replay on the corrected backend, followed by determinist
 and contextual replays of the same raw plans. These three arms share the corrected
 freeze, so retry behavior is not credited to the optimizer. The owner/query work
 is allocated from the original run in all three comparisons.
+
+## Assignment bound correction
+
+The initial handoff plan was rejected before writing because one instruction was
+2,469 characters against a 2,400-character subfield limit, despite fitting the
+4,000-character total assignment bound. Retain that result. The corrected backend
+enforces the total bound without the redundant instruction sublimit. It can replay
+the exact last submitted planning attempt when the donor has no accepted raw plan;
+record the source artifact name and hash. All three corrected writing arms use
+the same bounds and plan bytes. This does not imply the original plan passed its
+original runtime contract.

@@ -97,10 +97,13 @@ for (const id of selected) {
     const sourceCell = join(plansFrom, `${String(index - 1).padStart(3, '0')}-${id}`);
     const sourceResult = read(join(sourceCell, 'result.json'));
     if (sourceResult.task_hash !== hash(JSON.stringify(task))) throw new Error('Shared plan task differs');
-    const planBytes = readFileSync(join(sourceCell, 'raw-plan.json'));
+    const planArtifact = existsSync(join(sourceCell, 'raw-plan.json')) ? 'raw-plan.json'
+      : readdirSync(sourceCell).filter(name => /^planning-attempt-\d+\.json$/.test(name)).sort((a, b) => Number(b.match(/\d+/)[0]) - Number(a.match(/\d+/)[0]))[0];
+    if (!planArtifact) throw new Error('No submitted query plan available for replay');
+    const planBytes = readFileSync(join(sourceCell, planArtifact));
     preparedPlan = JSON.parse(planBytes); preparedBrief = readFileSync(join(sourceCell, 'implementation-brief.md'), 'utf8');
     if (hash(preparedBrief) !== sourceResult.implementation_brief_hash) throw new Error('Shared brief changed');
-    planningSource = { run: basename(plansFrom), cell: basename(sourceCell), plan_hash: hash(planBytes), result_hash: hash(readFileSync(join(sourceCell, 'result.json'))) };
+    planningSource = { run: basename(plansFrom), cell: basename(sourceCell), plan_hash: hash(planBytes), plan_artifact: planArtifact, result_hash: hash(readFileSync(join(sourceCell, 'result.json'))) };
   }
   const job = { task, optimization, preparedPlan, preparedBrief, planningSource, arm: 'changeset', strategy, selector, editorSelector, ledger, directory, mounts: original.mounts,
     plannerPrompt: readFileSync(join(run, 'frozen/skills/spec-changeset-plan/SKILL.md'), 'utf8') };

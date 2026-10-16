@@ -29,6 +29,8 @@ test('focused editor sees only selected current source and retries rejected edit
 
 test('focused packets refuse oversized context, stale anchors and multiple writable files before inference', () => {
   assert.throws(() => validateStrategyPlan('focused-dispatch', { operations: [{ ...operation(), writes: ['a', 'b'] }] }), /exactly one file/);
+  assert.doesNotThrow(() => validateStrategyPlan('focused-dispatch', { operations: [{ ...operation(), instruction: 'x'.repeat(2500) }] }));
+  assert.throws(() => validateStrategyPlan('focused-dispatch', { operations: [{ ...operation(), instruction: 'x'.repeat(4000) }] }), /short objective/);
   assert.throws(() => focusedInput(operation(), { 'answer.mjs': 'missing' }), /unique/);
   assert.throws(() => focusedInput({ ...operation(), context: [{ path: 'answer.mjs', start: null, end: null }] }, { 'answer.mjs': 'x'.repeat(32001) }), /32000/);
   assert.throws(() => focusedInput({ ...operation(), context: [] }, files), /Missing declared file excerpt/);
