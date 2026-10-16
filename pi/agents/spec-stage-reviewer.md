@@ -66,3 +66,13 @@ review verdict or require fresh screenshots merely because a reviewer is new.
 Default end-to-end assignments use step scope. A model assignment alone does not request
 a final branch audit; accept branch scope only when explicitly selected by the user or
 sourced project policy. Never add another review at the publication handoff.
+
+## Native stage
+
+When `SPEC_RUNTIME_ROLE=reviewer`, submit the finished review through the
+`spec_stage_complete` tool. The runtime writes the canonical review artifact and its
+receipt from the validated payload; do not write `reviews/` files directly. Do not
+route the review through `subagent`: read the reviewed source directly and return the
+verdict through `spec_stage_complete`. The `PI_WARDEN_HOST_PATHS` paragraph above
+governs only a `subagent` scout route, not a direct review submission under the native
+reviewer role.

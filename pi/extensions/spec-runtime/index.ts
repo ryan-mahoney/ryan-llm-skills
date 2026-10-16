@@ -6,7 +6,9 @@ import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { randomUUID, createHash } from 'node:crypto';
 import { join, resolve, realpathSync } from 'node:path';
 import { homedir } from 'node:os';
-import { Runtime, loadRun, summary, assertLease, assertManagedModel, waveSiblingConflict, runEditor, runCommand, runVerification, runAdvice, runCompletion, packageDirOf, assertIdleWriter, event as runtimeEvent } from './runtime.mjs';
+import { Runtime, loadRun, summary, assertLease, assertManagedModel, ROLE_CONTRACT, waveSiblingConflict, runEditor, runCommand, runVerification, runAdvice, runCompletion, packageDirOf, assertIdleWriter, event as runtimeEvent } from './runtime.mjs';
+import { assertModelSelector } from './model-selector.mjs';
+import { submitStage, recordStageFingerprint } from './wave-review.mjs';
 import { createCommunication } from './communication.mjs';
 import { createMonitor, publicHint } from './monitor.mjs';
 import { createSentinelObserver, createVerificationRecorder, readVerificationIncidents, recordCheckpoint as recordSentinelCheckpoint, readInboxGuard, readCheckpointRecord, observeInput, reconcileRuntimeReturn, checkpointPath, createSentinelAuthority, createDiagnosisController, activatePolicy, activateRuntimePolicy, disablePolicy, handleBeforeSettle, finishIntent, considerCancellation } from './sentinel.mjs';
@@ -108,25 +110,57 @@ export default function (pi: any) {
   if (role) {
     const record = JSON.parse(readFileSync(process.env.SPEC_RUNTIME_RECORD!, 'utf8'));
     installProgressContext(pi, { record, role });
-    const communication = createCommunication(pi, record, role, { onEvent: (name: string, detail: any) => runtimeEvent(record, name, detail) });
+    const stageRole = role === 'reviewer' || role === 'fixer';
+    // Stage roles have no intercom communication channel; createCommunication
+    // rejects them (Invalid communication role) before stage tools install.
+    const communication = stageRole ? undefined : createCommunication(pi, record, role, { onEvent: (name: string, detail: any) => runtimeEvent(record, name, detail) });
     if (role === 'editor') installDiscoveryBudget(pi, { report: (name: string, detail: any) => runtimeEvent(record, name, detail) });
-    const allowed = role === 'owner' ? ['read', 'grep', 'find', 'ls', 'spec_editor', 'spec_answer', 'spec_verify', 'spec_scout', 'spec_search', 'spec_advice', 'spec_complete'] : ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'spec_question'];
-    pi.on('session_shutdown', () => communication.close());
+    // Known roles select their tool allowlist from the shared contract; an
+    // unknown role keeps the historical editor list (the guard still runs).
+    const contract = (ROLE_CONTRACT as any)[role];
+    const allowed: string[] = contract
+      ? [...contract.tools, ...contract.providerTools]
+      : ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'spec_question'];
+    // Stage roles are the union of contract names and the names this Pi
+    // actually exposes; the intersection is both the active set and the guard.
+    let stageAllowed: string[] = [];
+    pi.on('session_shutdown', () => communication?.close());
     pi.on('session_start', (_event: any, ctx: any) => {
       // Apply the process guard only to a managed worker with a run record.
-      if (!['owner', 'editor'].includes(role) || !record.id) return;
+      if (!['owner', 'editor', 'reviewer', 'fixer'].includes(role) || !record.id) return;
       assertLease(record);
-      try { assertManagedModel(record, role, ctx.model, ctx.sessionManager.getBranch()); }
+      try {
+        if (stageRole) assertModelSelector(record[`${role === 'reviewer' ? 'review_model' : 'fix_model'}`], ctx.model);
+        else assertManagedModel(record, role, ctx.model, ctx.sessionManager.getBranch());
+      }
       catch (error: any) {
         // Extension hook errors are caught by Pi. Exit this managed child before
         // an API request can use a fuzzy match or a restored session's model.
         process.stderr.write(`${error.message}\n`);
         process.exit(78);
       }
-      pi.setActiveTools(allowed);
+      if (stageRole) {
+        const native = new Set((pi.getAllTools() as any[]).map((tool: any) => tool.name));
+        stageAllowed = allowed.filter(name => native.has(name));
+        const names = new Set(stageAllowed);
+        const missing = [
+          names.has('spec_stage_complete') ? null : 'check stage-complete',
+          names.has('bash') || (names.has('exec_command') && names.has('write_stdin')) ? null : 'shell',
+          role === 'fixer' && !(names.has('apply_patch') || (names.has('edit') && names.has('write'))) ? 'write' : null
+        ].filter(Boolean);
+        if (missing.length) {
+          for (const family of missing) process.stderr.write(`SPEC_ROLE_CAPABILITY_MISSING: ${role} lacks ${family}\n`);
+          process.exit(78);
+        }
+      }
+      pi.setActiveTools(stageRole ? stageAllowed : allowed);
       if (role === 'owner') {
         try { runtimeEvent(record, 'context_pack_written', { path: writeContextPack({ packageDir: record.package, stepPath: record.step, checkout: record.checkout }) }); }
         catch (error: any) { runtimeEvent(record, 'context_pack_failed', { error: error.message }); }
+      }
+      if (role === 'reviewer') {
+        try { recordStageFingerprint(record); }
+        catch (error: any) { process.stderr.write(`${error.message}\n`); process.exit(78); }
       }
     });
     if (['owner', 'editor'].includes(role)) installProviderRecovery(pi, { requestedModel: record[`${role}_model`],
@@ -137,9 +171,11 @@ export default function (pi: any) {
     pi.on('tool_call', (event: any) => {
       try {
         assertLease(record);
-        if (!allowed.includes(event.toolName)) return { block: true, reason: 'This tool is outside the managed worker role.' };
-        if (['bash', 'spec_verify'].includes(event.toolName) && /\bgit\s+(?:-[^\s]+\s+)*reset\s+--hard\b/.test(event.input.command)) return { block: true, reason: 'Hard resets are not allowed in a managed step. Return the recovery decision to the coordinator.' };
-        if (event.toolName === 'spec_verify' && /\bgit\s+(?:-[^\s]+\s+)*reset\s+--hard\b/.test(event.input.server?.command || '')) return { block: true, reason: 'Hard resets are not allowed in managed server commands.' };
+        const list = stageRole ? stageAllowed : allowed;
+        if (!list.includes(event.toolName)) return { block: true, reason: 'This tool is outside the managed worker role.' };
+        const input = event.input || {};
+        if (['bash', 'spec_verify'].includes(event.toolName) && /\bgit\s+(?:-[^\s]+\s+)*reset\s+--hard\b/.test(input.command)) return { block: true, reason: 'Hard resets are not allowed in a managed step. Return the recovery decision to the coordinator.' };
+        if (event.toolName === 'spec_verify' && /\bgit\s+(?:-[^\s]+\s+)*reset\s+--hard\b/.test(input.server?.command || '')) return { block: true, reason: 'Hard resets are not allowed in managed server commands.' };
       } catch (error: any) { return { block: true, reason: error.message }; }
     });
     if (role === 'owner') {
@@ -191,20 +227,47 @@ export default function (pi: any) {
           context: Type.Optional(Type.Array(Type.Object({ path: Type.String({ description: 'Checkout-relative or package path' }), start: Type.Number({ minimum: 1 }), end: Type.Number({ minimum: 1 }) }), { description: 'Exact current source ranges to attach to the editor packet, usually from the step context pack. The editor edits from them instead of searching.' })),
           reasoning: Type.Optional(Type.Union(['off', 'low', 'high', 'max'].map(value => Type.Literal(value)), { description: 'Editor reasoning for this packet. Use off for a closed packet (decision made, exact excerpts and changes given); high for an open one.' })) }),
         async execute(_id: string, args: any, signal: AbortSignal) {
-          try { const reply = await communication.beginEditor(() => runEditor(record, args.assignment, signal, undefined, { context: args.context, reasoning: args.reasoning }), signal); return result(reply, Boolean(reply.error)); }
+          try { const reply = await communication!.beginEditor(() => runEditor(record, args.assignment, signal, undefined, { context: args.context, reasoning: args.reasoning }), signal); return result(reply, Boolean(reply.error)); }
           catch (error: any) { return result({ error: error.message, ...(signal?.aborted ? { requires_cancellation: true } : {}), next: 'resolve this failure; do not start an unmanaged replacement' }, true); }
         } });
       pi.registerTool({ name: 'spec_answer', label: 'Answer editor', description: 'Answer the retained editor\'s pending decision and await the same editor process. Do not start a replacement editor.',
         parameters: Type.Object({ request_id: Type.String(), answer: Type.String() }),
         async execute(_id: string, args: any, signal: AbortSignal) {
-          try { const reply = await communication.answer(args.request_id, args.answer, signal); return result(reply, Boolean(reply.error)); }
+          try { const reply = await communication!.answer(args.request_id, args.answer, signal); return result(reply, Boolean(reply.error)); }
           catch (error: any) { return result({ error: error.message, ...(signal?.aborted ? { requires_cancellation: true } : {}), next: 'resolve the pending editor question without launching another writer' }, true); }
+        } });
+    } else if (role === 'reviewer' || role === 'fixer') {
+      const parameters = role === 'reviewer'
+        ? Type.Object({
+            verdict: Type.Union([Type.Literal('pass'), Type.Literal('needs-fix')]),
+            findings: Type.Array(Type.Object({
+              id: Type.String(), severity: Type.Union(['HIGH', 'MED', 'LOW'].map(v => Type.Literal(v))),
+              category: Type.Union(['correctness', 'security', 'performance', 'maintainability', 'tests', 'scope'].map(v => Type.Literal(v))),
+              actionable: Type.Boolean(), file: Type.String(), line: Type.Number({ minimum: 1 }), symbol: Type.String(),
+              signature: Type.String(), explanation: Type.String(), correction: Type.Optional(Type.String()), commit: Type.String() })),
+            fix_verdicts: Type.Array(Type.Object({ fix: Type.String(), id: Type.String(),
+              verdict: Type.Union([Type.Literal('resolved'), Type.Literal('unresolved')]), evidence: Type.String() })),
+            limitations: Type.Array(Type.String()) })
+        : Type.Object({
+            commits: Type.Array(Type.String()),
+            decisions: Type.Array(Type.Object({ id: Type.String(), decision: Type.Union([Type.Literal('fixed'), Type.Literal('dismissed')]),
+              signature: Type.String(), note: Type.String(), dismissal: Type.Optional(Type.String()),
+              approved: Type.Optional(Type.Boolean()), approval_source: Type.Optional(Type.String()) })),
+            evidence: Type.Array(Type.Object({ gate_id: Type.Optional(Type.String()), artifact: Type.String(),
+              outcome: Type.Union([Type.Literal('passed'), Type.Literal('failed')]), observed_commit: Type.String() })),
+            unresolved: Type.Array(Type.String()),
+            triage: Type.Optional(Type.Object({ summary: Type.String(), fallback: Type.Boolean() })) });
+      pi.registerTool({ name: 'spec_stage_complete', label: 'Submit stage result', description: 'Submit this stage role\'s review or fix result for the current assignment. Runtime validates the payload against the stage role, records the source fingerprint (reviewer) or commit/head checks (fixer), writes the artifact and receipt, and refuses anything outside the assignment. A reviewer may not edit the checkout; a fixer result must be committed with a clean tree.',
+        parameters,
+        async execute(_id: string, args: any) {
+          try { return result(submitStage(record, role, args)); }
+          catch (error: any) { return result({ error: error.message, next: 'correct the reported stage result; do not change role or assignment' }, true); }
         } });
     } else {
       pi.registerTool({ name: 'spec_question', label: 'Ask step owner', description: 'Ask the current step owner one concrete implementation decision. Wait for its answer in this same editor process. Include relevant source excerpts or diagnostics; do not contact other sessions.',
         parameters: Type.Object({ question: Type.String() }),
         async execute(_id: string, args: any, signal: AbortSignal) {
-          try { return result(await communication.question(args.question, signal)); }
+          try { return result(await communication!.question(args.question, signal)); }
           catch (error: any) { return result({ error: error.message, next: 'return the unresolved decision to the owner; do not assume permission or launch another agent' }, true); }
         } });
       pi.registerTool({ name: 'bash', label: 'Managed bash', description: 'Run a bounded foreground editing, formatting or explicitly assigned commit command in the code checkout. Do not run tests, compile/build checks, lint or other verification; the owner runs those after your return. Do not leave background or detached processes alive after it returns. Large output is saved to the run log.',

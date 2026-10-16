@@ -33,3 +33,15 @@ with apply_patch. This allowlist retains both tool families. The coordinator mus
 keep the provider extension available. Missing write tools are a launch/configuration
 error: report the exact missing capability and preserve the assigned model rather
 than substituting a generic worker or changing providers.
+
+## Native stage
+
+When `SPEC_RUNTIME_ROLE=fixer`, submit each completed packet through the
+`spec_stage_complete` tool; that submission performs the packet's
+`Update reviews/...-fix.md` instruction, so do not edit the fix artifact yourself. On
+packet 1, run the Jev `review-triage` checkpoint once as the first call and submit that
+triage through the tool. Later packets reuse the supplied triage summary and do not
+rerun it. If the assignment ends with unfinished work, run `git restore` on every touched
+file, then submit empty `decisions` and `unresolved`, naming the failing case in the
+submission. The assigned model stays pinned, and the runtime runs the gates only after a
+confirmed drain.

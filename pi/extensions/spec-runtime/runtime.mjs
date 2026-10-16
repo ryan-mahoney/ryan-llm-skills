@@ -18,9 +18,12 @@ import { createOwnership } from './ownership.mjs';
 import { createSystemdServiceAdapter, createWaveDeadline, deadlineRemainingMs } from './linux-resources.mjs';
 import { createWaveLifecycle, environmentFacts } from './wave-lifecycle.mjs';
 export { environmentFacts } from './wave-lifecycle.mjs';
+import { createWaveReviewRuntime } from './wave-review-runtime.mjs';
+import { stagePrompt } from './wave-review-state.mjs';
 import { observedRuns, buildDependencyHandoff } from './dependency-handoff.mjs';
 export { buildDependencyHandoff };
 import { PROVIDER_RECOVERY } from './provider-recovery.mjs';
+import { inspectProcess } from '../../../scripts/spec-observe/process-identity.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const RUNTIME_MODULE_PATH = resolve(fileURLToPath(import.meta.url));
@@ -350,15 +353,61 @@ export function event(record, name, detail = {}) {
 }
 function save(record) {
   atomic(join(record.package, 'runtime/runs', `${record.id}.json`), record);
-  // A wave run never replaces the serial latest pointer; only its own durable
-  // run record is written.
-  if (record.wave_bindings) return;
+  // A wave run or a run-only command phase never replaces the serial latest
+  // pointer; only its own durable run record is written.
+  if (record.wave_bindings || record.command_phase) return;
   atomic(join(record.package, 'runtime/run.json'), record);
 }
 // A spec-location refusal as an Error that keeps the machine-readable code and remedy.
 export function refusalError({ code, message, remedy }) {
   return Object.assign(new Error(`${code}: ${message}${remedy ? ` ${remedy}` : ''}`), { code, remedy });
 }
+// One shared role contract: native argv and the in-process guards read the same
+// table, so a role's tools, profile, model and session can never disagree.
+// `tools` are the names the runtime registers; `providerTools` are inert for
+// native Pi (1.2.0 treats --tools as an allowlist matcher) and only bind when
+// an adapter replaces tools.
+const deepFreeze = value => {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    for (const key of Object.keys(value)) deepFreeze(value[key]);
+    Object.freeze(value);
+  }
+  return value;
+};
+export const ROLE_CONTRACT = deepFreeze({
+  owner: {
+    profile: 'spec-step-owner.md',
+    tools: ['read', 'grep', 'find', 'ls', 'spec_editor', 'spec_answer', 'spec_verify', 'spec_scout', 'spec_search', 'spec_advice', 'spec_complete'],
+    providerTools: [],
+    modelKey: 'owner_model',
+    sessionKey: 'owner_session',
+    subagents: true
+  },
+  editor: {
+    profile: 'spec-step-editor.md',
+    tools: ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'spec_question'],
+    providerTools: [],
+    modelKey: 'editor_model',
+    sessionKey: 'editor_session',
+    subagents: false
+  },
+  reviewer: {
+    profile: 'spec-stage-reviewer.md',
+    tools: ['read', 'grep', 'find', 'ls', 'bash', 'spec_stage_complete'],
+    providerTools: ['exec_command', 'write_stdin'],
+    modelKey: 'review_model',
+    sessionKey: 'reviewer_session',
+    subagents: false
+  },
+  fixer: {
+    profile: 'spec-step-fixer.md',
+    tools: ['read', 'grep', 'find', 'ls', 'bash', 'edit', 'write', 'spec_stage_complete'],
+    providerTools: ['exec_command', 'write_stdin', 'apply_patch'],
+    modelKey: 'fix_model',
+    sessionKey: 'fixer_session',
+    subagents: false
+  }
+});
 // The real package folder for a `workspace/slug` ref, the folder, or a file inside it.
 export async function packageDirOf(ref, location = {}) {
   const found = await locatePackage(ref, location);
@@ -429,7 +478,7 @@ function assertWaveLease(record) {
     throw new Error('Wave checkout claim is absent or replaced; stop this assignment.');
   // Capacity is reserved before the root launches; its token/epoch/attempt must
   // still match this run's reservation and the wave membership attempt.
-  const capacityKey = `${binding.wave_id}:${binding.attempt_id}:${binding.phase}`;
+  const capacityKey = `${binding.wave_id}:${binding.attempt_id}:${record.command_phase?.purpose ?? binding.phase}`;
   const capacity = record.capacity_claim;
   if (!capacity || typeof capacity.token !== 'string' || capacity.epoch === undefined || capacity.attempt !== capacityKey)
     throw new Error('Wave capacity claim is absent or replaced; stop this assignment.');
@@ -438,14 +487,19 @@ function assertWaveLease(record) {
     throw new Error('Wave capacity claim is absent or replaced; stop this assignment.');
   if (!record.deadline || !wave.deadline || record.deadline.expires_at !== wave.deadline.expires_at || record.deadline.started_at !== wave.deadline.started_at)
     throw new Error('Wave deadline is absent or replaced; stop this assignment.');
-  // Each role's recorded model must match that role's own original model. The
-  // provider fallback is accepted only for a role whose recovery event was
-  // actually recorded; there is no cross-role or unconditional fallback.
-  const fallback = `${PROVIDER_RECOVERY.fallback.provider}/${PROVIDER_RECOVERY.fallback.model}`;
-  const recordedModel = (value, expected, role) => typeof value === 'string' && value.length > 0
-    && (value === expected || (value === fallback && providerRecoveryRecorded(record, role, expected)));
-  if (!recordedModel(record.owner_model, binding.owner_model, 'owner') || !recordedModel(record.editor_model, binding.editor_model, 'editor'))
-    throw new Error('Wave recorded model is absent or replaced; stop this assignment.');
+  // A command phase has no worker model, so only a launched run checks recorded
+  // models. The wave/member/checkout/capacity/deadline checks above apply to
+  // every record, including commands.
+  if (!record.command_phase) {
+    // Each role's recorded model must match that role's own original model. The
+    // provider fallback is accepted only for a role whose recovery event was
+    // actually recorded; there is no cross-role or unconditional fallback.
+    const fallback = `${PROVIDER_RECOVERY.fallback.provider}/${PROVIDER_RECOVERY.fallback.model}`;
+    const recordedModel = (value, expected, role) => typeof value === 'string' && value.length > 0
+      && (value === expected || (value === fallback && providerRecoveryRecorded(record, role, expected)));
+    if (!recordedModel(record.owner_model, binding.owner_model, 'owner') || !recordedModel(record.editor_model, binding.editor_model, 'editor'))
+      throw new Error('Wave recorded model is absent or replaced; stop this assignment.');
+  }
 }
 
 // The only admissible evidence for a role's provider fallback is a recorded
@@ -676,17 +730,23 @@ const targetFacts = record => record.target ? `TARGET: ${record.target}\n${recor
 // questions continue in that same process, never in a competing writer.
 // Discovery stays disabled: no goal continuation, subagent fanout, or unrelated extension tools.
 function nativeCommand(record, role, prompt, options = {}) {
-  const session = record[`${role}_session`];
+  const contract = ROLE_CONTRACT[role];
+  if (!contract) throw refusalError({ code: 'role-unknown', message: `Native role ${JSON.stringify(role)} is not in the role contract.`,
+    remedy: `Use one of ${Object.keys(ROLE_CONTRACT).join(', ')}.` });
+  const model = record[contract.modelKey];
+  if (model === undefined || model === null || model === '') throw refusalError({ code: 'role-model-missing', message: `Role ${role} has no ${contract.modelKey} selector.`,
+    remedy: 'Resolve the stage model before launching.' });
+  const session = record[contract.sessionKey];
   const stream = join(record.package, 'runtime/runs', `${record.id}-${role}-${randomUUID()}.jsonl`);
   const errors = `${stream}.stderr`;
-  const profile = resolve(here, '../../agents', role === 'owner' ? 'spec-step-owner.md' : 'spec-step-editor.md');
-  const selector = splitModelSelector(record[`${role}_model`]);
+  const profile = resolve(here, '../../agents', contract.profile);
+  const selector = splitModelSelector(model);
   const args = [ ...(options.prefix || []), '--print', '--mode', 'json', '--session', session,
     '--provider', selector.provider, '--model', selector.model,
     ...(selector.thinking ? ['--thinking', selector.thinking] : []), '--no-extensions', '--no-skills', '--no-prompt-templates',
     ...((record.child_extensions || []).flatMap(path => ['--extension', path])),
-    ...(role === 'owner' ? ['--extension', join(homedir(), '.pi/agent/npm/node_modules/pi-subagents/index.js')] : []),
-    '--extension', join(here, 'index.ts'), '--tools', role === 'owner' ? 'read,grep,find,ls,spec_editor,spec_answer,spec_verify,spec_scout,spec_search,spec_advice,spec_complete' : 'read,grep,find,ls,edit,write,bash,spec_question',
+    ...(contract.subagents ? ['--extension', join(homedir(), '.pi/agent/npm/node_modules/pi-subagents/index.js')] : []),
+    '--extension', join(here, 'index.ts'), '--tools', contract.tools.concat(contract.providerTools).join(','),
     '--append-system-prompt', profile, '--', prompt ];
   return { command: options.command || 'pi', args, stream, errors };
 }
@@ -807,9 +867,19 @@ export class Runtime {
     // adapter is the default and a test may inject a seam. Serial runs keep
     // launchProcess unchanged.
     this.serviceAdapter = serviceAdapter || createSystemdServiceAdapter();
+    // Stage launch and contained command primitives run with the Runtime
+    // receiver, sharing this instance's adapters, persistence and claims.
+    this.waveReviewRuntime = createWaveReviewRuntime({
+      nativeCommand, streamTask, save, read, runFileOf, assertWaveLease,
+      loadRun, runCommand, readOwnershipClaimsSync, waveInvalid, timestamp,
+      runLockedMutation, waveClaimToken
+    });
   }
 
   async containedRoot(record, prompt) {
+    // A stage record selects the role-aware contained launch; serial and
+    // implementation wave runs keep the immutable waveLifecycle route.
+    if (record.stage) return this.waveReviewRuntime.containedStage.call(this, record, prompt);
     return waveLifecycle.containedRoot.call(this, record, prompt);
   }
 
@@ -827,6 +897,25 @@ export class Runtime {
 
   async remountWaveMember(input) {
     return waveLifecycle.remountWaveMember.call(this, input);
+  }
+
+  // Stage launch and command-phase primitives are thin delegates so the Runtime
+  // keeps one persistence and process surface while their bodies live in the
+  // review-runtime module.
+  async startStage(input) {
+    return this.waveReviewRuntime.startStage.call(this, input);
+  }
+
+  async commandPhase(input) {
+    return this.waveReviewRuntime.commandPhase.call(this, input);
+  }
+
+  async runPhaseCommand(record, command, timeoutSeconds, signal) {
+    return this.waveReviewRuntime.runPhaseCommand.call(this, record, command, timeoutSeconds, signal);
+  }
+
+  async endCommandPhase(record, options = {}) {
+    return this.waveReviewRuntime.endCommandPhase.call(this, record, options);
   }
 
   // Side-effect-free validation of an explicit wave member assignment before any
@@ -884,7 +973,10 @@ export class Runtime {
     // cannot be reused under another workflow; the legacy/no-workflow shape is
     // preserved exactly.
     const contractBase = config.workflow_id == null ? contractParts : [...contractParts, config.workflow_id];
-    const contract = JSON.stringify(config.wave_bindings ? [...contractBase, { wave: config.wave_bindings }] : contractBase);
+    // A stage joins the launch contract so a stale review/fix label or model can
+    // never reuse another stage's assignment; the no-stage shape is unchanged.
+    const stageContract = config.stage ? [{ stage: config.stage, review_model: config.review_model ?? null, fix_model: config.fix_model ?? null }] : [];
+    const contract = JSON.stringify(config.wave_bindings ? [...contractBase, { wave: config.wave_bindings }, ...stageContract] : [...contractBase, ...stageContract]);
     if (existsSync(assignmentFile)) {
       const previous = previousAssignment;
       const legacy = [...legacyParts];
@@ -961,12 +1053,15 @@ export class Runtime {
     const pair = createHash('sha256').update(JSON.stringify(sessionKey)).digest('hex').slice(0, 16);
     const sessionDir = join(runtimeDir, 'sessions', pair);
     mkdirSync(sessionDir, { recursive: true });
+    if (config.stage) mkdirSync(join(sessionDir, 'stages'), { recursive: true });
     const record = { schema_version: 1, completion_contract: 1, id, assignment_id: key, workflow_id: config.workflow_id ?? null, wave_bindings: config.wave_bindings ?? null, wave_path: config.wave_path ?? null, package: config.package, package_ref: config.package_ref, target: config.target, primary: config.primary, other_targets: config.other_targets,
       step: config.step, checkout: config.checkout, owner_model: config.owner_model, editor_model: config.editor_model, scout_model: config.scout_model,
       dispatch_requested_at: requestedAt, routing_reason: config.routing_reason,
       attempt_kind: config.attempt_kind ?? null, session_scope: scope,
       environment: environmentFacts(config.checkout, config.primary),
       child_extensions: config.child_extensions || [], owner_session: join(sessionDir, 'owner.jsonl'), editor_session: join(sessionDir, 'editor.jsonl'),
+      stage: config.stage ?? null, review_model: config.review_model ?? null, fix_model: config.fix_model ?? null,
+      ...(config.stage ? { [`${config.stage.role}_session`]: join(sessionDir, 'stages', `${id}-${config.stage.role}.jsonl`) } : {}),
       parent_session: parentSession, coordinator_pid: process.pid, state: 'running', started_at: timestamp(), timeout_ms: input.timeout_ms || 7200000 };
     save(record);
     atomic(assignmentFile, { assignment_id: key, run_id: record.id, contract });
@@ -978,7 +1073,7 @@ export class Runtime {
       // failed bind or launch keeps the run blocked with its truthful error and
       // every ownership claim, never an unbound orphan.
       if (config.wave_bindings) await bindWaveMemberRun(config, record.id);
-      const prompt = `Implement this prepared step as its architect/owner using spec_editor.\nPACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${targetFacts(record)}${dependencyContext(record, config.target_ids)}Read the card and required policy. Choose the implementation approach yourself, then send a short Change/Edits/Preserve/Return packet for a bounded transformation. Name affected symbols, the chosen approach and preservation constraints; let the editor choose local implementation details and batch related edits. The editor does not run tests, compile/lint checks or other executable verification. After it returns, use spec_verify for necessary focused checks and diagnose failures before assigning bounded corrections. Do not check every packet automatically; reuse valid evidence. Read/search missing source facts directly. The editor normally reads and edits in one assignment; reserve facts-only requests for a specific blocking fact unavailable through your tools. Request compact results with artifact paths, not source inventories. Do not delegate architecture, whole-step restoration, or an entire acceptance suite with open-ended repairs. Keep owner context bounded. Every editor call starts a fresh session: include the chosen decisions, relevant files and preservation constraints in each packet; never refer to prior chat. Assess each returned diff/result before the next packet; commit is a separate assignment after acceptance of the completed changes and required evidence. Use spec_scout only for a bounded discovery gap worth delegating; direct reads remain the default. Do not discover models, run startup suites, poll, or start other agents outside that scout tool. The runtime retains the owner session and records each fresh editor session. Before ending, call spec_complete with decisions, introduced symbols, gaps and step-owned evidence assessments. It writes the canonical learning from verification receipts; an evidence log is not a learning. Commit via the editor first when complete. Missing handoffs remain unfinished obligations. This owner assignment ends after this step; independent review belongs to the coordinator.\n${input.instructions || ''}`;
+      const prompt = config.stage ? stagePrompt(record) : `Implement this prepared step as its architect/owner using spec_editor.\nPACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${targetFacts(record)}${dependencyContext(record, config.target_ids)}Read the card and required policy. Choose the implementation approach yourself, then send a short Change/Edits/Preserve/Return packet for a bounded transformation. Name affected symbols, the chosen approach and preservation constraints; let the editor choose local implementation details and batch related edits. The editor does not run tests, compile/lint checks or other executable verification. After it returns, use spec_verify for necessary focused checks and diagnose failures before assigning bounded corrections. Do not check every packet automatically; reuse valid evidence. Read/search missing source facts directly. The editor normally reads and edits in one assignment; reserve facts-only requests for a specific blocking fact unavailable through your tools. Request compact results with artifact paths, not source inventories. Do not delegate architecture, whole-step restoration, or an entire acceptance suite with open-ended repairs. Keep owner context bounded. Every editor call starts a fresh session: include the chosen decisions, relevant files and preservation constraints in each packet; never refer to prior chat. Assess each returned diff/result before the next packet; commit is a separate assignment after acceptance of the completed changes and required evidence. Use spec_scout only for a bounded discovery gap worth delegating; direct reads remain the default. Do not discover models, run startup suites, poll, or start other agents outside that scout tool. The runtime retains the owner session and records each fresh editor session. Before ending, call spec_complete with decisions, introduced symbols, gaps and step-owned evidence assessments. It writes the canonical learning from verification receipts; an evidence log is not a learning. Commit via the editor first when complete. Missing handoffs remain unfinished obligations. This owner assignment ends after this step; independent review belongs to the coordinator.\n${input.instructions || ''}`;
       task = config.wave_bindings
         ? await this.containedRoot(record, prompt)
         : this.launchProcess(record, 'owner', `${prompt}\nEnvironment paths (observations, not setup approval): ${JSON.stringify(record.environment)}`, { onEvent: this.onWorkerEvent });
@@ -990,6 +1085,14 @@ export class Runtime {
     // A wave service's identity is its recorded MainPID only; the systemd-run
     // launcher pid is never signalled, liveness-tested or recorded as the run pid.
     record.pid = config.wave_bindings ? (task.workerPid ?? null) : (task.workerPid ?? task.child.pid);
+    // Positively identify a wave-bound service process so a later drain
+    // classification can validate liveness without inferring it from a
+    // possibly-exited pid. A safe pid observed alive records its opaque start
+    // text; an absent pid or non-alive observation leaves no identity.
+    if (config.wave_bindings && Number.isSafeInteger(record.pid) && record.pid > 0) {
+      const observed = inspectProcess(record.pid);
+      if (observed.state === 'alive') record.worker_identity = { pid: observed.pid, started_at: observed.started_at };
+    }
     save(record); refreshProgress(record.package).catch(error => { record.progress_error = error.message; }); event(record, 'run_started', { dispatch_requested_at: requestedAt, owner_session: record.owner_session, editor_session: record.editor_session, parent_session: parentSession, pid: record.pid });
     // A wave run shares one original deadline: the timer fires at the retained
     // expiry, never a renewed full timeout measured from the launch moment.
