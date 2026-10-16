@@ -79,6 +79,7 @@ destinations retain their required schemas; do not rewrite them as prose.
 - Spec files are never inside a checkout. Never create, copy, or symlink a spec folder, `.gitignore` entry, or
   project-context file into a repository or worktree. Evidence and artifacts reference package files by package-relative
   path and target files as `<repo id>:<path>`.
+- On the wave path `targets[].worktree` remains the package's integration checkout. Member and candidate checkouts exist only in verified runtime records (`runtime/waves/<wave-id>.json` and run records); they are never recorded with `spec-location worktree` and never passed to a tool as a checkout.
 - Resolve any command output destination to an absolute path before running it, so a relative redirect or screenshot
   path cannot land in the worktree.
 - If `check` reports a package path inside a checkout (`legacy-location`) or untracked legacy spec folders

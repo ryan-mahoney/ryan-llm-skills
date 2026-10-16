@@ -53,6 +53,14 @@ run constraints, history-index path and intervening commits. The runtime can est
 an isolated worktree when checkout is omitted. Read and write spec files only in `package_dir`,
 never in a checkout. Use the prepared card as the execution plan.
 
+On the wave path the runtime launches each member owner in its own workspace with one
+writer per checkout; the coordinator does not call `start` per member and must never pass
+`checkout` or a member path. Owners still send fresh editor packets: one `assignment`, or
+a `packets` batch of 2-4 closed packets that run concurrently. Disjoint packets share the
+checkout. Overlapping packets run in isolated packet workspaces copied from the current
+working tree and merge back in packet order. A packet with a conflicting file applies
+nothing and returns its patch and conflicting paths.
+
 Dispatch the first bounded edit once the prepared card and decisive source facts settle
 its approach. Later edit details can wait until that batch returns; exhaustive step-wide
 discovery is not a prerequisite. The owner retains all decisions, one writer and checks
@@ -191,6 +199,8 @@ must preserve requirements and unresolved work; it never authorizes a Git reset.
 
 The runtime holds an exclusive checkout lock through the owner and editor process
 group. `spec_dispatch(action: cancel)` takes `package_dir` and the known run ID.
+Cancel one wave member with `spec_dispatch(action: cancel, package, wave_id, step)`; it
+drains only that member and blocks integration.
 Cancellation must establish actual process termination before any replacement
 writer or review fixer starts. Failed or unknown cancellation retains the lock: report
 the gap and diagnose it rather than starting another worker. A completed owner has no

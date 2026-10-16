@@ -1,13 +1,13 @@
 ---
 name: spec-run
-description: "Implement every step from a standalone spec package while escalating only unresolved consequential decisions. Use when the user asks to run or execute a prepared spec. Treat prepared subspecs as launchpads, preserve reviewable checkpoint commits, continue through imperfect results, review each finished step in the background and fix its findings between steps, and hand completed step review/fix cycles and evidence to publication without an automatic final branch review."
+description: "Implement every step from a standalone spec package while escalating only unresolved consequential decisions. Use when the user asks to run or execute a prepared spec. Treat prepared subspecs as launchpads, preserve reviewable checkpoint commits, continue through imperfect results, review each finished step in the background and fix its findings between steps, and hand completed step review/fix cycles and evidence to publication without an automatic final branch review. Run a concurrency-ready package as managed dependency waves."
 mode: coding
 scope: document
 disable-model-invocation: true
 argument-hint: "[workspace/slug or spec package folder]"
 license: MIT
 metadata:
-  version: "37"
+  version: "38"
 ---
 
 # Spec Run
@@ -56,7 +56,7 @@ and batched Jev verification/review-triage checkpoints.
 
 Execute the package produced by `spec-write` within its sourced context and authority. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Prepared inputs record accepted intent; implementation may adapt to repository reality while preserving acceptance and authority.
 
-Run steps sequentially with a retained implementation session. In Pi, use the
+On the serial path, run steps sequentially with a retained implementation session. On the wave path, follow [Run Managed Waves](#run-managed-waves). In Pi, use the
 repo-owned `spec_dispatch` runtime and synchronous owner-side `spec_editor` under
 [Paired execution](../spec-step-run/references/paired-execution.md). Reuse its disk sessions
 across related steps. Keep separate objectives and commits; session reuse does not
@@ -142,7 +142,114 @@ replace its independent review. Step reviews and fixes run outside the step work
 or risk changes return to the coordinator as `decision-required`; resolve them under the shared
 contract before dependent work and re-prepare when intent or proof changes.
 
+## Run Managed Waves
+
+Run a package whose prepared steps carry wave metadata as managed dependency waves. This
+section is the wave path; the serial sections below still describe ordinary sequencing,
+review and fixes for their own path. Use the repo-owned `spec_dispatch` runtime with
+native wave events; do not drive the run by hand.
+
+**Entry.** Call `spec_dispatch action=startup` with `execution: auto` plus the run's owner,
+strong owner, editor, `review_model` (required on the wave path), optional
+`fix_model_override`, `workflow_id` and `timeout_ms`. Never pass `checkout` or
+`owner_override`; the wave path refuses an owner override as `owner-override-serial-only`.
+Read the returned receipt and route on its selected path:
+
+| Signal | Action |
+| --- | --- |
+| Waves selected (receipt carries `wave_id`, `record_path`, `requested_width`, `admitted_width`) | Go idle and await attention events. |
+| Serial selected, reason `legacy-serial` or `multiple-targets` | Follow [Execute One Step At A Time](#execute-one-step-at-a-time). |
+| `needs_preparation` | Return to `spec-write` to regenerate `wave_checks`/`setup`; use `execution: serial` only on explicit operator direction. |
+| `setup-required` | Report its remedy (`node ~/.agents/scripts/spec-observe/cli.mjs runtime-host setup`, run only with host-setup authority) and stop dependent dispatch. |
+| Active serial run or claim conflict (`serial-run-active`, `wave-active`, `package-owned`, `package-owner-unknown`) | Reconcile the named run or owner; never start a duplicate. |
+| Any other or unknown result | Report blocked with its receipt. |
+
+**Width.** Requested width equals the ready-wave width. Admission is limited by memory,
+tasks, an explicit lower operator cap (`max_parallel`, 1-16) and the
+`software_ceiling: 16`. Excess members queue with a visible reason. Do not edit
+pi-subagents or extension settings.
+
+**Progress.** After startup the runtime's event handler drives implementation, review,
+fix, confirmation, seal, candidate checks and promotion. Do not call `advance` to make
+progress; use it only when a receipt names it after restart or replay. Do not launch wave
+reviewers or fixers through `subagent`; the runtime runs native reviewer and fixer roles
+with REVIEW_AGENT and the fix-owner precedence in [Background Step Review](#background-step-review).
+
+**Attention events** (`spec-wave` messages whose JSON `kind` is `barrier-reached`,
+`member-blocked`, `promotion-result` or `setup-required`): record
+`spec_sentinel_checkpoint` with obligation key `wave:<wave_id>`. For a blocked member, read
+its `blocking_reason` from the receipt's `members` preview (blocked members listed first)
+or the record at `record_path`, and never construct a member launch. `confirmation-failed`
+→ `spec_dispatch action=advance` with `wave_id`, `step`, `attempt_kind: review-repair`
+and sourced `instructions`. `undeclared-write` → `advance` with `wave_id`, `step` and
+`adaptations: [{path, reason}]`. Any other reason → report the member blocked with its
+record. A member waiting on input is queued with reason `input-pending`: answer it through
+the package inbox with the Answer A Startup Clarification sourcing rule, then call
+`advance` with `wave_id` and no `step`. As built at e43500d, every wave receipt carries one
+`next_action` string naming the first blocked member's route (`spec_dispatch advance
+step=<n> attempt_kind=review-repair instructions=<repair>` or `spec_dispatch advance
+step=<n> adaptations=[...]`, otherwise diagnose and `recover` or `advance`); follow it.
+Attention messages still carry only `reason`, so take `next_action` from a `status` call
+with `wave_id` when needed. As built at 89c6665, `next_action` for an open or running wave
+with a member queued `input-pending` is `input-pending: consume the inbox, then advance
+(step <n>; package <p>, wave <id>)` (lowest such step); blocked and repairing waves still
+name the blocked route first, and other running waves read `running: await native wave
+events; do not poll`.
+
+**Holds and cancellation.** Route overseer holds as usual; holds pause admission.
+`spec_dispatch action=cancel` with `wave_id` (and `step` for one member) drains before
+releasing.
+
+**Restart.** A fresh long-lived coordinator calls startup again; startup recovers the one
+non-terminal wave in place and returns its receipt with `loaded: true`. Call `recover` only
+when named; never launch a replacement writer while an old lifecycle is live or unknown.
+As built at 89c6665, adoption keeps the record's claim-creation epoch on the package
+claim, so the restarted coordinator also opens the package's later waves. With no
+non-terminal wave, startup from the coordinator that holds the package claim (same
+session, live PID and start time) resumes the highest integrated wave whose successor
+never opened (for example after a next-wave `setup-required` outcome is repaired) instead
+of returning `needs_reconciliation`. As built at 5f6a094 (C10-8 fixed), a coordinator that
+died after a wave integrated and before its successor opened is resumed by the next
+session's startup when the package claim still names the record's token, creation epoch
+and session and the record's stored coordinator `process_identity` (valid pid and start
+time) is observed dead for that exact pid: startup adopts it through the existing
+`recover` path with its continuation deferred (claims rebound, process identity repaired,
+no member relaunched; an expired wave deadline does not block an integrated record), then
+opens the successor under the supplied `workflow_id`. A live or unconfirmed other owner is
+never adopted, and startup then returns `needs_reconciliation`; report it blocked with the
+record and never start wave 1 again. As built at 9bcf62d, a workspace assignment launch or
+relaunch for the package (`launchAssignment`/`createAssignmentRelaunch` ->
+`scripts/workspaces/worker-guard.mjs` `assertNoAssignmentWorkers`) is refused with code
+`run-active` and a `reason` while any non-terminal wave's coordinator is alive
+(`coordinator-live`) or unconfirmed (`coordinator-unknown`), while any run record's
+`service`/`command_service` unit without a confirmed `phase_drain` is populated
+(`worker-live`, detail = unit) or unclassifiable (`worker-unknown`), or when a wave record
+is unreadable or `runtime/waves` is a symbolic link or not a directory (`record-invalid`,
+5f6a094). A confirmed `runtime/runs/<id>-phase-drain.json` receipt is not re-inspected, so
+a drained phase does not block relaunch after a reboot (5f6a094). The message names the
+wave, step and unit and suggests `systemctl --user status <unit>` or
+`spec_dispatch recover`. Follow that message; never retry the relaunch to get past it.
+
+**Drafts.** Push through `spec-pr mode=draft` only at an integrated barrier.
+
+**Status.** Use `spec_dispatch action=status` with `wave_id`, and Sentinel. A sibling's
+completion never makes the package idle. As built at 9bcf62d: Sentinel's snapshot has one
+`waves` row per record (`wave_id, state, member_count, active_count, sealed_count,
+blocked_count, queued_count, cancelled_count, omitted_count, record_path`, at most 32
+listed members with active, blocked and cancelled first) and the text line `<package_ref>
+· Wave <id> <state> · <n> members · <a> active · <s> sealed · <b> blocked · omitted <o>`;
+each member run is a current assignment while its wave is non-terminal.
+`runtime/progress.json` lists every member under `waves`.
+`node ~/.agents/scripts/spec-observe/cli.mjs metrics --package <package dir>` reports
+per-wave widths, `peak_observed_overlap`, phase and integration times and
+`barrier_waits`; an unreadable wave record adds `{path, code: 'INVALID_WAVE_RECORD'}` to
+its `errors`, and a truncated record scan adds `WAVE_RECORDS_TRUNCATED` (5f6a094). As built
+at 5f6a094, Sentinel matches a candidate check phase to its wave's candidate instead of
+reporting it `wave-member-unknown`.
+
 ## Execute One Step At A Time
+
+This section is the serial path.
 
 On resume, reconcile the ledger with canonical learning records and Git commits in
 the selected checkout. Reuse completed `as-specified`/`adapted` steps whose recorded
@@ -156,7 +263,7 @@ to re-record the same completion. A ready unattempted gate belongs in the curren
 assignment, not a routine checkpoint. Preserve useful partial receipts and genuine
 blockers, interruptions, deadlines and transfers without an automatic retry loop.
 
-Normally select remaining assigned steps in ascending order. Before dispatch, use their prepared dependency boundaries and current producer evidence to determine which are executable. When a known outside dependency blocks the earliest step's implementation or required gate, preserve that step's ID, learning/checkpoint, acceptance obligations, and blocked/pending evidence; select only an already prepared independent step whose contracts and proof do not rely on the missing producer. Pass that exact canonical card to dispatch instead of relying on startup's first-unfinished selection. Do not renumber steps, re-plan a speculative dependency graph, overlap writers, or expand this package to build the outside producer.
+Normally select remaining assigned steps in ascending order. Before dispatch, use their prepared dependency boundaries and current producer evidence to determine which are executable. When a known outside dependency blocks the earliest step's implementation or required gate, preserve that step's ID, learning/checkpoint, acceptance obligations, and blocked/pending evidence; select only an already prepared independent step whose contracts and proof do not rely on the missing producer. Pass that exact canonical card to dispatch instead of relying on startup's first-unfinished selection. Do not renumber steps, infer dependencies beyond the prepared `requires` edges, overlap writers, or expand this package to build the outside producer.
 
 Record the missing contract/capability, authoritative producer, availability evidence needed, blocked gates, and next reconciliation action in the existing ledger/learning. An unchanged pending prerequisite remains blocked; neither elapsed time nor another worker's exit establishes it. Do not repeat a knowingly impossible gate or use a fabricated mock/adapter as proof of an unavailable real transport. Reconcile new authoritative producer evidence before returning to dependent work. When no prepared independent work remains, report the concrete blocker and required external evidence without claiming completion.
 
@@ -279,6 +386,8 @@ returns `needs_reconciliation`, and with the step it dispatches under the defaul
 step-path attempt ID with its own preamble instead of your `Clarification:` lines.
 
 ## Background Step Review
+
+This section is the serial path; wave members are reviewed inside their own checkout before seal (see [Run Managed Waves](#run-managed-waves)).
 
 Review each finished step while the next one is being implemented. These step review/fix
 cycles are the default review process; no final integrated branch review follows. As in explicit branch refinement,
@@ -419,6 +528,8 @@ parent when a child completes. After a resume, check
 `subagent({ action: "status" })` against the ledger's run IDs before relaunching.
 
 ## Completion Gate
+
+On the wave path, the bounded final fix review range starts at the last promoted candidate head (`target.candidate_commit` of the last `integrated` wave record, as built) instead of the highest step-review head; every earlier commit is covered by member reviews and the wave integration review. Group wave-check receipts under their original gate IDs with the candidate `observedCommit` and `applicability`; never relabel member results. Return `ready-for-publication` only when every wave record is `integrated`. Promoted candidates are the reviewed boundaries; only later commits are uncovered. As built at 9bcf62d (`completion.mjs` `recordCheckpoint`), a complete `implementation` or `publication` checkpoint throws `Progress predates wave records; refresh progress before closing this stage`, `Wave records are unreadable; integrated completion cannot be established` or `Wave <id> is <state>; publication consumes only integrated canonical target heads` (any wave neither `integrated` nor `cancelled`), and `unfinishedPreparedSteps` counts a wave member finished only when it is `sealed` in its latest containing wave and that wave is `integrated`. The skill's every-record-integrated rule stays stricter than the checkpoint; name these messages when telling the coordinator what a refused checkpoint means.
 
 After all indexed steps have run and the step reviews and fixes have finished, map each acceptance criterion and claim to its commits and verification results, each Executable Evidence Plan gate (`EV-n`) to its produced artifact, and each pre-mortem item (`PM-n`) to its implemented disposition. Route missing focused coverage to the owning step; do not hide gaps or discard useful commits.
 

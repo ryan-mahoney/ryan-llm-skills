@@ -7,7 +7,7 @@ disable-model-invocation: true
 argument-hint: "[feature-slug (optional)]"
 license: MIT
 metadata:
-  version: "28"
+  version: "29"
 ---
 
 # Spec Write
@@ -334,8 +334,9 @@ For each step include:
 8. Visual reference: when a visual reference exists and the step is `Visual: yes`, repeat the exact reference line in that step and require parity with it. For a design package the line is the one screen this step implements, as printed by `node ~/.agents/scripts/design/cli.mjs ref <design-dir> <step>`: `Design reference: <workspace>/<design> step N → <absolute screen path> sha256:<digest>`. The digest binds the step to the screen as prepared; an implementer that finds a different digest reports a departure for re-preparation and never builds to the newer file silently. For any other reference repeat `Visual reference: <package-relative file path>`. Do not tell the implementer to create a replacement prototype or derive a new visual direction.
 9. Evidence: when this step owns one or more Executable Evidence Plan gates, an `Evidence:` tag line (`Evidence: EV-2` or `Evidence: EV-2, EV-5`). Producing merge evidence is part of the step's work. For later gates it owns the procedure and
 handoff, not premature execution; record the runtime result as pending until authorized and run. Steps owning no evidence omit the line.
+10. Dependencies and ownership: `Requires:` (`none` or earlier step numbers whose output this step's implementation, imports, type resolution or proof needs), a `Writes:` tag line (checkout-relative files or directories the step changes; a trailing `/` covers descendants; prefix `<repo id>:` in a multi-target package) and, only for a named exclusive non-filesystem resource such as a fixed port or fixture database, a `Resources:` tag line.
 
-Each step's `Covers:`, `Complexity:`, `Visual:`, and (when the step owns evidence) `Evidence:` tag lines sit together at the end of the step. Judge the implementation judgment that remains in *this step*, using its known precedent, settled contracts and ownership, failure consequences, and what focused evidence can expose:
+Each step's `Covers:`, `Complexity:`, `Visual:`, `Requires:`, `Writes:` and (when the step owns evidence) `Evidence:` tag lines, with optional `Resources:`, sit together at the end of the step. Judge the implementation judgment that remains in *this step*, using its known precedent, settled contracts and ownership, failure consequences, and what focused evidence can expose:
 
 | Tier | When |
 |---|---|
@@ -365,6 +366,7 @@ Step ordering:
 - Order granular objectives by actual dependencies, naming each stable handoff.
 - Name external/package prerequisites in the affected step and evidence gate: the exact contract or capability, its authoritative producer, the evidence needed to establish availability, and which implementation or proof is blocked without it. An installed dependency or producer's stated intent is not proof that its required runtime contract exists. If the producer is outside this scope, do not assign its implementation to this package.
 - Separate already independent work from dependency-bound proof where the existing objective permits it. Retain stable step and gate IDs; state the boundary so later scheduling can proceed on prepared independent work without claiming the blocked gate passed. A required merge prerequisite with no available contract/evidence is a preparation blocker; do not mark its card ready using fabricated mocks or an unowned future producer. Authorized later-phase procedures retain explicit pending handoffs rather than pretending availability.
+- A dependency exists when this step's implementation, imports, type resolution or proof needs a producer's output; a spec-fixed signature does not make missing code available. Do not split code to manufacture parallelism; generated assets that a repository commits with their source keep their producing steps serial.
 - Keep integration explicit in its owning step; do not enlarge every prerequisite into
   an end-to-end feature merely to make it self-contained.
 
@@ -439,14 +441,26 @@ The index is a JSON object with a `steps` array — one entry per Implementation
 ```json
 {
   "spec": "spec.md",
+  "setup": {
+    "sample-ui": "none"
+  },
+  "wave_checks": [
+    {
+      "after": 1,
+      "owner_step": 1,
+      "gates": ["EV-1"]
+    }
+  ],
   "steps": [
     {
       "step": 1,
-      "repository": "sample-ui",
       "name": "Define the FooConfig type",
       "description": "Add the FooConfig interface and its defaults to src/config.ts.",
       "difficulty": "easy",
       "visualDesign": false,
+      "requires": [],
+      "writes": ["src/config.ts"],
+      "resources": ["port:4101"],
       "evidence": ["EV-1"]
     }
   ]
@@ -462,10 +476,17 @@ Field contract:
 - `description` — one front-loaded, plain-language sentence summarizing what the step does.
 - `difficulty` — exactly one of `easy`, `medium`, `hard`, identical to the step's `Complexity:` tag.
 - `visualDesign` — boolean; `true` when the step implements user-facing visual design, identical to the step's `Visual:` flag (`Visual: yes` → `true`, `Visual: no` → `false`).
+- `requires` — ordered array of earlier step numbers whose output this step's implementation, imports, type resolution or proof needs; `[]` when none, identical to the step's `Requires:` tag (`none` → `[]`).
+- `writes` — ordered array of checkout-relative files or directories the step changes; a trailing `/` covers descendants, and each entry is prefixed `<repo id>:` in a multi-target package; identical to the step's `Writes:` tag.
+- `resources` — optional ordered array of named exclusive non-filesystem resources such as a fixed port or fixture database; omit the field when the step has no `Resources:` tag. The example's `"resources": ["port:4101"]` is a demonstration, not an arbitrary optional field: it declares that the step exclusively occupies the `port:4101` resource, so it must match the step's `Resources:` tag exactly.
+- `wave_checks` — ordered top-level array of `{after, owner_step, gates}`: `after` is the last step of the derived wave, `owner_step` is a member of that wave, and `gates` are the required merge EVs owned by `owner_step` whose kind is `focused-test`, `integration-test` or `deterministic-inspection` and whose command is executable.
+- `setup` — top-level object keyed by target id, each value either `"none"` or `{command, lockfiles, environment}`; `environment` lists variable names, never values.
 - `evidence` — ordered array of owned EV identifiers, exactly matching the step's `Evidence:` tag; use `[]` when the step owns none.
 - `design` — only on `visualDesign: true` steps that carry a `Design reference:` line: `{ "workspace", "design", "step", "path", "sha256" }` copied from that line, so runners and Sentinel can find the screen without parsing Markdown. Omit the field on every other step.
 
 Write `spec-steps.json` only after the spec body is final, so the index matches the committed step list, numbering, complexity, visual, and evidence tags exactly. There must be exactly one entry per step, in the same order.
+
+Validate with `node ~/.agents/scripts/spec-observe/cli.mjs steps lint <package_ref>`; never store derived waves.
 
 ## Machine-Readable Evidence Plan
 

@@ -7,7 +7,7 @@ disable-model-invocation: true
 argument-hint: "[spec=<path/to/spec.md>] [iter=<n>] [review=<reviews/<name>-review.md>]"
 license: MIT
 metadata:
-  version: "20"
+  version: "21"
 ---
 
 # Spec Branch Fix
@@ -103,6 +103,30 @@ active in the checkout. Everything below applies, with these differences:
   in `reviews/<name>-fix.md` from earlier packets, add yours, set `commit` to this
   packet's commit (earlier packets name theirs in their notes) and set `pending` to the
   packet's remaining IDs. A fix file whose `pending` is nonempty is not complete.
+
+### Wave Mode
+
+`scope=wave` selects wave mode. After a needs-fix review the runtime orders the
+findings with [`scripts/fix-packets.mjs`](scripts/fix-packets.mjs) and launches one
+fresh **native fixer** per packet, in order, in the same checkout. The next packet
+starts only after the previous one drained and its gates passed. No subagent applies
+the fixes.
+
+- Each attempt gets one fix and one confirmation. The packet 1 fixer runs Jev
+  review-triage once; later packets receive its summary.
+- Each fixer commits its packet. Keep main's no-partial-change and `pending` rules and
+  the no-empty-commit rule.
+- Submit commits, per-finding decisions, focused evidence, unresolved obligations and
+  (packet 1) the triage summary through `spec_stage_complete`; the runtime writes the
+  fix record and computes `pending`.
+- A nonempty `pending` or unresolved confirmation blocks the attempt for an explicit
+  repair assignment; there is no automatic third round.
+- Skip merge-evidence reassembly.
+- As built, an empty packet splits once into single-finding packets and then blocks
+  `fix-packet-empty`, a failing packet gate blocks `fix-gate-failed`, and the runtime
+  refuses a fix submission whose commit does not descend from the reviewed head, whose
+  HEAD is not the last listed commit, or whose tree is dirty. This keeps main's bounded
+  packets and observed-failure evidence inside the single-fix bound (Architecture F).
 
 ## Read The Review
 

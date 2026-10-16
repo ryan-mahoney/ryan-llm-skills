@@ -7,7 +7,7 @@ disable-model-invocation: true
 argument-hint: "spec=<package ref or folder> step=<number-or-exact-step>"
 license: MIT
 metadata:
-  version: "35"
+  version: "36"
 ---
 
 # Spec Step Run
@@ -111,6 +111,11 @@ if unavailable or incomplete, inspect the original records for affected prior st
 Never treat an indexing failure as an empty history. Prefer `learnings/` over historical
 root-level learning copies.
 
+On the wave path the launch carries a dependency handoff listing every `requires`
+prerequisite with its accepted wave, result SHA, review status, unresolved obligation
+count and artifact paths. Read any prerequisite the handoff marks omitted before editing;
+omission is not evidence of no blockers.
+
 Carry forward applicable unresolved defects. Confirm whether a later fix already
 resolved one before acting. Fixed or validly dismissed findings are precedent;
 deferred/unfixable findings remain open. Record only material handoffs and their
@@ -213,6 +218,20 @@ copy prototype-only fixtures, dependencies, shell UI, or fake data wiring.
   then verify an already-satisfied obligation.
 - Keep changes coherent, explicit, and reviewable. Avoid unrelated cleanup, but do not
   stop merely because a useful change might later be judged unnecessary.
+
+## Wave Members
+
+On the wave path the runtime supplies the checkout (an OverlayFS merged path or a fallback
+worktree) and its private Git directory. Work, verify and commit only there; never push,
+rebase or touch the integration checkout. Keep edits inside the step's declared `writes`.
+If a coherent outcome needs another path, change it only when no other member of the wave
+declares it, and name the path and reason in the learning so the coordinator can record an
+additive ownership adaptation; otherwise return `needs-spec-correction`. This narrows "work
+nominally assigned to a later step" for members, because an undeclared path blocks seal.
+Use only declared `Resources:` (ports, caches, fixture databases) or per-attempt ones.
+Renaming a directory that came from the lower layer can fail with EXDEV: use coreutils `mv`
+or copy-and-delete, then check the Git diff. Completion, review and seal stay separate:
+`spec_complete` makes the result eligible for independent review only.
 
 Read and apply the Reuse and Implementation sections of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
 Inspect generator/bulk-transformation defaults against the sourced domain rules when applicable;
