@@ -56,6 +56,19 @@ export function strategyPlanner(strategy, original) {
     (strategy === 'owner-editor-contracts' ? '\nEvery operation MUST additionally contain contract:{implementation:["..."],boundaries:["..."],verification:["..."]}, each a nonempty string array. This is the owner\'s resolved edit recipe. implementation names exact symbols/locations and the ordered algorithm or edit steps, including actual contracts of called helpers. boundaries spells out branch predicates, precedence, alternatives, missing/invalid values and fallbacks that the packet must preserve. verification states required assertions and concrete fixture setup, invocation and teardown; explicitly state when tests are forbidden or owned by a dependent packet. Do not replace these details with numbered spec references, a restatement of the goal, or a request for the editor to design the solution. Read the actual relevant implementation and test fixtures first. For child-process tests, identify how the fixture emits a terminal result, exits, and is cleaned up. For pure moves, identify source ranges and dependency injection so unchanged bodies need not be regenerated. Keep packets small enough to implement in one response, splitting independent concerns with explicit interfaces and dependency edges. Declare only the files this editor needs to implement its packet. Keep verification-only source with the owner when the editor neither changes those tests nor needs them to understand an interface; do not attach large unrelated test files to pure source moves. Repairs need equally concrete replacement recipes for every known defect. Do not add requirements absent from the original task.' : '');
 }
 
+// Match failures emitted by the request/budget boundary, not arbitrary source paths
+// or syntax diagnostics that can contain words such as "budget" and "deadline".
+const terminalEditorMessages = new Set([
+  'Campaign budget exhausted',
+  'Budget ledger locked; no request submitted',
+  'Budget limit differs from retained ledger',
+  'Cell deadline exceeded',
+  'Cell model-call limit exceeded',
+  'Execution aborted',
+]);
+const terminalEditorFailure = error => ['AbortError', 'TimeoutError'].includes(error.name) ||
+  terminalEditorMessages.has(error.message) || /^Model stopped: aborted(?::|$)/i.test(error.message);
+
 export async function patchEditor(model, stage, task, { operation, files }, { ranges = false, focused = false } = {}) {
   if (focused) {
     const input = focusedInput(operation, files);
@@ -70,7 +83,7 @@ export async function patchEditor(model, stage, task, { operation, files }, { ra
         validateFileSyntax(changed);
         return { files: changed };
       } catch (error) {
-        if (attempt === 1 || /budget|deadline|limit exceeded|aborted/i.test(error.message)) throw error;
+        if (attempt === 1 || terminalEditorFailure(error)) throw error;
         failure = error.message.slice(0, 2000);
       }
     }

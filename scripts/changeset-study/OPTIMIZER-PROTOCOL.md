@@ -112,3 +112,14 @@ remain unchanged, and groups contain at most two original assignments so Jev
 judges the actual pair. This is a new optimizer freeze; the original unoptimized
 run remains unchanged. Replays reuse its plans with the corrected optimizer code,
 so code hashes differ only as recorded in each manifest.
+
+## Recovery classifier correction
+
+The first three-role calibration run exposed a recovery classifier error: an
+application failure mentioning a `context-budget` path matched a broad budget
+keyword and suppressed the allowed retry. Restrict terminal classification to
+actual request-limit messages and cancellation types. Retain the original run.
+Use a fresh unoptimized replay on the corrected backend, followed by deterministic
+and contextual replays of the same raw plans. These three arms share the corrected
+freeze, so retry behavior is not credited to the optimizer. The owner/query work
+is allocated from the original run in all three comparisons.

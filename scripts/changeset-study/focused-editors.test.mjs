@@ -53,3 +53,35 @@ test('preflight rejects missing and oversized initial excerpts but leaves future
   const oversized = { ...operation(), context: [{ path: 'answer.mjs', start: null, end: null }] };
   assert.deepEqual(preflightFocusedPlan({ schema_version: 1, operations: [oversized] }, { 'answer.mjs': 'x'.repeat(32001) }), ['answer: Focused source exceeds 32000 characters: answer']);
 });
+
+for (const path of ['pi/extensions/context-budget/policy.test.mjs', 'deadline/policy.test.mjs']) {
+  test(`an application failure for ${path} retries without treating its path as a request limit`, async () => {
+    const original = { [path]: files['answer.mjs'] };
+    const op = { ...operation(), writes: [path], context: operation().context.map(c => ({ ...c, path })) };
+    const seen = [];
+    const model = { json: async (_system, input) => {
+      seen.push(input);
+      return { edits: seen.length === 1
+        ? [{ kind: 'create', path, text: 'export const answer = 2;' }]
+        : [{ kind: 'replace', path, search: 'answer = 1', text: 'answer = 2' }] };
+    } };
+    const result = await patchEditor(model, 'editor', 'contract', { operation: op, files: original }, { focused: true });
+    assert.equal(seen.length, 2);
+    assert.equal(seen[1].application_failure, `Create requires absent owned path: ${path}`);
+    assert.equal(result.files[path], 'export const answer = 2;\n// unrelated\nexport const untouched = 3;\n');
+    assert.equal(original[path], files['answer.mjs']);
+  });
+}
+
+test('request budget, deadline and cancellation failures stop without a second model request', async () => {
+  const failures = [new Error('Campaign budget exhausted'), new Error('Cell deadline exceeded'),
+    new Error('Cell model-call limit exceeded'), new Error('Budget ledger locked; no request submitted'),
+    new DOMException('The operation was aborted', 'AbortError'), new DOMException('The operation timed out', 'TimeoutError'),
+    new Error('Model stopped: aborted: request cancelled')];
+  for (const failure of failures) {
+    let calls = 0;
+    const model = { json: async () => { calls++; throw failure; } };
+    await assert.rejects(patchEditor(model, 'editor', 'contract', { operation: operation(), files }, { focused: true }), error => error === failure);
+    assert.equal(calls, 1, failure.message);
+  }
+});
