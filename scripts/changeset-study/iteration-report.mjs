@@ -7,7 +7,7 @@ const [root, output] = process.argv.slice(2);
 if (!root || !output) throw new Error('Usage: iteration-report.mjs ITERATIONS_ROOT OUTPUT_PREFIX');
 const read = p => JSON.parse(readFileSync(p, 'utf8'));
 const sum = values => values.reduce((a, b) => a + b, 0);
-const knownSum = values => values.every(Number.isFinite) ? sum(values) : null;
+const knownSum = values => values.length && values.every(Number.isFinite) ? sum(values) : null;
 const geo = values => values.length ? Math.exp(sum(values.map(Math.log)) / values.length) : null;
 const compact = r => Object.fromEntries(['task', 'accepted', 'delivered', 'strategy', 'selector', 'error', 'outcome', 'process_elapsed_ms',
   'implementation_ms', 'model_calls', 'equivalent_usd', 'catalog_usd', 'accounting_complete', 'tokens', 'repairs', 'review_accepted',
@@ -53,7 +53,7 @@ for (const name of readdirSync(root).sort()) {
 }
 if (!references) throw new Error('No iterations');
 const report = { schema_version: 1, label: 'adaptive development against historical native references',
-  references: references.map(r => ({ task: r.task, source_cell: r.source_cell, result_hash: r.result_hash, ...compact(r.result) })),
+  references: references.map(r => ({ task: r.task, source_cell: r.source_cell, result_hash: r.result_hash, ...compact(r.result), stages: r.result.stages })),
   baseline: { n: references.length, seconds: sum(references.map(r => r.result.process_elapsed_ms)) / 1000,
     equivalent_usd: knownSum(references.map(r => r.result.equivalent_usd)), calls: knownSum(references.map(r => r.result.model_calls)),
     tokens: knownSum(references.map(r => r.result.tokens?.totalTokens)) }, iterations: rows };

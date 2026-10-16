@@ -75,6 +75,20 @@ iteration is immutable even while the next strategy is being developed.
    this strategy also asks for an internal completeness pass over required artifacts,
    return shapes and absent/null/unknown states. This bundles vocabulary and prompt
    changes; it cannot isolate either one's individual causal effect.
+4. `checked-ranges`: keep the source-range planner and additionally run the
+   candidate's new or changed tests before review. Parse outer Node test/suite
+   declarations; select added or changed bodies by escaped literal test name,
+   including nested cases through their parent. For unknown names, parse failures
+   or helper-only changes, run the complete changed test file. Keep the original
+   visible command and terminal oracle unchanged, and retain one batch repair.
+   This adds feedback available to the native agent through its coding tools.
+   All check time counts. A diagnostic on the frozen iteration-3 candidate showed
+   its own focused tests reproduce both terminal defects in about 2.1 seconds.
+
+The checked strategy requires `--parser "$ACORN_MODULE"`, pointing to an Acorn ESM
+module. This campaign uses the locally installed Acorn 8.8.1; its exact bytes are
+copied into each freeze and fingerprinted with the worker. A `--freeze-from` replay
+copies that parser unchanged and does not require the original parser path.
 
 Range edits require unique start/end anchors in declared current source. The start
 is inclusive and end exclusive (`null` means EOF). `compose` creates an absent

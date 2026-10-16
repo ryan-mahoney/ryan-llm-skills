@@ -54,6 +54,11 @@ mkdirSync(join(run, 'frozen/scripts'), { recursive: true });
 for (const folder of ['changeset-study', 'changeset', 'changeset-research']) cpSync(join(codeRoot, 'scripts', folder), join(run, 'frozen/scripts', folder), { recursive: true });
 mkdirSync(join(run, 'frozen/skills/spec-changeset-plan'), { recursive: true });
 cpSync(join(codeRoot, 'skills/spec-changeset-plan/SKILL.md'), join(run, 'frozen/skills/spec-changeset-plan/SKILL.md'));
+if (strategy === 'checked-ranges' && !replay) {
+  const parser = resolve(option('--parser'));
+  mkdirSync(join(run, 'frozen/scripts/changeset-study/parser'), { recursive: true });
+  cpSync(parser, join(run, 'frozen/scripts/changeset-study/parser/acorn.mjs'));
+}
 const frozen = files(join(run, 'frozen'));
 if (replayManifest && !equal(frozen, replayManifest.frozen_files)) throw new Error('Replay freeze changed');
 write(join(run, 'tasks.json'), selected.map(id => tasks.find(t => t.id === id)));

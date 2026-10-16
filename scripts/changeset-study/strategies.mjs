@@ -1,6 +1,6 @@
 import { transform } from '../changeset/engine.mjs';
 
-export const strategyNames = ['patch-editors', 'direct-edits', 'source-ranges'];
+export const strategyNames = ['patch-editors', 'direct-edits', 'source-ranges', 'checked-ranges'];
 const rangeContract = `Additional deterministic edits avoid regenerating unchanged source:
 {"kind":"compose","path":"absent/new-file","parts":[{"text":"new header\\n"},{"path":"source/file","start":"unique inclusive start anchor","end":"unique exclusive end anchor"},{"text":"new footer\\n"}]}
 {"kind":"replace-range","path":"source/file","start":"unique inclusive start anchor","end":"unique exclusive end anchor","text":"replacement"}
@@ -18,7 +18,7 @@ export function strategyPlanner(strategy, original) {
     ? 'For this experiment, produce only deterministic operations with concrete edits. Resolve implementation details during read-only discovery. Do not delegate or return instructions for another editor. Batch all settled implementation and required test edits in the final executable plan.'
     : 'Editors return bounded exact edits, not entire existing files. Use deterministic edits when already settled; delegate only unresolved local work. Editors cannot run commands or investigate beyond declared files. Their assignment must include required tests as edits, not ask them to run tests.') +
     '\nPreserve the complete task contract. The harness runs visible checks and impact review after execution. Do not run test commands during read-only planning; inspect source and existing tests instead.' +
-    (strategy === 'source-ranges' ? '\n' + rangeContract +
+    (['source-ranges', 'checked-ranges'].includes(strategy) ? '\n' + rangeContract +
       '\nBefore emitting the plan, audit it against every requested implementation and regression-test artifact. Include the required tests in the first batch, unless the task forbids test edits. Preserve distinctions between absent values, intentional null values, and unknown states; check each required return shape and rejection case. This is an internal completeness pass, not another model call or a request for prose.' : '');
 }
 
