@@ -323,7 +323,102 @@ Scale in this checkout (2026-10-11): 17 package directories, 2.3 GB (`du`), of w
 
 ### 8. `spec-steps.json`
 
-- **Location/format**: `.specs/<f>/spec-steps.json`, 16 files. **No `version`/`schema_version`**. Schema (`spec-write/SKILL.md:393-434`): `{ "spec": ".specs/<f>/spec.md", "steps": [ { step:int, name, description, difficulty: easy|medium|hard, visualDesign: bool, evidence: ["EV-n"…], design?: {workspace, design, step, path, sha256} } ] }`. Census: 109 step entries with `evidence`, 8 (all in the June `3-agent-docs-automation`) without; `design` appears in none yet. The wave extension adds optional per-step `requires: [step…]` (earlier step numbers, or absent/none), `writes: [path…]` (declared write paths), `wave_checks: [ {gate: "EV-n", owner_step, kind: focused-test|integration-test|deterministic-inspection, phase: "merge", required: true, command, artifact} ]`, and package-level `setup: {command, lockfiles, environment}` (or `"none"`); a shared `resources` key adds an implicit edge to the lower-numbered step. `steps lint` (`scripts/spec-observe/cli.mjs steps lint`) validates these.
+- **Location/format**: `.specs/<f>/spec-steps.json`, 16 files. **No `version`/`schema_version`**. Schema (`spec-write/SKILL.md:393-434`): `{ "spec": ".specs/<f>/spec.md", "steps": [ { step:int, name, description, difficulty: easy|medium|hard, visualDesign: bool, evidence: ["EV-n"…], design?: {workspace, design, step, path, sha256} } ] }`. Census: 109 step entries with `evidence`, 8 (all in the June `3-agent-docs-automation`) without; `design` appears in none yet.
+- **Wave contract (Oct 2026)**: the wave extension adds **per-step** `requires` — earlier unique step integers (`[]` for none, never the string `none`), `writes` (declared write paths), and optional `resources` (a shared `resources` key adds an implicit edge to the lower-numbered step). It adds **top-level** `wave_checks` rows `{after, owner_step, gates: ["EV-n"…]}` — exactly one per derived wave, `after` the final step of that wave and `owner_step` a member of it — and top-level `setup`, keyed by target id, with value `"none"` or `{command, lockfiles, environment}` (environment names, not values). Gate definitions live in `evidence-plan.json` with `id/ownerStep/kind/phase/required/command/artifact`, **not** inline in `steps`. `steps lint` (`scripts/spec-observe/cli.mjs steps lint`) validates these. Wave-aware packages require per-step `requires` and `writes`; legacy packages omit them together. `resources` stays optional. Legacy packages that omit `requires`/`writes` remain serial, not concurrency ready.
+
+<!-- wave-index-example:begin -->
+```json
+{
+  "spec": "spec.md",
+  "steps": [
+    {
+      "step": 1,
+      "name": "Alpha",
+      "description": "Implement alpha.",
+      "difficulty": "easy",
+      "visualDesign": false,
+      "requires": [],
+      "writes": ["lib/alpha.mjs", "lib/alpha.test.mjs"],
+      "resources": ["port:4101"],
+      "evidence": ["EV-1"]
+    },
+    {
+      "step": 2,
+      "name": "Beta",
+      "description": "Implement beta.",
+      "difficulty": "easy",
+      "visualDesign": false,
+      "requires": [],
+      "writes": ["lib/beta.mjs", "lib/beta.test.mjs"],
+      "resources": ["port:4102"],
+      "evidence": ["EV-2"]
+    },
+    {
+      "step": 3,
+      "name": "Compose",
+      "description": "Integrate alpha and beta.",
+      "difficulty": "medium",
+      "visualDesign": false,
+      "requires": [1, 2],
+      "writes": ["app/compose.mjs", "app/compose.test.mjs"],
+      "evidence": ["EV-3"]
+    }
+  ],
+  "wave_checks": [
+    { "after": 2, "owner_step": 1, "gates": ["EV-1"] },
+    { "after": 3, "owner_step": 3, "gates": ["EV-3"] }
+  ],
+  "setup": {
+    "service": {
+      "command": "npm ci --prefix lib --ignore-scripts --no-audit --no-fund",
+      "lockfiles": ["lib/package-lock.json"],
+      "environment": []
+    }
+  }
+}
+```
+<!-- wave-index-example:end -->
+
+The following is a **wave-relevant excerpt** of `evidence-plan.json`, not a complete evidence-plan validation example:
+
+<!-- wave-evidence-example:begin -->
+```json
+{
+  "version": 2,
+  "spec": "spec.md",
+  "gates": [
+    {
+      "id": "EV-1",
+      "ownerStep": 1,
+      "kind": "focused-test",
+      "phase": "merge",
+      "required": true,
+      "command": "node --test lib/alpha.test.mjs",
+      "artifact": "evidence/alpha.txt"
+    },
+    {
+      "id": "EV-2",
+      "ownerStep": 2,
+      "kind": "focused-test",
+      "phase": "merge",
+      "required": true,
+      "command": "node --test lib/beta.test.mjs",
+      "artifact": "evidence/beta.txt"
+    },
+    {
+      "id": "EV-3",
+      "ownerStep": 3,
+      "kind": "integration-test",
+      "phase": "merge",
+      "required": true,
+      "command": "node --test app/compose.test.mjs",
+      "artifact": "evidence/compose.txt"
+    }
+  ]
+}
+```
+<!-- wave-evidence-example:end -->
+
 - **Purpose**: derived index so runners can enumerate/route steps without parsing Markdown; "spec.md stays canonical". Its `requires`/`writes`/`wave_checks`/`setup` fields are the reader-consumed wave contract.
 - **Lifecycle**: written last in planning, reconciled to spec.md; difficulty can be refined once after Jev `step-difficulty` advice. Not touched during execution.
 - **Writers**: spec-write. **Readers**: `startup.mjs:34-40` (validates ordered unique positive ints, picks cards, routes `hard` -> strong owner), spec-run, sentinel `readStepIndex` (progress bar position/total, `spec_progress`; `accepted_steps` stays null), dashboard, epics status (`proposed` vs `prepared` = file exists), spec-gym-extract, and `scripts/spec-observe/steps.mjs validateStepIndex` (resolves waves, `longest_chain`, `fan_in` and `concurrency_ready`).
