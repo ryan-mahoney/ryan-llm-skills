@@ -1005,7 +1005,7 @@ test('native recovery after a length stop can finish without inheriting the earl
 
 async function waveSetup(t, source, composition = false) {
   const f = await fixture(t, source);
-  if (composition === 'portable') {
+  if (composition) {
     // A normal separate-git-dir integration checkout: fallback worktrees'
     // shared admin storage must not be nested inside the integration tree.
     const common = join(f.dir, 'common.git');
@@ -1052,6 +1052,8 @@ async function waveSetup(t, source, composition = false) {
       if (composition && !request.register(service)) throw new Error('contained registration refused');
       const [command, ...args] = composition ? request.argv : [process.execPath, fake];
       const child = spawn(command, args, { cwd: request.cwd, env: { ...request.env }, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
+      const submittedLaunch = launches.at(-1);
+      child.stderr.on('data', chunk => { submittedLaunch.stderr = (submittedLaunch.stderr ?? '') + chunk; });
       child.on('error', () => {});
       service.main_pid = child.pid;
       services.set(service.unit, { service, child });
@@ -1180,7 +1182,7 @@ async function composedWave(t, source, portable = false) {
     assert.equal(w.workspace.backend, 'worktree');
     assert.ok(w.launches.every(({ argv }) => argv[0] === process.execPath && !argv.includes('bwrap')));
   }
-  t.diagnostic(portable ? 'portable contract: production worktree fallback, bwrap absent from PATH; kernel_proof:false; not EV-14'
+  t.diagnostic(portable ? 'portable execution SUBSET: production worktree fallback, bwrap absent from PATH; setup publication KNOWN GAP outside step 6; kernel_proof:false; not EV-14'
     : 'host-dependent/native auto-selection evidence only; not the portable contract; kernel_proof:false; not EV-14');
   t.diagnostic(`composition backend=${w.workspace.selectedBackend}; capability=${probe.result.reason}; probe boundary=${probe.boundary}; no systemd/cgroup or EV-14 certification`);
   const durable = JSON.parse(readFileSync(w.wavePath, 'utf8')).members['1'];
@@ -1196,7 +1198,12 @@ const waveRuntime = w => {
   return runtime;
 };
 
-test('wave runtime: composition executes the submitted bootstrap and observes private worker context', async t => {
+for (const portable of [false, true]) {
+// Original names/assertions stay intact for host-dependent auto-selection;
+// Portable variants establish execution/cleanup, but explicitly expose missing
+// setup publication. They cannot close F3 until the step-004 defect is repaired.
+const compositionName = portable ? 'portable fallback composition subset (KNOWN setup publication gap)' : 'composition';
+test(`wave runtime: ${compositionName} executes the submitted bootstrap and observes private worker context`, async t => {
   const previousSecret = process.env.SPEC_RUNTIME_COMPOSITION_SECRET;
   process.env.SPEC_RUNTIME_COMPOSITION_SECRET = 'private-composition-context';
   t.after(() => {
@@ -1210,15 +1217,20 @@ test('wave runtime: composition executes the submitted bootstrap and observes pr
     fs.writeFileSync(path.join(record.package, 'worker-checkout.json'), JSON.stringify({
       cwd: process.cwd(), pointer: fs.readFileSync('.git', 'utf8'),
       head: require('child_process').execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim(),
-      setup: fs.readFileSync('deps/setup-output', 'utf8'),
+      setup: fs.existsSync('deps/setup-output') ? fs.readFileSync('deps/setup-output', 'utf8') : null,
     }));
     setInterval(() => {}, 1000);
-  `);
+  `, portable);
   const { runtime } = w;
   const started = await runtime.start(w.input);
+  if (portable) {
+    assert.equal(loadRun(w.f.packagePath, started.run_id).wave_bindings.backend, 'worktree');
+    assert.equal(w.launches.at(-1).argv[0], process.execPath);
+  }
   const observed = join(w.f.packagePath, 'worker-environment.json');
   const checkoutObserved = join(w.f.packagePath, 'worker-checkout.json');
   for (let i = 0; i < 100 && !existsSync(checkoutObserved); i++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(existsSync(checkoutObserved), true, w.launches.at(-1).stderr);
   assert.equal(existsSync(observed), true, 'submitted bootstrap must deliver the private request environment');
   const env = JSON.parse(readFileSync(observed, 'utf8'));
   assert.equal(env.SPEC_RUNTIME_RECORD, join(w.f.packagePath, 'runtime', 'runs', `${started.run_id}.json`));
@@ -1240,18 +1252,26 @@ test('wave runtime: composition executes the submitted bootstrap and observes pr
   assert.equal(checkout.cwd, w.workspace.merged ?? w.workspace.worktree);
   assert.match(checkout.pointer, /^gitdir: /);
   assert.equal(checkout.head, w.wave.target.base_commit);
-  assert.equal(checkout.setup, 'prepared');
+  if (portable) {
+    assert.equal(checkout.setup, null, 'KNOWN GAP: real setup output was not published to fallback');
+    assert.equal(w.launches[0].argv[0], process.execPath);
+    const staging = join(w.workspace.worktree, '..', '..', '..', 'staging', 'attempt-1', 'dependencies', 'deps', 'setup-output');
+    assert.equal(readFileSync(staging, 'utf8'), 'prepared', 'real setup produced bytes in staging before fallback lost them');
+    t.diagnostic(`setup publication NOT verified; outside-step-6 defect in step-workspaces.mjs; fallback output=${checkout.setup}`);
+  } else {
+    assert.equal(checkout.setup, 'prepared');
+  }
   await runtime.cancel(w.f.packagePath, started.run_id);
 });
 
 for (const drainStatus of ['confirmed', 'unknown']) {
-  test(`wave runtime: composition contained settled cleanup with ${drainStatus} drain retains state for phase remount (not EV-14)`, { timeout: 60000 }, async t => {
+  test(`wave runtime: ${compositionName} contained settled cleanup with ${drainStatus} drain retains state for phase remount (not EV-14)`, { timeout: 60000 }, async t => {
     const w = await composedWave(t, `
       const fs = require('fs'), path = require('path');
       const record = JSON.parse(fs.readFileSync(process.env.SPEC_RUNTIME_RECORD, 'utf8'));
       const retained = fs.existsSync('retained.txt') ? fs.readFileSync('retained.txt', 'utf8') : null;
       fs.writeFileSync(path.join(record.package, record.id + '-observed.json'), JSON.stringify({
-        retained, setup: fs.readFileSync('deps/setup-output', 'utf8'),
+        retained, setup: fs.existsSync('deps/setup-output') ? fs.readFileSync('deps/setup-output', 'utf8') : null,
         head: require('child_process').execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim(),
       }));
       fs.writeFileSync('retained.txt', 'dirty retained bytes');
@@ -1259,15 +1279,19 @@ for (const drainStatus of ['confirmed', 'unknown']) {
       console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'Retained handoff'}]}}));
       console.log(JSON.stringify({type:'agent_settled',aborted:false}));
       setInterval(() => {}, 1000);
-    `);
+    `, portable);
     const { runtime } = w;
     w.adapter.drainOutcome = { status: drainStatus, reason: drainStatus === 'unknown' ? 'inspection-unavailable' : undefined };
     const started = await runtime.start(w.input);
     const result = await w.f.finished;
     let record = loadRun(w.f.packagePath, started.run_id);
+    if (portable) {
+      assert.equal(record.wave_bindings.backend, 'worktree');
+      assert.equal(w.launches.at(-1).argv[0], process.execPath);
+    }
     const claims = () => JSON.parse(readFileSync(join(w.ownershipRoot, 'claims.json'), 'utf8')).claims;
     const ownClaims = () => claims().filter(c => [record.capacity_claim.token, record.wave_bindings.checkout_claim].includes(c.token));
-    assert.equal(w.adapter.stops.filter(unit => unit === record.service.unit).length, 1, 'real contained settled-worker callback ran exactly once');
+    assert.equal(w.adapter.stops.filter(unit => unit === record.service.unit).length, 1, `real contained settled-worker callback ran exactly once: ${JSON.stringify(result)}`);
     assert.ok(w.adapter.drains.includes(record.service.unit), 'Runtime.finish used contained drain');
     const child = [...w.children].at(-1);
     assert.notEqual(child.exitCode ?? child.signalCode, null, 'real submitted process exited before drain confirmation');
@@ -1303,16 +1327,56 @@ for (const drainStatus of ['confirmed', 'unknown']) {
     assert.notEqual(remounted.workspace.claim.token, w.workspace.claim.token);
     assert.equal((await runtime.remountWaveMember(input)).idempotent, true);
     const next = await runtime.start(input);
+    if (portable) {
+      assert.equal(loadRun(w.f.packagePath, next.run_id).wave_bindings.backend, 'worktree');
+      assert.equal(w.launches.at(-1).argv[0], process.execPath);
+    }
     const observed = join(w.f.packagePath, `${next.run_id}-observed.json`);
     for (let i = 0; i < 100 && !existsSync(observed); i++) await new Promise(resolve => setTimeout(resolve, 20));
     const actual = JSON.parse(readFileSync(observed, 'utf8'));
     assert.equal(actual.retained, 'dirty retained bytes', 'second real worker sees first worker dirty state');
-    assert.equal(actual.setup, 'prepared', 'published setup output survives phase remount');
+    if (portable) {
+      assert.equal(actual.setup, null, 'KNOWN GAP: fallback remount still lacks real setup output');
+    } else {
+      assert.equal(actual.setup, 'prepared', 'published setup output survives phase remount');
+    }
     assert.equal(actual.head, w.wave.target.base_commit);
     assert.notEqual(next.run_id, started.run_id);
     await runtime.cancel(w.f.packagePath, next.run_id);
   });
 }
+
+}
+
+test('wave runtime: nonnative overlay argv construction retains real bootstrap without executing bwrap (not EV-14)', async t => {
+  const w = await waveSetup(t, 'throw new Error("must not execute");');
+  let submitted;
+  w.adapter.start = async request => {
+    submitted = request;
+    throw new Error('argv inspection only: no execution');
+  };
+  await assert.rejects(() => waveRuntime(w).start(w.input), /argv inspection only/);
+  assert.ok(submitted, 'production containedRoot must submit the composition');
+  const layers = w.workspace;
+  assert.deepEqual(submitted.argv.slice(0, 20), [
+    'bwrap', '--unshare-user', '--die-with-parent', '--bind', '/', '/',
+    '--dev', '/dev', '--proc', '/proc', '--overlay-src', layers.lower,
+    '--overlay', layers.upper, layers.work, layers.merged, '--chdir', layers.merged,
+    '--', process.execPath,
+  ]);
+  assert.equal(submitted.argv[20], '-e');
+  assert.match(submitted.argv[21], /spawn/);
+  const requestPath = submitted.argv[22];
+  assert.equal(submitted.argv.length, 23, 'bootstrap request is the final argv element');
+  const request = JSON.parse(readFileSync(requestPath, 'utf8'));
+  assert.equal(request.checkout, layers.merged);
+  assert.equal(request.gitDir, layers.gitDir);
+  assert.equal(request.command, 'pi');
+  assert.ok(request.args.includes('--session'));
+  assert.equal(request.env.SPEC_RUNTIME_ROLE, 'owner');
+  assert.equal(w.children.size, 0, 'inspection never executes a transport');
+  t.diagnostic('nonnative production overlay argv inspection only; no capability probe, fixture bwrap or execution; kernel_proof:false; not EV-14');
+});
 
 test('wave runtime: production fallback workspace binds and starts without an overlay upper (not EV-14)', async t => {
   const w = await composedWave(t, 'setInterval(() => {}, 1000);', true);
@@ -1330,7 +1394,11 @@ test('wave runtime: production fallback workspace binds and starts without an ov
 test('wave runtime: overlay workspace with a missing upper still throws before launch', async t => {
   const w = await waveSetup(t);
   rmSync(w.workspace.upper, { recursive: true });
-  await assert.rejects(() => waveRuntime(w).start(w.input), { code: 'ENOENT' });
+  await assert.rejects(() => waveRuntime(w).start(w.input), error => {
+    assert.equal(error.code, 'ENOENT');
+    assert.equal(error.path, w.workspace.upper);
+    return true;
+  });
   assert.equal(w.launches.length, 0);
 });
 
