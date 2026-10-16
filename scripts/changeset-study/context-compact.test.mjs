@@ -70,3 +70,51 @@ test('the focused writer receives omission metadata and exact edits preserve eve
   assert.equal(seen.length, 1); assert.equal(result.files['large.mjs'], source.replace('export const neighbor = 1;', 'export const neighbor = 2;'));
   assert.equal(files['large.mjs'], source);
 });
+
+// CHANGESET_TEST_PARSER="$ACORN_MODULE" node --test --test-name-pattern='overlapping source selections' scripts/changeset-study/context-compact.test.mjs
+test('overlapping source selections deliver their union once and retain every original selector', () => {
+  const text = '0123456789'.repeat(2500), files = { 'notes.txt': text };
+  const selections = [[0, 20000], [10000, 25000], [12000, 18000]].map(([source_start, source_end], i) => ({
+    path: 'notes.txt', start: `selector-${i}`, end: null, source_start, source_end, text: text.slice(source_start, source_end) }));
+  const result = compactContext(selections, files);
+  assert.equal(result.excerpts.length, 1);
+  assert.equal(result.excerpts[0].text, text);
+  assert.deepEqual(result.excerpts[0].selection_indices, [0, 1, 2]);
+  assert.equal(result.compaction.selectors.length, 3);
+  assert.equal(result.compaction.original_source_characters, 41000);
+  assert.equal(result.compaction.unique_source_characters, 25000);
+  assert.equal(result.compaction.deduplicated_source_characters, 16000);
+  assert.equal(result.compaction.omitted_characters, 0);
+  assert.deepEqual(result.compaction.omitted_ranges, []);
+});
+
+// CHANGESET_TEST_PARSER="$ACORN_MODULE" node --test --test-name-pattern='generated tails' scripts/changeset-study/context-compact.test.mjs
+test('generated tails with many medium bodies compact progressively while preserving exact signatures and source slices', () => {
+  const definitions = Array.from({ length: 150 }, (_, i) => `export function helper${i}(value) {\n${'  value += 1;\n'.repeat(38)}  return value;\n}\n`);
+  const text = definitions.join(''), files = { 'generated.mjs': text };
+  const excerpts = [[0, text.length], [text.indexOf('export function helper60('), text.length]].map(([source_start, source_end]) => ({
+    path: 'generated.mjs', start: null, end: null, source_start, source_end, text: text.slice(source_start, source_end) }));
+  const result = compactContext(excerpts, files, { parse });
+  assert.ok(result.compaction.source_characters <= 32000);
+  assert.equal(result.compaction.body_profile.prefix, 80, 'medium bodies need more than the original 600-character threshold');
+  assert.equal(result.compaction.unique_source_characters, text.length);
+  assert.equal(result.compaction.omitted_ranges.length, 150);
+  assert.deepEqual(result.compaction.omitted_ranges.find(range => range.definition.name === 'helper0').selection_indices, [0]);
+  assert.deepEqual(result.compaction.omitted_ranges.find(range => range.definition.name === 'helper60').selection_indices, [0, 1]);
+  const visible = result.excerpts.map(e => e.text).join('');
+  for (let i = 0; i < 150; i++) assert.ok(visible.includes(`export function helper${i}(value) {`));
+  const partition = [...result.excerpts, ...result.compaction.omitted_ranges].sort((a, b) => a.source_start - b.source_start);
+  let cursor = 0;
+  for (const range of partition) {
+    assert.equal(range.source_start, cursor, 'union slices and omissions partition source without duplication');
+    if (range.text !== undefined) assert.equal(range.text, text.slice(range.source_start, range.source_end));
+    cursor = range.source_end;
+  }
+  assert.equal(cursor, text.length);
+  assert.equal(files['generated.mjs'], text);
+  const minimal = compactContext(excerpts, files, { parse, limit: 8000 });
+  assert.equal(minimal.compaction.body_profile.prefix, 1);
+  assert.ok(minimal.compaction.source_characters <= 8000);
+  assert.equal(minimal.excerpts.map(e => e.text).join(''), definitions.map((_, i) => `export function helper${i}(value) {}\n`).join(''));
+  assert.throws(() => compactContext(excerpts, files, { parse, limit: 100 }), /exceeds 100/);
+});
