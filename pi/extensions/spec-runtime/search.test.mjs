@@ -437,15 +437,17 @@ test("wiring parity and import hygiene", { timeout: 60000 }, async () => {
   const searchText = await readFile(join(here, "search.mjs"), "utf8");
 
   assert.match(indexText, /registerRepositorySearch\(pi, record\)/);
-  const allowedMatch = /const allowed = role === 'owner' \? \[([^\]]*)\] : \[([^\]]*)\];/.exec(indexText);
+  // Owner list, then the fenced parallel-editor list and the ordinary editor list.
+  const allowedMatch = /const allowed = role === 'owner' \? \[([^\]]*)\]\s*: fence \? \[([^\]]*)\] : \[([^\]]*)\];/.exec(indexText);
   assert.ok(allowedMatch, "owner/editor allowlist literals present");
   assert.match(allowedMatch[1], /'spec_search'/);
-  assert.doesNotMatch(allowedMatch[2], /'spec_search'/);
+  assert.doesNotMatch(allowedMatch[2], /'spec_search'|'bash'|'spec_question'/);
+  assert.doesNotMatch(allowedMatch[3], /'spec_search'/);
   assert.match(
     runtimeText,
     /role === 'owner' \? 'read,grep,find,ls,spec_editor,spec_answer,spec_verify,spec_scout,spec_search,spec_advice,spec_complete'/,
   );
-  const toolsMatch = /--tools',\s*role === 'owner' \? '([^']*)' : '([^']*)'/.exec(runtimeText);
+  const toolsMatch = /--tools',\s*options\.tools \|\| \(role === 'owner' \? '([^']*)' : '([^']*)'\)/.exec(runtimeText);
   assert.ok(toolsMatch, "owner/editor tool lists present");
   assert.equal(toolsMatch[1].split(",").includes("spec_search"), true);
   assert.equal(toolsMatch[2].split(",").includes("spec_search"), false);

@@ -6,7 +6,7 @@ import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { randomUUID, createHash } from 'node:crypto';
 import { join, resolve, realpathSync } from 'node:path';
 import { homedir } from 'node:os';
-import { Runtime, loadRun, summary, assertLease, runEditor, runCommand, runVerification, runAdvice, runCompletion, packageDirOf, assertIdleWriter, event as runtimeEvent } from './runtime.mjs';
+import { Runtime, loadRun, summary, assertLease, runEditor, runEditorBatch, fencedPath, runCommand, runVerification, runAdvice, runCompletion, packageDirOf, assertIdleWriter, event as runtimeEvent } from './runtime.mjs';
 import { assertModelSelector } from './model-selector.mjs';
 import { createCommunication } from './communication.mjs';
 import { createMonitor, publicHint } from './monitor.mjs';
@@ -97,6 +97,9 @@ function realpathStep(step: string): string {
   try { return realpathSync(step); } catch { return step; }
 }
 
+const contextRanges = Type.Array(Type.Object({ path: Type.String({ description: 'Checkout-relative or package path' }), start: Type.Number({ minimum: 1 }), end: Type.Number({ minimum: 1 }) }), { description: 'Exact current source ranges to attach to the editor packet, usually from the step context pack. The editor edits from them instead of searching.' });
+const reasoningLevel = Type.Union(['off', 'low', 'high', 'max'].map(value => Type.Literal(value)), { description: 'Editor reasoning for this packet. Use off for a closed packet (decision made, exact excerpts and changes given); high for an open one.' });
+
 export default function (pi: any) {
   // One installer wins per session; both entry points must pass the same options.
   installContextBudget(pi);
@@ -105,8 +108,11 @@ export default function (pi: any) {
     const record = JSON.parse(readFileSync(process.env.SPEC_RUNTIME_RECORD!, 'utf8'));
     installProgressContext(pi, { record, role });
     const communication = createCommunication(pi, record, role, { onEvent: (name: string, detail: any) => runtimeEvent(record, name, detail) });
-    if (role === 'editor') installDiscoveryBudget(pi, { report: (name: string, detail: any) => runtimeEvent(record, name, detail) });
-    const allowed = role === 'owner' ? ['read', 'grep', 'find', 'ls', 'spec_editor', 'spec_answer', 'spec_verify', 'spec_scout', 'spec_search', 'spec_advice', 'spec_complete'] : ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'spec_question'];
+    // A parallel packet's editor may write only its declared files and has no shell or owner channel.
+    const fence: string[] | undefined = role === 'editor' && process.env.SPEC_EDITOR_PATHS ? JSON.parse(process.env.SPEC_EDITOR_PATHS) : undefined;
+    if (role === 'editor') installDiscoveryBudget(pi, { parallel: Boolean(fence), report: (name: string, detail: any) => runtimeEvent(record, name, detail) });
+    const allowed = role === 'owner' ? ['read', 'grep', 'find', 'ls', 'spec_editor', 'spec_answer', 'spec_verify', 'spec_scout', 'spec_search', 'spec_advice', 'spec_complete']
+      : fence ? ['read', 'grep', 'find', 'ls', 'edit', 'write'] : ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'spec_question'];
     pi.on('session_shutdown', () => communication.close());
     pi.on('session_start', (_event: any, ctx: any) => {
       // Apply the process guard only to a managed worker with a run record.
@@ -134,6 +140,8 @@ export default function (pi: any) {
       try {
         assertLease(record);
         if (!allowed.includes(event.toolName)) return { block: true, reason: 'This tool is outside the managed worker role.' };
+        if (fence && ['edit', 'write'].includes(event.toolName) && !fencedPath(record.checkout, event.input?.path, fence))
+          return { block: true, reason: `This parallel packet may write only ${fence.join(', ')}. Return the needed change to the owner instead.` };
         if (['bash', 'spec_verify'].includes(event.toolName) && /\bgit\s+(?:-[^\s]+\s+)*reset\s+--hard\b/.test(event.input.command)) return { block: true, reason: 'Hard resets are not allowed in a managed step. Return the recovery decision to the coordinator.' };
         if (event.toolName === 'spec_verify' && /\bgit\s+(?:-[^\s]+\s+)*reset\s+--hard\b/.test(event.input.server?.command || '')) return { block: true, reason: 'Hard resets are not allowed in managed server commands.' };
       } catch (error: any) { return { block: true, reason: error.message }; }
@@ -183,11 +191,19 @@ export default function (pi: any) {
           catch (error: any) { return result({ error: error.message, receipt_id: error.receipt_id }, true); }
         } });
       pi.registerTool({ name: 'spec_editor', label: 'Spec editor', description: 'Start a fresh editor session for this packet; include current decisions, paths and preservation constraints without relying on prior editor chat. Apply a bounded transformation whose behavior and architectural approach the owner has chosen; let the editor choose local implementation details. Send a Change/Edits/Preserve/Return packet with named symbols and concrete operations. The owner reads/searches source directly; reserve facts-only requests for a blocking fact unavailable through those tools. Return a compact result and artifact paths. The editor does not run verification; the owner uses spec_verify after the return. Do not delegate whole-step design or open-ended repair. Assess the return before the next assignment; commit is separate. No polling.',
-        parameters: Type.Object({ assignment: Type.String(),
-          context: Type.Optional(Type.Array(Type.Object({ path: Type.String({ description: 'Checkout-relative or package path' }), start: Type.Number({ minimum: 1 }), end: Type.Number({ minimum: 1 }) }), { description: 'Exact current source ranges to attach to the editor packet, usually from the step context pack. The editor edits from them instead of searching.' })),
-          reasoning: Type.Optional(Type.Union(['off', 'low', 'high', 'max'].map(value => Type.Literal(value)), { description: 'Editor reasoning for this packet. Use off for a closed packet (decision made, exact excerpts and changes given); high for an open one.' })) }),
+        parameters: Type.Object({ assignment: Type.Optional(Type.String({ description: 'One packet. Omit when sending packets.' })),
+          context: Type.Optional(contextRanges),
+          reasoning: Type.Optional(reasoningLevel),
+          packets: Type.Optional(Type.Array(Type.Object({ assignment: Type.String(), paths: Type.Array(Type.String(), { minItems: 1, description: 'Checkout-relative files this packet alone may write' }),
+            context: Type.Optional(contextRanges), reasoning: Type.Optional(reasoningLevel) }),
+            { minItems: 2, maxItems: 4, description: 'Closed packets that write disjoint files, run concurrently. Each editor is fenced to its paths, has no shell and cannot ask questions. Settle every shared interface first; keep a shared test file in one packet.' })) }),
         async execute(_id: string, args: any, signal: AbortSignal) {
-          try { const reply = await communication.beginEditor(() => runEditor(record, args.assignment, signal, undefined, { context: args.context, reasoning: args.reasoning }), signal); return result(reply, Boolean(reply.error)); }
+          try {
+            if (args.packets && args.assignment) throw new Error('send either assignment or packets, not both');
+            const reply = await communication.beginEditor(() => args.packets
+              ? runEditorBatch(record, args.packets, signal)
+              : runEditor(record, args.assignment, signal, undefined, { context: args.context, reasoning: args.reasoning }), signal);
+            return result(reply, Boolean(reply.error)); }
           catch (error: any) { return result({ error: error.message, ...(signal?.aborted ? { requires_cancellation: true } : {}), next: 'resolve this failure; do not start an unmanaged replacement' }, true); }
         } });
       pi.registerTool({ name: 'spec_answer', label: 'Answer editor', description: 'Answer the retained editor\'s pending decision and await the same editor process. Do not start a replacement editor.',

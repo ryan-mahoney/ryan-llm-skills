@@ -79,6 +79,12 @@ packet fails, reports an anchor mismatch or asks a question, re-send it once wit
 `reasoning: "high"` and record the escalation. Debug failing gates yourself from the
 failure output, then send a closed repair packet.
 
+When two to four closed packets write disjoint files and every interface between them is
+settled, send them together as `spec_editor` `packets`, each with the `paths` it alone may
+write; they run concurrently. Parallel editors cannot ask questions or use a shell, so send an
+open packet, a shared file (including a shared test file) or formatting as a single packet.
+In one hard step, 89 of 146 minutes were serial editor time across mostly disjoint modules.
+
 Keep each editor packet inside one context window. When a target file would pass about
 1,000 lines, split it along the card's boundaries into cohesive modules before adding
 more; do not keep growing one module. A new module that splits a declared file along the

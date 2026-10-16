@@ -212,11 +212,11 @@ export async function terminateGroup(record, pid) {
 }
 // Register every detached group before it can execute useful work. If its launcher
 // dies before releasing stdin, the wrapper sees EOF and exits without running a worker.
-export function spawnManaged(record, role, command, args, onRegistered = () => {}) {
+export function spawnManaged(record, role, command, args, onRegistered = () => {}, env = {}) {
   const child = spawn('/bin/bash', ['-c', 'IFS= read -r gate && [ "$gate" = start ] && exec "$@"', 'spec-runtime', command, ...args], {
     cwd: record.checkout, detached: true,
     env: { ...process.env, ...artifactEnvironment(record.package), SPEC_RUNTIME_ROLE: role, SPEC_RUNTIME_RECORD: join(record.package, 'runtime/runs', `${record.id}.json`),
-      PI_INTERCOM_SCOPE_ID: record.id, PI_INTERCOM_STABLE_ID: `spec-${role}-${record.id}` },
+      PI_INTERCOM_SCOPE_ID: record.id, PI_INTERCOM_STABLE_ID: `spec-${role}-${record.id}`, ...env },
     stdio: ['pipe', 'pipe', 'pipe'] });
   child.stdin.on('error', () => {});
   trackGroup(record, child.pid, role);
@@ -292,9 +292,9 @@ export function launch(record, role, prompt, options = {}) {
     ...(selector.thinking ? ['--thinking', selector.thinking] : []), '--no-extensions', '--no-skills', '--no-prompt-templates',
     ...((record.child_extensions || []).flatMap(path => ['--extension', path])),
     ...(role === 'owner' ? ['--extension', join(homedir(), '.pi/agent/npm/node_modules/pi-subagents/index.js')] : []),
-    '--extension', join(here, 'index.ts'), '--tools', role === 'owner' ? 'read,grep,find,ls,spec_editor,spec_answer,spec_verify,spec_scout,spec_search,spec_advice,spec_complete' : 'read,grep,find,ls,edit,write,bash,spec_question',
+    '--extension', join(here, 'index.ts'), '--tools', options.tools || (role === 'owner' ? 'read,grep,find,ls,spec_editor,spec_answer,spec_verify,spec_scout,spec_search,spec_advice,spec_complete' : 'read,grep,find,ls,edit,write,bash,spec_question'),
     '--append-system-prompt', profile, '--', prompt ];
-  const child = spawnManaged(record, role, options.command || 'pi', args);
+  const child = spawnManaged(record, role, options.command || 'pi', args, undefined, options.env);
   const activity = activityRecorder(record, role);
   let reportLifecycleFailure;
   const lifecycleFailure = new Promise(resolveFailure => { reportLifecycleFailure = resolveFailure; });
@@ -335,7 +335,8 @@ export function launch(record, role, prompt, options = {}) {
           shutdownTimer = setTimeout(async () => {
             try {
               if (child.exitCode !== null || child.signalCode !== null) return;
-              if (activeGroups(record).some(group => group.pid !== child.pid && !(role === 'editor' && group.role === 'owner'))) {
+              // Sibling editors of a parallel batch are expected; they have no shell to leave descendants.
+              if (activeGroups(record).some(group => group.pid !== child.pid && !(role === 'editor' && (group.role === 'owner' || (options.parallel && group.role === 'editor'))))) {
                 reportLifecycleFailure('Settled worker has active managed descendants; cancel the run before replacing it.');
                 return;
               }
@@ -531,6 +532,7 @@ export class Runtime {
 
 const THINKING = /^(off|minimal|low|medium|high|xhigh|max)$/;
 const EXCERPT_LINES = 600;
+const PARALLEL_EDITORS = 4;
 const EXCERPT_CHARS = 120000;
 
 // Attach the owner's chosen source ranges so a fresh editor edits immediately
@@ -553,7 +555,7 @@ export function contextExcerpts(record, context = []) {
   return `CONTEXT EXCERPTS (exact current bytes chosen by the owner; edit against them and read further only when an edit anchor does not match):\n${blocks.join('\n')}\n--- end of excerpts\n`;
 }
 
-export async function runEditor(record, assignment, signal, launchProcess = launch, { stopGroup = terminateGroup, context = [], reasoning } = {}) {
+export async function runEditor(record, assignment, signal, launchProcess = launch, { stopGroup = terminateGroup, context = [], reasoning, paths, member } = {}) {
   assertLease(record);
   if (reasoning !== undefined && !THINKING.test(reasoning)) throw new Error(`reasoning must be one of off, minimal, low, medium, high, xhigh, max`);
   const excerpts = contextExcerpts(record, context);
@@ -563,8 +565,9 @@ export async function runEditor(record, assignment, signal, launchProcess = laun
     const failure = read(configFile);
     if (failure.selector === record.editor_model) return { error: configurationAction(failure.selector, failure.cause), configuration_failure: failure, coordinator_action_required: true };
   }
+  // A batch member runs under the batch's writer slot; runEditorBatch checks survivors.
   const editorLock = editorSlot(record);
-  try { mkdirSync(editorLock); } catch { throw new Error('An editor assignment is already active; await its result.'); }
+  if (!member) try { mkdirSync(editorLock); } catch { throw new Error('An editor assignment is already active; await its result.'); }
   let task;
   try {
     invalidateCompletion(record);
@@ -579,7 +582,9 @@ export async function runEditor(record, assignment, signal, launchProcess = laun
     const orientation = excerpts
       ? 'The owner attached the exact source you need below; start editing from it. Ask the owner for a missing decision.'
       : 'Read the relevant card contracts and current named source; ask the owner for a missing decision.';
-    task = launchProcess({ ...record, editor_session: session, editor_model: editorModel }, 'editor', `PACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${targetFacts(record)}FRESH EDITOR: This packet is your complete assignment, not a continuation of prior editor chat. Preserve existing working-tree changes. ${orientation} Do not repeat prior work or verification.\n${assignment}\n${excerpts}`);
+    const fence = member ? `PARALLEL PACKET: other editors are writing other files now. You may edit or write only: ${paths.join(', ')}. You have no shell and cannot ask the owner; if a decision or anchor is missing, stop and return the exact question, the paths you checked and the facts found.\n` : '';
+    task = launchProcess({ ...record, editor_session: session, editor_model: editorModel }, 'editor', `PACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${targetFacts(record)}FRESH EDITOR: This packet is your complete assignment, not a continuation of prior editor chat. Preserve existing working-tree changes. ${orientation} Do not repeat prior work or verification.\n${fence}${assignment}\n${excerpts}`,
+      member ? { parallel: true, tools: 'read,grep,find,ls,edit,write', env: { SPEC_EDITOR_PATHS: JSON.stringify(paths), PI_INTERCOM_STABLE_ID: `spec-editor-${record.id}-${member}` } } : undefined);
     event(record, 'editor_started', { pid: task.child.pid, editor_session: session, ...(reasoning ? { reasoning } : {}), ...(context?.length ? { context_ranges: context.length } : {}) });
     let stopping;
     let reportUnconfirmed;
@@ -601,7 +606,7 @@ export async function runEditor(record, assignment, signal, launchProcess = laun
       result.requires_cancellation = true;
     }
     settleGroup(record, task.child.pid);
-    const surviving = activeGroups(record).filter(group => group.role !== 'owner');
+    const surviving = member ? [] : activeGroups(record).filter(group => group.role !== 'owner');
     if (surviving.length) {
       revoke(record);
       result.error = 'Editor or command descendants remain alive. Lease revoked; coordinator must cancel this run before replacing the editor.';
@@ -616,9 +621,61 @@ export async function runEditor(record, assignment, signal, launchProcess = laun
       result.coordinator_action_required = true;
       event(record, 'editor_configuration_failed', failure);
     }
-    event(record, 'editor_finished', { state: result.error ? 'failed' : 'completed', error: result.error });
-    return { ...result, editor_session: session };
-  } finally { if (!task || !activeGroups(record).some(group => group.role !== 'owner')) rmSync(editorLock, { recursive: true, force: true }); }
+    event(record, 'editor_finished', { state: result.error ? 'failed' : 'completed', error: result.error, ...(member ? { member } : {}) });
+    return { ...result, editor_session: session, ...(member ? { paths } : {}) };
+  } finally { if (!member && (!task || !activeGroups(record).some(group => group.role !== 'owner'))) rmSync(editorLock, { recursive: true, force: true }); }
+}
+
+// True when an editor write targets one of its fenced checkout-relative paths or lies under one.
+export function fencedPath(checkout, path, fence) {
+  if (typeof path !== 'string' || !path) return false;
+  const root = resolve(checkout), full = resolve(root, path);
+  return fence.some(entry => { const allowed = resolve(root, entry); return full === allowed || full.startsWith(`${allowed}/`); });
+}
+
+// Checkout-relative write sets for parallel packets: each must be non-empty, inside the
+// checkout, and disjoint from every other packet's, counting a directory as its contents.
+export function packetPaths(record, packets) {
+  const root = resolve(record.checkout);
+  const sets = packets.map((packet, index) => {
+    if (!Array.isArray(packet.paths) || !packet.paths.length) throw new Error(`packet ${index + 1} needs paths: the files it may write`);
+    return packet.paths.map(path => {
+      const full = resolve(root, path);
+      if (full === root || !full.startsWith(`${root}/`)) throw new Error(`packet ${index + 1} path ${path} is outside the checkout`);
+      return relative(root, full);
+    });
+  });
+  const covers = (a, b) => a === b || b.startsWith(`${a}/`) || a.startsWith(`${b}/`);
+  sets.forEach((set, i) => sets.slice(i + 1).forEach((other, offset) => {
+    const clash = set.find(a => other.some(b => covers(a, b)));
+    if (clash) throw new Error(`packets ${i + 1} and ${i + offset + 2} overlap at ${clash}; parallel packets must write disjoint files`);
+  }));
+  return sets;
+}
+
+// Closed packets that write disjoint files run concurrently in the shared checkout. Each
+// editor is fenced to its paths, has no shell and cannot ask questions; the batch holds the
+// writer slot, so no check or other editor overlaps it. Overlapping files need isolated
+// workspaces and an integration merge, which this does not provide.
+export async function runEditorBatch(record, packets, signal, launchProcess = launch, { stopGroup = terminateGroup } = {}) {
+  assertLease(record);
+  if (!Array.isArray(packets) || packets.length < 2 || packets.length > PARALLEL_EDITORS) throw new Error(`a parallel batch takes 2 to ${PARALLEL_EDITORS} packets`);
+  const sets = packetPaths(record, packets);
+  const editorLock = editorSlot(record);
+  try { mkdirSync(editorLock); } catch { throw new Error('An editor assignment is already active; await its result.'); }
+  try {
+    event(record, 'editor_batch_started', { packets: packets.length });
+    const results = await Promise.all(packets.map((packet, index) => runEditor(record, packet.assignment, signal, launchProcess,
+      { stopGroup, context: packet.context, reasoning: packet.reasoning, paths: sets[index], member: index + 1 })
+      .catch(error => ({ error: error.message, paths: sets[index] }))));
+    const reply = { results };
+    if (activeGroups(record).some(group => group.role !== 'owner')) {
+      revoke(record);
+      Object.assign(reply, { error: 'Editor or command descendants remain alive. Lease revoked; coordinator must cancel this run before replacing the editor.', requires_cancellation: true });
+    }
+    event(record, 'editor_batch_finished', { packets: packets.length, failed: results.filter(item => item.error).length });
+    return reply;
+  } finally { if (!activeGroups(record).some(group => group.role !== 'owner')) rmSync(editorLock, { recursive: true, force: true }); }
 }
 
 // Share the editor slot so checks cannot race writes, even during a question pause.
