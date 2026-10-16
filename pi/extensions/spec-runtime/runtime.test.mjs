@@ -12,6 +12,7 @@ import { makePackageFixture } from './package-fixture.mjs';
 import { createOwnership } from './ownership.mjs';
 import { runCapabilityProbe } from './overlay.mjs';
 import { splitModelSelector } from './model-selector.mjs';
+import { completeOutcomes } from './completion.mjs';
 
 async function fixture(t, source) {
   const base = await makePackageFixture();
@@ -1875,6 +1876,8 @@ if (process.env.SPEC_RUNTIME_ROLE === 'owner') { setInterval(() => {}, 1000); }
 else if (dumps.length === 1) {
   fs.writeFileSync('partial.txt', 'partial editor work');
   console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'length',content:[{type:'text',text:'Partial'}]}}));
+} else if (dumps.length === 3) {
+  console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'error',errorMessage:'upstream timeout',content:[]}}));
 } else {
   console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'Done'}]}}));
 }`;
@@ -1887,6 +1890,11 @@ test('wave handoff: step 13 owner prompt lists accepted step 1 despite eleven ne
   writeFileSync(join(f.packagePath, 'step-013-subspec.md'), 'Prepared step');
   writeRun(f.packagePath, { id: 'older-1', step: 'step-001-subspec.md', started_at: '2026-01-01T00:00:00.000Z', completion: { decisions: ['keep wave ids stable'], gaps: ['g1', 'g2'] } });
   writeWave(f.packagePath, 'wave-a', { version: 1, generation: 1, state: 'integrated', members: { '1': { step: 1, phase: 'sealed', run_id: 'older-1', sealed_head: 'a'.repeat(40), review_artifacts: ['reviews/step-001-review.md'] } } });
+  writeFileSync(join(f.packagePath, 'runtime/runs/older-1-learning.md'), 'older run learning');
+  mkdirSync(join(f.packagePath, 'learnings'), { recursive: true });
+  writeFileSync(join(f.packagePath, 'learnings', 'step-001-learning.md'), 'canonical learning');
+  mkdirSync(join(f.packagePath, 'reviews'), { recursive: true });
+  for (let k = 0; k <= 9; k++) writeFileSync(join(f.packagePath, 'reviews', `step-001-fix-${String(k).padStart(2, '0')}.md`), `fix review ${k}`);
   for (let k = 2; k <= 12; k++) writeRun(f.packagePath, { id: `newer-${k}`, step: `step-${String(k).padStart(3, '0')}-subspec.md`, started_at: `2026-02-${String(k).padStart(2, '0')}T00:00:00.000Z`, completion: { decisions: [], gaps: [] } });
   let prompt;
   const runtime = new Runtime({ ...f.options, launchProcess: (record, role, text, launchOptions = {}) => { if (role === 'owner') prompt = text; return f.options.launchProcess(record, role, text, launchOptions); } });
@@ -1903,6 +1911,17 @@ test('wave handoff: step 13 owner prompt lists accepted step 1 despite eleven ne
   assert.ok(handoff.index[0].artifacts.includes('runtime/waves/wave-a.json'));
   assert.ok(handoff.index[0].artifacts.includes('reviews/step-001-review.md'));
   assert.ok(handoff.index[0].artifacts.includes('runtime/runs/older-1-completion.json'));
+  assert.deepEqual(handoff.index[0].artifacts, [
+    'runtime/waves/wave-a.json',
+    'reviews/step-001-review.md',
+    'runtime/runs/older-1-completion.json',
+    'runtime/runs/older-1-learning.md',
+    'learnings/step-001-learning.md',
+    'reviews/step-001-fix-00.md',
+    'reviews/step-001-fix-01.md',
+    'reviews/step-001-fix-02.md',
+  ]);
+  assert.equal(handoff.index[0].artifacts_omitted, 7);
   assert.deepEqual(handoff.details[0].decisions, ['keep wave ids stable']);
   assert.deepEqual(handoff.omitted_details, []);
   assert.deepEqual(handoff.coverage_gaps, []);
@@ -1941,6 +1960,9 @@ test('wave handoff: nine prerequisites stay indexed when detail budget omits exc
 // Run alone: node --test --test-name-pattern='^wave handoff: fresh editor packets' pi/extensions/spec-runtime/runtime.test.mjs
 test('wave handoff: fresh editor packets carry incomplete-packet state and length stop blocks completion', async t => {
   const f = await fixture(t, SESSION_DUMP_PI);
+  // completion.mjs gatesFor unconditionally reads evidence-plan.json; the
+  // checkpoint submission below must reach it with a valid gates array.
+  writeFileSync(join(f.packagePath, 'evidence-plan.json'), JSON.stringify({ gates: [] }));
   const runtime = new Runtime(f.options);
   f.runtimes.add(runtime);
   const started = await runtime.start(f.input);
@@ -1972,6 +1994,35 @@ test('wave handoff: fresh editor packets carry incomplete-packet state and lengt
   } catch (error) {
     assert.doesNotMatch(String(error?.message ?? error), /Latest editor packet stopped incomplete/);
   }
+  const third = await runEditor(record, 'Change: gamma-unique', undefined, f.options.launchProcess);
+  assert.match(third.error, /upstream timeout/);
+  assert.notEqual(third.stop_reason, 'length');
+  const thirdOutcome = JSON.parse(readFileSync(outcomeFile, 'utf8'));
+  assert.equal(thirdOutcome.state, 'incomplete');
+  assert.equal(thirdOutcome.stop_reason, third.stop_reason);
+  assert.match(thirdOutcome.error, /upstream timeout/);
+  for (const outcome of completeOutcomes) {
+    await assert.rejects(runCompletion(record, { outcome }), /Latest editor packet stopped incomplete/);
+  }
+  const checkpoint = await runCompletion(record, {
+    outcome: 'checkpoint', strategy: 'implementation-first', checkpoint_reason: 'blocker',
+    remaining_work: ['Complete the errored editor packet'], decisions: [], gaps: [], findings: [], introduced: [], evidence: [],
+  });
+  assert.equal(checkpoint.status, 'recorded');
+  assert.equal(checkpoint.outcome, 'checkpoint');
+  assert.deepEqual(checkpoint.remaining_work, ['Complete the errored editor packet']);
+  const persisted = JSON.parse(readFileSync(join(f.packagePath, 'runtime/runs', `${record.id}-completion.json`), 'utf8'));
+  assert.equal(persisted.learning.outcome, 'checkpoint');
+  assert.deepEqual(persisted.learning.remaining_work, ['Complete the errored editor packet']);
+  const fourth = await runEditor(record, 'Change: delta-unique', undefined, f.options.launchProcess);
+  const fourthArgv = JSON.parse(readFileSync(fourth.editor_session.replace(/\.jsonl$/, '') + '.argv.json', 'utf8'));
+  const fourthPrompt = fourthArgv.at(-1);
+  assert.match(fourthPrompt, /PREVIOUS PACKET INCOMPLETE/);
+  assert.match(fourthPrompt, /upstream timeout/);
+  assert.match(fourthPrompt, /"session":/);
+  assert.ok(fourthPrompt.includes(JSON.stringify(third.editor_session)));
+  assert.match(fourthPrompt, /delta-unique/);
+  assert.equal(JSON.parse(readFileSync(outcomeFile, 'utf8')).state, 'completed');
   await runtime.cancel(f.packagePath, undefined, 1000);
 });
 
@@ -2003,6 +2054,15 @@ test('wave handoff: worker receipts never make unsealed, unintegrated, conflicti
   assert.equal(byStep(4).review_status, 'none');
   assert.deepEqual([byStep(5).status, byStep(5).reason], ['conflict', 'conflicting-wave-records:wave-a,wave-d']);
   for (const step of [2, 3, 4, 5]) assert.equal(byStep(step).accepted_commit, null);
+
+  writeWave(f.packagePath, 'wave-c', { version: 1, generation: 1, state: 'ready-to-integrate', members: { '1': { step: 1, phase: 'sealed', run_id: 'run-1', sealed_head: head, review_artifacts: ['reviews/step-001-review.md'] } } });
+  const conflicting = buildDependencyHandoff({ packageDir: f.packagePath, step: 6, targets: ['repo'] });
+  const conflictRow = conflicting.index.find(entry => entry.step === 1);
+  assert.equal(conflictRow.status, 'conflict');
+  assert.equal(conflictRow.reason, 'conflicting-wave-records:wave-a,wave-c');
+  assert.equal(conflictRow.accepted_commit, null);
+  assert.notEqual(conflictRow.review_status, 'closed');
+  rmSync(join(f.packagePath, 'runtime/waves/wave-c.json'));
 
   const waveFile = join(f.packagePath, 'runtime/waves/wave-a.json');
   const waveRecord = JSON.parse(readFileSync(waveFile, 'utf8'));

@@ -141,12 +141,10 @@ function artifactsFor(packageDir, step, records, classification, runId) {
       .filter(name => name.startsWith(`step-${String(step).padStart(3, '0')}-`) && name.endsWith('.md'))
       .map(name => `reviews/${name}`).sort();
   } catch { reviews = []; }
-  paths.push(...reviews);
   // D8: recorded wave and review pointers are listed regardless of whether the
   // file currently exists; only runtime/runs and the learning path are gated.
   const existing = gatedPaths.filter(path => existsSync(join(packageDir, path)));
-  const existingSet = new Set(existing);
-  const ordered = [...paths, ...gatedPaths].filter(path => reviewPointers.includes(path) || path.startsWith('reviews/') || path.startsWith('runtime/waves/') || existingSet.has(path));
+  const ordered = [...paths, ...existing, ...reviews];
   const kept = ordered.slice(0, ARTIFACT_LIMIT);
   return { artifacts: kept, artifacts_omitted: ordered.length - kept.length };
 }
