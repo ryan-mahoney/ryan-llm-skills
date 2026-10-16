@@ -126,7 +126,34 @@ Use each `spec-steps.json` entry's existing `difficulty` as the default preparat
 | `medium` | Read named symbols, their immediate integration seam, and the existing target test or nearest test file. | Grounded |
 | `hard` | Inspect the relevant cross-module contracts, consequential callers/callees, and test architecture. | Detailed |
 
-Difficulty bounds effort; it does not require delegation. A hard but explicit propagation can still be planned directly. Deepen any card only when repository evidence exposes a missing target, new public or ownership boundary, ambiguous acceptance behavior, unavailable focused verifier, architecture conflict, concurrency or migration risk, destructive data change, security boundary, or uncertain external runtime contract.
+A strong step owner should be able to execute each card with only the card and the dispatch-time
+context pack (`runtime/context/step-NNN.md`: as-built prerequisite exports, the anchor map of
+target files, and changes since planning), sending closed packets to a low-reasoning editor.
+A medium or hard card is `ready` only when it meets this bar:
+
+- **Decisions.** A `### Decisions` list in the card settles every choice that affects public
+  interfaces, persisted record fields, refusal/fallback/retry policy, naming and normalization,
+  and test seams. Each entry gives the chosen option and a one-line reason. "Choose", "as
+  needed" or "handle edge cases" means the decision is still open.
+- **Consumed contracts.** List each prerequisite API the step calls or extends, with its
+  planned shape and owning step, marked to be checked against the context pack at dispatch.
+  The pack's as-built shape wins when they differ.
+- **Test cases.** Each verification case names its fixture or seam, the action, and the exact
+  observable assertion. One-sentence behavior summaries are not enough.
+- **Outcome tables.** Copy rows from Architecture for any classifying component the step owns.
+- **Signal.** Link shared hazards and environment boilerplate rather than repeating them.
+
+For every `hard` card, and every `medium` card that consumes another step's contract, ground the
+card in a fresh subagent running `spec-subspec-write` for that one step. Run independent
+cards in parallel. The parent stays the only writer of shared artifacts. Then run one
+review-only card-critic subagent per such card with this question: "Could a strong owner
+execute this card with only the card and the context pack, without further discovery or
+questions? List every open decision, unlisted consumed contract, and test case that lacks
+an exact assertion." Correct the card from that list, or record why an item is deliberately
+left to dispatch. In one run, every editor question on a hard step traced back to an undecided
+choice or a missing contract, and editors re-read the target and prerequisite files more
+than 250 times.
+For an easy card, plan directly; delegation adds nothing. Deepen any card only when repository evidence exposes a missing target, new public or ownership boundary, ambiguous acceptance behavior, unavailable focused verifier, architecture conflict, concurrency or migration risk, destructive data change, security boundary, or uncertain external runtime contract.
 
 Visual grounding is required independently of difficulty. For every `Visual: yes` card,
 inspect the resolved reference or production precedent, the actual production surface,

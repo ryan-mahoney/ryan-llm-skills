@@ -259,6 +259,17 @@ For `Visual: yes`, begin by opening the selected reference or production precede
 its relevant region, then map it to the named production components and behavior before
 editing. End with the focused Playwright capture-and-inspection loop.
 
+### Decisions
+
+For medium and hard steps, list every choice the owner would otherwise make mid-step: public
+interface shapes, persisted record fields, refusal/fallback/retry policy, naming and
+normalization, and test seams. Give each as `- <question>: <chosen option> — <one-line
+reason>`. Under `Consumed contracts:`, name each prerequisite API this step calls or extends,
+with its planned shape and owning step; the owner checks these against the dispatch-time
+context pack, and the as-built shape wins. Each `verification.cases` entry names its fixture
+or seam, the action, and the exact observable assertion. A card whose owner would still need
+to choose, rediscover a contract, or invent an assertion is not `ready`.
+
 ### Setup and Hazards
 
 Include only non-obvious fixture, dependency-injection, timer, mock, runner, migration, or external-runtime details needed by the implementor. Write `None` when no special handling applies. State which true external boundary may be faked; an internal adapter required for production reachability must remain concrete.
