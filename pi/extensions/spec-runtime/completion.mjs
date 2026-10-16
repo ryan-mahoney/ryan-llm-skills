@@ -12,7 +12,7 @@ const runFile = (r, suffix) => join(r.package, 'runtime/runs', `${r.id}-${suffix
 const isWave = r => Boolean(r.wave_bindings);
 export const outcomes = ['as-specified', 'adapted', 'checkpoint', 'no-artifact', 'decision-required', 'needs-spec-correction'];
 export const checkpointReasons = ['blocker', 'deadline', 'decision', 'owner-transfer', 'interruption'];
-const completeOutcomes = new Set(['as-specified', 'adapted', 'no-artifact']);
+export const completeOutcomes = new Set(['as-specified', 'adapted', 'no-artifact']);
 function safePath(root, file) {
   const target = resolve(root, file), rel = relative(root, target);
   if (!rel || rel === '..' || rel.startsWith('../') || isAbsolute(rel)) throw new Error('Artifact must be inside its canonical root');

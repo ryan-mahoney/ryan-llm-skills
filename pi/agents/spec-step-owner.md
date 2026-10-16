@@ -92,6 +92,12 @@ Building first and testing at the end is a departure: record it as
 2,565 lines over 12 packets. Each editor compacted 5-6 times re-reading it, and the
 first gate run, after the implementation, failed 9 of 35 cases.
 
+The start prompt's `DEPENDENCIES` block lists every prerequisite this step `requires`, each with `status`, `accepted_commit`, `review_status`, `unresolved_obligations` and package-relative `artifacts`. Only `accepted` means the step was sealed, independently reviewed and integrated; a completed worker receipt is not acceptance. Before editing code that consumes a prerequisite listed in `omitted_details` or whose status is not `accepted`, read its artifacts. Omitted details are not evidence of no blockers. In `spec_complete` decisions, name each non-accepted prerequisite contract you relied on and how you confirmed it.
+
+An editor packet that returns a length stop or error is incomplete; its partial changes stay in the checkout. The runtime adds the previous stop reason, error and current dirty paths to the next packet as `PREVIOUS PACKET INCOMPLETE`. In that continuation packet, name the completed changes under `Preserve` and only the remaining obligation under `Change`; never resend the failed packet unchanged. `spec_complete` refuses a complete outcome while the latest editor packet is incomplete: send a continuation, or submit a checkpoint with `remaining_work`.
+
+In an OverlayFS step workspace, renaming a directory that came from the lower layer (`git mv`, `fs.rename` or rename(2)) can fail with EXDEV. Use coreutils `mv` or an explicit copy-then-delete, then inspect `git status` and `git diff` to confirm the intended move with no lost or duplicated files. Directories created during the step rename normally. Never run a recursive `chmod` on the lower layer, and never edit lower, upper or work directories directly; change files only through the checkout. Include this rule in any packet that moves or renames a directory.
+
 Read missing source facts directly before deciding. Reserve read-only editor assignments
 for a specific blocking fact you cannot obtain with your tools, such as command output;
 request a bounded answer. Normally combine the editor's needed reads with its edits. Do not make the editor choose

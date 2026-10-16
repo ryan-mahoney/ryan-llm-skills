@@ -13,11 +13,13 @@ import { prepareSpecWorktree } from '../../../scripts/spec-location/worktree.mjs
 import { decide, collectFacts } from '../../../scripts/jev/core.mjs';
 import { preparedEntry } from './startup.mjs';
 import { splitModelSelector, assertModelSelector, configurationFailure, configurationAction } from './model-selector.mjs';
-import { submitCompletion, completionStatus, refreshProgress, revision, recordVerification, invalidateCompletion } from './completion.mjs';
+import { submitCompletion, completionStatus, refreshProgress, revision, recordVerification, invalidateCompletion, completeOutcomes } from './completion.mjs';
 import { createOwnership } from './ownership.mjs';
 import { createSystemdServiceAdapter, createWaveDeadline, deadlineRemainingMs } from './linux-resources.mjs';
 import { createWaveLifecycle, environmentFacts } from './wave-lifecycle.mjs';
 export { environmentFacts } from './wave-lifecycle.mjs';
+import { observedRuns, buildDependencyHandoff } from './dependency-handoff.mjs';
+export { buildDependencyHandoff };
 import { PROVIDER_RECOVERY } from './provider-recovery.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -25,20 +27,6 @@ const RUNTIME_MODULE_PATH = resolve(fileURLToPath(import.meta.url));
 const terminal = new Set(['completed', 'failed', 'cancelled', 'stale']);
 const timestamp = () => new Date().toISOString();
 const read = file => JSON.parse(readFileSync(file, 'utf8'));
-function observedRuns(packagePath, coverageGaps = []) {
-  const dir = join(packagePath, 'runtime/runs');
-  let names;
-  try { names = readdirSync(dir); } catch (error) { coverageGaps.push(`Run receipts unavailable: ${error.code}`); return []; }
-  return names.filter(name => /^[\w-]+\.json$/.test(name)).flatMap(name => {
-    try {
-      const run = read(join(dir, name));
-      return run && typeof run.id === 'string' && typeof run.step === 'string' && run.state ? [run] : [];
-    } catch (error) {
-      if (coverageGaps.length < 8) coverageGaps.push(`Unreadable observation: ${name}`);
-      return [];
-    }
-  });
-}
 // CURRENT revision identity for the launch prompt. The prompt is built before any
 // contained service exists, and a wave member's merged overlay is not mounted in the
 // coordinator, so a wave never runs git status/rev-parse against that external empty
@@ -51,17 +39,19 @@ function promptRevision(record) {
 }
 // The card determines relevance; the latest attempt supplies observations. Do not
 // infer prerequisite acceptance or carry every historical blocker into a new step.
-function currentHandoff(record) {
+function currentHandoff(record, { sameStepOnly = false } = {}) {
   const card = readFileSync(record.step, 'utf8');
-  const steps = [...new Set([basename(record.step).match(/step-(\d+)/)?.[1],
-    ...[...card.matchAll(/step-(\d+)/g)].map(match => match[1])].filter(Boolean))];
+  const currentNumber = Number(basename(record.step).match(/step-(\d+)/)?.[1]);
+  const steps = sameStepOnly
+    ? (Number.isFinite(currentNumber) ? [String(currentNumber).padStart(3, '0')] : [])
+    : [...new Set([basename(record.step).match(/step-(\d+)/)?.[1],
+      ...[...card.matchAll(/step-(\d+)/g)].map(match => match[1])].filter(Boolean))];
   const runsDir = join(record.package, 'runtime/runs');
   const coverageGaps = [];
   const runs = observedRuns(record.package, coverageGaps);
-  const currentNumber = Number(basename(record.step).match(/step-(\d+)/)?.[1]);
   // Cards also use prose such as "Prerequisites: steps 1–2". Supplement exact
   // references with bounded earlier results, clearly labelled as context only.
-  const earlier = [...new Set(runs.map(run => basename(run.step).match(/step-(\d+)/)?.[1])
+  const earlier = sameStepOnly ? [] : [...new Set(runs.map(run => basename(run.step).match(/step-(\d+)/)?.[1])
     .filter(step => step && Number(step) < currentNumber))].sort((a, b) => Number(b) - Number(a));
   for (const step of earlier.slice(0, 7)) if (!steps.includes(step)) steps.push(step);
   const latest = new Map();
@@ -130,6 +120,15 @@ function git(cwd, ...args) {
 function inside(parent, child) {
   const rel = relative(parent, child);
   return rel && !rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) && rel !== '..' && !isAbsolute(rel);
+}
+// D10: accepted prerequisites come from the requires graph; the same-step CURRENT
+// observations still carry this step's retry state.
+function dependencyContext(record, targetIds) {
+  const step = Number(basename(record.step).match(/step-(\d+)/)?.[1]);
+  const targets = targetIds ?? [record.target];
+  const handoff = buildDependencyHandoff({ packageDir: record.package, step, targets });
+  if (!handoff) return currentHandoff(record);
+  return `DEPENDENCIES: ${JSON.stringify(handoff)}\n${currentHandoff(record, { sameStepOnly: true })}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -661,12 +660,13 @@ export async function resolveInput(input, location = {}, { ownership, ownershipR
     const bound = await resolveWaveBinding(input, { packagePath, packageRef: locations.package_ref, target }, ownershipRoot);
     return { ...input, scout_model: input.scout_model || SCOUT_MODEL, package: packagePath, package_ref: locations.package_ref,
       target: bound.target, primary: bound.primary, step, checkout: bound.checkout, other_targets: [], wave_bindings: bound.wave,
+      target_ids: locations.targets.map(entry => entry.id),
       wave_path: join(packagePath, 'runtime', 'waves', `${input.wave_id}.json`) };
   }
   const { primary, worktree: actual } = await prepareSpecWorktree(locations, target, { ...location, base: input.base || 'HEAD' });
   // Other targets' recorded worktrees are read-only context for the owner and editor.
   const others = locations.targets.filter(entry => entry.id !== target.id && entry.worktree).map(({ id, worktree }) => ({ id, worktree }));
-  return { ...input, scout_model: input.scout_model || SCOUT_MODEL, package: packagePath, package_ref: locations.package_ref, target: target.id, primary, step, checkout: actual, other_targets: others };
+  return { ...input, scout_model: input.scout_model || SCOUT_MODEL, package: packagePath, package_ref: locations.package_ref, target: target.id, primary, step, checkout: actual, other_targets: others, target_ids: locations.targets.map(entry => entry.id) };
 }
 
 // Prompt lines naming the step's target and, read-only, the package's other worktrees.
@@ -978,7 +978,7 @@ export class Runtime {
       // failed bind or launch keeps the run blocked with its truthful error and
       // every ownership claim, never an unbound orphan.
       if (config.wave_bindings) await bindWaveMemberRun(config, record.id);
-      const prompt = `Implement this prepared step as its architect/owner using spec_editor.\nPACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${targetFacts(record)}${currentHandoff(record)}Read the card and required policy. Choose the implementation approach yourself, then send a short Change/Edits/Preserve/Return packet for a bounded transformation. Name affected symbols, the chosen approach and preservation constraints; let the editor choose local implementation details and batch related edits. The editor does not run tests, compile/lint checks or other executable verification. After it returns, use spec_verify for necessary focused checks and diagnose failures before assigning bounded corrections. Do not check every packet automatically; reuse valid evidence. Read/search missing source facts directly. The editor normally reads and edits in one assignment; reserve facts-only requests for a specific blocking fact unavailable through your tools. Request compact results with artifact paths, not source inventories. Do not delegate architecture, whole-step restoration, or an entire acceptance suite with open-ended repairs. Keep owner context bounded. Every editor call starts a fresh session: include the chosen decisions, relevant files and preservation constraints in each packet; never refer to prior chat. Assess each returned diff/result before the next packet; commit is a separate assignment after acceptance of the completed changes and required evidence. Use spec_scout only for a bounded discovery gap worth delegating; direct reads remain the default. Do not discover models, run startup suites, poll, or start other agents outside that scout tool. The runtime retains the owner session and records each fresh editor session. Before ending, call spec_complete with decisions, introduced symbols, gaps and step-owned evidence assessments. It writes the canonical learning from verification receipts; an evidence log is not a learning. Commit via the editor first when complete. Missing handoffs remain unfinished obligations. This owner assignment ends after this step; independent review belongs to the coordinator.\n${input.instructions || ''}`;
+      const prompt = `Implement this prepared step as its architect/owner using spec_editor.\nPACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${targetFacts(record)}${dependencyContext(record, config.target_ids)}Read the card and required policy. Choose the implementation approach yourself, then send a short Change/Edits/Preserve/Return packet for a bounded transformation. Name affected symbols, the chosen approach and preservation constraints; let the editor choose local implementation details and batch related edits. The editor does not run tests, compile/lint checks or other executable verification. After it returns, use spec_verify for necessary focused checks and diagnose failures before assigning bounded corrections. Do not check every packet automatically; reuse valid evidence. Read/search missing source facts directly. The editor normally reads and edits in one assignment; reserve facts-only requests for a specific blocking fact unavailable through your tools. Request compact results with artifact paths, not source inventories. Do not delegate architecture, whole-step restoration, or an entire acceptance suite with open-ended repairs. Keep owner context bounded. Every editor call starts a fresh session: include the chosen decisions, relevant files and preservation constraints in each packet; never refer to prior chat. Assess each returned diff/result before the next packet; commit is a separate assignment after acceptance of the completed changes and required evidence. Use spec_scout only for a bounded discovery gap worth delegating; direct reads remain the default. Do not discover models, run startup suites, poll, or start other agents outside that scout tool. The runtime retains the owner session and records each fresh editor session. Before ending, call spec_complete with decisions, introduced symbols, gaps and step-owned evidence assessments. It writes the canonical learning from verification receipts; an evidence log is not a learning. Commit via the editor first when complete. Missing handoffs remain unfinished obligations. This owner assignment ends after this step; independent review belongs to the coordinator.\n${input.instructions || ''}`;
       task = config.wave_bindings
         ? await this.containedRoot(record, prompt)
         : this.launchProcess(record, 'owner', `${prompt}\nEnvironment paths (observations, not setup approval): ${JSON.stringify(record.environment)}`, { onEvent: this.onWorkerEvent });
@@ -1147,7 +1147,36 @@ export async function runEditor(record, assignment, signal, launchProcess = laun
     const orientation = excerpts
       ? 'The owner attached the exact source you need below; start editing from it. Ask the owner for a missing decision.'
       : 'Read the relevant card contracts and current named source; ask the owner for a missing decision.';
-    task = launchProcess({ ...record, editor_session: session, editor_model: editorModel }, 'editor', `PACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${targetFacts(record)}FRESH EDITOR: This packet is your complete assignment, not a continuation of prior editor chat. Preserve existing working-tree changes. ${orientation} Do not repeat prior work or verification.\n${assignment}\n${excerpts}`);
+    // D12: a failed or length-stopped packet leaves partial changes behind. Carry
+    // the previous stop reason and the current dirty state, never the packet or
+    // its transcript; the owner's new assignment names the remaining obligation.
+    const outcomeFile = join(record.package, 'runtime/runs', `${record.id}-editor-outcome.json`);
+    const previous = existsSync(outcomeFile) ? read(outcomeFile) : null;
+    let continuation = '';
+    if (previous?.state === 'incomplete') {
+      let dirty_paths = null, dirty_count = null;
+      try {
+        const status = git(record.checkout, 'status', '--porcelain=v1', '-z', '--untracked-files=all');
+        const records = status.split('\0');
+        const paths = [];
+        for (let index = 0; index < records.length; index++) {
+          const entry = records[index];
+          if (!entry) continue;
+          // The shared git helper trims its output, which can drop the leading
+          // status space of the first record. Read the two status characters
+          // and the following space positionally so trimming never shifts the
+          // path, and skip the source entry that follows an R or C record.
+          const match = /^([ MADRCU?!]{1,2}) (.*)$/s.exec(entry);
+          if (!match) continue;
+          if (match[1].includes('R') || match[1].includes('C')) index++;
+          paths.push(match[2]);
+        }
+        dirty_paths = paths.slice(0, 50);
+        dirty_count = paths.length;
+      } catch { dirty_paths = null; dirty_count = null; }
+      continuation = `PREVIOUS PACKET INCOMPLETE: ${JSON.stringify({ session: previous.session ?? null, stop_reason: previous.stop_reason ?? null, error: previous.error ?? null, full_result_path: previous.full_result_path ?? null, dirty_paths, dirty_count })}\nThe previous editor packet stopped before completion and its partial changes remain in the checkout. Keep them; do not redo or revert completed edits. Complete only the remaining obligation in this packet.\n`;
+    }
+    task = launchProcess({ ...record, editor_session: session, editor_model: editorModel }, 'editor', `PACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${targetFacts(record)}FRESH EDITOR: This packet is your complete assignment, not a continuation of prior editor chat. Preserve existing working-tree changes. ${orientation} Do not repeat prior work or verification.\n${continuation}${assignment}\n${excerpts}`);
     event(record, 'editor_started', { pid: task.child.pid, editor_session: session, ...(reasoning ? { reasoning } : {}), ...(context?.length ? { context_ranges: context.length } : {}) });
     let stopping;
     let reportUnconfirmed;
@@ -1184,6 +1213,13 @@ export async function runEditor(record, assignment, signal, launchProcess = laun
       result.coordinator_action_required = true;
       event(record, 'editor_configuration_failed', failure);
     }
+    // D11: an atomic per-run receipt, written immediately before editor_finished,
+    // so a later packet and the completion guard observe this packet's outcome.
+    // Calls that throw or latch on configuration write nothing.
+    atomic(outcomeFile, {
+      version: 1, session, state: (result.error || result.stop_reason === 'length') ? 'incomplete' : 'completed',
+      stop_reason: result.stop_reason ?? null, error: result.error ? String(result.error).slice(0, 300) : null,
+      full_result_path: result.full_result_path ?? null, recorded_at: timestamp() });
     event(record, 'editor_finished', { state: result.error ? 'failed' : 'completed', error: result.error });
     return { ...result, editor_session: session };
   } finally { if (!task || !activeGroups(record).some(group => group.role !== 'owner')) rmSync(editorLock, { recursive: true, force: true }); }
@@ -1192,6 +1228,13 @@ export async function runEditor(record, assignment, signal, launchProcess = laun
 // Share the editor slot so checks cannot race writes, even during a question pause.
 export async function runCompletion(record, input) {
   return withIdleWriter(record, async () => {
+    // D13: a length stop or error cannot complete the step; partial work stays
+    // recoverable behind a bounded continuation or a checkpoint handoff.
+    const outcomeFile = join(record.package, 'runtime/runs', `${record.id}-editor-outcome.json`);
+    if (completeOutcomes.has(input.outcome) && existsSync(outcomeFile)) {
+      const outcome = read(outcomeFile);
+      if (outcome.state === 'incomplete') throw new Error(`Latest editor packet stopped incomplete (${outcome.stop_reason ?? 'error'}); assign a bounded continuation or submit a checkpoint with remaining_work.`);
+    }
     const receipt = submitCompletion(record, input);
     event(record, 'handoff_recorded', { outcome: receipt.outcome, learning_path: receipt.learning_path });
     try { await refreshProgress(record.package); }
