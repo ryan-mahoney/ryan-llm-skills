@@ -23,6 +23,8 @@ import { metrics, formatMetrics } from './metrics.mjs';
 import installContextBudget from '../context-budget/index.ts';
 import { createWorkflowContinuation } from './workflow-continuation.mjs';
 import { installProviderRecovery } from './provider-recovery.mjs';
+import { createNativeWaveController, nativeWaveAction } from './waves-native.mjs';
+import { processIdentity } from '../../../scripts/spec-observe/process-identity.mjs';
 
 const result = (value: unknown, isError = false) => ({ content: [{ type: 'text', text: JSON.stringify(value) }], details: value, isError });
 const optional = (description: string) => Type.Optional(Type.String({ description }));
@@ -626,7 +628,12 @@ export default function (pi: any) {
     },
   });
   const verificationRecorder = createVerificationRecorder();
+  let waveController: any;
   const runtime = new Runtime({ indexDir: join(getAgentDir(), 'spec-runtime'), notify: (value: any) => {
+    // A wave-bound notification is consumed by the native wave controller before
+    // the legacy per-run reconciliation runs; an unrecognized notification falls
+    // through to the existing reconciliation and completion message unchanged.
+    if (waveController?.routeNotification(value)) return;
     // On a mapped terminal runtime notification, reconcile the checkpoint before
     // sending the existing native completion message. A runtime return is
     // reconciliation work, never acceptance; any reconcile error is reported
@@ -679,6 +686,12 @@ export default function (pi: any) {
       if (!observed?.incident) return;
       diagnoseObserved(record, observed.incident);
     } });
+  waveController = createNativeWaveController({
+    runtime,
+    indexDir: join(getAgentDir(), 'spec-runtime'),
+    coordinator: () => ({ session: coordinatorIdentity(sessionCtx), ...processIdentity(process.pid) }),
+    send: (value: any) => pi.sendMessage({ customType: 'spec-runtime', content: JSON.stringify(value), display: true }, { triggerTurn: true }),
+  });
   function diagnoseObserved(record: any, incident: any) {
       const routed = runtimeAuthorityFor(record);
       const authority = routed?.authority ?? sentinelAuthority;
@@ -739,7 +752,7 @@ export default function (pi: any) {
       const { authority, scope } = entry;
       const continued = await handleBeforeSettle(event, { authority, workflow_id: scope.workflow_id,
         package: scope.package, coordinator_session: scope.coordinator_session,
-        inputGuard: () => inputGuard, activeManaged: () => runtime.active.size > 0,
+        inputGuard: () => inputGuard, activeManaged: () => runtime.active.size > 0 || waveController?.progressing() === true,
         onRequested: (intent: any) => {
           pendingContinuation = { workflow_id: scope.workflow_id, intent_id: typeof intent?.id === 'string' ? intent.id : null, authority, scope };
           if (entry.activation) sentinelControl?.report({ message: `Sentinel continuing: ${scope.package} · ${scope.workflow_id}.` });
@@ -748,7 +761,7 @@ export default function (pi: any) {
     }
     if (allowOwned && sessionCtx) return ownedWorkflow.beforeSettle(event, {
       coordinator_session: coordinatorIdentity(sessionCtx), inputGuard,
-      activeManaged: runtime.active.size > 0,
+      activeManaged: runtime.active.size > 0 || waveController?.progressing() === true,
       notify: (message: string) => sessionCtx?.ui?.notify(message, 'warning'),
     });
     return undefined;
@@ -817,16 +830,22 @@ export default function (pi: any) {
     revokeRuntimeAuthorities();
     await sentinel?.close();
     sentinel = undefined;
+    await waveController?.shutdown();
     sessionCtx = null;
     diagnosisController?.close();
     diagnosisController = null;
     await Promise.allSettled([...runtime.active.values()].map(({ record }: any) => runtime.cancel(record.package, record.id)));
   });
   pi.registerTool({ name: 'spec_dispatch', label: 'Spec step runtime', description: 'Use startup to enter a prepared package in one call: first-step selection, recorded difficulty routing, worktree setup and dispatch; existing progress returns a resume obligation without replay. Start launches an explicit prepared spec step with a retained owner and fresh editor per assignment. Creates/reuses the worktree of the target repository named by the step (spec-steps.json `repository`; required with several targets), refuses a package whose previous run still has a live coordinator, and delivers a completion event. Repeated assignment IDs are idempotent. Status is for explicit recovery, never polling. Cancellation returns only after confirmed process-group termination.',
-    parameters: Type.Object({ action: Type.Union([Type.Literal('startup'), Type.Literal('start'), Type.Literal('status'), Type.Literal('cancel')]), package: Type.String({ description: 'The spec package (a `workspace/slug` ref or its folder)' }),
+    parameters: Type.Object({ action: Type.Union([Type.Literal('startup'), Type.Literal('start'), Type.Literal('status'), Type.Literal('cancel'), Type.Literal('advance'), Type.Literal('recover')]), package: Type.String({ description: 'The spec package (a `workspace/slug` ref or its folder)' }),
       strong_owner_model: optional('Optional STRONG_OWNER; startup routes prepared hard steps here'), owner_override: optional('Explicit owner for the selected step; takes precedence over owner_model in start and startup, including tier routing'),
       step: optional('Absolute canonical prepared subspec path; required for start'), owner_model: optional('provider/model[:thinking]; required unless owner_override is supplied'), editor_model: optional('provider/model[:thinking]; required for start'), scout_model: optional('SCOUT_AGENT selector as provider/model[:thinking]; default openai-codex/gpt-6-luna:low'),
       base: optional('Start ref for a new branch, default HEAD'),
+      execution: Type.Optional(Type.Union(['auto', 'serial', 'waves'].map(value => Type.Literal(value)), { description: 'Wave execution mode; auto selects from host capacity and package shape, serial forces the legacy per-run route.' })),
+      isolation: Type.Optional(Type.Union(['auto', 'overlayfs', 'worktree'].map(value => Type.Literal(value)), { description: 'Member checkout isolation backend; auto selects from host capability.' })),
+      review_model: optional('Reviewer selector as provider/model[:thinking]; overrides the package review routing for this wave.'), fix_model_override: optional('Fix-model selector as provider/model[:thinking]; overrides repair routing for this wave.'),
+      max_parallel: Type.Optional(Type.Number({ minimum: 1, maximum: 16, description: 'Maximum concurrent wave members (integer 1..16).' })),
+      adaptations: Type.Optional(Type.Array(Type.Object({ path: Type.String({ description: 'Adapted file path' }), reason: Type.String({ description: 'Why this adaptation is required' }) }), { description: 'Declared deviations from the prepared plan, each with its path and reason.' })),
       assignment_id: optional('Stable ID for this step attempt. Omit to use step path. Use a new ID only for an intentional subsequent attempt.'), run_id: optional('Existing run ID, otherwise latest'), workflow_id: optional('Registered workflow ID from a prior spec_sentinel_checkpoint; binds this real dispatch to its checkpoint'),
       wave_id: optional('Validated wave ID; explicit wave member start binds to the durable wave record'), expected_generation: Type.Optional(Type.Number({ description: 'Expected durable wave generation (integer); must match the wave record' })), step_number: Type.Optional(Type.Number({ description: 'Wave member step number (integer); must match the step card' })), attempt_id: optional('Durable wave member attempt ID; must match the wave record'), phase: optional('Durable wave member phase; must match the wave record'), claim_token: optional('Wave claim token; must match the durable wave record'), coordinator_epoch: optional('Wave coordinator epoch; must match the durable wave record'),
       attempt_kind: Type.Optional(Type.Union(['implementation', 'verification-continuation', 'implementation-repair', 'review-repair', 'launch-retry'].map(value => Type.Literal(value)), { description: 'Explicit reason for this assignment; observation only, grants no retry authority.' })),
@@ -837,8 +856,11 @@ export default function (pi: any) {
       let receipt: any = null;
       try {
         const packagePath = await packageDirOf(args.package); progress.attach(packagePath);
-        if (args.action === 'status') { const record = loadRun(packagePath, args.run_id); monitor.attach(record, ctx); return result(summary(record)); }
-        if (args.action === 'cancel') return result(await runtime.cancel(packagePath, args.run_id));
+        const nativeAction = nativeWaveAction(args);
+        if (!nativeAction) {
+          if (args.action === 'status') { const record = loadRun(packagePath, args.run_id); monitor.attach(record, ctx); return result(summary(record)); }
+          if (args.action === 'cancel') return result(await runtime.cancel(packagePath, args.run_id));
+        }
         const configFile = join(homedir(), '.pi/agent/spec-runtime.json');
         const config = existsSync(configFile) ? JSON.parse(readFileSync(configFile, 'utf8')) : {};
         const input = { ...args, package: packagePath, scout_model: args.scout_model ?? config.scout_model ?? SCOUT_MODEL, child_extensions: args.child_extensions ?? config.child_extensions ?? [] };
@@ -882,7 +904,7 @@ export default function (pi: any) {
             return result({ error: `workflow ${workflowId} still has active assignment ${conflict.id} (run state ${conflict.state}); refusing a concurrent dispatch`, next: 'await its completion or confirmed cancellation, or reconcile the assignment with spec_sentinel_checkpoint before dispatching the next one' }, true);
           }
         }
-        receipt = args.action === 'startup' ? await runtime.startup(input, ctx.sessionManager.getSessionFile()) : await runtime.start(input, ctx.sessionManager.getSessionFile());
+        receipt = nativeAction ? await waveController[nativeAction](input, ctx.sessionManager.getSessionFile()) : await runtime.start(input, ctx.sessionManager.getSessionFile());
         if (receipt.run_id) monitor.attach(loadRun(packagePath, receipt.run_id), ctx);
         if (receipt.run_id && !ownPackages.includes(packagePath)) ownPackages.push(packagePath);
         // The actual receipt binds its run/checkout to the workflow validated above

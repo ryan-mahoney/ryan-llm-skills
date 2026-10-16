@@ -21,6 +21,7 @@ import { calculateResourcePolicy } from './linux-resources.mjs';
 import { buildOverlayArgv, createOverlayPhases } from './overlay.mjs';
 import { artifactEnvironment } from '../../../scripts/spec-location/artifact-environment.mjs';
 import { stageLabel, stagePaths, resolveStageModel } from './wave-review.mjs';
+import { selectWaveSubject } from './wave-candidate-binding.mjs';
 
 // The phase → native role map. Review-shaped phases use the reviewer contract;
 // fix-shaped phases use the fixer contract. Anything else is refused rather than
@@ -227,14 +228,19 @@ export function createWaveReviewRuntime(deps) {
     async startStage(input) {
       if (input === null || typeof input !== 'object' || Array.isArray(input)) throw new Error('startStage input must be an object');
       const { role, stage, subject, packet, assignmentId } = stageIdentity(input);
-      // A stage may not start until the preceding member phase is positively
-      // drained. The member's run_id is cleared by a legitimate remount, so a
-      // non-null run_id means a phase is still held; Runtime.start then validates
-      // whatever claim the caller newly holds. Nothing is released or mutated here.
+      // A stage may not start until the preceding subject phase is positively
+      // drained. A candidate stage's preceding subject is the candidate repair's
+      // run recorded in wave.target.repair; a step stage's preceding subject is
+      // the member's run. The subject's run_id is cleared by a legitimate
+      // remount, so a non-null run_id means a phase is still held; Runtime.start
+      // then validates whatever claim the caller newly holds. Nothing is released
+      // or mutated here.
       const wavePath = join(input.package, 'runtime', 'waves', `${input.wave_id}.json`);
       let wave;
-      try { wave = read(wavePath); } catch { throw waveInvalid('wave-record-unreadable', `Cannot read the durable wave record runtime/waves/${input.wave_id}.json to verify the preceding member drain.`, 'Prepare the wave record before starting a stage.'); }
-      const previousRunId = wave?.members?.[String(input.step_number)]?.run_id ?? null;
+      try { wave = read(wavePath); } catch { throw waveInvalid('wave-record-unreadable', `Cannot read the durable wave record runtime/waves/${input.wave_id}.json to verify the preceding subject drain.`, 'Prepare the wave record before starting a stage.'); }
+      const previousRunId = subject
+        ? wave?.target?.repair?.run_id ?? null
+        : wave?.members?.[String(input.step_number)]?.run_id ?? null;
       if (previousRunId !== null) {
         const previous = loadRun(input.package, previousRunId);
         // A run from this same assignment is the stage being replayed, not the
@@ -370,9 +376,25 @@ export function createWaveReviewRuntime(deps) {
         : null;
       // A step-subject command is a real member phase: bind its run to the
       // durable member so the next phase can remount from the confirmed drain.
-      const member = subject?.kind === 'step' ? (wave?.members?.[String(subject.step)] ?? null) : null;
+      // A candidate gate command binds to the target.repair record instead, so
+      // the next remount verifies the actual candidate gate claim/run. Any other
+      // candidate command (assembly/checks) stays unbound.
+      const candidateGate = subject?.kind === 'candidate' && purpose === 'gates' && subject.candidate !== undefined;
+      const selected = candidateGate
+        ? selectWaveSubject(wave, {
+          candidate: subject.candidate,
+          step_number: wave.target?.repair?.step,
+          attempt_id: wave.target?.repair?.attempt_id
+        })
+        : null;
+      const boundSubject = candidateGate ? selected.subject : subject;
+      const member = (subject?.kind === 'step' || candidateGate)
+        ? (candidateGate ? boundSubject : (wave?.members?.[String(subject.step)] ?? null))
+        : null;
       if (subject?.kind === 'step' && (!member || typeof member !== 'object'))
         throw waveInvalid('wave-member-missing', `Wave ${waveId} has no member for step ${subject.step}.`, 'Prepare the wave member before running a command phase.');
+      if (candidateGate && (!member || typeof member !== 'object'))
+        throw waveInvalid('wave-candidate-missing', `Wave ${waveId} has no target.repair for candidate ${subject.candidate}.`, 'Prepare the candidate repair record before running a gate phase.');
       const checkoutToken = workspace.claim?.token ?? workspace.claim_token ?? null;
       // The checkout claim's attempt exists only on the live registry claim, so
       // the binding takes it from the claim this workspace actually holds rather
@@ -384,9 +406,10 @@ export function createWaveReviewRuntime(deps) {
       const waveBindings = member ? {
         wave_id: waveId,
         generation: wave.generation,
-        step_number: subject.step,
+        step_number: boundSubject.step,
         attempt_id: member.attempt_id,
         phase: member.phase,
+        ...(candidateGate ? { candidate: selected.candidate } : {}),
         package_ref: wave.package_ref ?? waveId,
         claim_token: waveClaimToken(wave),
         coordinator_epoch: wave.coordinator?.epoch,
@@ -430,6 +453,7 @@ export function createWaveReviewRuntime(deps) {
           file: wavePath, generation: waveBindings.generation, claimToken: waveBindings.claim_token,
           coordinatorEpoch: waveBindings.coordinator_epoch, stepNumber: waveBindings.step_number,
           attemptId: waveBindings.attempt_id, phase: waveBindings.phase,
+          candidate: waveBindings.candidate,
           checkoutClaim: checkoutToken, runId: record.id,
         });
         if (!bound || bound.ok !== true)

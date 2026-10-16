@@ -2155,6 +2155,55 @@ test('wave handoff: worker receipts never make unsealed, unintegrated, conflicti
   assert.equal(buildDependencyHandoff({ packageDir: f.packagePath, step: 6, targets: ['repo'] }), null);
 });
 
+// Run alone: node --test --test-name-pattern='^wave handoff: validates wave checks against the package evidence plan' pi/extensions/spec-runtime/runtime.test.mjs
+test('wave handoff: validates wave checks against the package evidence plan', async t => {
+  const f = await makePackageFixture();
+  t.after(() => rmSync(f.dir, { recursive: true, force: true }));
+  const indexFile = join(f.packagePath, 'spec-steps.json');
+  const planFile = join(f.packagePath, 'evidence-plan.json');
+  const index = {
+    version: 1,
+    setup: { repo: 'none' },
+    wave_checks: [{ after: 1, owner_step: 1, gates: ['EV-1'] }],
+    steps: [{ step: 1, difficulty: 'hard', requires: [], writes: ['a.txt'] }]
+  };
+  const plan = {
+    version: 1,
+    gates: [{ id: 'EV-1', ownerStep: 1, required: true, phase: 'merge', kind: 'focused-test', command: 'node -e "process.exit(0)"', artifact: 'evidence/a.txt' }]
+  };
+  writeFileSync(indexFile, JSON.stringify(index));
+  writeFileSync(planFile, JSON.stringify(plan));
+
+  // The wave check names a gate the plan defines, and step 1 declares no
+  // prerequisites, so building the handoff must resolve the graph and return an
+  // empty requires index. This currently throws dependency-graph-invalid
+  // because the evidence plan is not threaded into validation yet.
+  const handoff = buildDependencyHandoff({ packageDir: f.packagePath, step: 1, targets: ['repo'] });
+  assert.equal(handoff.step, 1);
+  assert.deepEqual(handoff.index, []);
+
+  // A gate the evidence plan does not contain leaves the requires graph invalid.
+  index.wave_checks[0].gates = ['EV-MISSING'];
+  writeFileSync(indexFile, JSON.stringify(index));
+  assert.throws(
+    () => buildDependencyHandoff({ packageDir: f.packagePath, step: 1, targets: ['repo'] }),
+    error => error.code === 'dependency-graph-invalid'
+  );
+
+  // Naming a gate with no evidence plan at all is refused, never accepted.
+  index.wave_checks[0].gates = ['EV-1'];
+  writeFileSync(indexFile, JSON.stringify(index));
+  rmSync(planFile);
+  assert.throws(
+    () => buildDependencyHandoff({ packageDir: f.packagePath, step: 1, targets: ['repo'] }),
+    error => error.code === 'dependency-graph-invalid'
+  );
+
+  // An unreadable evidence plan is a refusal, never a silent acceptance.
+  writeFileSync(planFile, '{');
+  assert.throws(() => buildDependencyHandoff({ packageDir: f.packagePath, step: 1, targets: ['repo'] }));
+});
+
 // Run alone: node --test --test-name-pattern='^wave handoff: owner and editor profiles' pi/extensions/spec-runtime/runtime.test.mjs
 test('wave handoff: owner and editor profiles carry overlay EXDEV rename guidance', async t => {
   const f = await fixture(t, SESSION_DUMP_PI);

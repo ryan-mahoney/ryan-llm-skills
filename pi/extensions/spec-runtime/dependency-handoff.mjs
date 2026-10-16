@@ -164,7 +164,17 @@ export function buildDependencyHandoff({ packageDir, step, targets }) {
   try { parsed = read(indexFile); } catch (error) {
     throw refusalError({ code: 'dependency-index-unreadable', remedy: 'Fix the JSON in spec-steps.json.', message: `Cannot read ${indexFile}: ${error.message}` });
   }
-  const validation = validateStepIndex(parsed, { targets });
+  // Step 7: the witness index references evidence gates, so the dependency graph
+  // can only be validated against the package's evidence plan. A legacy package
+  // without one (or with an unparseable one) stays as it was: an index that
+  // references gates is dependency-graph-invalid, and one that does not still
+  // validates as before.
+  let evidencePlan = null;
+  const evidencePlanFile = join(packageDir, 'evidence-plan.json');
+  if (existsSync(evidencePlanFile)) {
+    try { evidencePlan = read(evidencePlanFile); } catch { evidencePlan = null; }
+  }
+  const validation = validateStepIndex(parsed, { targets, evidencePlan });
   if (validation.legacy) return null;
   if (!validation.ok) {
     throw refusalError({ code: 'dependency-graph-invalid', remedy: 'Fix the requires/writes declarations before starting this step.', message: validation.errors.slice(0, 3).join('; ') });

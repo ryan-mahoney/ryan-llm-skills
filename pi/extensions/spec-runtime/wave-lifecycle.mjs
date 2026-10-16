@@ -158,6 +158,7 @@ export function createWaveLifecycle({
   // dependencies staging; the source tree remains byte-for-byte the tracked base
   // tree validated by the contained setup.
   function partitionUntracked({ gitDir, source, dependencies }) {
+    mkdirSync(dependencies, { recursive: true });
     const moved = new Set([...gitList(gitDir, source, ['--others', '--exclude-standard']),
       ...gitList(gitDir, source, ['--others', '--ignored', '--exclude-standard'])]);
     for (const rel of moved) {
@@ -502,10 +503,10 @@ export function createWaveLifecycle({
     const step = realpathSync(input.step);
     if (!inside(packagePath, step)) throw new Error('step must be inside the package');
     const target = stepTarget(locations, packagePath, step);
-    const { record, claimToken, epoch, member, coordinator } = resolveWaveMemberRequest(input, { packagePath, packageRef, target }, this.ownershipRoot);
+    const { record, claimToken, epoch, member, candidate, coordinator } = resolveWaveMemberRequest(input, { packagePath, packageRef, target }, this.ownershipRoot);
     const waveFile = join(packagePath, 'runtime', 'waves', `${input.wave_id}.json`);
 
-    const workspace = member.workspace;
+    const workspace = candidate ? record.target.integration.workspace : member.workspace;
     if (!workspace || typeof workspace !== 'object' || !workspace.retained)
       throw waveInvalid('wave-remount-unprepared', 'Wave member has no retained workspace to remount.', 'Prepare the member workspace before remounting.');
     const retained = workspace.retained;
@@ -520,7 +521,7 @@ export function createWaveLifecycle({
       return { status: 'prepared', remounted: true, idempotent: true, wave_id: input.wave_id,
         step_number: input.step_number, attempt_id: input.attempt_id, phase: input.phase, workspace };
 
-    const previousRunId = member.run_id;
+    const previousRunId = candidate ? record.target.repair.run_id : member.run_id;
     if (typeof previousRunId !== 'string' || previousRunId === '')
       throw waveInvalid('wave-remount-run', 'Wave member names no previous run to remount.', 'Drain the previous phase before remounting.');
     let previousRun;
@@ -550,6 +551,9 @@ export function createWaveLifecycle({
     if (layers && layers.worktree !== undefined && retained.worktree !== undefined && layers.worktree !== retained.worktree)
       throw waveInvalid('wave-remount-layers', 'The phase drain receipt names a different workspace worktree.', 'Remount only the drained workspace.');
     const released = Array.isArray(drain.released) ? drain.released : [];
+    const bindingCandidate = binding.candidate ?? null;
+    if (bindingCandidate !== (candidate ?? null))
+      throw waveInvalid('wave-remount-candidate', 'The previous run binding names a different candidate than the remount.', 'Remount the drained run named by the selected candidate.');
     const prior = identity.claim;
     if (!released.some(item => item && item.kind === 'checkout' && item.token === prior.token && String(item.epoch) === String(prior.epoch)))
       throw waveInvalid('wave-remount-claim', 'The confirmed drain did not release the retained checkout claim.', 'Remount only from a confirmed drain of the retained claim.');
@@ -585,7 +589,7 @@ export function createWaveLifecycle({
     const persisted = await runLockedMutation(`${waveFile}.lock`, 'remount-wave-member', {
       file: waveFile, generation: record.generation, claimToken, coordinatorEpoch: epoch,
       stepNumber: input.step_number, attemptId: input.attempt_id, phase: input.phase,
-      previousRunId, retained, workspace: remounted });
+      previousRunId, retained, workspace: remounted, ...(candidate !== null ? { candidate } : {}) });
     if (!persisted || persisted.ok !== true)
       throw waveInvalid(persisted?.code || 'wave-remount-persist', persisted?.message || 'Could not persist the remounted member workspace.', 'Repair the wave record then re-run the remount.');
     return { status: 'prepared', remounted: true, idempotent: persisted.idempotent === true,

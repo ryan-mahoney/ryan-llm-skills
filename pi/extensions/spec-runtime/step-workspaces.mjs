@@ -944,7 +944,10 @@ async function prepare(kind, options = {}) {
       refuse('receipt-identity-mismatch', 'preparation receipt must bind the validated staging input contents');
     }
   }
-  requireStableBase({ worktree: target.worktree, baseCommit });
+  // A packet workspace is based on a working-tree snapshot commit that is
+  // intentionally not the canonical HEAD, so the tracked-base check is skipped
+  // for kind 'packet' only; every other preparation keeps the check unchanged.
+  if (kind !== 'packet') requireStableBase({ worktree: target.worktree, baseCommit });
 
   const attemptRoot = join(waveRoot, 'attempts', attemptId);
   const canonicalWorktree = canonicalPath(target.worktree);
@@ -995,7 +998,7 @@ async function prepare(kind, options = {}) {
 }
 
 export async function prepareStepWorkspace(options) {
-  return prepare('step', options);
+  return prepare(options.kind === 'packet' ? 'packet' : 'step', options);
 }
 
 export async function prepareCandidateWorkspace(options) {

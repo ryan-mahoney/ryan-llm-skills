@@ -15,6 +15,7 @@ import { preparedEntry } from './startup.mjs';
 import { splitModelSelector, assertModelSelector, configurationFailure, configurationAction } from './model-selector.mjs';
 import { submitCompletion, completionStatus, refreshProgress, revision, recordVerification, invalidateCompletion, completeOutcomes } from './completion.mjs';
 import { createOwnership } from './ownership.mjs';
+import { createPacketWorkspaces } from './editor-workspaces.mjs';
 import { createSystemdServiceAdapter, createWaveDeadline, deadlineRemainingMs } from './linux-resources.mjs';
 import { createWaveLifecycle, environmentFacts } from './wave-lifecycle.mjs';
 export { environmentFacts } from './wave-lifecycle.mjs';
@@ -24,6 +25,7 @@ import { observedRuns, buildDependencyHandoff } from './dependency-handoff.mjs';
 export { buildDependencyHandoff };
 import { PROVIDER_RECOVERY } from './provider-recovery.mjs';
 import { inspectProcess } from '../../../scripts/spec-observe/process-identity.mjs';
+import { selectWaveSubject, candidateLeaseSubject, candidateCapacityAttempt } from './wave-candidate-binding.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const RUNTIME_MODULE_PATH = resolve(fileURLToPath(import.meta.url));
@@ -111,11 +113,45 @@ function currentHandoff(record, { sameStepOnly = false } = {}) {
     sources: [join(record.package, 'runtime/progress.json'), join(record.package, 'history-index.json')],
     obligations: 'Read all card prerequisites. Reconcile historical gaps against latest evidence; worker exit and handoff outcome do not establish acceptance. Preserve original evidence revisions.' })}\n`;
 }
-function atomic(file, value) {
+export function atomic(file, value) {
   mkdirSync(dirname(file), { recursive: true });
   const tmp = `${file}.${randomUUID()}.tmp`;
   writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
   renameSync(tmp, file);
+}
+// The serial latest-run predicate: run.json names an active state whose
+// coordinator is still alive. Extracted so the serial admission path and the
+// wave-eligibility probe share one definition.
+export function serialRunActive(packagePath) {
+  const latest = join(packagePath, 'runtime/run.json');
+  if (!existsSync(latest)) return false;
+  let prior;
+  try { prior = read(latest); } catch { return false; }
+  if (!['running', 'cancelling', 'blocked'].includes(prior.state)) return false;
+  return processAlive(prior.coordinator_pid ?? prior.pid);
+}
+// Nonterminal wave records durably persisted under runtime/waves. A record is
+// live while its state is neither integrated nor cancelled. An unreadable file
+// cannot be shown terminal, so it fails closed as `unknown`.
+const WAVE_RECORD_NAME = /^[A-Za-z0-9_-]{1,128}\.json$/;
+export function activeWaveRecords(packagePath) {
+  const dir = join(packagePath, 'runtime', 'waves');
+  if (!existsSync(dir)) return [];
+  const records = [];
+  for (const name of readdirSync(dir)) {
+    if (!WAVE_RECORD_NAME.test(name)) continue;
+    const recordPath = join(dir, name);
+    let record;
+    try { record = read(recordPath); } catch {
+      records.push({ wave_id: name.slice(0, -'.json'.length), state: 'unknown', generation: null, record_path: recordPath });
+      continue;
+    }
+    const state = record?.state;
+    if (state === 'integrated' || state === 'cancelled') continue;
+    records.push({ wave_id: record?.wave_id ?? name.slice(0, -'.json'.length), state: state ?? 'unknown',
+      generation: record?.generation ?? record?.expected_generation ?? null, record_path: recordPath });
+  }
+  return records;
 }
 function git(cwd, ...args) {
   return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -250,10 +286,18 @@ async function resolveWaveBinding(input, { packagePath, packageRef, target }, ow
   const cardStep = Number(basename(input.step).match(/^step-(\d+)-subspec\.md$/)?.[1]);
   if (!Number.isInteger(cardStep) || input.step_number !== cardStep)
     throw waveInvalid('wave-step-mismatch', 'Supplied step_number does not match the step card.', 'Pass the card step number.');
-  const member = record.members?.[String(input.step_number)];
-  if (!member || typeof member !== 'object')
+  let selected;
+  try {
+    selected = selectWaveSubject(record, { step_number: input.step_number, candidate: input.candidate,
+      attempt_id: input.attempt_id, phase: input.phase });
+  } catch (error) {
+    throw waveInvalid(error?.code || 'wave-member-mismatch', error?.message || 'Wave member attempt or phase does not match the supplied identity.', 'Pass the recorded member attempt and phase.');
+  }
+  const member = selected.subject;
+  const candidate = selected.candidate;
+  if (!candidate && (!member || typeof member !== 'object'))
     throw waveInvalid('wave-member-missing', `Wave record has no member for step ${input.step_number}.`, 'Record the member before binding a run.');
-  if (Number(member.step) !== input.step_number || member.attempt_id !== input.attempt_id || member.phase !== input.phase)
+  if (!candidate && (Number(member.step) !== input.step_number || member.attempt_id !== input.attempt_id || member.phase !== input.phase))
     throw waveInvalid('wave-member-mismatch', 'Wave member attempt or phase does not match the supplied identity.', 'Pass the recorded member attempt and phase.');
   const identity = workspaceIdentity(member.workspace);
   if (identity.baseCommit !== record.target.base_commit)
@@ -276,12 +320,39 @@ async function resolveWaveBinding(input, { packagePath, packageRef, target }, ow
   const gitDirReal = realpathSync(identity.gitDir);
   if (integration && (checkoutReal === integration || inside(integration, checkoutReal)))
     throw waveInvalid('wave-checkout-integration', 'Wave member workspace reuses the integration checkout.', 'Provision a retained attempt workspace.');
-  if (integration && (gitDirReal === integration || inside(integration, gitDirReal)))
-    throw waveInvalid('wave-gitdir-integration', 'Wave member workspace private git dir reuses the integration checkout.', 'Provision a retained attempt workspace.');
+  // A linked worktree keeps private metadata at .git/worktrees/<name> inside the
+  // canonical source common dir, which may itself live under the integration
+  // checkout. That is legitimate: the member edits its own worktree and the
+  // integration checkout keeps its own gitdir. A blanket containment rejection
+  // is relaxed only when the private git dir is narrowly validated as belonging
+  // to this attempt worktree, not to the integration checkout itself.
+  if (integration && (gitDirReal === integration || inside(integration, gitDirReal))) {
+    let linkedPrivate = false;
+    if (identity.backend === 'worktree') {
+      try {
+        const worktreesRoot = join(sourceCommon, 'worktrees');
+        const immediateChild = dirname(gitDirReal) === worktreesRoot && basename(gitDirReal) !== '' && basename(gitDirReal) !== '.';
+        // The private git dir backlink names the worktree it belongs to.
+        const backlink = immediateChild ? realpathSync(readFileSync(join(gitDirReal, 'gitdir'), 'utf8').trim()) : null;
+        const expectedCheckoutGit = join(checkoutReal, '.git');
+        const commonDirRaw = git(identity.checkout, 'rev-parse', '--git-common-dir');
+        const commonDirReal = realOrNull(isAbsolute(commonDirRaw) ? commonDirRaw : resolve(identity.checkout, commonDirRaw));
+        const integrationGitDir = realOrNull(target.worktree || target.primary)
+          ? realpathSync(git(target.worktree || target.primary, 'rev-parse', '--absolute-git-dir'))
+          : null;
+        linkedPrivate = immediateChild
+          && backlink === expectedCheckoutGit
+          && commonDirReal === sourceCommon
+          && gitDirReal !== integrationGitDir;
+      } catch { linkedPrivate = false; }
+    }
+    if (!linkedPrivate)
+      throw waveInvalid('wave-gitdir-integration', 'Wave member workspace private git dir reuses the integration checkout.', 'Provision a retained attempt workspace.');
+  }
   if (!inside(identity.attemptRoot, checkoutReal))
     throw waveInvalid('wave-checkout-outside-attempt', 'Wave member checkout is outside its retained attempt root.', 'Provision the member under the wave attempt root.');
   for (const [step, other] of Object.entries(record.members || {})) {
-    if (Number(step) === input.step_number || !other || typeof other !== 'object' || !other.workspace) continue;
+    if ((!candidate && Number(step) === input.step_number) || !other || typeof other !== 'object' || !other.workspace) continue;
     let otherIdentity;
     try { otherIdentity = workspaceIdentity(other.workspace); } catch { continue; }
     const otherCheckout = realOrNull(otherIdentity.checkout);
@@ -318,7 +389,8 @@ async function resolveWaveBinding(input, { packagePath, packageRef, target }, ow
       upper_id: member.workspace.upperId ?? null, checkout_claim: identity.claim.token,
       checkout_claim_epoch: checkoutClaim.epoch, checkout_claim_attempt: checkoutClaim.attempt ?? null,
       layers: identity.backend === 'overlayfs' ? { lower: identity.lower, upper: identity.upper, work: identity.work, merged: identity.checkout, gitDir: identity.gitDir } : null,
-      worktree: identity.backend === 'worktree' ? identity.checkout : null } };
+      worktree: identity.backend === 'worktree' ? identity.checkout : null,
+      ...(candidate === null ? {} : { candidate }) } };
 }
 
 async function bindWaveMemberRun(config, runId) {
@@ -326,6 +398,7 @@ async function bindWaveMemberRun(config, runId) {
     file: config.wave_path, generation: config.wave_bindings.generation, claimToken: config.wave_bindings.claim_token,
     coordinatorEpoch: config.wave_bindings.coordinator_epoch, stepNumber: config.wave_bindings.step_number,
     attemptId: config.wave_bindings.attempt_id, phase: config.wave_bindings.phase,
+    candidate: config.wave_bindings.candidate,
     checkoutClaim: config.wave_bindings.checkout_claim, runId,
   });
   if (!result || result.ok !== true)
@@ -479,9 +552,15 @@ function assertWaveLease(record) {
     || wave.coordinator?.epoch !== binding.coordinator_epoch || wave.coordinator?.session !== binding.coordinator?.session || wave.package_ref !== binding.package_ref
     || wave.target?.id !== binding.target || wave.target?.base_commit !== binding.base_commit)
     throw new Error('Wave lease is absent or replaced; stop this assignment.');
-  const member = wave.members?.[String(binding.step_number)];
-  if (!member || member.attempt_id !== binding.attempt_id || member.phase !== binding.phase || member.run_id !== record.id)
-    throw new Error('Wave member binding is absent or replaced; stop this assignment.');
+  if (binding.candidate !== undefined && binding.candidate !== null) {
+    // A candidate binding leases the target.repair subject selected by the
+    // shared helper; the ordinary member check does not apply.
+    candidateLeaseSubject(wave, binding, record.id);
+  } else {
+    const member = wave.members?.[String(binding.step_number)];
+    if (!member || member.attempt_id !== binding.attempt_id || member.phase !== binding.phase || member.run_id !== record.id)
+      throw new Error('Wave member binding is absent or replaced; stop this assignment.');
+  }
   const claims = readOwnershipClaimsSync(binding.ownership_root);
   if (!claims.some(claim => claim.kind === 'package' && claim.token === binding.claim_token && String(claim.epoch) === String(binding.coordinator_epoch) && claim.packageId === binding.package_ref))
     throw new Error('Wave package claim is absent or replaced; stop this assignment.');
@@ -490,7 +569,7 @@ function assertWaveLease(record) {
     throw new Error('Wave checkout claim is absent or replaced; stop this assignment.');
   // Capacity is reserved before the root launches; its token/epoch/attempt must
   // still match this run's reservation and the wave membership attempt.
-  const capacityKey = `${binding.wave_id}:${binding.attempt_id}:${record.command_phase?.purpose ?? binding.phase}`;
+  const capacityKey = candidateCapacityAttempt(binding, record.command_phase?.purpose ?? binding.phase);
   const capacity = record.capacity_claim;
   if (!capacity || typeof capacity.token !== 'string' || capacity.epoch === undefined || capacity.attempt !== capacityKey)
     throw new Error('Wave capacity claim is absent or replaced; stop this assignment.');
@@ -693,10 +772,18 @@ function resolveWaveMemberRequest(input, { packagePath, packageRef, target }, ow
   const cardStep = Number(basename(input.step).match(/^step-(\d+)-subspec\.md$/)?.[1]);
   if (!Number.isInteger(cardStep) || input.step_number !== cardStep)
     throw waveInvalid('wave-step-mismatch', 'Supplied step_number does not match the step card.', 'Pass the card step number.');
-  const member = record.members?.[String(input.step_number)];
-  if (!member || typeof member !== 'object')
+  let selected;
+  try {
+    selected = selectWaveSubject(record, { step_number: input.step_number, candidate: input.candidate,
+      attempt_id: input.attempt_id, phase: input.phase });
+  } catch (error) {
+    throw waveInvalid(error?.code || 'wave-member-mismatch', error?.message || 'Wave member attempt or phase does not match the supplied identity.', 'Pass the recorded member attempt and phase.');
+  }
+  const member = selected.subject;
+  const candidate = selected.candidate;
+  if (!candidate && (!member || typeof member !== 'object'))
     throw waveInvalid('wave-member-missing', `Wave record has no member for step ${input.step_number}.`, 'Record the member before preparing its workspace.');
-  if (Number(member.step) !== input.step_number || member.attempt_id !== input.attempt_id || member.phase !== input.phase)
+  if (!candidate && (Number(member.step) !== input.step_number || member.attempt_id !== input.attempt_id || member.phase !== input.phase))
     throw waveInvalid('wave-member-mismatch', 'Wave member attempt or phase does not match the supplied identity.', 'Pass the recorded member attempt and phase.');
   // The phase's coordinator identity is the validated package-claim coordinator,
   // revalidated against the durable wave record session/epoch.
@@ -704,7 +791,7 @@ function resolveWaveMemberRequest(input, { packagePath, packageRef, target }, ow
     && claim.token === claimToken && String(claim.epoch) === String(epoch));
   if (!packageClaim)
     throw waveInvalid('wave-package-claim', 'No live package claim matches the wave token and epoch.', 'Recover or reacquire the package claim before preparing.');
-  return { record, claimToken, epoch, member, coordinator: waveCoordinator(record, packageClaim) };
+  return { record, claimToken, epoch, member, candidate, coordinator: waveCoordinator(record, packageClaim) };
 }
 
 export async function resolveInput(input, location = {}, { ownership, ownershipRoot } = {}) {
@@ -1000,6 +1087,14 @@ export class Runtime {
       if (previous.contract !== contract && !compatibleLegacy) throw new Error('assignment_id already identifies a different launch contract; use a new explicit attempt ID for an intentional change.');
       return summary(loadRun(config.package, previous.run_id));
     }
+    // A serial run cannot start while a nonterminal wave record is persisted: the
+    // wave owns the package and a serial launch would fork the work. Wave runs
+    // carry wave_bindings and are admitted by their own validation.
+    if (!config.wave_bindings) {
+      const waves = activeWaveRecords(config.package);
+      if (waves.length) throw refusalError({ code: 'wave-active', message: `Package ${config.package_ref} has an active wave claim(s) represented by record(s) ${waves.map(record => record.wave_id).join(', ')}; a serial run cannot start while a wave is running.`,
+        remedy: 'Resume through spec_dispatch startup with execution auto or waves; serial cannot bypass an active wave.' });
+    }
     // No lock folders: a live coordinator pid in run.json is the writer claim. A dead
     // coordinator's run is marked stale. Two processes starting in the same instant can both pass.
     // A serial run refuses any live package wave claim even when run.json looks
@@ -1043,7 +1138,7 @@ export class Runtime {
         && priorStarted <= Date.parse(inspectedAt) && priorFinished >= Date.parse(enteredAt);
       if (active) {
         const pid = prior.coordinator_pid ?? prior.pid;
-        if (processAlive(pid)) throw refusalError({ code: 'run-active', message: `Run ${prior.id} is ${prior.state} and its coordinator (pid ${pid}) is alive.`,
+        if (serialRunActive(config.package)) throw refusalError({ code: 'run-active', message: `Run ${prior.id} is ${prior.state} and its coordinator (pid ${pid}) is alive.`,
           remedy: 'Await its completion or confirmed cancellation; start a new run only after it ends.' });
         // A dead coordinator is recoverable only when the active record carries a
         // truthful known lifetime. An active-shaped record with an unknown start or
@@ -1238,7 +1333,7 @@ export function contextExcerpts(record, context = []) {
   return `CONTEXT EXCERPTS (exact current bytes chosen by the owner; edit against them and read further only when an edit anchor does not match):\n${blocks.join('\n')}\n--- end of excerpts\n`;
 }
 
-export async function runEditor(record, assignment, signal, launchProcess = launch, { stopGroup = terminateGroup, context = [], reasoning, paths, member } = {}) {
+export async function runEditor(record, assignment, signal, launchProcess = launch, { stopGroup = terminateGroup, context = [], reasoning, paths, member, workspace } = {}) {
   assertLease(record);
   if (reasoning !== undefined && !THINKING.test(reasoning)) throw new Error(`reasoning must be one of off, minimal, low, medium, high, xhigh, max`);
   const excerpts = contextExcerpts(record, context);
@@ -1295,7 +1390,7 @@ export async function runEditor(record, assignment, signal, launchProcess = laun
       continuation = `PREVIOUS PACKET INCOMPLETE: ${JSON.stringify({ session: previous.session ?? null, stop_reason: previous.stop_reason ?? null, error: previous.error ?? null, full_result_path: previous.full_result_path ?? null, dirty_paths, dirty_count })}\nThe previous editor packet stopped before completion and its partial changes remain in the checkout. Keep them; do not redo or revert completed edits. Complete only the remaining obligation in this packet.\n`;
     }
     const fence = member ? `PARALLEL PACKET: other editors are writing other files now. You may edit or write only: ${paths.join(', ')}. You have no shell and cannot ask the owner; if a decision or anchor is missing, stop and return the exact question, the paths you checked and the facts found.\n` : '';
-    task = launchProcess({ ...record, editor_session: session, editor_model: editorModel }, 'editor', `PACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${targetFacts(record)}FRESH EDITOR: This packet is your complete assignment, not a continuation of prior editor chat. Preserve existing working-tree changes. ${orientation} Do not repeat prior work or verification.\n${continuation}${fence}${assignment}\n${excerpts}`,
+    task = launchProcess({ ...record, checkout: workspace ?? record.checkout, editor_session: session, editor_model: editorModel }, 'editor', `PACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${workspace ?? record.checkout}\nPRIMARY: ${record.primary}\n${targetFacts(record)}FRESH EDITOR: This packet is your complete assignment, not a continuation of prior editor chat. Preserve existing working-tree changes. ${orientation} Do not repeat prior work or verification.\n${continuation}${fence}${assignment}\n${excerpts}`,
       member ? { parallel: true, tools: FENCED_EDITOR_TOOLS.join(','), env: { SPEC_EDITOR_PATHS: JSON.stringify(paths), PI_INTERCOM_STABLE_ID: `spec-editor-${record.id}-${member}` } } : undefined);
     event(record, 'editor_started', { pid: task.child.pid, editor_session: session, ...(reasoning ? { reasoning } : {}), ...(context?.length ? { context_ranges: context.length } : {}) });
     let stopping;
@@ -1350,6 +1445,20 @@ export async function runEditor(record, assignment, signal, launchProcess = laun
 // siblings never overwrite one another or the per-run receipt.
 const memberOutcomeFile = (record, member) => join(record.package, 'runtime/runs', `${record.id}-editor-outcome-${member}.json`);
 
+// AC23: a nonempty integration patch from a packet is persisted under the run's
+// runtime directory so the owner can inspect exactly what a member produced. The
+// name embeds the batch identifier and packet index so sibling batches never
+// overwrite one another. An empty patch (nothing to merge) writes nothing.
+function persistConflictPatch(record, batch, index, patch) {
+  if (typeof patch !== 'string' || !patch.length) return null;
+  const file = join(record.package, 'runtime/runs', `${record.id}-batch-${batch}-packet-${index + 1}.patch`);
+  mkdirSync(dirname(file), { recursive: true });
+  const tmp = `${file}.${randomUUID()}.tmp`;
+  writeFileSync(tmp, patch, { mode: 0o600 });
+  renameSync(tmp, file);
+  return file;
+}
+
 // True when an editor write targets one of its fenced checkout-relative paths or lies under one.
 export function fencedPath(checkout, path, fence) {
   if (typeof path !== 'string' || !path) return false;
@@ -1357,9 +1466,11 @@ export function fencedPath(checkout, path, fence) {
   return fence.some(entry => { const allowed = resolve(root, entry); return full === allowed || full.startsWith(`${allowed}/`); });
 }
 
-// Checkout-relative write sets for parallel packets: each must be non-empty, inside the
-// checkout, and disjoint from every other packet's, counting a directory as its contents.
-export function packetPaths(record, packets) {
+// Checkout-relative write sets for parallel packets: each must be non-empty and
+// inside the checkout. Cross-packet overlap is refused by default; a batch that
+// runs packets in isolated packet workspaces may pass `allowOverlap` and rely on
+// the integration merge instead, while per-packet validation is unchanged.
+export function packetPaths(record, packets, { allowOverlap = false } = {}) {
   const root = resolve(record.checkout);
   const sets = packets.map((packet, index) => {
     if (!Array.isArray(packet.paths) || !packet.paths.length) throw new Error(`packet ${index + 1} needs paths: the files it may write`);
@@ -1369,6 +1480,7 @@ export function packetPaths(record, packets) {
       return relative(root, full);
     });
   });
+  if (allowOverlap) return sets;
   const covers = (a, b) => a === b || b.startsWith(`${a}/`) || a.startsWith(`${b}/`);
   sets.forEach((set, i) => sets.slice(i + 1).forEach((other, offset) => {
     const clash = set.find(a => other.some(b => covers(a, b)));
@@ -1377,20 +1489,100 @@ export function packetPaths(record, packets) {
   return sets;
 }
 
-// Closed packets that write disjoint files run concurrently in the shared checkout. Each
-// editor is fenced to its paths, has no shell and cannot ask questions; the batch holds the
-// writer slot, so no check or other editor overlaps it. Overlapping files need isolated
-// workspaces and an integration merge, which this does not provide.
-export async function runEditorBatch(record, packets, signal, launchProcess = launch, { stopGroup = terminateGroup } = {}) {
+// The run's selected backend bounds an isolated batch. Only explicit overlayfs
+// or worktree selections are meaningful here; anything else defaults truthful
+// to worktree rather than an insinuated overlay capability.
+function normalizeWorkspaceBackend(value) {
+  if (value === 'overlayfs' || value === 'overlay') return 'overlayfs';
+  return 'worktree';
+}
+
+function packetSetsOverlap(sets) {
+  const covers = (a, b) => a === b || b.startsWith(`${a}/`) || a.startsWith(`${b}/`);
+  for (let i = 0; i < sets.length; i += 1) {
+    for (let j = i + 1; j < sets.length; j += 1) {
+      if (sets[i].some(a => sets[j].some(b => covers(a, b)))) return true;
+    }
+  }
+  return false;
+}
+
+// Disjoint packets share the owner checkout without provisioning. The runtime
+// builds this minimal view directly so a disjoint batch never calls the
+// workspace provider.
+function sharedPacketWorkspaces(record, sets, backend) {
+  let expected = 0;
+  return {
+    isolated: false,
+    mode: 'shared',
+    backend,
+    snapshot: null,
+    members: sets.map((paths, k) => ({ k, checkout: record.checkout, paths })),
+    workspaces: sets.map(() => record.checkout),
+    integrate(index, { skip = false } = {}) {
+      if (index !== expected) throw new Error(`packet ${expected} must integrate before packet ${index}`);
+      expected += 1;
+      return skip ? { status: 'not-run', conflicting_paths: [], patch: '' } : { status: 'applied', conflicting_paths: [], patch: '' };
+    },
+    cleanup() {},
+  };
+}
+
+// Closed packets run concurrently while holding the writer slot, so no check or
+// other editor overlaps the batch. Disjoint packets share the owner checkout in
+// place. Packets that declare overlapping paths run in isolated packet
+// workspaces snapshotted from the current working tree and are merged back in
+// order by the integration step. Either way each editor is fenced to its paths,
+// has no shell and cannot ask questions.
+export async function runEditorBatch(record, packets, signal, launchProcess = launch, {
+  stopGroup = terminateGroup,
+  workspaceProvider = createPacketWorkspaces,
+  ownership,
+  coordinator,
+  capability,
+  mountTransport,
+} = {}) {
   assertLease(record);
   if (!Array.isArray(packets) || packets.length < 2 || packets.length > PARALLEL_EDITORS) throw new Error(`a parallel batch takes 2 to ${PARALLEL_EDITORS} packets`);
-  const sets = packetPaths(record, packets);
+  const sets = packetPaths(record, packets, { allowOverlap: true });
+  const selectedBackend = packets.map(packet => packet.backend ?? packet.selected_backend ?? packet.launch ?? null).find(value => value != null) ?? null;
+  // The run's backend selection bounds which backend an isolated batch may use;
+  // a disjoint batch shares the owner checkout and never provisions.
+  const runBackend = normalizeWorkspaceBackend(record.wave_bindings?.backend ?? record.backend ?? selectedBackend ?? 'worktree');
+  const overlap = packetSetsOverlap(sets);
+  let replyMode = 'shared';
   const editorLock = editorSlot(record);
   try { mkdirSync(editorLock); } catch { throw new Error('An editor assignment is already active; await its result.'); }
+  let workspaces;
+  const batch = randomUUID();
+  let actualBackend = runBackend;
   try {
-    event(record, 'editor_batch_started', { packets: packets.length });
+    // Provisioning decides the actual isolation and backend; the started event
+    // is emitted only once that selection is known. Snapshot the CURRENT
+    // working tree before any member launches so every packet workspace starts
+    // from the same bytes and never from a sibling's partial writes. A disjoint
+    // batch shares the checkout and never calls the provider.
+    if (overlap) {
+      workspaces = await workspaceProvider({
+        record,
+        checkout: record.checkout,
+        packets: packets.map((packet, index) => ({ ...packet, paths: sets[index] })),
+        batch,
+        mode: runBackend,
+        ownership,
+        coordinator,
+        capability,
+        mountTransport,
+      });
+      replyMode = workspaces.isolated ? 'isolated' : 'shared';
+    } else {
+      workspaces = sharedPacketWorkspaces(record, sets, runBackend);
+      replyMode = 'shared';
+    }
+    actualBackend = workspaces.backend ?? runBackend;
+    event(record, 'editor_batch_started', { packets: packets.length, batch, mode: replyMode, selected_backend: actualBackend });
     const results = await Promise.all(packets.map((packet, index) => runEditor(record, packet.assignment, signal, launchProcess,
-      { stopGroup, context: packet.context, reasoning: packet.reasoning, paths: sets[index], member: index + 1 })
+      { stopGroup, context: packet.context, reasoning: packet.reasoning, paths: sets[index], member: index + 1, workspace: workspaces.workspaces[index] })
       .catch(error => ({ error: error.message, paths: sets[index] }))));
     // Fold this batch's member receipts into the per-run receipt that the next
     // packet and the completion guard read: one incomplete member makes the batch
@@ -1410,14 +1602,92 @@ export async function runEditorBatch(record, packets, signal, launchProcess = la
         full_result_path: incomplete?.full_result_path ?? null,
         members: members.map(({ member, receipt_path, state }) => ({ member, receipt_path, state })), recorded_at: timestamp() });
     }
-    const reply = { results };
-    if (activeGroups(record).some(group => group.role !== 'owner')) {
+    const reply = { results, batch, mode: replyMode, selected_backend: actualBackend };
+    // Verify every member group settled before touching the working tree: a live
+    // descendant could still be writing into the checkout or its workspace.
+    let survivors = activeGroups(record).filter(group => group.role !== 'owner');
+    for (const group of survivors) {
       revoke(record);
-      Object.assign(reply, { error: 'Editor or command descendants remain alive. Lease revoked; coordinator must cancel this run before replacing the editor.', requires_cancellation: true });
+      try { await stopGroup(record, group.pid); } catch { /* keep the group visible below */ }
     }
-    event(record, 'editor_batch_finished', { packets: packets.length, failed: results.filter(item => item.error).length });
+    if (survivors.length) survivors = activeGroups(record).filter(group => group.role !== 'owner');
+    if (survivors.length) {
+      revoke(record);
+      Object.assign(reply, {
+        error: 'Editor or command descendants remain alive. Lease revoked; coordinator must cancel this run before replacing the editor.',
+        requires_cancellation: true, retained_workspaces: workspaces.workspaces,
+        mode: replyMode, selected_backend: actualBackend,
+      });
+      event(record, 'editor_batch_finished', { packets: packets.length, batch, mode: replyMode, selected_backend: actualBackend, failed: results.filter(item => item.error).length, requires_cancellation: true });
+      return reply;
+    }
+    if (workspaces.isolated) {
+      const integration = [];
+      for (let index = 0; index < packets.length; index += 1) {
+        // AC23: a failed editor never integrates. Skip its workspace entirely;
+        // the conflict patch rule also applies to a nonempty patch from a failed
+        // member so the owner can inspect what it tried to write.
+        const failed = Boolean(results[index]?.error);
+        const merged = workspaces.integrate(index, { skip: failed });
+        if (failed) {
+          const notRun = { ...merged, status: 'not-run', reason: 'editor-failed' };
+          integration.push(notRun);
+          reply.results[index] = { ...reply.results[index], integration: notRun };
+          if (merged.patch) {
+            const patchPath = persistConflictPatch(record, batch, index, merged.patch);
+            if (patchPath) reply.results[index] = { ...reply.results[index], patch_path: patchPath };
+          }
+          continue;
+        }
+        integration.push(merged);
+        reply.results[index] = { ...reply.results[index], integration: merged };
+        if (merged.status === 'conflict') {
+          const detail = `packet ${index + 1} integration conflict at ${merged.conflicting_paths.join(', ')}`;
+          reply.error = reply.error ? `${reply.error}; ${detail}` : detail;
+          reply.results[index] = { ...reply.results[index], error: reply.results[index]?.error || detail, integration_conflict: merged.conflicting_paths };
+          const file = memberOutcomeFile(record, index + 1);
+          if (existsSync(file)) atomic(file, { ...read(file), state: 'incomplete', error: detail, integration_conflict: merged.conflicting_paths });
+        }
+        if (merged.patch) {
+          const patchPath = persistConflictPatch(record, batch, index, merged.patch);
+          if (patchPath) reply.results[index] = { ...reply.results[index], patch_path: patchPath };
+        }
+      }
+      reply.integration = integration;
+      // The per-run receipt is folded after integration so a conflict marks the
+      // batch incomplete for the next packet and the completion guard.
+      const members = results.flatMap((item, index) => {
+        if (!item.editor_session) return [];
+        const file = memberOutcomeFile(record, index + 1);
+        const receipt = existsSync(file) ? read(file) : null;
+        return receipt?.session === item.editor_session ? [{ member: index + 1, receipt_path: file, ...receipt }] : [];
+      });
+      if (members.length) {
+        const incomplete = members.find(item => item.state === 'incomplete');
+        atomic(join(record.package, 'runtime/runs', `${record.id}-editor-outcome.json`), {
+          version: 1, session: incomplete?.session ?? null, state: incomplete ? 'incomplete' : 'completed',
+          stop_reason: incomplete?.stop_reason ?? null, error: incomplete?.error ?? null,
+          full_result_path: incomplete?.full_result_path ?? null,
+          members: members.map(({ member, receipt_path, state }) => ({ member, receipt_path, state })), recorded_at: timestamp() });
+      }
+    }
+    event(record, 'editor_batch_finished', {
+      packets: packets.length, batch, mode: replyMode, selected_backend: actualBackend,
+      failed: results.filter(item => item.error).length,
+      integrated: reply.results.map(item => item?.integration?.status ?? null),
+      integrated_packets: reply.results
+        .map((item, index) => (item?.integration?.status === 'applied' ? index + 1 : null))
+        .filter(index => index !== null),
+    });
     return reply;
-  } finally { if (!activeGroups(record).some(group => group.role !== 'owner')) rmSync(editorLock, { recursive: true, force: true }); }
+  } finally {
+    // Cleanup only after a confirmed drain; a surviving process still owns its
+    // workspace, so leave every path on disk and keep the slot locked instead.
+    if (!activeGroups(record).some(group => group.role !== 'owner')) {
+      await workspaces?.cleanup();
+      rmSync(editorLock, { recursive: true, force: true });
+    }
+  }
 }
 
 // Share the editor slot so checks cannot race writes, even during a question pause.
@@ -1647,17 +1917,25 @@ const RUNTIME_MUTATIONS = {
     const epoch = record.coordinator?.epoch;
     if (epoch === undefined || epoch === null || String(epoch) !== String(request.coordinatorEpoch))
       return { ok: false, code: 'wave-epoch-mismatch', message: 'Wave coordinator epoch changed before the run bound.' };
-    const member = record.members?.[String(request.stepNumber)];
+    let selected;
+    try {
+      selected = selectWaveSubject(record, { step_number: request.stepNumber, candidate: request.candidate,
+        attempt_id: request.attemptId, phase: request.phase });
+    } catch (error) {
+      return { ok: false, code: error?.code || 'wave-member-mismatch', message: error?.message || 'Wave member identity changed before the run bound.' };
+    }
+    const member = selected.subject;
     if (!member || typeof member !== 'object') return { ok: false, code: 'wave-member-missing', message: 'Wave member disappeared before the run bound.' };
     if (Number(member.step) !== request.stepNumber || member.attempt_id !== request.attemptId || member.phase !== request.phase)
       return { ok: false, code: 'wave-member-mismatch', message: 'Wave member identity changed before the run bound.' };
     const workspace = member.workspace;
     if (!workspace || typeof workspace !== 'object' || workspace.claim?.token !== request.checkoutClaim)
       return { ok: false, code: 'wave-checkout-claim', message: 'Wave member checkout claim changed before the run bound.' };
-    if (member.run_id !== undefined && member.run_id !== null && member.run_id !== request.runId)
+    const occupied = selected.candidate ? record.target.repair : member;
+    if (occupied.run_id !== undefined && occupied.run_id !== null && occupied.run_id !== request.runId)
       return { ok: false, code: 'wave-member-occupied', message: 'Wave member is already bound to another run.' };
-    if (member.run_id === request.runId) return { ok: true, status: 'bound', idempotent: true };
-    member.run_id = request.runId;
+    if (occupied.run_id === request.runId) return { ok: true, status: 'bound', idempotent: true };
+    occupied.run_id = request.runId;
     atomic(request.file, record);
     return { ok: true, status: 'bound', idempotent: false };
   },
@@ -1712,19 +1990,34 @@ const RUNTIME_MUTATIONS = {
     const epoch = record.coordinator?.epoch;
     if (epoch === undefined || epoch === null || String(epoch) !== String(request.coordinatorEpoch))
       return { ok: false, code: 'wave-epoch-mismatch', message: 'Wave coordinator epoch changed before the remount persisted.' };
-    const member = record.members?.[String(request.stepNumber)];
-    if (!member || typeof member !== 'object') return { ok: false, code: 'wave-member-missing', message: 'Wave member disappeared before the remount persisted.' };
-    if (Number(member.step) !== request.stepNumber || member.attempt_id !== request.attemptId || member.phase !== request.phase)
+    let selected;
+    try {
+      selected = selectWaveSubject(record, { step_number: request.stepNumber, candidate: request.candidate, attempt_id: request.attemptId, phase: request.phase });
+    } catch (error) {
+      return { ok: false, code: error?.code || 'wave-member-mismatch', message: error?.message || 'Wave member identity changed before the remount persisted.' };
+    }
+    if (selected.candidate !== (request.candidate ?? null))
       return { ok: false, code: 'wave-member-mismatch', message: 'Wave member identity changed before the remount persisted.' };
-    const prior = member.workspace;
+    const subject = selected.subject;
+    if (!subject || typeof subject !== 'object') return { ok: false, code: 'wave-member-missing', message: 'Wave member disappeared before the remount persisted.' };
+    if (Number(subject.step) !== request.stepNumber || subject.attempt_id !== request.attemptId || subject.phase !== request.phase)
+      return { ok: false, code: 'wave-member-mismatch', message: 'Wave member identity changed before the remount persisted.' };
+    const prior = subject.workspace;
     if (!prior || typeof prior !== 'object' || !prior.retained) return { ok: false, code: 'wave-remount-unprepared', message: 'Wave member lost its retained workspace before the remount persisted.' };
     if (JSON.stringify(prior.retained) !== JSON.stringify(request.retained)) return { ok: false, code: 'wave-remount-identity', message: 'Wave member retained identity moved before the remount persisted.' };
-    if (member.run_id !== null && member.run_id !== undefined && member.run_id !== request.previousRunId)
+    if (subject.run_id !== null && subject.run_id !== undefined && subject.run_id !== request.previousRunId)
       return { ok: false, code: 'wave-remount-run', message: 'Wave member run binding changed before the remount persisted.' };
-    if ((member.run_id === null || member.run_id === undefined) && JSON.stringify(prior.claim) === JSON.stringify(request.workspace.claim))
+    if ((subject.run_id === null || subject.run_id === undefined) && JSON.stringify(prior.claim) === JSON.stringify(request.workspace.claim))
       return { ok: true, status: 'remounted', idempotent: true };
-    member.workspace = request.workspace;
-    member.run_id = null;
+    if (selected.candidate !== null) {
+      if (!record.target || typeof record.target !== 'object') return { ok: false, code: 'wave-member-mismatch', message: 'Wave target disappeared before the remount persisted.' };
+      if (!record.target.integration || typeof record.target.integration !== 'object') record.target.integration = {};
+      record.target.integration.workspace = request.workspace;
+      if (record.target.repair && typeof record.target.repair === 'object') record.target.repair.run_id = null;
+    } else {
+      subject.workspace = request.workspace;
+      subject.run_id = null;
+    }
     atomic(request.file, record);
     return { ok: true, status: 'remounted', idempotent: false };
   },
