@@ -102,6 +102,19 @@ export function installContextBudget(pi, { compact, serialize, retrySettings } =
     } finally { applying = false; }
   };
   pi.on('session_start', apply);
+  // A resumed session starts a new process at calibration 1, so its first request was
+  // judged on the raw estimate: a retained Sol owner at about 65k real input was refused
+  // at 121k on 2026-10-16. Seed the ratio from the session's last recorded usage.
+  pi.on('session_start', (_event, ctx) => {
+    const entries = ctx.sessionManager?.getEntries?.() ?? [];
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const data = entries[i]?.customType === 'context-budget' ? entries[i].data : undefined;
+      if (data?.event === 'usage' && data.input_tokens > 0 && data.estimated_input_tokens > 0) {
+        calibration = Math.min(2, Math.max(0.5, data.input_tokens / data.estimated_input_tokens));
+        return;
+      }
+    }
+  });
   pi.on('model_select', apply);
   pi.on('before_agent_start', apply);
   pi.on('session_before_compact', async (event, ctx) => {
