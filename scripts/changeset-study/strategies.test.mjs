@@ -1,7 +1,7 @@
 // node --test scripts/changeset-study/strategies.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { patchEditor } from './strategies.mjs';
+import { patchEditor, validateStrategyPlan } from './strategies.mjs';
 import { transform } from '../changeset/engine.mjs';
 
 test('bounded editor edits preserve unrelated source and reject stale anchors or unowned writes', async () => {
@@ -25,5 +25,25 @@ test('source ranges move exact bytes and refuse ambiguous or reversed boundaries
   assert.deepEqual({ ...transform(operation, files) }, { 'new.txt': 'prefix\nSTART\nkeep exactly\nsuffix\n', 'old.txt': 'header\ndelegate\nEND\ntail\n' });
   assert.throws(() => transform(operation, { ...files, 'old.txt': files['old.txt'] + 'START\n' }), /unique/);
   assert.throws(() => transform({ writes: ['old.txt'], edits: [{ kind: 'replace-range', path: 'old.txt', start: 'END\n', end: 'START\n', text: '' }] }, files), /ordering/);
+  assert.equal(files['new.txt'], null);
+});
+
+test('delegated edits preserve moved source while refusing owner-written edits', async () => {
+  const operation = { executor: 'involved', writes: ['old.txt', 'new.txt'], instruction: 'Extract unchanged body' };
+  validateStrategyPlan('owner-editor', { operations: [operation] });
+  assert.throws(() => validateStrategyPlan('owner-editor', { operations: [{ ...operation, executor: 'deterministic' }] }), /delegated/);
+  assert.throws(() => validateStrategyPlan('owner-editor', { operations: [{ ...operation, edits: [] }] }), /delegated/);
+  const files = { 'old.txt': 'header\nSTART\nunchanged body\nEND\ntail\n', 'new.txt': null };
+  const model = { json: async (system, input) => {
+    assert.match(system, /replace-range/);
+    assert.match(system, /Compose the moved text before removing/);
+    assert.deepEqual(input.writes, operation.writes);
+    return { edits: [
+      { kind: 'compose', path: 'new.txt', parts: [{ path: 'old.txt', start: 'START\n', end: 'END\n' }] },
+      { kind: 'replace-range', path: 'old.txt', start: 'START\n', end: 'END\n', text: 'delegate\n' },
+    ] };
+  } };
+  const result = await patchEditor(model, 'editor', 'Preserve body', { operation, files }, { ranges: true });
+  assert.deepEqual({ ...result.files }, { 'new.txt': 'START\nunchanged body\n', 'old.txt': 'header\ndelegate\nEND\ntail\n' });
   assert.equal(files['new.txt'], null);
 });

@@ -10,7 +10,7 @@ import { execute } from '../changeset/engine.mjs';
 import { Workspace, hash } from '../changeset/workspace.mjs';
 import { parseJson } from '../changeset/models.mjs';
 import { equivalentCost } from '../changeset-research/cost.mjs';
-import { strategyPlanner, strategyReviewer, usesCandidateChecks, patchEditor } from './strategies.mjs';
+import { strategyPlanner, strategyReviewer, usesCandidateChecks, usesBoundaryReview, validateStrategyPlan, patchEditor } from './strategies.mjs';
 import { changedTestCommands } from './candidate-checks.mjs';
 import { reviewContext } from './review-context.mjs';
 
@@ -38,7 +38,7 @@ function diffs(before, after, limit = 200000) {
 const tail = (visible, chars) => visible?.output?.length > chars ? { ...visible, output: '[earlier output omitted]\n' + visible.output.slice(-chars) } : visible;
 function materialize(files, root) { rmSync(root, { recursive: true, force: true }); mkdirSync(root, { recursive: true }); new Workspace(files).materialize(root); }
 
-export async function runCell({ task, arm, selector, ledger, directory, plannerPrompt, timeoutMs, mounts = [], simpleSelector = null, strategy = null }) {
+export async function runCell({ task, arm, selector, ledger, directory, plannerPrompt, timeoutMs, mounts = [], simpleSelector = null, editorSelector = null, strategy = null }) {
   if (strategy) plannerPrompt = strategyPlanner(strategy, plannerPrompt);
   // Phase limits travel with the task (hard phase); dev/eval keep the original values.
   const limits = { cell_ms: 300000, model_calls: 32, max_output_tokens: 16000, call_ms: 120000, command_ms: 30000, grade_ms: null, review_input: 'files', ...task.limits };
@@ -52,6 +52,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
     schema_version: 1, task: task.id, family: task.family, origin: task.origin, context: task.context,
     arm, selector, task_hash: hash(JSON.stringify(task)), outcome: 'failed', accepted: false, repairs: 0,
     ...(simpleSelector ? { simple_selector: simpleSelector, exploratory: true } : {}), limits,
+    ...(editorSelector ? { editor_selector: editorSelector } : {}),
     ...(strategy ? { strategy, exploratory: true } : {}),
   };
   let client, agent, simpleClient;
@@ -82,7 +83,11 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
     client = await stage('initialize', () => Client.create({ selector, ...clientOptions }));
     // Exploratory mixed routing: the planner/reviewer model plans, involved leaves and
     // repairs stay on it, and only `simple` leaves go to simpleSelector. One call limit.
-    if (arm === 'changeset-mixed') {
+    if (strategy === 'owner-editor') {
+      if (!editorSelector) throw new Error('Owner-editor requires an explicit editor selector');
+      client.shared = { calls: 0 };
+      simpleClient = await stage('initialize', () => Client.create({ selector: editorSelector, ...clientOptions, shared: client.shared }));
+    } else if (arm === 'changeset-mixed') {
       if (!simpleSelector) throw new Error('changeset-mixed requires a simple-leaf selector');
       client.shared = { calls: 0 };
       simpleClient = await stage('initialize', () => Client.create({ selector: simpleSelector, ...clientOptions, shared: client.shared }));
@@ -107,11 +112,12 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
         finally { for (const [name, count] of Object.entries(scout.counts)) toolCalls[name] = (toolCalls[name] ?? 0) + count; scout.dispose(); }
       } else plan = await stage(feedback ? 'repair-planning' : 'planning', () => client.json(plannerPrompt, planningInput, 'planning'));
       writeFileSync(join(directory, `plan-${executions.length}.json`), JSON.stringify(plan, null, 2));
-      if (strategy && strategy !== 'patch-editors' && plan.operations?.some(op => op.executor !== 'deterministic')) throw new Error('Direct strategy requires deterministic operations');
+      validateStrategyPlan(strategy, plan);
       const editor = (model, stageName) => ({ operation, files }) => strategy
-        ? patchEditor(model, stageName, task.spec, { operation, files })
+        ? patchEditor(model, stageName, task.spec, { operation, files }, { ranges: strategy === 'owner-editor' })
         : model.json(editorPrompt, { task_contract: task.spec, instruction: operation.instruction, writes: operation.writes, files }, stageName);
-      const adapters = simpleClient ? { simple: editor(simpleClient, 'simple-editor'), involved: editor(client, 'editor') }
+      const adapters = strategy === 'owner-editor' ? { simple: editor(simpleClient, 'editor'), involved: editor(simpleClient, 'editor') }
+        : simpleClient ? { simple: editor(simpleClient, 'simple-editor'), involved: editor(client, 'editor') }
         : { simple: editor(client, 'editor'), involved: editor(client, 'editor') };
       let draft;
       const report = await stage('execution', () => execute(plan, current, { concurrency: 4, adapters, signal: controller.signal, onDraft: d => { draft = d; } }));
@@ -131,7 +137,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
       writeFileSync(join(directory, `draft-${round}.json`), JSON.stringify(files));
       const reviewInput = diffMode ? { task: task.spec, changes: diffs(task.files, files), visible: tail(visible, 20000) } : { task: task.spec, files, visible };
       if (strategy) reviewInput.execution = implementation;
-      if (strategy === 'boundary-review') {
+      if (usesBoundaryReview(strategy)) {
         const { parse } = await import('./parser/acorn.mjs');
         reviewInput.unchanged_helper_context = reviewContext(task.files, files, parse);
       }

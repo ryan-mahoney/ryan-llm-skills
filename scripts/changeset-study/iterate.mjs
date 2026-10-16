@@ -9,12 +9,15 @@ import { hash } from '../changeset/workspace.mjs';
 import { sdkRoot } from './client.mjs';
 import { recoverAccounting } from './accounting.mjs';
 import { strategyNames, usesCandidateChecks } from './strategies.mjs';
+import { modelRuntime, parseSelector } from '../changeset/models.mjs';
 
 const args = process.argv.slice(2);
 const option = name => { const i = args.indexOf(name); if (i < 0 || !args[i + 1]) throw new Error(`${name} required`); return args[i + 1]; };
 const repo = fileURLToPath(new URL('../..', import.meta.url));
 const source = resolve(option('--source')), run = resolve(option('--output')), ledger = resolve(option('--ledger'));
 const strategy = option('--strategy'), selector = option('--model');
+const editorSelector = args.includes('--editor-model') ? option('--editor-model') : null;
+if ((strategy === 'owner-editor') !== Boolean(editorSelector)) throw new Error('Use --editor-model only and always with owner-editor');
 const replay = args.includes('--freeze-from') ? resolve(option('--freeze-from')) : null;
 const codeRoot = replay ? join(replay, 'frozen') : repo;
 if (!strategyNames.includes(strategy)) throw new Error('Unknown strategy');
@@ -38,7 +41,7 @@ const sdkFiles = () => Object.fromEntries(['pi-agent-core', 'pi-coding-agent', '
 const original = read(join(source, 'manifest.json'));
 if (hash(readFileSync(join(source, 'tasks.json'))) !== original.tasks_file_hash) throw new Error('Reference task bytes changed');
 const replayManifest = replay ? read(join(replay, 'manifest.json')) : null;
-if (replayManifest && (replayManifest.strategy !== strategy || replayManifest.selector !== selector || !equal(files(codeRoot), replayManifest.frozen_files))) throw new Error('Replay strategy or frozen bytes differ');
+if (replayManifest && (replayManifest.strategy !== strategy || replayManifest.selector !== selector || (replayManifest.editor_selector ?? null) !== editorSelector || !equal(files(codeRoot), replayManifest.frozen_files))) throw new Error('Replay strategy, selectors or frozen bytes differ');
 if (original.comparison !== 'sol-native-vs-sol-nemotron-workflow' || original.models[0] !== selector) throw new Error('Use previous workflow run and identical Sol selector');
 const selected = ['hard-context-calibration', 'hard-dependency-handoff', 'hard-lifecycle-extract'];
 const tasks = read(join(source, 'tasks.json'));
@@ -50,6 +53,13 @@ const references = selected.map(task => {
   return { task, source_cell: name, result_hash: hash(readFileSync(path)), result };
 });
 if (!equal(sdkFiles(), original.sdk_files) || !equal(files(original.mounts[0][0]), original.dependency_files)) throw new Error('SDK or dependencies differ from reference');
+const runtime = await modelRuntime();
+const models = [selector, editorSelector].filter(Boolean).map(selected => {
+  const { provider, id } = parseSelector(selected), model = runtime.getModel(provider, id);
+  if (!model || !runtime.hasConfiguredAuth(provider)) throw new Error(`Unavailable model: ${selected}`);
+  return { selector: selected, model };
+});
+if (replayManifest?.models && !equal(models, replayManifest.models)) throw new Error('Replay model metadata changed');
 mkdirSync(join(run, 'frozen/scripts'), { recursive: true });
 for (const folder of ['changeset-study', 'changeset', 'changeset-research']) cpSync(join(codeRoot, 'scripts', folder), join(run, 'frozen/scripts', folder), { recursive: true });
 mkdirSync(join(run, 'frozen/skills/spec-changeset-plan'), { recursive: true });
@@ -63,7 +73,8 @@ const frozen = files(join(run, 'frozen'));
 if (replayManifest && !equal(frozen, replayManifest.frozen_files)) throw new Error('Replay freeze changed');
 write(join(run, 'tasks.json'), selected.map(id => tasks.find(t => t.id === id)));
 write(join(run, 'references.json'), references);
-const manifest = { schema_version: 1, comparison: 'adaptive-sol-only-development', exploratory: true, strategy, selector,
+const manifest = { schema_version: 1, comparison: editorSelector ? 'sol-owner-deepseek-editor' : 'adaptive-sol-only-development', exploratory: true, strategy, selector,
+  editor_selector: editorSelector, models,
   replay_of: replay ? basename(replay) : null,
   created_at: new Date().toISOString(), source_run: basename(source), source_manifest_hash: hash(readFileSync(join(source, 'manifest.json'))),
   revision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim(), node: process.version,
@@ -77,7 +88,7 @@ for (const id of selected) {
   if (!equal(files(join(run, 'frozen')), frozen) || !equal(sdkFiles(), original.sdk_files) || !equal(files(original.mounts[0][0]), original.dependency_files)) throw new Error('Frozen dependencies changed');
   const directory = join(run, `${String(index++).padStart(3, '0')}-${id}`); mkdirSync(directory);
   const task = structuredClone(tasks.find(t => t.id === id)); delete task.gold;
-  const job = { task, arm: 'changeset', strategy, selector, ledger, directory, mounts: original.mounts,
+  const job = { task, arm: 'changeset', strategy, selector, editorSelector, ledger, directory, mounts: original.mounts,
     plannerPrompt: readFileSync(join(run, 'frozen/skills/spec-changeset-plan/SKILL.md'), 'utf8') };
   write(join(directory, 'job.json'), job);
   const began = performance.now(), cap = task.limits.cell_ms + task.limits.grade_ms;
