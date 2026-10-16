@@ -4,7 +4,9 @@ import {createHash} from 'node:crypto';
 import {lstat,readFile,readdir,readlink} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve,sep} from 'node:path';
-const LIMIT=2048;
+// Bounds inspection cost while staying fail-closed. A long spec run kept about 2,400
+// runtime/runs entries (logs, receipts, sessions), so 2,048 refused a legitimate relaunch.
+const LIMIT=16384;
 const refuse=message=>Object.assign(new Error(message),{code:'run-active'});
 export const subagentRoot=()=>join(process.env.PI_SUBAGENTS_TEMP_ROOT?.trim()
   ?resolve(process.env.PI_SUBAGENTS_TEMP_ROOT):join(tmpdir(),`pi-subagents-uid-${process.getuid()}`),'async-subagent-runs');
