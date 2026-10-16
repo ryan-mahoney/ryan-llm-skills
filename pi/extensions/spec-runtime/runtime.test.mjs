@@ -8,6 +8,7 @@ import { createServer } from 'node:http';
 import { Runtime, launch, loadRun, summary, groupAlive, runEditor, runCommand, runVerification, runCompletion, runAdvice, activeGroups, spawnManaged, settleGroup, assertLease, assertIdleWriter, editorSlot, revoke } from './runtime.mjs';
 import { createVerificationRecorder, readVerificationIncidents } from './sentinel.mjs';
 import { makePackageFixture } from './package-fixture.mjs';
+import { splitModelSelector } from './model-selector.mjs';
 
 async function fixture(t, source) {
   const base = await makePackageFixture();
@@ -84,6 +85,39 @@ test('settled editor cleanup preserves its live owner and returns the retained r
   assert.equal(result.result, 'Edits complete');
   assert.equal(groupAlive(f.pids[0]), true);
   assert.equal(groupAlive(f.pids[1]), false);
+  await runtime.cancel(f.packagePath, record.id);
+});
+
+// Run alone: node --test --test-name-pattern='editor packet context' pi/extensions/spec-runtime/runtime.test.mjs
+test('editor packet context attaches exact ranges and per-packet reasoning overrides only the editor thinking', async t => {
+  const f = await fixture(t, `
+    if(process.env.SPEC_RUNTIME_ROLE === 'editor') {
+      console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'Edits complete'}]}}));
+      console.log(JSON.stringify({type:'agent_settled',aborted:false}));
+    }
+    setInterval(() => {}, 1000);
+  `);
+  const launchProcess = f.options.launchProcess;
+  let captured;
+  f.options.launchProcess = (r, role, prompt, opts) => {
+    if (role === 'editor') captured = { record: r, prompt };
+    return launchProcess(r, role, prompt, { ...opts, shutdownGraceMs: 25 });
+  };
+  const runtime = new Runtime(f.options);
+  await runtime.start(f.input);
+  const record = loadRun(f.packagePath);
+  writeFileSync(join(record.checkout, 'excerpt.mjs'), ['line one', 'line two', 'line three', 'line four'].join('\n'));
+  await assert.rejects(runEditor(record, 'Edit', undefined, f.options.launchProcess, { context: [{ path: '/etc/hostname', start: 1, end: 1 }] }), /outside the checkout and package/);
+  await assert.rejects(runEditor(record, 'Edit', undefined, f.options.launchProcess, { reasoning: 'loud' }), /reasoning must be one of/);
+  const result = await runEditor(record, 'Edit one function', undefined, f.options.launchProcess,
+    { context: [{ path: 'excerpt.mjs', start: 2, end: 3 }], reasoning: 'off' });
+  assert.equal(result.error, undefined);
+  assert.match(captured.prompt, /--- excerpt\.mjs:2-3\nline two\nline three\n--- end of excerpts/);
+  assert.doesNotMatch(captured.prompt, /line one|line four/);
+  assert.match(captured.prompt, /start editing from it/);
+  const { provider, model } = splitModelSelector(record.editor_model);
+  assert.equal(captured.record.editor_model, `${provider}/${model}:off`);
+  assert.equal(loadRun(f.packagePath).editor_model, record.editor_model, 'the run record keeps the assignment selector');
   await runtime.cancel(f.packagePath, record.id);
 });
 

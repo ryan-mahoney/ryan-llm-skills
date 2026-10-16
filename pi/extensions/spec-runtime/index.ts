@@ -14,6 +14,7 @@ import { createSentinelObserver, createVerificationRecorder, readVerificationInc
 import { completeWorkflowsAfterPublication } from './final-checkpoint.mjs';
 import { createScout, SCOUT_MODEL } from './scout.mjs';
 import { installDiscoveryBudget } from './discovery-budget.mjs';
+import { writeContextPack } from './context-pack.mjs';
 import { registerRepositorySearch } from './search.mjs';
 import { createSentinelControl } from './sentinel-control.mjs';
 import { installProgressContext, recordCheckpoint, refreshProgress } from './completion.mjs';
@@ -119,6 +120,10 @@ export default function (pi: any) {
         process.exit(78);
       }
       pi.setActiveTools(allowed);
+      if (role === 'owner') {
+        try { runtimeEvent(record, 'context_pack_written', { path: writeContextPack({ packageDir: record.package, stepPath: record.step, checkout: record.checkout }) }); }
+        catch (error: any) { runtimeEvent(record, 'context_pack_failed', { error: error.message }); }
+      }
     });
     if (['owner', 'editor'].includes(role)) installProviderRecovery(pi, { requestedModel: record[`${role}_model`],
       assertActive: () => assertLease(record),
@@ -178,9 +183,11 @@ export default function (pi: any) {
           catch (error: any) { return result({ error: error.message, receipt_id: error.receipt_id }, true); }
         } });
       pi.registerTool({ name: 'spec_editor', label: 'Spec editor', description: 'Start a fresh editor session for this packet; include current decisions, paths and preservation constraints without relying on prior editor chat. Apply a bounded transformation whose behavior and architectural approach the owner has chosen; let the editor choose local implementation details. Send a Change/Edits/Preserve/Return packet with named symbols and concrete operations. The owner reads/searches source directly; reserve facts-only requests for a blocking fact unavailable through those tools. Return a compact result and artifact paths. The editor does not run verification; the owner uses spec_verify after the return. Do not delegate whole-step design or open-ended repair. Assess the return before the next assignment; commit is separate. No polling.',
-        parameters: Type.Object({ assignment: Type.String() }),
+        parameters: Type.Object({ assignment: Type.String(),
+          context: Type.Optional(Type.Array(Type.Object({ path: Type.String({ description: 'Checkout-relative or package path' }), start: Type.Number({ minimum: 1 }), end: Type.Number({ minimum: 1 }) }), { description: 'Exact current source ranges to attach to the editor packet, usually from the step context pack. The editor edits from them instead of searching.' })),
+          reasoning: Type.Optional(Type.Union(['off', 'low', 'high', 'max'].map(value => Type.Literal(value)), { description: 'Editor reasoning for this packet. Use off for a closed packet (decision made, exact excerpts and changes given); high for an open one.' })) }),
         async execute(_id: string, args: any, signal: AbortSignal) {
-          try { const reply = await communication.beginEditor(() => runEditor(record, args.assignment, signal), signal); return result(reply, Boolean(reply.error)); }
+          try { const reply = await communication.beginEditor(() => runEditor(record, args.assignment, signal, undefined, { context: args.context, reasoning: args.reasoning }), signal); return result(reply, Boolean(reply.error)); }
           catch (error: any) { return result({ error: error.message, ...(signal?.aborted ? { requires_cancellation: true } : {}), next: 'resolve this failure; do not start an unmanaged replacement' }, true); }
         } });
       pi.registerTool({ name: 'spec_answer', label: 'Answer editor', description: 'Answer the retained editor\'s pending decision and await the same editor process. Do not start a replacement editor.',

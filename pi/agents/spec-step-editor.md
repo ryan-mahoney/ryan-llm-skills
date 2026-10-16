@@ -45,7 +45,10 @@ to the same file and any operation that needs an earlier result. Return when the
 batch is complete; do not add checks or extra assignments just to create a pipeline. This is tool batching within your assignment, not authority
 to launch more agents or background writers.
 
-Each packet starts a fresh session. Read the relevant assigned card contracts and applicable
+Each packet starts a fresh session. When the packet ends with `CONTEXT EXCERPTS`, those are
+the exact current bytes the owner chose: edit from them directly, without re-reading the
+card or the files. Read further only when an edit anchor does not match or a named symbol is
+missing from the excerpts. Otherwise, read the relevant assigned card contracts and applicable
 rules, then only the current source needed for this transformation. Prior editor chat is
 not available; ask the owner for a missing consequential decision. Refresh affected
 source after another worker changes it, compaction loses the exact text, a formatter

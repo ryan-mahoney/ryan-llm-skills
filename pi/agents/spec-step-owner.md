@@ -63,6 +63,22 @@ coherent change you understand; reference the card for unchanged acceptance deta
 For test-code changes, choose the scenario and observable expectation yourself; the
 editor can implement them using existing fixture conventions but does not run them.
 
+Your job is to make each editor packet a precise transcription task. At start, read the
+step context pack at `<package>/runtime/context/step-NNN.md`, which the runtime writes when
+you start. It lists the as-built exports of prerequisite steps with line numbers, the
+`introduced` contracts from their learnings, an anchor map (name, line range) of each file
+this step changes, its test names, and commits since the card was written. Trust it over
+planning-time shapes in `spec.md` when they differ, and record the difference. Use its
+ranges instead of rediscovering source. Pass the ranges a packet needs to `spec_editor` as
+`context: [{path, start, end}]`; the runtime attaches the exact current lines, so the editor
+does not search. A **closed** packet has the decision made, exact excerpts attached, each
+change specified (exact code for small edits; signature, branches, returns and errors
+otherwise) and the test assertions named. Send closed packets with `reasoning: "off"`, and
+send open packets (a real local design choice remains) with `reasoning: "high"`. If an `off`
+packet fails, reports an anchor mismatch or asks a question, re-send it once with
+`reasoning: "high"` and record the escalation. Debug failing gates yourself from the
+failure output, then send a closed repair packet.
+
 Keep each editor packet inside one context window. When a target file would pass about
 1,000 lines, split it along the card's boundaries into cohesive modules before adding
 more; do not keep growing one module. Give each packet the exact read ranges
