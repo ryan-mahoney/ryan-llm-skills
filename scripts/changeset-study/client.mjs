@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { Budget, modelRuntime, parseSelector, parseJson } from '../changeset/models.mjs';
+import { registerStudyModel } from './model-catalog.mjs';
 
 export function sdkRoot() {
   if (process.env.CHANGESET_STUDY_SDK_ROOT) return process.env.CHANGESET_STUDY_SDK_ROOT;
@@ -14,9 +15,14 @@ export function sdkRoot() {
 export async function sdkImport(path) { return import(pathToFileURL(join(sdkRoot(), path)).href); }
 
 export class Client {
-  static async create(options) { return new Client({ ...options, runtime: await modelRuntime() }); }
-  constructor({ runtime, selector, ledger, receiptPath, signal, maxCalls = 32, maxTokens = 16000 }) {
-    Object.assign(this, { runtime, selector, receiptPath, signal, maxCalls, maxTokens });
+  static async create(options) {
+    const runtime = await modelRuntime();
+    await registerStudyModel(runtime, options.selector);
+    return new Client({ ...options, runtime });
+  }
+  // `shared` lets two clients in one cell (mixed routing) draw on one call limit.
+  constructor({ runtime, selector, ledger, receiptPath, signal, maxCalls = 32, maxTokens = 16000, callMs = 120000, shared = null }) {
+    Object.assign(this, { runtime, selector, receiptPath, signal, maxCalls, maxTokens, callMs, shared });
     const { provider, id, reasoning } = parseSelector(selector);
     this.model = runtime.getModel(provider, id); this.reasoning = reasoning;
     if (!this.model || !runtime.hasConfiguredAuth(provider)) throw new Error(`Unavailable model: ${selector}`);
@@ -24,15 +30,16 @@ export class Client {
   }
   begin(context, externalSignal, stage) {
     if (this.signal?.aborted || externalSignal?.aborted) throw new Error('Cell deadline exceeded');
-    if (this.calls >= this.maxCalls) throw new Error('Cell model-call limit exceeded');
+    const counter = this.shared ?? this;
+    if (counter.calls >= this.maxCalls) throw new Error('Cell model-call limit exceeded');
     const rates = [this.model.cost, ...(this.model.cost?.tiers ?? [])];
     const inputRate = Math.max(...rates.flatMap(r => [r.input, r.cacheRead ?? 0, r.cacheWrite ?? 0]));
     const outputRate = Math.max(...rates.map(r => r.output));
     const bytes = Buffer.byteLength(JSON.stringify(context)) + 8192;
     const reservation = this.budget.reserve(this.selector, (bytes * inputRate + this.maxTokens * outputRate) / 1e6 * 1.25);
-    this.calls++;
+    counter.calls++; if (counter !== this) this.calls++;
     appendFileSync(this.receiptPath.replace(/receipts\.jsonl$/, 'requests.jsonl'), JSON.stringify({ reservation, selector: this.selector, stage, context }) + '\n');
-    const signal = AbortSignal.any([AbortSignal.timeout(120000), ...[this.signal, externalSignal].filter(Boolean)]);
+    const signal = AbortSignal.any([AbortSignal.timeout(this.callMs), ...[this.signal, externalSignal].filter(Boolean)]);
     const started = Date.now(); let settled = false;
     const finish = (response, error) => {
       if (settled) return; settled = true;
@@ -43,7 +50,7 @@ export class Client {
       appendFileSync(this.receiptPath.replace(/receipts\.jsonl$/, 'responses.jsonl'), JSON.stringify({ reservation, stage, response: response ?? null, error: error?.message ?? null }) + '\n');
     };
     return { finish, options: { maxTokens: this.maxTokens, reasoning: this.reasoning === 'off' ? undefined : this.reasoning,
-      maxRetries: 0, timeoutMs: 120000, signal } };
+      maxRetries: 0, timeoutMs: this.callMs, signal } };
   }
   async json(systemPrompt, prompt, stage) {
     const context = { systemPrompt, messages: [{ role: 'user', content: typeof prompt === 'string' ? prompt : JSON.stringify(prompt), timestamp: Date.now() }] };

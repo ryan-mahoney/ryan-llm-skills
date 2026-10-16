@@ -27,3 +27,15 @@ test('an early successful process exit cannot bypass the hidden assertions', asy
     const checked=await grade(root,'if (1+1 !== 2) throw new Error("wrong");',{oracle});assert.equal(checked.ok,true);
   } finally {rmSync(root,{recursive:true,force:true});}
 });
+
+// Run alone: node --test --test-name-pattern='extra mounts' scripts/changeset-study/sandbox.test.mjs
+test('extra mounts are readable but never writable by candidate commands', async () => {
+  const root=mkdtempSync(join(tmpdir(),'study-mount-')), deps=mkdtempSync(join(tmpdir(),'study-deps-'));
+  try {
+    writeFileSync(join(deps,'pinned.txt'),'pinned');
+    const read=await sandbox(root,'cat /node_modules/pinned.txt',{mounts:[[deps,'/node_modules']]});
+    assert.equal(read.ok,true,read.output);assert.match(read.output,/pinned/);
+    const write=await sandbox(root,'echo changed > /node_modules/pinned.txt',{mounts:[[deps,'/node_modules']]});
+    assert.equal(write.ok,false);
+  } finally { rmSync(root,{recursive:true,force:true});rmSync(deps,{recursive:true,force:true}); }
+});

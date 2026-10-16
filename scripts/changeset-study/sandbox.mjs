@@ -17,7 +17,9 @@ export function confinedPath(root, virtual) {
   return current;
 }
 
-export function sandbox(root, command, { readOnly = false, signal, timeoutMs = 30000, onData, oracle } = {}) {
+// `mounts` are extra read-only [hostPath, sandboxPath] binds (for example pinned
+// node_modules). `maxMs` raises the 30-second command cap for a declared phase.
+export function sandbox(root, command, { readOnly = false, signal, timeoutMs = 30000, onData, oracle, mounts = [], maxMs = 30000 } = {}) {
   return new Promise((resolvePromise, reject) => {
     const args = ['--die-with-parent', '--new-session', '--unshare-all', '--clearenv',
       '--ro-bind', '/usr', '/usr', '--ro-bind', '/bin', '/bin', '--ro-bind', '/lib', '/lib',
@@ -27,13 +29,14 @@ export function sandbox(root, command, { readOnly = false, signal, timeoutMs = 3
       '--setenv', 'PATH', '/opt:/usr/bin:/bin', '--setenv', 'HOME', '/tmp',
       '--setenv', 'LANG', 'C.UTF-8', '--setenv', 'PYTHONDONTWRITEBYTECODE', '1', '--chdir', '/work'];
     if (oracle) args.push('--ro-bind', realpathSync(oracle), '/oracle.mjs');
+    for (const [source, target] of mounts) args.push('--ro-bind', realpathSync(source), target);
     args.push('--', '/bin/bash', '--noprofile', '--norc', '-c', command);
     const child = spawn('bwrap', args, { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: {} });
     let output = '', timedOut = false, settled = false;
     const collect = data => { output = (output + data.toString()).slice(-65536); onData?.(data); };
     child.stdout.on('data', collect); child.stderr.on('data', collect);
     const abort = () => { try { process.kill(-child.pid, 'SIGKILL'); } catch {} };
-    const timer = setTimeout(() => { timedOut = true; abort(); }, Math.min(timeoutMs, 30000));
+    const timer = setTimeout(() => { timedOut = true; abort(); }, Math.min(timeoutMs, maxMs));
     signal?.addEventListener('abort', abort, { once: true }); if (signal?.aborted) abort();
     const cleanup = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); };
     child.on('error', error => { if (!settled) { settled = true; cleanup(); reject(error); } });
@@ -44,10 +47,10 @@ export function sandbox(root, command, { readOnly = false, signal, timeoutMs = 3
   });
 }
 
-export async function grade(root, source, { oracle, signal } = {}) {
+export async function grade(root, source, { oracle, signal, mounts, maxMs } = {}) {
   const marker = `STUDY_COMPLETED_${randomUUID()}`;
   writeFileSync(oracle, source + '\nconsole.log(' + JSON.stringify(marker) + ');\n');
-  const result = await sandbox(root, 'node /oracle.mjs', { oracle, readOnly: true, signal });
+  const result = await sandbox(root, 'node /oracle.mjs', { oracle, readOnly: true, signal, mounts, maxMs, timeoutMs: maxMs });
   const completed = result.output.split('\n').includes(marker);
   return { ...result, ok: result.ok && completed, completed, output: result.output.replace(marker + '\n', '') };
 }

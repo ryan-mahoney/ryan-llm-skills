@@ -35,22 +35,25 @@ prose describes this frozen campaign and must be reviewed if the dataset changes
 
 ## Run the study
 
-### Next campaign: awaiting more complex cases
+### Hard campaign: historical workloads with Nemotron
 
 Nemotron 3.5 Super VL replaces Mercury in the next comparison. The selected models
 are `deepseek/deepseek-flash:off`, `openai-codex/gpt-6.1-sol:low`, and
 `openrouter/nvidia/nemotron-3.5-super-vl:low`. The Nemotron selector uses the
 [OpenRouter model ID](https://openrouter.ai/nvidia/nemotron-3.5-super-vl/providers)
-and retains the previous third model's `low` reasoning setting; it has not been
-exercised by this harness.
+and retains the previous third model's `low` reasoning setting.
 
-**Do not run validation, tests, pilots or evaluation yet.** More complex cases will
-be added before the next campaign is frozen. The local Pi catalog inspected during
-this change did not contain Nemotron 3.5 Super VL; refresh the catalog or register
-the exact model through the supported Pi configuration before the eventual run.
-No inference request was made to check compatibility.
+The six historical workloads from `changeset-hard-workloads` are integrated.
+The hard campaign compares all three models in both primary arms, with two
+repetitions (72 cells). A separate exploratory Sol/Nemotron routing campaign has
+12 cells and runs afterward only if budget remains. The study freezes its code,
+prompts, corpus, SDK and model metadata before the primary run.
 
-The commands below describe the next model lineup, not a request to execute it.
+`model-catalog.mjs` registers the exact paid Nemotron model inside the study runtime
+using public OpenRouter metadata observed on 2026-10-16; global model configuration
+and credentials are unchanged. Validate its native-tool and structured-output paths
+on development data before the hard campaign.
+
 Use a new run directory, preserve the existing $50 campaign ledger, and retain the
 Sol-at-DeepSeek-rates cost policy. Run all selected models against both approaches
 on the same expanded corpus. The completed Mercury results, protocol, charts and
@@ -58,7 +61,8 @@ HTML visual remain historical evidence; they are not Nemotron results.
 
 Requirements: Node 22, the configured managed Pi SDK and authorized provider models,
 Linux bubblewrap, Python 3, and Git history containing the two historical fixtures.
-No dependencies or network access are available to model-generated commands.
+No network access is available to model-generated commands; the only dependencies
+are the hard phase's pinned packages, mounted read-only.
 
 Use an external run directory and the existing campaign ledger. Paths below are shell
 variables supplied by the operator, not repository locations:
@@ -76,6 +80,22 @@ node scripts/changeset-study/cli.mjs run --phase eval --root "$STUDY_ROOT" \
   --model openrouter/nvidia/nemotron-3.5-super-vl:low
 
 node scripts/changeset-study/report.mjs "$RUN_DIRECTORY" "$REPORT_PREFIX"
+
+# Hard phase (realistic spec-step workloads; see PROTOCOL.md "Hard phase").
+# NODE_MODULES supplies chokidar 5.0.0 and readdirp 5.1.1, for example the
+# spec-runtime install; it is copied, version-checked and mounted read-only.
+node scripts/changeset-study/cli.mjs validate --phase hard --root "$STUDY_ROOT" \
+  --node-modules "$NODE_MODULES"
+node scripts/changeset-study/cli.mjs run --phase hard --root "$STUDY_ROOT" \
+  --node-modules "$NODE_MODULES" --ledger "$CAMPAIGN_LEDGER" --repeat 2 \
+  --model openai-codex/gpt-6.1-sol:low \
+  --model deepseek/deepseek-flash:off \
+  --model openrouter/nvidia/nemotron-3.5-super-vl:low
+# Exploratory mixed routing, run separately after the primary matrix:
+node scripts/changeset-study/cli.mjs run --phase hard --root "$STUDY_ROOT" \
+  --node-modules "$NODE_MODULES" --ledger "$CAMPAIGN_LEDGER" --repeat 2 \
+  --model openai-codex/gpt-6.1-sol:low --arm changeset-mixed \
+  --simple-model openrouter/nvidia/nemotron-3.5-super-vl:low
 
 # A separately labeled coverage audit of already frozen candidates:
 node scripts/changeset-study/posthoc.mjs "$RUN_DIRECTORY" "$AUDIT_DIRECTORY"
@@ -108,7 +128,7 @@ crash recovers whatever accounting was already persisted.
 Focused harness checks:
 
 ```sh
-node --test scripts/changeset-study/accounting.test.mjs scripts/changeset-study/sandbox.test.mjs
+node --test scripts/changeset-study/accounting.test.mjs scripts/changeset-study/sandbox.test.mjs scripts/changeset-study/cell.test.mjs
 ```
 
 No broad repository test result or CI pass is implied by this study.

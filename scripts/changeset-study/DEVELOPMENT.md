@@ -60,3 +60,23 @@ supplemental acceptance counts and cost-per-acceptance calculations. The focused
 harness checks remain applicable to unchanged execution code. The study stops with
 a scoped positive result for Sol and weaker reliability results for the other models,
 well below the authorized spending cap.
+
+## Hard-workload campaign preparation
+
+The six historical workloads from `changeset-hard-workloads` were integrated for
+a new campaign with Sol, native DeepSeek and Nemotron 3.5 Super VL. The completed
+small-corpus results remain separate. Before any hard-phase inference, the harness
+was corrected to stop the implementation timer before separately budgeted grading,
+describe mounted dependencies consistently, and report the hard failure cap and
+exploratory arm correctly. Five focused sandbox, accounting and deadline checks
+passed; the deadline regression took about 1.75 seconds.
+
+Nemotron's development-only clamp pilot passed both arms: native agent 8.75 seconds
+and six calls; changeset 30.89 seconds and four calls. The changeset's initial plan
+was malformed JSON and the single permitted repair succeeded. No prompt was tuned
+using this result. These two trials establish basic provider/tool compatibility,
+not comparative performance. They consumed about $0.005 in catalog estimates.
+
+The new primary matrix is 72 cells (six tasks, three models, two arms, two repeats).
+A separate 12-cell Sol/Nemotron mixed-routing matrix follows only if the existing
+$50 ledger allows. It must not be pooled with the primary matched comparison.

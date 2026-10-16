@@ -3,7 +3,7 @@ import { appendFileSync } from 'node:fs';
 import { sdkImport } from './client.mjs';
 import { confinedPath, sandbox } from './sandbox.mjs';
 
-export async function nativeAgent({ root, client, transcript, signal, readOnly = false, extraPrompt = '', stage = 'agent' }) {
+export async function nativeAgent({ root, client, transcript, signal, readOnly = false, extraPrompt = '', stage = 'agent', mounts = [], commandMs = 30000 }) {
   const [{ Agent }, { createCodingTools }, { buildSystemPrompt }] = await Promise.all([
     sdkImport('pi-agent-core/dist/agent.js'), sdkImport('pi-coding-agent/dist/core/tools/index.js'),
     sdkImport('pi-coding-agent/dist/core/system-prompt.js'),
@@ -14,11 +14,13 @@ export async function nativeAgent({ root, client, transcript, signal, readOnly =
   const tools = createCodingTools('/work', {
     read: { operations: readOps }, edit: { operations: { ...readOps, ...writeOps } }, write: { operations: writeOps },
     bash: { exposeSessionEnvironment: false, operations: { exec: async (command, _cwd, options) => sandbox(root, command, {
-      readOnly, signal: options.signal, timeoutMs: Math.min((options.timeout ?? 30) * 1000, 30000), onData: options.onData,
+      readOnly, signal: options.signal, timeoutMs: Math.min((options.timeout ?? commandMs / 1000) * 1000, commandMs), onData: options.onData,
+      mounts, maxMs: commandMs,
     }) } },
   }).filter(tool => !readOnly || ['read', 'bash'].includes(tool.name));
   const prompt = buildSystemPrompt({ cwd: '/work', selectedTools: tools.map(t => t.name),
-    appendSystemPrompt: 'This is a dependency-free isolated repository. Network access is unavailable. Files are under /work. Use the provided visible tests and preserve them. You may batch file changes and commands.\n' + extraPrompt,
+    appendSystemPrompt: (mounts.length ? 'This is an isolated repository with the declared preinstalled dependencies. ' : 'This is a dependency-free isolated repository. ')
+      + 'Network access is unavailable. Files are under /work. Use the provided visible tests and preserve files declared protected in the task. You may batch file changes and commands.\n' + extraPrompt,
     contextFiles: [], skills: [] });
   const agent = new Agent({ initialState: { systemPrompt: prompt, model: client.model,
     thinkingLevel: client.reasoning ?? 'off', tools, messages: [] }, streamFn: client.stream(stage) });

@@ -17,12 +17,21 @@ const cells=readdirSync(run,{withFileTypes:true}).filter(e=>e.isDirectory()&&/^\
     peak_operation_concurrency:Math.max(0,...(executions??[]).map(e=>e.metrics?.peak_concurrency??0)),
     model_editor_calls:executions?.reduce((n,e)=>n+(e.metrics?.model_calls??0),0)??0};
 });
-const mean=xs=>xs.reduce((a,b)=>a+b,0)/xs.length;
-const median=xs=>{const sorted=[...xs].sort((a,b)=>a-b);return sorted.length%2?sorted[(sorted.length-1)/2]:(sorted[sorted.length/2-1]+sorted[sorted.length/2])/2;};
-const geometric=xs=>Math.exp(mean(xs.map(Math.log)));
+const mean=xs=>xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:null;
+const median=xs=>{if(!xs.length)return null;const sorted=[...xs].sort((a,b)=>a-b);return sorted.length%2?sorted[(sorted.length-1)/2]:(sorted[sorted.length/2-1]+sorted[sorted.length/2])/2;};
+const geometric=xs=>xs.length?Math.exp(mean(xs.map(Math.log))):null;
 function rng(seed=16381){return ()=>{seed=(1664525*seed+1013904223)>>>0;return seed/2**32;};}
-function bootstrap(rows,fn){const random=rng(),values=[];for(let i=0;i<10000;i++){const sample=Array.from({length:rows.length},()=>rows[Math.floor(random()*rows.length)]);values.push(fn(sample));}values.sort((a,b)=>a-b);return[values[250],values[9749]];}
+function bootstrap(rows,fn){if(!rows.length)return [null,null];const random=rng(),values=[];for(let i=0;i<10000;i++){const sample=Array.from({length:rows.length},()=>rows[Math.floor(random()*rows.length)]);values.push(fn(sample));}values.sort((a,b)=>a-b);return[values[250],values[9749]];}
 
+const failureCap=(manifest.limits?.cell_ms??300000)+(manifest.limits?.grade_ms??0);
+const expectedCells=manifest.schedule.reduce((n,pair)=>n+pair.arms.length,0);
+const complete=cells.length===expectedCells;
+if(manifest.exploratory){
+  const summaries=manifest.models.map(selector=>{const rows=cells.filter(c=>c.selector===selector);return {selector,simple_selector:manifest.simple_selector,n:rows.length,accepted:rows.filter(c=>c.accepted).length,mean_wall_ms:mean(rows.map(c=>c.process_elapsed_ms)),model_calls:rows.reduce((n,c)=>n+(c.model_calls??0),0),equivalent_usd:rows.every(c=>c.equivalent_usd!=null)?rows.reduce((n,c)=>n+c.equivalent_usd,0):null};});
+  writeFileSync(output+'.json',JSON.stringify({schema_version:1,run_id:basename(run),manifest,cost_policy:costPolicy,complete,expected_cells:expectedCells,summaries,cells},null,2)+'\n');
+  const lines=['# Exploratory mixed-model study','',`Completed ${cells.length}/${expectedCells} cells. This separate run is descriptive; it does not establish a matched architectural speed advantage.`,'','| Planner / reviewer | Simple editor | Accepted | Mean seconds | Calls | Equivalent USD |','|---|---|---:|---:|---:|---:|',...summaries.map(s=>`| ${s.selector} | ${s.simple_selector} | ${s.accepted}/${s.n} | ${(s.mean_wall_ms/1000).toFixed(2)} | ${s.model_calls} | ${s.equivalent_usd?.toFixed(5)??'unknown'} |`),''];
+  writeFileSync(output+'.md',lines.join('\n'));console.log(JSON.stringify({output,complete,summaries}));process.exit(0);
+}
 const comparisons=[];
 for(const selector of manifest.models){
   const selected=cells.filter(c=>c.selector===selector),tasks=[...new Set(selected.map(c=>c.task))];
@@ -47,11 +56,12 @@ for(const selector of manifest.models){
       tokens:Object.fromEntries(['input','output','cacheRead','cacheWrite','totalTokens'].map(k=>[k,rows.every(c=>c.tokens?.[k]!=null)?rows.reduce((n,c)=>n+c.tokens[k],0):null]))}];
   }));
   const successful=byTask.filter(t=>t.successful_pair_ratio!==null);
-  comparisons.push({selector,task_count:tasks.length,arms,by_task:byTask,
-    capped_geometric_speed_ratio:geometric(byTask.map(t=>t.capped_ratio)),
-    capped_ratio_task_bootstrap_95:bootstrap(byTask,x=>geometric(x.map(t=>t.capped_ratio))),
+  const matched=byTask.filter(t=>t.agent_n===manifest.repetitions&&t.changeset_n===manifest.repetitions);
+  comparisons.push({selector,task_count:tasks.length,complete_task_count:matched.length,arms,by_task:byTask,
+    capped_geometric_speed_ratio:geometric(matched.map(t=>t.capped_ratio)),
+    capped_ratio_task_bootstrap_95:bootstrap(matched,x=>geometric(x.map(t=>t.capped_ratio))),
     acceptance_difference:arms.changeset.passes/arms.changeset.n-arms.agent.passes/arms.agent.n,
-    acceptance_difference_task_bootstrap_95:bootstrap(byTask,x=>mean(x.map(t=>t.changeset_passes/t.changeset_n-t.agent_passes/t.agent_n))),
+    acceptance_difference_task_bootstrap_95:bootstrap(matched,x=>mean(x.map(t=>t.changeset_passes/t.changeset_n-t.agent_passes/t.agent_n))),
     successful_pair_geometric_speed_ratio:successful.length?geometric(successful.map(t=>t.successful_pair_ratio)):null,
     successful_pair_ratio_task_bootstrap_95:successful.length?bootstrap(successful,x=>geometric(x.map(t=>t.successful_pair_ratio))):null,
     successful_pair_task_count:successful.length});
@@ -67,27 +77,27 @@ if(supplemental){
       audited:rows.find(row=>row.cell===cell.evidence_directory).supplemental_accepted}));
     const taskRatios=[...new Set(scoped.map(cell=>cell.task))].map(task=>{
       const group=scoped.filter(cell=>cell.task===task);
-      const time=arm=>mean(group.filter(cell=>cell.arm===arm).map(cell=>cell.audited?cell.process_elapsed_ms:300000));
+      const time=arm=>mean(group.filter(cell=>cell.arm===arm).map(cell=>cell.audited?cell.process_elapsed_ms:failureCap));
       return time('agent')/time('changeset');
     });
     c.posthoc_efficiency={
       capped_geometric_speed_ratio:geometric(taskRatios),
       capped_ratio_task_bootstrap_95:bootstrap(taskRatios,geometric),
       arms:Object.fromEntries(['agent','changeset'].map(arm=>[arm,{
-        mean_capped_ms:mean(scoped.filter(cell=>cell.arm===arm).map(cell=>cell.audited?cell.process_elapsed_ms:300000)),
+        mean_capped_ms:mean(scoped.filter(cell=>cell.arm===arm).map(cell=>cell.audited?cell.process_elapsed_ms:failureCap)),
         cost_per_acceptance:c.arms[arm].total_equivalent_usd!==null&&c.posthoc_acceptance[arm]>0?c.arms[arm].total_equivalent_usd/c.posthoc_acceptance[arm]:null,
       }]))};
   }
 }
-const report={schema_version:1,run_id:basename(run),manifest,cost_policy:costPolicy,comparisons,cells,supplemental};
+const report={schema_version:1,run_id:basename(run),manifest,cost_policy:costPolicy,complete,expected_cells:expectedCells,comparisons,cells,supplemental};
 writeFileSync(output+'.json',JSON.stringify(report,null,2)+'\n');
 const f=n=>n==null?'unknown':n.toFixed(2), lines=['# Matched study results','',
-  `Frozen campaign: ${basename(run)}. ${cells.length} cells; ${comparisons[0]?.task_count??0} workload families; ${manifest.repetitions} repetitions per model and arm.`,
+  `Frozen campaign: ${basename(run)}. ${cells.length}/${expectedCells} cells (${complete?'complete':'partial'}); ${comparisons[0]?.task_count??0} workload families; ${manifest.repetitions} repetitions per model and arm.`,
   '', 'Native Pi coding tools form the conventional baseline. Each pair uses the same model for all roles. Total process wall time includes planning, tool execution, visible checks, impact review, repairs, grading and process startup. Hidden graders run only after candidates freeze.', '',
   '| Model | Agent accepted | Changeset accepted | Agent median seconds | Changeset median seconds | Capped speed ratio (95% task interval) |',
   '|---|---:|---:|---:|---:|---:|'];
 for(const c of comparisons){const a=c.arms.agent,b=c.arms.changeset;lines.push(`| ${c.selector} | ${a.passes}/${a.n} | ${b.passes}/${b.n} | ${f(a.median_wall_ms/1000)} | ${f(b.median_wall_ms/1000)} | ${f(c.capped_geometric_speed_ratio)} (${c.capped_ratio_task_bootstrap_95.map(f).join('–')}) |`);}
-lines.push('', 'Ratios above 1 favor changesets. The capped metric assigns 300 seconds to unsuccessful cells. Medians include failures and are not time-to-correct-answer claims. Confidence intervals resample workload families, not individual repeats. This is a purposive small corpus, not a random sample of software engineering. An all-pass sample can produce a degenerate bootstrap interval; it does not establish equal population reliability.', '',
+lines.push('', `Ratios above 1 favor changesets. Capped ratios and acceptance-difference intervals use only workload families with every scheduled repetition in both arms; counts retain all observed cells. The capped metric assigns ${failureCap/1000} seconds to unsuccessful cells. Medians include failures and are not time-to-correct-answer claims. Confidence intervals resample workload families, not individual repeats. This is a purposive small corpus, not a random sample of software engineering. An all-pass sample can produce a degenerate bootstrap interval; it does not establish equal population reliability.`, '',
   '| Model | Agent model calls | Changeset model calls | Agent equivalent USD | Changeset equivalent USD |', '|---|---:|---:|---:|---:|');
 for(const c of comparisons){const a=c.arms.agent,b=c.arms.changeset;lines.push(`| ${c.selector} | ${a.model_calls} | ${b.model_calls} | ${a.total_equivalent_usd?.toFixed(5)??'unknown'} | ${b.total_equivalent_usd?.toFixed(5)??'unknown'} |`);}
 lines.push('', 'Equivalent costs price Sol tokens at DeepSeek rates per the operator’s subscription assumption. Original catalog costs, raw token totals, stage times, failures and task-level comparisons are retained in the companion JSON. Estimates are not invoices.', '',
@@ -96,7 +106,7 @@ lines.push('', 'Equivalent costs price Sol tokens at DeepSeek rates per the oper
 for(const c of comparisons)lines.push(`| ${c.selector} | ${c.arms.agent.workflow_completed}/${c.arms.agent.n} | ${c.arms.changeset.workflow_completed}/${c.arms.changeset.n} | ${c.arms.agent.top_level_errors} | ${c.arms.changeset.top_level_errors} |`);
 if(supplemental){
   lines.push('', '## Supplemental contract coverage audit', '',
-    'Source inspection found that the original legacy-session grader missed the specified behavior for files without a session header. Additional checks cover that case and other explicit contract boundaries. The reference solutions passed. All 96 frozen candidates were rechecked, with no model calls, implementation changes or repair feedback. These are post-hoc observations, separate from the preregistered scores above.', '',
+    'Source inspection found that the original legacy-session grader missed the specified behavior for files without a session header. Additional checks cover that case and other explicit contract boundaries. The reference solutions passed. Frozen candidates were rechecked, with no model calls, implementation changes or repair feedback. These are post-hoc observations, separate from the preregistered scores above.', '',
     '| Model | Agent accepted after supplemental checks | Changeset accepted after supplemental checks | Newly detected regressions |', '|---|---:|---:|---:|');
   for(const c of comparisons)lines.push(`| ${c.selector} | ${c.posthoc_acceptance.agent}/${c.arms.agent.n} | ${c.posthoc_acceptance.changeset}/${c.arms.changeset.n} | ${c.posthoc_new_failures} |`);
   lines.push('', '| Model | Post-hoc capped speed ratio (95% task interval) | Equivalent cost per accepted outcome, agent / changeset |', '|---|---:|---:|');
@@ -106,6 +116,6 @@ if(supplemental){
 lines.push('',
   '## Per-workload results under original grading', '', '| Model | Task | Agent passes | Changeset passes | Mean seconds, agent / changeset |', '|---|---|---:|---:|---:|');
 for(const c of comparisons)for(const t of c.by_task)lines.push(`| ${c.selector} | ${t.task} | ${t.agent_passes}/${t.agent_n} | ${t.changeset_passes}/${t.changeset_n} | ${f(t.agent_mean_ms/1000)} / ${f(t.changeset_mean_ms/1000)} |`);
-lines.push('', 'Six synthetic tasks and two extracted historical modules cover mechanical migration, independent edits, shared-file parsers, cross-file precision, CSV parsing, Python aggregation, catalog validation and legacy session compatibility. Historical tasks require discovery in small module snapshots; they do not measure navigation in a full production repository. Visible tests are sparse, hidden checks cover specified boundaries, and model review is fallible.', '',
+lines.push('', manifest.phase==='hard' ? 'Six historical spec-step workloads cover feature delivery, concurrency, recovery, cross-module fixes, refactoring and calibration. Source is the import closure of the acceptance tests, not a complete production checkout. Pinned third-party dependencies are read-only. The protocol records exclusions and separate implementation/grading deadlines.' : 'Six synthetic tasks and two extracted historical modules cover mechanical migration, independent edits, shared-file parsers, cross-file precision, CSV parsing, Python aggregation, catalog validation and legacy session compatibility. Historical tasks require discovery in small module snapshots; they do not measure navigation in a full production repository. Visible tests are sparse, hidden checks cover specified boundaries, and model review is fallible.', '',
   'Provider caching, serving load and a single host can affect latency. Pair order is balanced across repetitions and randomized across tasks. No other study inference jobs run concurrently. SDK bytes are pinned; provider-side model deployments are outside the harness control. The study cannot establish general superiority, production readiness or success on ambiguous specifications and large refactors.', '');
 writeFileSync(output+'.md',lines.join('\n'));console.log(JSON.stringify({output,cells:cells.length,comparisons:comparisons.map(({cells,by_task,...c})=>c)},null,2));
