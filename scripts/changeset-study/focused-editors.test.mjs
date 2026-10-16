@@ -1,7 +1,7 @@
 // node --test scripts/changeset-study/focused-editors.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { focusedInput } from './focused-editors.mjs';
+import { focusedInput, preflightFocusedPlan } from './focused-editors.mjs';
 import { patchEditor, validateStrategyPlan } from './strategies.mjs';
 
 const operation = () => ({ id: 'answer', executor: 'simple', reads: [], writes: ['answer.mjs'], depends_on: [],
@@ -44,4 +44,12 @@ test('editor recovery is bounded to two attempts and syntax failure is reported 
   await assert.rejects(patchEditor(model, 'editor', 'contract', { operation: operation(), files }, { focused: true }), /Syntax check failed/);
   assert.equal(calls, 2);
   assert.equal(files['answer.mjs'], 'export const answer = 1;\n// unrelated\nexport const untouched = 3;\n');
+});
+
+test('preflight rejects missing and oversized initial excerpts but leaves future source to staged execution', () => {
+  const first = { ...operation(), context: [{ path: 'answer.mjs', start: 'missing', end: null }] };
+  const later = { ...operation(), id: 'later', depends_on: ['answer'], context: [{ path: 'answer.mjs', start: 'future anchor', end: null }] };
+  assert.deepEqual(preflightFocusedPlan({ schema_version: 1, operations: [first, later] }, files), ['answer: Excerpt anchor must be unique: answer.mjs']);
+  const oversized = { ...operation(), context: [{ path: 'answer.mjs', start: null, end: null }] };
+  assert.deepEqual(preflightFocusedPlan({ schema_version: 1, operations: [oversized] }, { 'answer.mjs': 'x'.repeat(32001) }), ['answer: Focused source exceeds 32000 characters: answer']);
 });

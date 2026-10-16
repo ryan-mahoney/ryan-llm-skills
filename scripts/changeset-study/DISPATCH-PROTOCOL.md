@@ -78,3 +78,23 @@ An exact repeat uses `--freeze-from "$FIRST_DISPATCH_RUN"` instead of `--parser`
 The existing owner/editor reporter can summarize this strategy and validates that
 no owner call occurs after editor dispatch. Audits retain candidate hashes. The
 research backend does not change managed `spec-end-to-end` behavior.
+
+## Pre-dispatch validation revision
+
+The first frozen run passed no complete case. Handoff stopped on a nonexistent
+source-excerpt endpoint; extraction stopped at the context-size cap before any
+editor call. Calibration's implementation passed external checks, but its added
+tests called a callback with the wrong arguments. Preserve all three results.
+
+Before the next run, add a generic planning validation pass. Validate plan shape,
+dependencies, initial-source excerpt anchors and size before launching any editor.
+Return errors to Sol for at most one correction of its own plan. Source changed by
+preceding operations is still checked against actual staged state during execution.
+The planner is also told to check exact callback and fixture invocation signatures.
+No candidate solution, task-specific fix or external test is provided to models.
+
+This is planning, not review of editor work: every Sol call must precede the first
+DeepSeek call. No owner call may inspect an editor result. Preserve scoped editor
+instructions, one local application recovery, separate executable checks and no
+batch repair. Run the three cases once more; repeat that freeze only if all pass.
+Retain both attempts and stop after this bounded revision or the budget guard.

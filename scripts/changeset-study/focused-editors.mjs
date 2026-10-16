@@ -1,9 +1,14 @@
 // Keep the complete specification with the planner; editors get bounded assignments.
+import { compile } from '../changeset/engine.mjs';
+
 export const focusedPlanner = `
 Act as the query planner and dispatcher. You retain the full task and own completeness,
 interfaces and dependencies. You produce one plan; there is no later owner review or repair. Editors implement one small outcome
 each; they do NOT receive the original task. This overrides earlier grouping advice and
 statements that editors receive the original task. Resolve design decisions yourself.
+Before dispatch, the runtime validates the plan and current-source excerpts. If it
+returns planning_validation_errors, correct your own plan once; no editor has run.
+Check exact callback signatures and fixture invocation arguments when assigning tests.
 
 Every operation must have exactly ONE writable file, plus:
 - objective: one outcome, at most 240 characters. A helper, one behavior in a function,
@@ -75,4 +80,19 @@ export function focusedInput(operation, files) {
   }
   return { objective: operation.objective, instruction: operation.instruction, requirements: operation.requirements,
     writes: operation.writes, absent_files: Object.keys(files).filter(p => files[p] === null), excerpts };
+}
+
+// Validate only source that has not been written by an earlier operation. Future
+// generated source remains checked at execution against the actual staged state.
+export function preflightFocusedPlan(plan, files) {
+  const errors = [], changed = new Set();
+  for (const operation of compile(plan)) {
+    const context = operation.context.filter(c => !changed.has(c.path));
+    const current = Object.fromEntries([...new Set([...operation.reads, ...operation.writes])]
+      .filter(path => !changed.has(path)).map(path => [path, files[path] ?? null]));
+    try { focusedInput({ ...operation, context }, current); }
+    catch (error) { errors.push(`${operation.id}: ${error.message}`); }
+    operation.writes.forEach(path => changed.add(path));
+  }
+  return errors;
 }

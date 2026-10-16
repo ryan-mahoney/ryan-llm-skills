@@ -69,12 +69,30 @@ for (const name of readdirSync(root).sort()) {
         equivalent_usd: rows.length ? equivalentCost(rows) : 0,
         request_seconds: sum(rows.map(r => r.elapsed_ms)) / 1000 };
     };
+    let dispatch = null;
+    if (dispatchOnly(m.strategy)) {
+      const planPath = join(cellDir, 'plan-0.json');
+      const plan = existsSync(planPath) ? read(planPath) : null;
+      if (r.executions.length && hash(JSON.stringify(plan)) !== r.executions[0].plan_sha256) throw new Error('Dispatch plan changed');
+      const packets = requests.filter(r => r.stage === 'editor').map(r => ({ request: r,
+        input: JSON.parse(r.context.messages[0].content) }));
+      const maximum = xs => xs.length ? Math.max(...xs) : null;
+      dispatch = { planned_packets: plan?.operations?.length ?? null, editor_requests: packets.length,
+        application_retries: packets.filter(p => p.input.application_failure !== undefined).length,
+        max_source_characters: maximum(packets.map(p => sum(p.input.excerpts.map(e => e.text.length)))),
+        max_assignment_characters: maximum(packets.map(p => p.input.objective.length + p.input.instruction.length + p.input.requirements.join('').length)),
+        max_request_bytes: maximum(packets.map(p => Buffer.byteLength(JSON.stringify(p.request.context)))),
+        scheduler_peak_concurrency: maximum(r.executions.map(e => e.metrics.peak_concurrency)),
+        owner_calls_after_dispatch: firstEditor < 0 ? 0 : requests.slice(firstEditor).filter(r => r.stage !== 'editor').length,
+        packets: plan?.operations?.map(op => ({ id: op.id, objective: op.objective, writes: op.writes, depends_on: op.depends_on })) ?? [] };
+    }
     cells.push({ task, accepted: r.accepted, delivered: r.delivered, qualified_delivery: qualified, routing_valid: routingValid, dispatch_valid: dispatchValid,
       outcome: r.outcome, error: r.error ?? null, seconds: r.process_elapsed_ms / 1000,
       calls: r.model_calls, tokens: r.tokens, equivalent_usd: r.equivalent_usd, accounting_complete: completeAccounting,
       owner: role(m.selector), editor: role(m.editor_selector), repairs: r.repairs,
       review_accepted: r.review_accepted, visible_accepted: r.visible_accepted,
       review_mode: r.review_mode ?? 'model-impact-review', checks: r.checks ?? [],
+      dispatch,
       result_hash: hash(readFileSync(rp)), candidate_hash: r.candidate_hash, task_hash: r.task_hash,
       posthoc: audit, stages: r.stages, executions: r.executions,
       reviews: r.reviews.map(v => ({ round: v.round, accepted: v.review.accepted, findings: v.review.findings, implementation_error: v.implementation_error })),

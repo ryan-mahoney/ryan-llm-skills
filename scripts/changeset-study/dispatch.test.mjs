@@ -25,14 +25,15 @@ test('dispatch runs no owner review or repair after either successful or failed 
         if(model.id==='planner') {
           if(!input.file_tree || input.feedback) throw Error('Unexpected owner follow-up');
           value={schema_version:1,operations:[{id:'answer',executor:'simple',reads:[],writes:['answer.txt'],depends_on:[],
-            objective:'Change answer',instruction:input.task,requirements:['Keep other files.'],context:[{path:'answer.txt',start:null,end:null}]}]};
+            objective:'Change answer',instruction:input.task==='plan-correction'?'correct':input.task,requirements:['Keep other files.'],
+            context:[{path:'answer.txt',start:null,end:input.task==='plan-correction'&&!input.planning_validation_errors?'missing':null}]}]};
         } else value={edits:[{kind:'replace',path:'answer.txt',search:input.instruction==='bad-anchor'?'absent':'wrong',text:input.instruction}]};
         return {stopReason:'stop',usage:{cost:{total:0.000001}},content:[{type:'text',text:JSON.stringify(value)}]};
       }
     })};`);
     process.env.CHANGESET_MODEL_RUNTIME = fake;
     const { runCell } = await import(pathToFileURL(join(root, 'scripts/changeset-study/cell.mjs')));
-    for (const outcome of ['correct', 'bad-anchor', 'incorrect-behavior']) {
+    for (const outcome of ['correct', 'bad-anchor', 'incorrect-behavior', 'plan-correction']) {
       const directory = join(root, outcome);
       const result = await runCell({ arm: 'changeset', strategy: 'focused-dispatch', selector: 'test/planner', editorSelector: 'test/editor',
         ledger: join(root, 'budget.json'), directory, plannerPrompt: 'planner', task: {
@@ -42,13 +43,15 @@ test('dispatch runs no owner review or repair after either successful or failed 
           limits: { cell_ms: 5000, grade_ms: 3000 },
         } });
       const requests = readFileSync(join(directory, 'requests.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-      assert.deepEqual(requests.map(r => r.stage), outcome === 'bad-anchor' ? ['planning', 'editor', 'editor'] : ['planning', 'editor']);
+      const stages = { correct: ['planning', 'editor'], 'bad-anchor': ['planning', 'editor', 'editor'],
+        'incorrect-behavior': ['planning', 'editor'], 'plan-correction': ['planning', 'planning', 'editor'] };
+      assert.deepEqual(requests.map(r => r.stage), stages[outcome]);
       assert.equal(result.review_accepted, null);
       assert.equal(result.review_mode, 'executable-checks-only');
       assert.equal(result.repairs, 0);
       assert.deepEqual(result.reviews, []);
       assert.equal(result.stages.some(s => s.name === 'impact-review' || s.name === 'repair-planning'), false);
-      assert.equal(deliveredResult(result), outcome === 'correct', result.error ?? JSON.stringify(result.checks));
+      assert.equal(deliveredResult(result), ['correct', 'plan-correction'].includes(outcome), result.error ?? JSON.stringify(result.checks));
     }
   } finally {
     if (previous === undefined) delete process.env.CHANGESET_MODEL_RUNTIME;
