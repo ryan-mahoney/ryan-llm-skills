@@ -42,3 +42,21 @@ test('pack carries prerequisite exports, the learning introduced block, anchors,
   assert.equal(written, join(pkg, 'runtime/context/step-002.md'));
   assert.equal(readFileSync(written, 'utf8'), pack);
 });
+
+// Run alone: node --test --test-name-pattern='named by the card' pi/extensions/spec-runtime/context-pack.test.mjs
+test('pack includes an earlier step the card names but does not require, and skips unnamed ones', t => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'context-pack-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const pkg = join(root, 'pkg'), repo = join(root, 'repo');
+  mkdirSync(pkg, { recursive: true }); mkdirSync(join(repo, 'src'), { recursive: true });
+  writeFileSync(join(pkg, 'spec-steps.json'), JSON.stringify({ steps: [
+    { step: 1, name: 'Seal', requires: [], writes: ['src/seal.mjs'] },
+    { step: 2, name: 'Unrelated', requires: [], writes: ['src/other.mjs'] },
+    { step: 3, name: 'Docs', requires: [], writes: ['docs/waves.md'] }] }));
+  writeFileSync(join(pkg, 'step-003-subspec.md'), '# Step 3\nConsumes `sealMember` from src/seal.mjs.');
+  writeFileSync(join(repo, 'src/seal.mjs'), 'export function sealMember(ctx) {\n  return ctx;\n}');
+  writeFileSync(join(repo, 'src/other.mjs'), 'export const other = 1;');
+  const pack = buildContextPack({ packageDir: pkg, stepPath: join(pkg, 'step-003-subspec.md'), checkout: repo });
+  assert.match(pack, /### Step 001: Seal \(named by the card; not a declared prerequisite\)\n- src\/seal\.mjs\n  - src\/seal\.mjs:1 `export function sealMember\(ctx\) \{`/);
+  assert.doesNotMatch(pack, /Step 002|src\/other\.mjs/, 'an earlier step the card does not name stays out');
+});

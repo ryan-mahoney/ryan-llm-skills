@@ -67,22 +67,30 @@ export function buildContextPack({ packageDir, stepPath, checkout, maxChars = 40
   const out = [`# Context pack: step ${pad(number)}`, '',
     'Generated at owner start from the current checkout. Line ranges are current; pass the ones a packet needs to `spec_editor` `context` instead of asking the editor to search.', ''];
 
+  // Cards also consume earlier steps they do not declare: a step-12 card used step 8 and 9
+  // contracts without requiring them. Include any earlier step whose code files the card names.
+  const card = existsSync(stepPath) ? readFileSync(stepPath, 'utf8') : '';
+  const sourceFiles = entry => (entry?.writes || []).filter(path => CODE.test(path) && !/\.test\./.test(path));
+  const declared = new Set(step.requires || []);
+  const consumed = [...steps.values()].filter(entry => entry.step < number && !declared.has(entry.step)
+    && sourceFiles(entry).some(path => card.includes(path))).map(entry => entry.step);
+  const sources = [...declared, ...consumed].sort((a, b) => a - b);
   const planned = existsSync(stepPath) ? Math.floor(statSync(stepPath).mtimeMs / 1000) : null;
-  const watched = [...new Set([...(step.writes || []), ...(step.requires || []).flatMap(r => steps.get(r)?.writes || [])])];
+  const watched = [...new Set([...(step.writes || []), ...sources.flatMap(r => steps.get(r)?.writes || [])])];
   const changes = planned && watched.length ? git(checkout, ['log', `--since=@${planned}`, '--format=%h %s', '-n', '30', '--', ...watched]) : '';
   out.push('## Changes since this card was written', '', changes ? changes.split('\n').map(line => `- ${line}`).join('\n') : '- none recorded', '');
 
   out.push('## Prerequisite contracts as built', '');
-  for (const required of step.requires || []) {
+  for (const required of sources) {
     const prerequisite = steps.get(required);
-    out.push(`### Step ${pad(required)}: ${prerequisite?.name ?? ''}`);
+    out.push(`### Step ${pad(required)}: ${prerequisite?.name ?? ''}${declared.has(required) ? '' : ' (named by the card; not a declared prerequisite)'}`);
     const learningPath = join(packageDir, 'learnings', `step-${pad(required)}-learning.md`);
     if (existsSync(learningPath)) {
       const block = introduced(readFileSync(learningPath, 'utf8'));
       out.push(`Learning: learnings/step-${pad(required)}-learning.md`);
       if (block.length) out.push('Introduced (from the learning):', '```yaml', ...block, '```');
     }
-    for (const file of (prerequisite?.writes || []).filter(path => CODE.test(path) && !/\.test\./.test(path))) {
+    for (const file of sourceFiles(prerequisite)) {
       const full = join(checkout, file);
       if (!existsSync(full)) continue;
       const exported = exportsOf(readFileSync(full, 'utf8'));
