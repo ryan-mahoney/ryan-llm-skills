@@ -668,11 +668,11 @@ export function createWaveController(deps = {}) {
 
   // A fresh startup with no active wave may re-enter after a predecessor
   // integrated while no continuation ran (for example the automatic next wave
-  // was suppressed). Resume that predecessor instead of opening wave 1 again:
-  // select the highest-ordinal integrated record that still has a successor in
-  // the prepared validation, whose frozen inputs match, and whose package claim
-  // is still held at the record's frozen token, creation epoch and session. The
-  // record is never mutated here; the existing continuation opens the successor.
+  // was suppressed). Select that predecessor's highest-ordinal integrated
+  // record whose frozen inputs match the prepared validation, whose successor
+  // still exists there, and whose package claim is still held at the record's
+  // frozen token, creation epoch and session; adopt the dead owner before
+  // continuing, and only ever launch the successor wave from here.
   async function resumeIntegratedPredecessor({ packagePath, packageRef, validation, index_sha256, evidence_plan_sha256 }) {
     const dir = join(packagePath, 'runtime', 'waves');
     if (!existsSync(dir)) return null;
@@ -703,8 +703,30 @@ export function createWaveController(deps = {}) {
       if (!held) continue;
       if (String(held.epoch) !== String(candidate.record.coordinator?.epoch)) continue;
       if (held.coordinator?.session !== candidate.record.coordinator?.session) continue;
-      if (own && held.coordinator?.session !== own.session) continue;
-      return { packageDir: packagePath, ...candidate };
+      // The stored owner is opaque evidence. It is positively dead only when a
+      // live observation reports dead for the exact stored pid, and the stored
+      // pid/start pair is itself valid. Anything else -- unknown, a different
+      // pid, a live pid with a mismatched start, or a malformed pair -- is
+      // fail-closed: never adopted.
+      const stored = candidate.record.coordinator?.process_identity;
+      const storedValid = Number.isSafeInteger(stored?.pid) && stored.pid > 0
+        && typeof stored.started_at === 'string' && stored.started_at.length > 0;
+      let observed = null;
+      if (storedValid) {
+        try { observed = await inspectProcess(stored.pid); } catch { observed = null; }
+      }
+      const positivelyDead = storedValid && observed
+        && observed.state === 'dead' && observed.pid === stored.pid;
+      const sessionMatches = held.coordinator?.session === candidate.record.coordinator?.session;
+      const ours = !!own && sessionMatches && held.coordinator?.session === own.session;
+      // A different live session may not touch the record; only a positively
+      // dead owner may be adopted by a differing session. A same-session
+      // candidate still requires exact live ownership checks at load time.
+      if (!ours && !positivelyDead) continue;
+      // A positively dead owner is adopted even in the same session, so its
+      // process identity is repaired before the entry is driven.
+      const requiresAdoption = positivelyDead;
+      return { packageDir: packagePath, recordPath: candidate.recordPath, ...candidate, requiresAdoption };
     }
     return null;
   }
@@ -765,10 +787,33 @@ export function createWaveController(deps = {}) {
       // wave 1 again. Every host/inbox/frozen-input guard stays in the
       // continuation; this path adds no progression logic of its own.
       if (predecessor) {
-        const entry = await memberRecovery.loadOwnedEntry(predecessor);
+        // A live same-session predecessor may be loaded directly; a positively
+        // dead owner is first adopted by the existing recovery path (which
+        // rebinds claims, repairs the process identity and persists the
+        // outcome) with its own continuation deferred, so exactly one
+        // continuation can run below against the freshly read record.
+        let loaded = predecessor;
+        if (predecessor.requiresAdoption) {
+          await memberRecovery.recover({
+            package: packagePath,
+            wave_id: predecessor.wave_id,
+            expected_generation: predecessor.record.generation
+          }, { deferContinuation: true });
+          const fresh = integration.readWaveRecord(predecessor.recordPath);
+          loaded = { ...predecessor, record: fresh };
+        }
+        const entry = await memberRecovery.loadOwnedEntry(loaded);
+        // An adopted predecessor resumes under the explicitly supplied current
+        // workflow. The original checkpoint stays untouched (it is written only
+        // when a wave opens); only the continuation context's frozen input is
+        // rebound so a supplied workflow_id can drive the successor.
+        if (predecessor.requiresAdoption && typeof input.workflow_id === 'string' && input.workflow_id.length > 0
+          && entry.openContext && entry.openContext.input) {
+          entry.openContext.input = { ...entry.openContext.input, workflow_id: input.workflow_id };
+        }
         const continued = await driveAndContinue(entry);
         if (continued && typeof continued === 'object' && continued.wave_id) return continued;
-        return waveReceipt(predecessor.record, predecessor.recordPath);
+        return waveReceipt(loaded.record, loaded.recordPath);
       }
       const host = hostCheck ? await hostCheck({ readyMembers: deriveWaveWidth(validation), explicitCap: input.max_parallel ?? null }) : null;
       if (!host || typeof host !== 'object') throw invalid('host-check-missing', 'Wave execution requires a host check result.');

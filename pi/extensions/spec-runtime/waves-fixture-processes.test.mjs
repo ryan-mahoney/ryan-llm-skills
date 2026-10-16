@@ -94,3 +94,19 @@ test('fixture process registry: a live descendant after the leader exits is dete
     await registry.cleanup();
   }
 });
+
+test('wave dispatch: C10-7 registry refuses non-detached child', async () => {
+  const registry = createProcessRegistry();
+  // A plain non-detached child stays in this process's group, so its pgid is not
+  // its own pid. The registry owns whole process groups and must refuse it rather
+  // than later signalling an unrelated group.
+  const child = spawn(process.execPath, ['-e', WORKER_SCRIPT], { stdio: 'ignore' });
+  try {
+    await once(child, 'spawn');
+    assert.notEqual(child.pid, process.pid);
+    assert.throws(() => registry.register(child), /process group/i);
+  } finally {
+    child.kill('SIGKILL');
+    await once(child, 'close');
+  }
+});

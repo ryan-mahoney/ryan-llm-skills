@@ -508,3 +508,37 @@ test('wave observation: metrics count distinct overlapping intervals without fil
   const overlapping = await metrics(dir, { now: Date.parse(time(100)) });
   assert.equal(overlapping.waves.find(w => w.wave_id === 'w1').peak_observed_overlap, 2);
 });
+
+test('wave observation: C11-3 invalid wave records surface discovery errors', async t => {
+  const dir = await fixture(t);
+  const runDir = path.join(dir, 'runtime/runs'), waveDir = path.join(dir, 'runtime/waves');
+  await mkdir(runDir, { recursive: true }); await mkdir(waveDir, { recursive: true });
+  const stepFile = n => path.join(dir, `step-${String(n).padStart(3, '0')}-subspec.md`);
+  const A = path.join(dir, 'pi/coordinator.jsonl');
+  // A managed completed run plus its coordinator log keep metrics executing.
+  const r1 = { id: 'r1', package: dir, package_ref: 'demo/feature', primary: dir, step: stepFile(1), target: 'demo',
+    checkout: path.join(dir, 'attempts/attempt-1/merged'), state: 'completed', started_at: time(2), finished_at: time(10),
+    parent_session: A, owner_session: null, editor_session: null,
+    wave_bindings: { wave_id: 'w1', generation: 1, step_number: 1, phase: 'implementing', target: 'demo', backend: 'overlayfs', base_commit: null } };
+  await writeFile(path.join(runDir, 'r1.json'), JSON.stringify(r1));
+  await log(A, [header('A'), message('user', 0, {}), assistant(5, 3, [{ type: 'text', text: 'coordinating' }])]);
+  // An unreadable wave record must surface one discovery error, not a wave row.
+  const badWavePath = path.join(waveDir, 'w1.json');
+  await writeFile(badWavePath, '{');
+  const invalid = await metrics(dir, { now: Date.parse(time(100)) });
+  assert.deepEqual(invalid.discovery_errors.filter(e => e.path === badWavePath),
+    [{ path: badWavePath, code: 'INVALID_WAVE_RECORD' }]);
+  // Exceeding the bounded wave-record read surfaces truncation against the directory.
+  const WAVE_LIMIT = 100;
+  await writeFile(badWavePath, JSON.stringify({ version: 1, wave_id: 'w1', generation: 1, revision: 0, state: 'running',
+    transitions: [{ state: 'running', at: time(0) }], package_ref: 'demo/feature', package: dir, started_at: time(0),
+    requested_width: 1, admitted_width: 1, members: {} }));
+  for (let n = 0; n <= WAVE_LIMIT; n++)
+    await writeFile(path.join(waveDir, `extra-${String(n).padStart(3, '0')}.json`),
+      JSON.stringify({ version: 1, wave_id: `extra-${n}`, generation: 1, revision: 0, state: 'running',
+        transitions: [{ state: 'running', at: time(0) }], package_ref: 'demo/feature', package: dir, started_at: time(0),
+        requested_width: 1, admitted_width: 1, members: {} }));
+  const truncated = await metrics(dir, { now: Date.parse(time(100)) });
+  assert.deepEqual(truncated.discovery_errors.filter(e => e.path === waveDir),
+    [{ path: waveDir, code: 'WAVE_RECORDS_TRUNCATED' }]);
+});

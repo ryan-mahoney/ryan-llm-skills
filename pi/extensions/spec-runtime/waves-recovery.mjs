@@ -632,7 +632,7 @@ export function createWaveRecovery(deps = {}) {
   }
 
   return {
-    async recover(input = {}) {
+    async recover(input = {}, { deferContinuation = false } = {}) {
       // The locate+stale-generation guard runs first, unchanged: a stale
       // expected_generation refuses before any identity observation.
       const { packageDir, recordPath, wave_id, record } = await locateControl(input);
@@ -697,7 +697,7 @@ export function createWaveRecovery(deps = {}) {
       if (Array.isArray(pending) && pending.length > 0)
         throw invalid('recovery-blocked', 'Package has a pending inbox direction; refusing to adopt and launch workers.');
       const expires = deadlineValue(record.deadline);
-      if (expires !== null && expires <= now())
+      if (expires !== null && expires <= now() && record.state !== 'integrated')
         throw invalid('recovery-blocked', 'Wave deadline has expired; refusing to adopt and launch workers.');
 
       // The replacement coordinator handed to held claims must carry the record's
@@ -742,18 +742,26 @@ export function createWaveRecovery(deps = {}) {
       const entry = rehydrateEntry({ record: adopted, recordPath, packageDir, prepared, wave_id, own });
       loadedWaves.set(wave_id, entry);
 
-      const outcomes = [];
-      for (const key of Object.keys(adopted.members ?? {})) {
-        outcomes.push(await resumeMember({ key, record: adopted, recordPath, packageDir, wave_id, entry, own }));
-      }
+      // An already-integrated record has no unsupported phase to resume: its
+      // members are sealed and no launch may be re-issued. Skip both the
+      // member-resume loop and the retained-candidate repair so adoption
+      // only persists the outcome and defers any continuation to the caller.
+      const integratedAdoption = adopted.state === 'integrated';
 
-      // A retained candidate repair phase is recovered with the exact candidate
-      // identity; the fresh durable read is the authority for the repair binding.
-      try {
-        const candidateOutcome = await candidateRecovery.resume(entry, integration.readWaveRecord(recordPath), own);
-        if (candidateOutcome?.status) outcomes.push(candidateOutcome.status);
-      } catch (error) {
-        outcomes.push(`candidate-blocked:${error?.code ?? 'recovery-error'}`);
+      const outcomes = [];
+      if (!integratedAdoption) {
+        for (const key of Object.keys(adopted.members ?? {})) {
+          outcomes.push(await resumeMember({ key, record: adopted, recordPath, packageDir, wave_id, entry, own }));
+        }
+
+        // A retained candidate repair phase is recovered with the exact candidate
+        // identity; the fresh durable read is the authority for the repair binding.
+        try {
+          const candidateOutcome = await candidateRecovery.resume(entry, integration.readWaveRecord(recordPath), own);
+          if (candidateOutcome?.status) outcomes.push(candidateOutcome.status);
+        } catch (error) {
+          outcomes.push(`candidate-blocked:${error?.code ?? 'recovery-error'}`);
+        }
       }
 
       // Record the adoption outcome. A later continuation release is allowed to
@@ -767,7 +775,7 @@ export function createWaveRecovery(deps = {}) {
         effect.blocked = outcomes.filter(outcome => outcome === 'blocked').length;
       });
 
-      if (typeof driveAndContinue === 'function') await driveAndContinue(entry);
+      if (!deferContinuation && typeof driveAndContinue === 'function') await driveAndContinue(entry);
 
       return waveReceipt(integration.readWaveRecord(recordPath), recordPath);
     },

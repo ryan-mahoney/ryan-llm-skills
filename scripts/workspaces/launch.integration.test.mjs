@@ -2510,3 +2510,94 @@ test("wave observation: relaunch guard resolves observed proof and names each le
     await reset({ status: statusRecord({ pid: process.pid }), candidate: candidate() });
   });
 });
+
+test("wave observation: F11-1 symlinked wave directory refuses launch", { timeout: 120000 }, async (t) => {
+  const { storageRoot, home, piPath, logPath, socket } = await launchScenario(t, 1);
+  const created = await newPackage({
+    workspace: "workspace-0", slug: "symlink", targets: [{ id: "app" }], root: storageRoot,
+  });
+  assert.equal(created.ok, true);
+  const packageDirectory = created.locations.package_dir;
+  await prepareAssignmentSpecTarget({
+    storageRoot,
+    workspace_id: "workspace-0",
+    target: "app",
+    specPackage: packageDirectory,
+  });
+
+  const runtimeDir = join(packageDirectory, "runtime");
+  await mkdir(runtimeDir, { recursive: true });
+  const emptyTarget = join(runtimeDir, "waves-target");
+  await mkdir(emptyTarget, { recursive: true });
+  await symlink(emptyTarget, join(runtimeDir, "waves"));
+  assert.equal((await lstat(join(runtimeDir, "waves"))).isSymbolicLink(), true);
+
+  const assignmentsDir = join(storageRoot, "projects", "workspace-0", "assignments");
+  const input = launchInput({
+    workspaceId: "workspace-0", storageRoot, home, piPath, specPackage: packageDirectory,
+  });
+  const digest = (await resolveAssignment(input)).contractDigest;
+  await assert.rejects(
+    launchAssignment(input, { expectedDigest: digest }),
+    (error) => {
+      assert.equal(error.code, "run-active");
+      assert.equal(error.reason, "record-invalid");
+      return true;
+    },
+  );
+  assert.equal(await exists(join(assignmentsDir, `${input.assignment_id}.json`)), false);
+  assert.equal(
+    (await fixtureEntries(logPath)).some((entry) => argvSessionId(entry) === input.assignment_id),
+    false,
+    "no fixture log entry for a refused launch",
+  );
+  assert.equal(
+    (await sessionNames(socket)).some((name) => name.includes(input.assignment_id)),
+    false,
+    "no fixture session for a refused assignment",
+  );
+});
+
+test("wave observation: C11-1 confirmed phase drain survives reboot", { timeout: 120000 }, async (t) => {
+  const root = await tempRoot(t);
+  const packageDirectory = join(root, "pkg");
+  const runsDir = join(packageDirectory, "runtime", "runs");
+  const wavesDir = join(packageDirectory, "runtime", "waves");
+  const asyncRoot = join(root, "async-subagent-runs");
+  const runtimeDir = join(packageDirectory, "runtime");
+  await mkdir(runsDir, { recursive: true });
+  await mkdir(wavesDir, { recursive: true });
+  await mkdir(asyncRoot, { recursive: true });
+
+  await writeFile(
+    join(runtimeDir, "run.json"),
+    JSON.stringify({ id: "r-latest", state: "completed" }),
+  );
+  await writeFile(join(wavesDir, "w1.json"), JSON.stringify({
+    version: 1,
+    wave_id: "w1",
+    generation: 1,
+    state: "integrated",
+    started_at: new Date().toISOString(),
+    transitions: [],
+    coordinator: { process_identity: { pid: 2, started_at: new Date().toISOString() } },
+    members: {},
+  }));
+
+  const { record: service } = await startSpecUnit(t);
+  await writeFile(join(runsDir, "r1.json"), JSON.stringify({
+    id: "r1",
+    step: 1,
+    wave_bindings: { wave_id: "w1", step_number: 1, phase: "implementing" },
+    phase_drain: { status: "confirmed" },
+    service: { ...service, boot_id: `${service.boot_id}-stale` },
+  }));
+  await writeFile(
+    join(runsDir, "r1-phase-drain.json"),
+    JSON.stringify({ status: "confirmed", service: { ...service, boot_id: `${service.boot_id}-stale` } }),
+  );
+
+  await assert.doesNotReject(
+    assertNoAssignmentWorkers({ spec_package: packageDirectory, subagent_async_root: asyncRoot }),
+  );
+});

@@ -176,7 +176,12 @@ export function createProcessRegistry(options = {}) {
     const existing = groups.get(child.pid);
     if (existing) return existing;
     const observed = readStat(child.pid);
-    const startedAt = observed.state === 'read' && observed.value ? observed.value.starttime : null;
+    if (observed.state !== 'read' || !observed.value
+        || !Number.isSafeInteger(observed.value.pgrp) || observed.value.pgrp !== child.pid) {
+      throw new Error('fixture process registry requires a verified detached process group leader: '
+        + `child ${child.pid} has no confirmed detached identity at readStat`);
+    }
+    const startedAt = observed.value.starttime;
     const entry = { pid: child.pid, pgid: child.pid, startedAt, identityKnown: startedAt !== null, child, closed: false };
     child.once('close', () => { entry.closed = true; });
     groups.set(child.pid, entry);

@@ -1902,6 +1902,37 @@ test('wave observation: sentinel reports wave runs from receipts without opening
   assert.ok(three.coverage.reasons.includes(`checkout-mismatch: ${file3}`), JSON.stringify(three.coverage.reasons));
 });
 
+// Run alone: node --test --test-name-pattern='^wave observation: C11-2 candidate check without repair retains integration identity' scripts/spec-observe/sentinel.test.mjs
+test('wave observation: C11-2 candidate check without repair retains integration identity', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'wave-candidate'), pkg = pack(repo);
+  const candidateCheckout = join(f.dir, 'attempts', 'candidate-w1', 'worktree');
+  mkdirSync(candidateCheckout, { recursive: true });
+  // A wave whose member 1 is sealed and whose candidate is checking. The record
+  // has no repair yet, so target.repair is null, but target.integration still
+  // names the candidate backend, fallback and checkout.
+  wave(pkg, 'w1', { state: 'running', members: { 1: waveMember(1, 'sealed', { run_id: 'r1' }) },
+    extra: { target: { repair: null, integration: { backend: 'worktree',
+      workspace: { backend: 'worktree', backendReason: 'userns-denied', worktree: candidateCheckout } } } } });
+  // The candidate check phase is a step 8 command-phase run record with a
+  // candidate subject and no wave_bindings: runWaveIdentity must still tie it
+  // to the wave's candidate lifecycle rather than reporting it unknown.
+  const candidateFile = receipt(pkg, { id: 'candidate-check', assignment_id: 'candidate-check', state: 'running',
+    started_at: recent(90000), checkout: candidateCheckout,
+    command_phase: { wave_id: 'w1', subject: { kind: 'candidate' } } });
+
+  const snapshot = await collect({ roots: [repo], indexDir: f.indexDir, now });
+  const run = snapshot.runs.find(item => item.assignment_id === 'candidate-check');
+  assert.ok(run, JSON.stringify(snapshot.runs.map(item => item.assignment_id)));
+  assert.equal(run.coverage.reasons.some(reason => reason.startsWith('wave-member-unknown')), false,
+    JSON.stringify(run.coverage.reasons));
+  assert.equal(run.wave && run.wave.step, null, 'a candidate check is not a member step (step is exposed in the wave projection)');
+  assert.deepEqual(run.wave && [run.wave.backend, run.wave.fallback_reason], ['worktree', 'userns-denied']);
+  assert.equal(run.checkout, candidateCheckout, 'the candidate checkout comes from target.integration');
+  assert.equal(run.coverage.reasons.some(reason => reason.startsWith('checkout-')), false,
+    JSON.stringify(run.coverage.reasons));
+  assert.ok(candidateFile, 'the candidate receipt file exists');
+});
+
 // Run alone: node --test --test-name-pattern='^wave observation: shared projection rejects invalid identities and timestamps' scripts/spec-observe/sentinel.test.mjs
 test('wave observation: shared projection rejects invalid identities and timestamps', () => {
   const at = '2026-10-06T12:00:00.000Z';

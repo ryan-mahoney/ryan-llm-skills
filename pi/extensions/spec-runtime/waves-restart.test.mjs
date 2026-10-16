@@ -18,8 +18,9 @@ import { join } from 'node:path';
 
 import { validateStepIndex } from '../../../scripts/spec-observe/steps.mjs';
 import { inspectProcess } from '../../../scripts/spec-observe/process-identity.mjs';
-import { readCheckpointRecord } from './sentinel.mjs';
+import { readCheckpointRecord, recordCheckpoint } from './sentinel.mjs';
 import { calculateResourcePolicy, MIB } from './linux-resources.mjs';
+import { updateWaveRecord } from './wave-integration.mjs';
 import {
   CASE4_TIMEOUT_MS,
   WAVE_ID,
@@ -351,9 +352,12 @@ async function assertTwoWaveProgression(f, readRecord) {
   const finalHead = f.git(['rev-parse', 'HEAD']).trim();
   assert.equal(finalHead, second.target.candidate_commit, "the final repository HEAD must be wave 2's candidate commit");
 
-  const checkpoint = readCheckpointRecord(f.packagePath, WAVE_ID);
+  const originalCheckpoint = readCheckpointRecord(f.packagePath, WAVE_ID);
+  assert.equal(originalCheckpoint?.coordinator_session, COORDINATOR_SESSION,
+    'the original workflow checkpoint must retain its coordinator session after progression');
   for (const record of sorted) {
-    const worker = (checkpoint.workers ?? []).find(candidate => candidate.kind === 'wave' && candidate.id === record.wave_id);
+    const checkpoint = readCheckpointRecord(f.packagePath, record.workflow_id ?? WAVE_ID);
+    const worker = (checkpoint?.workers ?? []).find(candidate => candidate.kind === 'wave' && candidate.id === record.wave_id);
     assert.equal(worker?.state, 'complete', `wave ${record.wave_id} worker must be complete`);
   }
 
@@ -453,4 +457,268 @@ test('wave dispatch: restart with a fresh epoch re-enters through startup to ope
 
   assert.deepEqual(f.entry, { startup: 2, advance: 0, recover: 1, status: 0, cancel: 0 },
     'the fresh restart must open wave 2 through a second startup entry');
+});
+
+// C10-8: a fresh epoch must be able to adopt an integrated predecessor whose
+// owning coordinator is dead and whose deadline has expired, then open the
+// successor through `startup`. Unlike the held cases above, the initial wave is
+// allowed to finish normally (no owner hold) -- only the automatic next-wave
+// continuation is suppressed so the successor can be opened by the fresh
+// startup. The durable wave record and package claim keep the ORIGinal epoch.
+test('wave dispatch: C10-8 startup adopts dead integrated predecessor after deadline', { timeout: CASE4_TIMEOUT_MS }, async t => {
+  const session = 'session-c10-8-restart';
+  const gate = { allowNext: false };
+  const hostCheck = async ({ readyMembers = 16, explicitCap = null } = {}) => {
+    // The automatic next-wave continuation probes with readyMembers === 1 (one
+    // successor step). Hold it until the fresh startup re-enters; every other
+    // check -- the initial wave and the fresh startup -- sees the full width.
+    if (readyMembers === 1 && !gate.allowNext) {
+      return {
+        version: 1,
+        status: 'setup-required',
+        ok: false,
+        reason: 'c10-8-next-wave-held',
+        remedy: 'resume the restarted coordinator through startup',
+        nativeReady: false,
+        softwareCeiling: 16,
+        route: 'native',
+        fallback: null,
+        host: { host_id: 'fixture-host', boot_id: 'fixture-boot', uid: process.getuid?.() ?? 1000 },
+        admission: {
+          status: 'setup-required', reason: 'c10-8-next-wave-held',
+          remedy: 'resume the restarted coordinator through startup',
+          admittedWidth: 0, binding: null, bindings: null, launchable: false, slots: null, free: null
+        },
+        policy: { admittedWidth: 0, binding: null, softwareCeiling: 16 },
+        overlay: { status: 'unavailable', reason: 'fixture-worktree-transport', remedy: null, fallbackEligible: true }
+      };
+    }
+    return readyHost({ readyMembers, explicitCap });
+  };
+
+  // Disposable coordinator identity for wave 1. Register cleanup before any
+  // await so a failed start still kills the child exactly once.
+  const coordinatorChild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 60000)'], { stdio: 'ignore' });
+  let childCleaned = false;
+  const cleanupChild = async () => {
+    if (childCleaned) return;
+    childCleaned = true;
+    if (coordinatorChild.exitCode === null && coordinatorChild.signalCode === null) {
+      try { coordinatorChild.kill('SIGKILL'); } catch { /* already gone */ }
+      await new Promise(resolve => coordinatorChild.once('close', resolve));
+    }
+  };
+  t.after(cleanupChild);
+
+  const childIdentity = await waitFor(() => {
+    const identity = inspectProcess(coordinatorChild.pid);
+    return identity?.state === 'alive' ? identity : false;
+  }, WAIT_TIMEOUT_MS, 'disposable coordinator identity is alive');
+
+  // holdOwners is intentionally false: the initial wave must run to integration
+  // under the live child, and only the automatic successor is gated off.
+  const f = await makeCase4Fixture(t, {
+    memberCount: 3,
+    holdOwners: false,
+    hostCheck,
+    coordinator: {
+      session: COORDINATOR_SESSION,
+      epoch: 1,
+      pid: childIdentity.pid,
+      started_at: childIdentity.started_at
+    },
+    mutateIndex(index, evidencePlan) {
+      index.steps[2].requires = [1, 2];
+      index.wave_checks = [
+        { after: 2, owner_step: 2, gates: ['EV-1'] },
+        { after: 3, owner_step: 3, gates: ['EV-2'] }
+      ];
+      evidencePlan.gates[0].ownerStep = 2;
+      const ev2 = JSON.parse(JSON.stringify(evidencePlan.gates[0]));
+      ev2.id = 'EV-2';
+      ev2.ownerStep = 3;
+      ev2.artifact = 'evidence/EV-2.txt';
+      evidencePlan.gates.push(ev2);
+    }
+  });
+
+  const precondition = validateStepIndex(f.index, { targets: [f.targetId], evidencePlan: f.evidencePlan });
+  assert.equal(precondition.ok, true, `mutated index invalid: ${(precondition.errors ?? []).join('; ')}`);
+  assert.equal(precondition.concurrency_ready, true, 'mutated index must be concurrency ready');
+  assert.deepEqual(precondition.waves, [[1, 2], [3]], 'the precondition must expose waves [[1, 2], [3]]');
+
+  const receipt = await f.controller.startup({
+    package: f.packagePath,
+    workflow_id: WAVE_ID,
+    execution: 'waves',
+    isolation: 'worktree',
+    ...MODELS
+  }, { session: COORDINATOR_SESSION });
+  const waveFile = receipt.record_path ?? join(f.packagePath, 'runtime', 'waves', `${receipt.wave_id ?? WAVE_ID}.json`);
+  const readRecord = () => JSON.parse(readFileSync(waveFile, 'utf8'));
+
+  // The initial coordinator's package claim is the durable authority that must
+  // survive the whole restart: capture its creation epoch and token now.
+  const claimBefore = (await f.ownership.inspectClaims({ packageId: f.packageRef }))
+    .claims.find(claim => claim.kind === 'package');
+  assert.ok(claimBefore, 'wave 1 must hold a package claim before the restart');
+  const creationEpoch = String(claimBefore.epoch);
+  const claimToken = claimBefore.token;
+  assert.equal(creationEpoch, '1', 'the package claim must be created at the initial epoch 1');
+
+  // Wave 1 runs normally to integration; the automatic continuation records
+  // setup-required attention instead of opening ordinal 2.
+  const integrated = await waitForWithDiagnostics(f, () => {
+    const current = readRecord();
+    if (current.state !== 'integrated') return false;
+    const intent = Object.values(current.effects ?? {})
+      .find(effect => effect?.kind === 'next-wave' && effect.outcome === 'setup-required');
+    const attention = Object.entries(current.attention ?? {})
+      .find(([key]) => key.endsWith(':next-wave:setup-required'));
+    return intent && attention ? { current, intent, attention } : false;
+  }, 'wave 1 integrates with the next-wave continuation suppressed');
+  assert.equal(integrated.intent.outcome, 'setup-required', 'the next-wave intent must record setup-required');
+  assert.ok(integrated.attention, 'the suppressed continuation must emit setup-required attention');
+  assert.equal(
+    readWaveRecords(f.packagePath).filter(entry => (entry.record.ordinal ?? 0) >= 2).length, 0,
+    'no successor wave may open while the automatic continuation is suppressed'
+  );
+
+  // The set of wave-1 owner service launches before the restart. After the
+  // restart no additional wave-1 member launch may appear -- the predecessor is
+  // already integrated. Bind each candidate launch to its durable run's wave
+  // identity through the mode-0600 owner request file named in argv instead of
+  // matching role/stage, so the successor wave's step-3 owner launch is not
+  // counted as a predecessor member.
+  const predecessorMemberLaunchIds = () => {
+    const predecessorWaveId = readRecord().wave_id;
+    return f.launches
+      .filter(launch => Array.isArray(launch.argv))
+      .filter(launch => {
+        const requestFile = launch.argv.find(arg =>
+          typeof arg === 'string' && arg.endsWith('-request.json'));
+        if (!requestFile) return false;
+        try {
+          const request = JSON.parse(readFileSync(requestFile, 'utf8'));
+          const runFile = request?.env?.SPEC_RUNTIME_RECORD;
+          if (typeof runFile !== 'string') return false;
+          const run = JSON.parse(readFileSync(runFile, 'utf8'));
+          return run?.wave_bindings?.wave_id === predecessorWaveId;
+        } catch { return false; }
+      })
+      .map(launch => launch.id);
+  };
+  const wave1LaunchIds = predecessorMemberLaunchIds();
+  assert.ok(wave1LaunchIds.length >= 2, 'non-vacuous predecessor member launch snapshot');
+
+  // Expire the integrated record's deadline through the record CAS. An expired
+  // deadline on a dead coordinator must still be adopted, not refused.
+  const beforeDeadline = readRecord();
+  updateWaveRecord(waveFile, { expectedRevision: beforeDeadline.revision }, draft => {
+    draft.deadline = { expires_at: '2000-01-01T00:00:00.000Z' };
+  });
+
+  // Kill the owning coordinator; nothing recovers until the fresh startup does.
+  coordinatorChild.kill('SIGKILL');
+  await new Promise(resolve => coordinatorChild.once('close', resolve));
+  assert.equal(inspectProcess(coordinatorChild.pid).state, 'dead', 'the disposable coordinator must be positively dead');
+
+  // The restarted process enters under a NEW session label and epoch 2 while
+  // pointing at this live process identity.
+  const ownIdentity = inspectProcess(process.pid);
+  f.coordinator.session = session;
+  f.coordinator.pid = ownIdentity.pid;
+  f.coordinator.started_at = ownIdentity.started_at;
+  f.coordinator.epoch = 2;
+
+  // Rebuild the controller after the coordinator swap so the fresh startup
+  // really restarts rather than a live controller adopting.
+  const replacement = f.replaceController();
+
+  // Seed the required workflow prerequisite for the fresh session's new
+  // workflow (not a transfer of the dead coordinator's checkpoint): the restarted
+  // epoch must own its own admission checkpoint before startup can proceed.
+  recordCheckpoint({
+    package: f.packagePath,
+    workflow_id: 'wave-skeleton-restarted',
+    expected_revision: 0,
+    state: 'waiting-worker',
+    obligation: {
+      key: 'wave',
+      stage: 'executing',
+      step: 'step-010',
+      summary: 'restarted wave workflow'
+    },
+    workers: [],
+    coordinator_session: session,
+    checkout: f.repo
+  });
+
+  // The fresh coordinator re-enters through startup with full models; the
+  // successor gate is released so the check passes for the new epoch.
+  gate.allowNext = true;
+  let freshReceipt;
+  try {
+    freshReceipt = await replacement.startup({
+      package: f.packagePath,
+      workflow_id: 'wave-skeleton-restarted',
+      execution: 'waves',
+      isolation: 'worktree',
+      ...MODELS
+    }, { session });
+  } catch (error) {
+    try { error.message = `${error.message}${await diagnosticSnapshot(f)}`; }
+    catch { /* keep the original startup failure */ }
+    throw error;
+  }
+  assert.ok(freshReceipt, 'fresh startup must adopt the integrated predecessor and open wave 2');
+  assert.notEqual(freshReceipt.state ?? freshReceipt.record?.state, 'needs_reconciliation',
+    'a dead integrated predecessor with an expired deadline must be adopted, not refused as needs_reconciliation');
+
+  const successor = readWaveRecords(f.packagePath)
+    .map(entry => entry.record)
+    .find(record => (record.ordinal ?? 0) === 2);
+  assert.ok(successor, 'the fresh restart must open a wave 2 successor record');
+  assert.equal(freshReceipt.wave_id, successor.wave_id,
+    `the startup receipt must name the ordinal 2 successor: ${JSON.stringify({
+      freshReceiptWaveId: freshReceipt.wave_id,
+      freshReceipt,
+      effects: readRecord().effects,
+      successorWaveId: successor.wave_id,
+      successor,
+    })}`);
+  assert.equal(successor.ordinal, 2, 'the resumed successor must be wave ordinal 2');
+  assert.notEqual(successor.wave_id, readRecord().wave_id, 'the successor wave_id must be distinct from wave 1');
+
+  // Adoption preserved the predecessor's coordinator session and epoch, and the
+  // same package claim token/epoch survives the restart.
+  const adopted = readRecord();
+  assert.equal(adopted.coordinator?.session, session,
+    'adoption must adopt the predecessor onto the restarted coordinator session');
+  assert.equal(String(adopted.coordinator?.epoch ?? ''), creationEpoch,
+    'adoption must preserve the claim-creation epoch (1) on the durable wave record');
+  const claimAfter = (await f.ownership.inspectClaims({ packageId: f.packageRef }))
+    .claims.find(claim => claim.kind === 'package');
+  if (claimAfter) {
+    assert.equal(claimAfter.token, claimToken, 'adoption must keep the same package claim token');
+    assert.equal(String(claimAfter.epoch), creationEpoch, 'adoption must keep the claim-creation epoch');
+  }
+
+  // No additional wave-1 owner launch: the integrated predecessor is not
+  // re-run. Compare the original member-phase launch IDs to the current set.
+  const wave1LaunchIdsAfter = predecessorMemberLaunchIds();
+  assert.deepEqual(wave1LaunchIdsAfter, wave1LaunchIds,
+    'restart adoption must not launch any additional wave-1 member');
+
+  await assertTwoWaveProgression(f, readRecord);
+
+  // The restarted coordinator session must own its own successor admission
+  // checkpoint: progression must not transfer the original workflow's
+  // coordinator identity to the restarted session.
+  const originalCheckpoint = readCheckpointRecord(f.packagePath, WAVE_ID);
+  assert.equal(originalCheckpoint?.coordinator_session, COORDINATOR_SESSION,
+    'progression must leave the original checkpoint coordinator_session unchanged');
+  const successorCheckpoint = readCheckpointRecord(f.packagePath, successor.workflow_id ?? WAVE_ID);
+  assert.equal(successorCheckpoint?.coordinator_session, session,
+    'the successor checkpoint must carry the restarted coordinator session, not a transfer');
 });

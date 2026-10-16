@@ -307,8 +307,8 @@ export function projectWaveRecord(value, recordPath) {
   members.sort((a, b) => a.step - b.step);
   const repair = value.target?.repair;
   const integration = value.target?.integration;
-  const candidate = repair ? {
-    n: repair.n ?? null, phase: repair.phase ?? null, run_id: repair.run_id ?? null,
+  const candidate = repair || integration ? {
+    n: repair?.n ?? null, phase: repair?.phase ?? null, run_id: repair?.run_id ?? null,
     backend: integration?.backend ?? null,
     fallback_reason: integration?.workspace?.backendReason ?? null,
     checkout: integration?.workspace ? (integration.workspace.merged ?? integration.workspace.worktree ?? null) : null }

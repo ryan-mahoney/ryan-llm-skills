@@ -282,6 +282,10 @@ export async function metrics(packagePath, { session, allSessions = false, maxBy
   if (selectedParents.some(p => !p)) throw new Error('Coordinator session not found for this package.');
   const selectedRuns = records.filter(r => selectedParents.includes(r.parent_session));
   const nodes = new Map(), errors = [];
+  for (const entry of index.runtime.waves?.invalid ?? [])
+    errors.push({ path: entry.record_path, code: 'INVALID_WAVE_RECORD' });
+  if (index.runtime.waves?.truncated)
+    errors.push({ path: path.join(path.resolve(packagePath), 'runtime', 'waves'), code: 'WAVE_RECORDS_TRUNCATED' });
   const addNode = (file, role, windows) => {
     const existing = nodes.get(file);
     if (existing) { if (existing.windows && windows) existing.windows.push(...windows); return; }

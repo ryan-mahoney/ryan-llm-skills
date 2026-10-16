@@ -61,6 +61,13 @@ async function assertServicesDrained(run,getAdapter){
 export async function assertNoAssignmentWorkers(record){
   if(!record.spec_package)return;
   const waveDir=join(record.spec_package,'runtime','waves');
+  try{
+    const waveDirInfo=await lstat(waveDir);
+    if(waveDirInfo.isSymbolicLink()||!waveDirInfo.isDirectory())
+      throw refuse('Wave records could not be inspected safely; ownership is unconfirmed.','record-invalid');
+  }catch(error){
+    if(error.code!=='ENOENT')throw refuse('Wave records could not be inspected safely; ownership is unconfirmed.','record-invalid');
+  }
   for(const entry of await entries(waveDir)){
     if(!WAVE_FILE.test(entry.name))continue;
     const wavePath=join(waveDir,entry.name);
@@ -94,6 +101,7 @@ export async function assertNoAssignmentWorkers(record){
     if(entry.isFile()&&entry.name.endsWith('.json')) {
       const run=await json(join(runs,entry.name));
       if(typeof run.parent_session==='string')parents.add(run.parent_session);
+      if(entry.name.endsWith('-phase-drain.json')&&run.status==='confirmed')continue;
       await assertServicesDrained(run,getAdapter);
     }
     if(!entry.isDirectory()||!entry.name.endsWith('-processes'))continue;

@@ -83,7 +83,14 @@ export function waveLifecycleActive(fact) {
 export function waveRunMatch(fact, receipt) {
   const identity = runWaveIdentity(receipt);
   if (!identity) return null;
+  if (receipt?.command_phase?.subject?.kind === 'candidate') return { identity, match: matchWaveCandidate(fact, identity) };
   return { identity, match: matchWaveMember(fact, identity) };
+}
+
+function matchWaveCandidate(fact, identity) {
+  const wave = (fact.waves ?? []).find(item => item.wave_id === identity.wave_id);
+  if (!wave) return null;
+  return wave.candidate ? { wave, member: null, candidate: wave.candidate } : null;
 }
 
 export function matchWaveMember(fact, identity) {
