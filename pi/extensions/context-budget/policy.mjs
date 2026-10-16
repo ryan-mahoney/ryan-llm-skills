@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 
 // Working limits, not provider capabilities or prices. Leave headroom below the
 // operator's 100k input ceiling for schemas, token-estimation error and tool bursts.
-export const POLICY = Object.freeze({ contextWindow: 76000,
+export const POLICY = Object.freeze({ contextWindow: 88000,
   requestEstimateLimit: 90000, toolTextChars: 12000 });
 const installed = new WeakSet();
 // Native update summaries otherwise accumulate completed history on every pass.
@@ -50,6 +50,11 @@ export function inputTokens(usage) {
     sum + (Number.isFinite(usage?.[key]) ? usage[key] : 0), 0);
 }
 
+export function reasoningOnly(message) {
+  const content = Array.isArray(message?.content) ? message.content : [];
+  return !content.some(b => b.type === 'toolCall' || (b.type === 'text' && b.text?.trim()));
+}
+
 export function boundedToolContent(content, artifact) {
   const length = content.reduce((n, block) => n + (block.type === 'text' ? block.text.length : 0), 0);
   if (length <= POLICY.toolTextChars) return content;
@@ -70,6 +75,12 @@ export function installContextBudget(pi, { compact, retrySettings } = {}) {
   pi.events?.on('context-budget:claim', claim => claim());
   let applying = false;
   let lastEstimate = 0;
+  // Native compaction triggers on provider-reported input; the guard sees only the
+  // byte estimate, which ran 1.3x (DeepSeek) to 1.6x (Codex) high. Uncalibrated, the
+  // guard fired at ~57k real input, before compaction could start at ~59.6k. Scale by
+  // the latest observed ratio; the raw estimate applies until usage is reported.
+  let calibration = 1;
+  const projected = estimate => Math.ceil(estimate * calibration);
   const record = data => pi.appendEntry('context-budget', { version: 1, ...data });
   const apply = async (_event, ctx) => {
     if (applying || !ctx.model) return;
@@ -93,9 +104,10 @@ export function installContextBudget(pi, { compact, retrySettings } = {}) {
     const estimate = estimatePayload({ messages: p.messagesToSummarize,
       prefix: p.turnPrefixMessages, summary: p.previousSummary,
       instructions: event.customInstructions });
+    const blocked = projected(estimate) >= POLICY.requestEstimateLimit;
     record({ event: 'compaction_request', estimated_input_tokens: estimate,
-      blocked: estimate >= POLICY.requestEstimateLimit });
-    if (estimate >= POLICY.requestEstimateLimit) {
+      projected_input_tokens: projected(estimate), blocked });
+    if (blocked) {
       const message = 'Context budget refused an oversized compaction request. Resume in a fresh session from canonical artifacts and a bounded handoff; preserve the original transcript.';
       ctx.ui?.notify(message, 'error');
       process.stderr.write(`${message}\n`);
@@ -113,8 +125,9 @@ export function installContextBudget(pi, { compact, retrySettings } = {}) {
         { ...options, signal, onPayload: payload => {
           const estimate = estimatePayload(payload);
           record({ event: 'summary_request', provider: model.provider, model: model.id,
-            estimated_input_tokens: estimate, blocked: estimate >= POLICY.requestEstimateLimit });
-          if (estimate >= POLICY.requestEstimateLimit) guard.abort();
+            estimated_input_tokens: estimate, projected_input_tokens: projected(estimate),
+            blocked: projected(estimate) >= POLICY.requestEstimateLimit });
+          if (projected(estimate) >= POLICY.requestEstimateLimit) guard.abort();
         } });
       const response = await stream.result();
       record({ event: 'summary_usage', provider: response.provider, model: response.model,
@@ -124,9 +137,13 @@ export function installContextBudget(pi, { compact, retrySettings } = {}) {
       return stream;
     };
     try {
+      // Summaries share Pi's 8k/13k output cap with reasoning. At max effort DeepSeek
+      // spent 6-13k reasoning tokens per summary and hit the cap with no text, which
+      // aborted the editor. The summary is a fresh single-prompt request, so disabling
+      // thinking here leaves the session's selected level and reasoning replay intact.
       const result = await compact(p, ctx.model, undefined, undefined,
         [SUMMARY_FOCUS, event.customInstructions].filter(Boolean).join('\n\n'),
-        signal, pi.getThinkingLevel(), streamSummary,
+        signal, 'off', streamSummary,
         undefined, retrySettings?.());
       signal.throwIfAborted();
       return { compaction: result };
@@ -142,20 +159,45 @@ export function installContextBudget(pi, { compact, retrySettings } = {}) {
   });
   pi.on('before_provider_request', (event, ctx) => {
     lastEstimate = estimatePayload(event.payload);
-    record({ event: 'request', estimated_input_tokens: lastEstimate,
-      limit: POLICY.requestEstimateLimit, blocked: lastEstimate >= POLICY.requestEstimateLimit });
-    if (lastEstimate >= POLICY.requestEstimateLimit) {
+    const expected = projected(lastEstimate);
+    const blocked = expected >= POLICY.requestEstimateLimit;
+    record({ event: 'request', estimated_input_tokens: lastEstimate, projected_input_tokens: expected,
+      calibration: Number(calibration.toFixed(3)), limit: POLICY.requestEstimateLimit, blocked });
+    if (blocked) {
       // Pi reports hook exceptions but continues sending: throwing alone is NOT
       // a guard. Abort the native request signal before the provider transport.
       ctx.abort();
-      const message = `Context budget stopped an estimated ${lastEstimate}-token request before transport. Preserve work; compact or resume in a fresh session with a bounded handoff. Do not retry the same oversized request.`;
+      const message = `Context budget stopped a request projected at ${expected} input tokens before transport. Preserve work; compact or resume in a fresh session with a bounded handoff. Do not retry the same oversized request.`;
       ctx.ui?.notify(message, 'error');
       process.stderr.write(`${message}\n`);
     }
   });
+  // A response holding only reasoning ends the agent loop with no answer or tool call.
+  // MiMo produced these (stop with zero output, or length inside reasoning) and three
+  // spec workers exited without results on 2026-10-15. Ask for the next action, twice
+  // at most in a row; any response with text or a tool call resets the allowance.
+  // Track the final response at message_end: Pi drops a `length` response from the
+  // settle context, so the context alone cannot show that the run ended empty.
+  let emptyStreak = 0, lastAssistant;
+  pi.on('agent_before_settle', event => {
+    if (event.continue || event.outcome !== 'completed' || event.context?.pendingMessages?.length) return;
+    const last = lastAssistant;
+    lastAssistant = undefined;
+    if (!last || !['stop', 'length'].includes(last.stopReason) || !reasoningOnly(last)) return;
+    if (emptyStreak >= 2) return;
+    emptyStreak++;
+    record({ event: 'empty_response_continue', stop_reason: last.stopReason, attempt: emptyStreak });
+    return { entries: [...(event.entries ?? []), { type: 'custom_message', customType: 'context-budget', display: true,
+      content: 'Your previous response contained only reasoning, with no answer or tool call, so the run would end without a result. Continue the assigned task: make the next tool call, or give the final answer if the task is complete.' }],
+      continue: true };
+  });
   pi.on('message_end', (event) => {
     if (event.message?.role !== 'assistant') return;
+    lastAssistant = event.message;
+    if (!reasoningOnly(event.message)) emptyStreak = 0;
     const usage = event.message.usage;
+    if (inputTokens(usage) > 0 && lastEstimate > 0)
+      calibration = Math.min(2, Math.max(0.5, inputTokens(usage) / lastEstimate));
     record({ event: 'usage', provider: event.message.provider, model: event.message.model,
       input_tokens: inputTokens(usage), output_tokens: usage?.output ?? null,
       cache_read_tokens: usage?.cacheRead ?? null, reasoning_tokens: usage?.reasoning ?? null,

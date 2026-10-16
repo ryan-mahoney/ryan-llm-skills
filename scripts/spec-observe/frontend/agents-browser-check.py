@@ -7,7 +7,7 @@
 After npm run build --prefix scripts/spec-observe/frontend:
 SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 180s uv run --script \
   scripts/spec-observe/frontend/agents-browser-check.py --case selection
-  ... --case list | --case detail | --case captures
+  ... --case list | --case detail | --case captures | --case cross-links
 
 Only the final /api/state observer response is replaced. The built dashboard,
 catalog, route, normalizeEnvelope, scope and Agents adapter stay real.
@@ -36,7 +36,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--case', choices=['selection', 'list', 'detail', 'captures'], required=True)
+parser.add_argument('--case', choices=['selection', 'list', 'detail', 'captures', 'cross-links'], required=True)
 case = parser.parse_args().case
 
 if case == 'list':
@@ -1229,6 +1229,316 @@ if case == 'detail':
             fixture.wait()
         report['elapsedSeconds'] = round(time.monotonic() - started, 3)
         (evidence / 'agents-detail.json').write_text(json.dumps(report, indent=2) + '\n')
+        print(json.dumps(report, indent=2))
+    raise SystemExit(0)
+
+
+if case == 'cross-links':
+    root = Path(__file__).resolve().parent
+    evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-agents-evidence'))
+    evidence.mkdir(parents=True, exist_ok=True)
+    shots = evidence / 'step-004'
+    shots.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+    report = {'status': 'failed', 'case': case, 'scenarios': [], 'pageErrors': [], 'urls': {}, 'snapshots': [], 'requests': {}}
+    fixture = subprocess.Popen(['node', str(root / 'browser-fixture.mjs')], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        if not select.select([fixture.stdout], [], [], 10)[0]:
+            raise RuntimeError('Fixture readiness exceeded 10 seconds')
+        receipt = json.loads(fixture.stdout.readline())
+        report['fixture'] = receipt
+        report['observedCommit'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+        report['dirty'] = bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=root, text=True).strip())
+
+        generated_at = '2026-10-12T12:00:00.000Z'
+        ws = 'fixture'
+        thread_id = receipt['thread1']
+        brief_path = 'briefs/browser.md'
+        repository_id = 'fixture-repo'
+        spec_package = 'fixture/cross-links-spec'
+        run_assignment = 'cross-links-live'
+        record_assignment_key = json.dumps([ws, spec_package, run_assignment], separators=(',', ':'))
+
+        def record_key(assignment_id, workspace=ws):
+            return json.dumps([workspace, assignment_id], separators=(',', ':'))
+
+        def locate_command(assignment_id):
+            return 'node ~/.agents/scripts/workspaces/cli.mjs locate ' + assignment_id
+
+        def assignment(assignment_id, display='live', workspace_id='fixture', **extra):
+            value = {
+                'assignment_id': assignment_id,
+                'workspace_id': workspace_id,
+                'spec_package': 'fixture/' + assignment_id,
+                'workflow_id': 'workflow-1',
+                'display': display,
+                'state': display,
+                'execution': 'running' if display == 'live' else 'completed',
+                'task_activity': {'state': 'idle', 'reason': 'Fixture assignment is waiting for input.'},
+                'nextAction': 'Attach to ' + assignment_id,
+                'coverage': 'complete',
+                'recordedState': 'live',
+                'observedState': 'live',
+                'unrecorded': False,
+                'quiet': False,
+                'attachedCount': 0,
+                'execution_dir': '/fixture/checkout',
+                'locate_command': locate_command(assignment_id),
+            }
+            value.update(extra)
+            return value
+
+        def state_value(assignments, runs=()):
+            return {
+                'schema_version': 1,
+                'generated_at': generated_at,
+                'observers': [{
+                    'observer_id': 'fixture',
+                    'state': 'observing',
+                    'published_at': generated_at,
+                    'snapshot': {
+                        'workspace': ws,
+                        'coverage': {'state': 'complete', 'observed_at': generated_at, 'reasons': []},
+                        'runs': list(runs),
+                        'recently_completed': [],
+                        'planned_packages': [],
+                        'epics': [],
+                        'assignments': assignments,
+                        'assignment_coverage': {'state': 'complete', 'observed_at': generated_at, 'reasons': []},
+                    },
+                }],
+            }
+
+        run_record = {
+            'workspace': ws,
+            'package': spec_package,
+            'package_ref': spec_package,
+            'assignment_id': run_assignment,
+            'workflow_id': 'workflow-1',
+            'execution': 'running',
+            'workflow_state': 'waiting-worker',
+            'is_current_assignment': True,
+            'activity': 'Building the dashboard',
+            'obligation': 'Keep editors stable',
+            'observed_at': generated_at,
+            'coverage': {'state': 'complete', 'reasons': []},
+            'spec_progress': {'current_position': 1, 'total_steps': 3, 'current_name': 'Step'},
+            'timing': {'started_at': generated_at, 'attempts': []},
+            'evidence': {'state': 'recorded', 'verdict': 'ready', 'scope': 'declared-artifact', 'source': 'work-tour.html', 'commit': 'abc123', 'observed_at': generated_at},
+        }
+        populated = assignment(run_assignment, spec_package=spec_package, thread_id=thread_id, brief=brief_path, repository_id=repository_id)
+        package_match = assignment('cross-links-package', spec_package=spec_package)
+        legacy = assignment('cross-links-legacy', spec_package='fixture/cross-links-unmatched')
+        populated_state = state_value([populated, package_match], [run_record])
+        legacy_state = state_value([legacy])
+
+        state = {'value': populated_state}
+        request_log = []
+        with sync_playwright() as p:
+            browser = p.chromium.launch(executable_path=shutil.which('google-chrome'), headless=True, args=['--no-sandbox'])
+            context = browser.new_context(viewport={'width': 1280, 'height': 900})
+            page = context.new_page()
+            page.set_default_timeout(10000)
+            page.set_default_navigation_timeout(10000)
+            expect.set_options(timeout=10000)
+            page.on('pageerror', lambda error: report['pageErrors'].append(str(error)))
+            page.on('request', lambda request: request_log.append({'method': request.method, 'url': request.url}))
+
+            def serve_state(route):
+                route.fulfill(json=state['value'])
+
+            page.route('**/api/state**', serve_state)
+
+            def params_on(target_page):
+                return parse_qs(urlsplit(target_page.url).fragment.partition('?')[2])
+
+            def href_params(anchor):
+                return parse_qs(urlsplit(anchor.get_attribute('href') or '').fragment.partition('?')[2])
+
+            def capture(target_page, state_name, width):
+                target_page.set_viewport_size({'width': width, 'height': 900})
+                target_page.screenshot(path=str(shots / f'{state_name}-{width}.png'))
+                report['urls'][f'{state_name}-{width}'] = urlsplit(target_page.url).fragment
+
+            def open_agent(target_page, assignment_id):
+                target_page.goto(receipt['url'] + '/#/agents', wait_until='domcontentloaded')
+                expect(target_page.locator('h1')).to_have_text('Agents')
+                rendered = target_page.locator('button.run-row')
+                empty = target_page.locator('.empty')
+                assert rendered.count() >= 1, (
+                    f'agents list rendered no rows while opening {assignment_id}: '
+                    f'empty={empty.first.inner_text() if empty.count() else "(none)"}; '
+                    f'rows={[rendered.nth(index).inner_text() for index in range(rendered.count())]}'
+                )
+                row = target_page.locator("[data-assignment-key='" + record_key(assignment_id) + "']")
+                expect(row).to_have_count(1)
+                row.click()
+                expect(target_page.locator('article.agent-detail')).to_be_visible()
+
+            def related_section(target_page):
+                return target_page.locator('article.agent-detail section.section', has_text='Related work')
+
+            def related_rows(target_page):
+                rows = related_section(target_page).locator('tbody tr')
+                expect(rows).to_have_count(3)
+                return rows
+
+            def execution_rows(target_page):
+                return target_page.locator('article.agent-detail section.section', has_text='Execution').locator('tbody tr')
+
+            # (a) All-workspaces populated agent: every recorded relation anchor
+            # carries the assignment workspace and opens a real destination.
+            open_agent(page, run_assignment)
+            expect(page.locator('article.agent-detail .object-head h2')).to_have_text(run_assignment)
+            assert 'ws' not in params_on(page), f'all-workspaces agent route carried a workspace scope: {page.url}'
+            rows = related_rows(page)
+            spec_anchor = rows.nth(0).locator('td').nth(0).locator('a.text-link')
+            expect(spec_anchor).to_have_text('Spec ' + spec_package)
+            expect(rows.nth(0).locator('td').nth(1)).to_have_text('Waiting-worker')
+            spec_href = href_params(spec_anchor)
+            assert spec_href.get('ws') == [ws], f'populated Spec anchor lost the assignment workspace: {spec_anchor.get_attribute("href")}'
+            assert spec_href.get('id') == [record_assignment_key], f'populated Spec anchor lost the record key: {spec_anchor.get_attribute("href")}'
+            assert 'filter' not in spec_href, f'populated Spec anchor added an unrelated filter: {spec_anchor.get_attribute("href")}'
+            conversation_anchor = rows.nth(1).locator('td').nth(0).locator('a.text-link')
+            expect(conversation_anchor).to_contain_text('Conversation')
+            expect(rows.nth(1).locator('td').nth(1)).to_have_text('Recorded')
+            conversation_href = href_params(conversation_anchor)
+            assert conversation_href.get('ws') == [ws], f'populated Conversation anchor lost the assignment workspace: {conversation_anchor.get_attribute("href")}'
+            assert conversation_href.get('id') == [thread_id], f'populated Conversation anchor lost the thread id: {conversation_anchor.get_attribute("href")}'
+            brief_anchor = rows.nth(2).locator('td').nth(0).locator('a.text-link')
+            expect(brief_anchor).to_have_text('Brief ' + brief_path)
+            expect(rows.nth(2).locator('td').nth(1)).to_have_text('Recorded')
+            brief_href = href_params(brief_anchor)
+            assert brief_href.get('ws') == [ws], f'populated Brief anchor lost the assignment workspace: {brief_anchor.get_attribute("href")}'
+            assert brief_href.get('source') == ['workspace'], f'populated Brief anchor lost the workspace source: {brief_anchor.get_attribute("href")}'
+            assert brief_href.get('path') == [brief_path], f'populated Brief anchor lost the brief path: {brief_anchor.get_attribute("href")}'
+            repo_anchor = execution_rows(page).filter(has_text='Repository').locator('td').nth(1).locator('a.text-link')
+            expect(repo_anchor).to_have_text(repository_id)
+            repo_href = href_params(repo_anchor)
+            assert repo_href.get('ws') == [ws], f'populated Repository anchor lost the assignment workspace: {repo_anchor.get_attribute("href")}'
+            assert repo_href.get('source') == ['repository'], f'populated Repository anchor lost the repository source: {repo_anchor.get_attribute("href")}'
+            assert repo_href.get('id') == [repository_id], f'populated Repository anchor lost the repository id: {repo_anchor.get_attribute("href")}'
+            report['scenarios'].append('cross-links populated: on the All-workspaces route Spec, Conversation, Brief and Repository anchors carry the assignment workspace and the real destination identities without an ambient ws')
+            related_section(page).scroll_into_view_if_needed()
+            capture(page, 'populated', 1280)
+            capture(page, 'populated', 1600)
+
+            spec_anchor.click()
+            expect(page.locator('h1')).to_have_text('Specs')
+            assert params_on(page).get('ws') == [ws] and params_on(page).get('id') == [record_assignment_key], page.url
+            assert 'filter' not in params_on(page), page.url
+            expect(page.locator('article.detail-pane')).to_contain_text('cross-links-spec')
+            page.reload(wait_until='domcontentloaded')
+            expect(page.locator('h1')).to_have_text('Specs')
+            assert params_on(page).get('ws') == [ws] and params_on(page).get('id') == [record_assignment_key], page.url
+            expect(page.locator('article.detail-pane')).to_contain_text('cross-links-spec')
+            report['scenarios'].append('cross-links Spec destination: the anchor opens #/specs with ws and the record key and the package survives reload')
+
+            open_agent(page, run_assignment)
+            related_rows(page).nth(1).locator('td').nth(0).locator('a.text-link').click()
+            expect(page.locator('h1')).to_have_text('Conversations')
+            assert params_on(page).get('ws') == [ws] and params_on(page).get('id') == [thread_id], page.url
+            expect(page.locator('article.detail-pane')).to_contain_text('Discussion one')
+            page.reload(wait_until='domcontentloaded')
+            expect(page.locator('article.detail-pane')).to_contain_text('Discussion one')
+            report['scenarios'].append('cross-links Conversation destination: the anchor opens #/conversations ws/id for the recorded thread and the thread survives reload')
+
+            open_agent(page, run_assignment)
+            related_rows(page).nth(2).locator('td').nth(0).locator('a.text-link').click()
+            expect(page.locator('h1')).to_have_text('Files')
+            assert params_on(page).get('ws') == [ws] and params_on(page).get('source') == ['workspace'] and params_on(page).get('path') == [brief_path], page.url
+            expect(page.locator('article.detail-pane header.reader-head h2.mono')).to_have_text(brief_path)
+            expect(page.locator('article.detail-pane .reader #file-content')).to_contain_text('A recorded brief.')
+            page.reload(wait_until='domcontentloaded')
+            expect(page.locator('article.detail-pane header.reader-head h2.mono')).to_have_text(brief_path)
+            expect(page.locator('article.detail-pane .reader #file-content')).to_contain_text('A recorded brief.')
+            report['scenarios'].append('cross-links Brief destination: the anchor opens the real Files workspace reader for briefs/browser.md and the recorded brief survives reload')
+
+            open_agent(page, run_assignment)
+            execution_rows(page).filter(has_text='Repository').locator('td').nth(1).locator('a.text-link').click()
+            expect(page.locator('h1')).to_have_text('Files')
+            assert params_on(page).get('ws') == [ws] and params_on(page).get('source') == ['repository'] and params_on(page).get('id') == [repository_id], page.url
+            expect(page.locator('.list-pane')).to_contain_text('fixture-repo-plan.md')
+            page.locator('.list-pane').get_by_text('fixture-repo-plan.md').first.click()
+            expect(page.locator('article.detail-pane header.reader-head h2.mono')).to_contain_text('fixture-repo-plan.md')
+            assert params_on(page).get('path') == ['fixture-repo-plan.md'], page.url
+            page.reload(wait_until='domcontentloaded')
+            expect(page.locator('article.detail-pane header.reader-head h2.mono')).to_contain_text('fixture-repo-plan.md')
+            report['scenarios'].append('cross-links Repository destination: the anchor opens the real Files repository listing and the selected checkout file survives reload')
+
+            # (c) Package-level match keeps the qualification and the scoped href
+            # through a native modified click.
+            open_agent(page, 'cross-links-package')
+            rows = related_rows(page)
+            package_spec_anchor = rows.nth(0).locator('td').nth(0).locator('a.text-link')
+            expect(package_spec_anchor).to_have_text('Spec ' + spec_package)
+            expect(rows.nth(0).locator('td').nth(1)).to_have_text('Waiting-worker · package-level; not this assignment')
+            package_href = href_params(package_spec_anchor)
+            assert package_href.get('ws') == [ws], f'package-level Spec anchor lost the assignment workspace: {package_spec_anchor.get_attribute("href")}'
+            assert package_href.get('id') == [record_assignment_key], f'package-level Spec anchor lost the record key: {package_spec_anchor.get_attribute("href")}'
+            package_fragment = (package_spec_anchor.get_attribute('href') or '').partition('#')[2]
+            related_section(page).scroll_into_view_if_needed()
+            capture(page, 'package-match', 1280)
+            popup = None
+            try:
+                with context.expect_page(timeout=5000) as popup_info:
+                    package_spec_anchor.click(modifiers=['Control'])
+                popup = popup_info.value
+                method = 'ctrl-click opened a separate page through native modified navigation'
+            except Exception:
+                method = 'ctrl-click produced no page; the real href was opened in a second page'
+            if popup is None:
+                popup = context.new_page()
+                popup.route('**/api/state**', serve_state)
+                popup.goto(receipt['url'] + '/#' + package_fragment, wait_until='domcontentloaded')
+            else:
+                popup.set_default_timeout(10000)
+                popup.on('pageerror', lambda error: report['pageErrors'].append(str(error)))
+                popup.route('**/api/state**', serve_state)
+                popup.reload(wait_until='domcontentloaded')
+            expect(popup.locator('h1')).to_have_text('Specs')
+            popup_params = parse_qs(urlsplit(popup.url).fragment.partition('?')[2])
+            assert popup_params.get('ws') == [ws], f'modified-click package Spec page lost the scoped ws: {popup.url}'
+            assert popup_params.get('id') == [record_assignment_key], f'modified-click package Spec page lost the scoped id: {popup.url}'
+            expect(popup.locator('article.detail-pane')).to_contain_text('cross-links-spec')
+            report['urls']['package-match-popup'] = urlsplit(popup.url).fragment
+            popup.close()
+            report['scenarios'].append(f'cross-links package-level Spec: {method}; the native href keeps ws and the record key and the package-level qualification stays visible')
+
+            # (b) Legacy assignment: no invented relationships and explicit gaps.
+            state['value'] = legacy_state
+            open_agent(page, 'cross-links-legacy')
+            rows = related_rows(page)
+            expect(rows.nth(0).locator('td').nth(0)).to_have_text('Spec fixture/cross-links-unmatched')
+            expect(rows.nth(0).locator('td').nth(1)).to_have_text('Not recorded')
+            expect(rows.nth(1).locator('td').nth(0)).to_have_text('Conversation')
+            expect(rows.nth(1).locator('td').nth(1)).to_have_text('Not recorded')
+            expect(rows.nth(2).locator('td').nth(0)).to_have_text('Brief')
+            expect(rows.nth(2).locator('td').nth(1)).to_have_text('Not recorded')
+            expect(related_section(page).locator('a.text-link')).to_have_count(0)
+            legacy_repo = execution_rows(page).filter(has_text='Repository').locator('td').nth(1)
+            expect(legacy_repo.locator('a.text-link')).to_have_count(0)
+            report['scenarios'].append('cross-links legacy: an unmatched Spec, Conversation and Brief render plain text with Not recorded and no invented anchor')
+            related_section(page).scroll_into_view_if_needed()
+            capture(page, 'legacy', 1280)
+            capture(page, 'legacy', 1600)
+
+        posts = [request for request in request_log if request['method'] == 'POST']
+        report['requests'] = {
+            'total': len(request_log),
+            'stateGets': sum(1 for request in request_log if request['method'] == 'GET' and '/api/state' in request['url']),
+            'posts': len(posts),
+        }
+        assert not posts, posts
+        report['status'] = 'passed'
+    finally:
+        try:
+            fixture.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            fixture.kill()
+            fixture.wait()
+        report['elapsedSeconds'] = round(time.monotonic() - started, 3)
+        (evidence / 'agents-cross-links.json').write_text(json.dumps(report, indent=2) + '\n')
         print(json.dumps(report, indent=2))
     raise SystemExit(0)
 

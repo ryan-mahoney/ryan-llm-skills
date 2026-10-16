@@ -7,7 +7,7 @@ import { POLICY, budgetModel, estimatePayload, inputTokens, installContextBudget
 
 test('working cap preserves provider identity and smaller native limits; cached input counts toward budget', () => {
   const original = { id: 'model', provider: 'provider', contextWindow: 1048576, maxTokens: 65536, cost: { input: 1 } };
-  assert.deepEqual(budgetModel(original), { ...original, contextWindow: 76000 });
+  assert.deepEqual(budgetModel(original), { ...original, contextWindow: 88000 });
   assert.equal(original.contextWindow, 1048576);
   assert.equal(budgetModel(original).maxTokens, 65536);
   assert.equal(budgetModel({ ...original, maxTokens: 0 }).maxTokens, 0);
@@ -15,6 +15,53 @@ test('working cap preserves provider identity and smaller native limits; cached 
   assert.equal(inputTokens({ input: 1000, cacheRead: 98000, cacheWrite: 2000, output: 999 }), 101000);
   assert.ok(estimatePayload({ messages: [{ content: '界'.repeat(90000) }] }) > POLICY.requestEstimateLimit);
   assert.ok(estimatePayload({ messages: [{ content: [{ type: 'image_url', image_url: { url: 'x'.repeat(1000000) } }] }] }) < 10000);
+});
+
+// Run alone: node --test --test-name-pattern='calibrates' pi/extensions/context-budget/policy.test.mjs
+test('request guard calibrates to reported input so it cannot fire before native compaction', () => {
+  const handlers = {}, entries = [];
+  const pi = { on: (name, fn) => handlers[name] = fn, appendEntry: (_kind, data) => entries.push(data) };
+  installContextBudget(pi);
+  const send = chars => {
+    let aborted = false;
+    handlers.before_provider_request({ payload: { messages: [{ content: 'x'.repeat(chars) }] } }, { abort: () => { aborted = true; } });
+    return aborted;
+  };
+  // An observed Codex reviewer: ~80k estimated was 50.6k reported, then one read batch
+  // raised the estimate to ~93k while real input stayed below the 59.6k compaction trigger.
+  assert.equal(send(276000), true, 'uncalibrated ~93k estimate is blocked');
+  assert.equal(send(237000), false);
+  handlers.message_end({ message: { role: 'assistant', usage: { input: 2000, cacheRead: 46000, output: 10 } } });
+  assert.equal(send(276000), false, '~93k estimate at a 0.6 ratio is ~56k real input');
+  assert.equal(send(480000), true, '~161k estimate at a 0.6 ratio still exceeds the guard');
+  handlers.message_end({ message: { role: 'assistant', usage: { input: 0, output: 0 } } });
+  assert.equal(entries.at(-1).event, 'usage');
+  assert.equal(send(276000), false, 'a response without reported usage keeps the prior calibration');
+});
+
+// Run alone: node --test --test-name-pattern='reasoning-only' pi/extensions/context-budget/policy.test.mjs
+test('a reasoning-only final response continues twice at most and text resets the allowance', () => {
+  const handlers = {}, entries = [];
+  const pi = { on: (name, fn) => handlers[name] = fn, appendEntry: (_kind, data) => entries.push(data) };
+  installContextBudget(pi);
+  const thinking = { role: 'assistant', stopReason: 'stop', content: [{ type: 'thinking', thinking: 'plan' }] };
+  // Pi omits a `length` response from the settle context, so only message_end shows it.
+  const settle = (last, extra = {}) => {
+    handlers.message_end({ message: { usage: {}, ...last } });
+    return handlers.agent_before_settle({ outcome: 'completed', continue: false, entries: [],
+      context: { pendingMessages: [], contextMessages: [{ role: 'user', content: 'task' }] }, ...extra });
+  };
+  const first = settle(thinking);
+  assert.equal(first.continue, true);
+  assert.match(first.entries[0].content, /next tool call/);
+  assert.equal(settle({ ...thinking, stopReason: 'length' }).continue, true, 'reasoning cut off at the output cap also continues');
+  assert.equal(settle(thinking), undefined, 'a third consecutive empty response is left to end');
+  handlers.message_end({ message: { role: 'assistant', content: [{ type: 'text', text: 'Edited the file.' }], usage: {} } });
+  assert.equal(settle(thinking).continue, true, 'a substantive response resets the allowance');
+  assert.equal(settle({ role: 'assistant', stopReason: 'stop', content: [{ type: 'thinking' }, { type: 'text', text: 'Done.' }] }), undefined);
+  assert.equal(settle({ role: 'assistant', stopReason: 'toolUse', content: [{ type: 'toolCall', name: 'read' }] }), undefined);
+  assert.equal(settle(thinking, { outcome: 'aborted' }), undefined, 'an aborted run is not continued');
+  assert.deepEqual(entries.filter(e => e.event === 'empty_response_continue').map(e => e.attempt), [1, 2, 1]);
 });
 
 test('large tool output remains exactly recoverable, retains error tail, and telemetry excludes content', async t => {

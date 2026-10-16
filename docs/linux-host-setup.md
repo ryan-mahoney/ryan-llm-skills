@@ -150,6 +150,34 @@ attach to the assignment's tmux session and answer it there.
 
 Run it again after every `git pull`.
 
+### Speech transcription
+
+Install Bun on the host before speech setup. Sentinel runs the speech worker from a
+Rearrange Writer checkout. From the tooling checkout, run:
+
+```bash
+node scripts/spec-observe/setup-speech.mjs --repository <writer-clone-url>
+```
+
+Use `--checkout /absolute/path/to/rearrange-writer` for an existing checkout outside
+`$HOME/Documents/rearrange-writer`. The installer installs locked dependencies, provisions
+ASR assets, and checks that the engine loads before saving service configuration.
+It writes `~/.config/systemd/user/spec-sentinel.service.d/speech.conf`.
+The drop-in supplies the checkout path and Bun on the service PATH.
+
+For automatic setup on future hosts, set `SENTINEL_SPEECH_REPOSITORY_URL` before `sync.sh`.
+Without that variable, `sync.sh` prepares speech when the default checkout already exists.
+Setup failure stops sync with an error. A missing checkout prints a setup command and lets sync continue.
+
+After section 7 starts the service, check speech availability:
+
+```bash
+curl -fsS http://127.0.0.1:4319/api/request/speech   # expect state: ready
+```
+
+If Sentinel already runs, restart it after setup with `systemctl --user restart spec-sentinel`.
+Reload the dashboard to refresh its speech availability.
+
 ## Native resources and bubblewrap support
 
 Contained Linux waves need cgroup v2 controllers delegated to the user systemd

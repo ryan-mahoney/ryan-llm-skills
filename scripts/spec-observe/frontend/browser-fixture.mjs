@@ -7,6 +7,7 @@ import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
 import {execFileSync,spawn} from 'node:child_process';
 import {createDashboardServer} from '../dashboard.mjs';
+import {createSpeechAdapter} from '../request-speech.mjs';
 import {parseModelCatalog} from '../model-routes.mjs';
 import {collectWorkspace} from '../sentinel.mjs';
 import {createDiscussionService} from '../../workspaces/discussion.mjs';
@@ -22,11 +23,22 @@ const filesFixture=process.env.SENTINEL_REPOSITORY_FILES==='1';
 const modelsFixture=process.env.SENTINEL_MODELS==='1';
 const handoffIntegration=process.env.SENTINEL_HANDOFF_INTEGRATION==='1'&&(plannedLaunch||specsReadiness||epicPlanning);
 const nextSteps=process.env.SENTINEL_NEXT_STEPS==='1';
+const requestFixture=process.env.SENTINEL_REQUEST_FIXTURE==='1';
 // EV-7 runs the next-steps fixture over the real discussion service; that
 // composition additionally seeds one package whose catalog kit id differs from
 // its storage directory basename so the ordinary cold route proves the
 // catalog-to-snapshot identity adapter rather than a same-name coincidence.
 const nextStepsColdAlias=nextSteps&&handoffIntegration;
+// Cross-links gate (SENTINEL_SPECS_LINKS=1): one links workspace whose kit
+// binds repository alias "frontend" to the frontend checkout and alias "app"
+// to a different physical checkout, so a recorded package target can be
+// resolved by canonical path rather than by target id. Packages are created
+// through the real lifecycle so detail scope and Files routes read real
+// locations; the default fixture is unchanged when the gate is unset. The
+// Discuss gate (SENTINEL_SPECS_DISCUSS=1) reuses this workspace and adds an
+// ambiguous workspace whose kit binds two aliases to the same checkout.
+const specsDiscuss=process.env.SENTINEL_SPECS_DISCUSS==='1';
+const specsLinks=process.env.SENTINEL_SPECS_LINKS==='1'||specsDiscuss;
 const root=await realpath(process.env.SENTINEL_FIXTURE_ROOT??await mkdtemp(join(tmpdir(),'sentinel-solid-browser-')));
 // Real final-integration resolution reads HOME and PATH: isolate both to this
 // fixture root so the real catalog sees root/.agents skills and the fake pi
@@ -693,7 +705,59 @@ async function handleTerminalRequest(req,res,url,assetMatch){
 if(nextSteps)await publishNextStepsSnapshot();
 else if(handoffIntegration)await publishIntegrationSnapshot();
 else await writeFile(observerFile,JSON.stringify(makeSnapshot()));
-const dashboard=createDashboardServer({...modelsFixture?{modelCatalog:fixtureCatalog}:{},agentDir:join(root,'agent'),storageRoot:storage,publicHost:'dashboard.example',discussion,sessionControl});
+// --- Opt-in request-work browser fixture --------------------------------
+// SENTINEL_REQUEST_FIXTURE=1 composes the real request routes in front of the
+// fake final child boundaries: the speech service stays createSpeechAdapter
+// and only its spawn executable is replaced (bun -> node fake-asr-daemon.mjs,
+// the request-speech.test.mjs pattern), and interpretation is one deterministic
+// validated proposal. The scenario switch drives readiness, transcription and
+// interpretation outcomes. The default (flag unset) keeps every dashboard wire
+// exactly as before, so entry/scope runs are unchanged.
+let requestScenario='happy';
+let lastClipSamples=0;
+let requestSpeechCheckout=null;
+let requestServices=null;
+const requestScenarioNames=new Set(['happy','transcribe-failed','interpret-failed','interpret-offline','speech-unavailable']);
+const requestFixtureProposal={resolution:'proposal',candidates:[{action:'plan_epic',goal:'Plan the request work fixture epic',workspace:'fixture',uses:['workspace:fixture'],resolved_refs:[],research:{},constraints:[]}],omissions:0,sourceErrors:[]};
+if(requestFixture){
+ const workerRel='server/asr/asrDaemonWorker.ts';
+ let speechCheckout=join(root,'speech-checkout');
+ const configured=process.env.SENTINEL_SPEECH_CHECKOUT;
+ if(typeof configured==='string'&&configured){
+  try{await access(join(configured,workerRel));speechCheckout=configured;}catch{}
+ }
+ try{await access(join(speechCheckout,workerRel));}catch{await mkdir(join(speechCheckout,'server','asr'),{recursive:true});await writeFile(join(speechCheckout,workerRel),'// browser fixture worker placeholder: only the spawn boundary is replaced\n');}
+ requestSpeechCheckout=speechCheckout;
+ const fakeDaemon=fileURLToPath(new URL('../fixtures/fake-asr-daemon.mjs',import.meta.url));
+ const requestPadSeconds=3.5;
+ const requestSpeaker=(command,args,options)=>{
+  if(command!=='bun')return spawn(command,args,options);
+  const daemonScenario=requestScenario==='transcribe-failed'?'runtime-error':'happy';
+  const env={...process.env,...options?.env,FAKE_ASR_SCENARIO:daemonScenario};
+  // The happy daemon finalizes after all input frames and halfway into the
+  // padding. The daemon and the route's decodePcm both count float32 frames,
+  // so lastClipSamples is the same unit; the mid-padding point keeps a robust
+  // margin before the padding ends while still qualifying as a post-input final.
+  if(daemonScenario==='happy')env.FAKE_ASR_FINAL_AFTER_SAMPLES=String(lastClipSamples+Math.floor(Math.round(requestPadSeconds*16000)/2));
+  env.FAKE_ASR_TEXT='spoken request fixture text';
+  env.FAKE_ASR_TEXT_2='for the request work plan';
+  return spawn(process.execPath,[fakeDaemon,daemonScenario],{...options,env});
+ };
+ const requestSpeechReady=createSpeechAdapter({checkout:speechCheckout,spawn:requestSpeaker,padSeconds:requestPadSeconds});
+ const requestSpeechMissing=createSpeechAdapter({checkout:join(root,'speech-checkout-unavailable'),spawn:requestSpeaker,padSeconds:requestPadSeconds});
+ requestServices={
+  spawn:requestSpeaker,
+  interpret:async()=>{
+   if(requestScenario==='interpret-failed')throw new Error('fixture interpretation failure');
+   return requestFixtureProposal;
+  },
+  speech:{
+   readiness:()=>requestScenario==='speech-unavailable'?requestSpeechMissing.readiness():requestSpeechReady.readiness(),
+   transcribe:(samples,signal)=>{lastClipSamples=samples.length;return requestSpeechReady.transcribe(samples,signal);},
+  },
+ };
+}
+const dashboard=createDashboardServer({...modelsFixture?{modelCatalog:fixtureCatalog}:{},agentDir:join(root,'agent'),storageRoot:storage,publicHost:'dashboard.example',discussion,sessionControl,...(requestServices?{requestServices}:{})});
 const server=createServer(async(req,res)=>{
  const url=new URL(req.url,'http://fixture');
  if(url.pathname==='/__fixture/control'){
@@ -711,6 +775,7 @@ const server=createServer(async(req,res)=>{
   if(nextSteps&&action==='next-local')localOperator=url.searchParams.get('value')==='true';
   if(nextSteps&&action==='next-scan-fail')nextStepsScanFail=url.searchParams.get('value')==='true';
   if(nextSteps&&action==='next-scan-delay-ms')nextStepsScanDelayMs=numberValue(url.searchParams.get('value'),0,15000);
+  if(requestFixture&&action==='request-scenario'){const value=url.searchParams.get('value')||'happy';requestScenario=requestScenarioNames.has(value)?value:'happy';}
   if(action==='session-end-fails')sessionEndFails=url.searchParams.get('value')==='true';
   if(action==='session-identity'){const next=url.searchParams.get('value');sessionIdentity=next?next:'fixture-identity';}
   if(action==='terminal-state')terminalState=url.searchParams.get('value')||'none';
@@ -805,7 +870,7 @@ const server=createServer(async(req,res)=>{
   if(modelsFixture&&action==='models-preferences-empty')await writeFile(join(root,'agent','spec-sentinel','preferred-models.json'),url.searchParams.get('value')==='true'?`{"version":1,"preferred":[],"updated_at":"2026-10-14T14:31:00.000Z"}`:modelsPreferredSeed);
   if(modelsFixture&&action==='models-catalog-drop')modelsCatalogDrop=url.searchParams.get('value')||'';
   const modelsState=modelsFixture?{catalogFail:modelsCatalogFail,drop:modelsCatalogDrop,readAt:new Date(modelsReadAt).toISOString(),stale:Date.now()-modelsReadAt>24*60*60*1000}:null;
-  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({...packageIdentity,local:localOperator,posts,resolverDiagnostics,threads,createdThreads,modelRpcCalls,modelTmuxCalls:handoffTmuxCalls,tick,boundary,threadControls:{holdThreads,holdThreadsWorkspace,failThreads,longHistory,incompleteTail,invalidRecords,listFailStatus,historyFailStatus,responseState},subscribedThreadIds:[...new Set([...subscribers].map(item=>item.thread_id))],createControls:{delayCreate,failCreate},session:{identity:sessionIdentity,ended:sessionEnded},terminal:{state:terminalState,delayMs:terminalDelayMs,openDelayMs:terminalOpenDelayMs,failAsset:terminalFailAsset,assignment:terminalAssignment,counts:terminalCounts},review:{holdDispatchPreview,holdDispatchLaunch,dispatchPreviewRefusal,dispatchLaunchRefusal,staleLaunch,holdingRun:reviewHoldingRun?.assignment_id??null},launch:{outcome:dispatchLaunchOutcome,published:[...launchedAssignments.keys()]},diagnostics:{resolvers:resolverDiagnostics},boundaryLog:boundaryLog.slice(-60),active:[...activeBoundary.values()],launchResolutions:Object.fromEntries(launchResolutions),briefWritesPending,completedBriefWrites,integration:handoffIntegration?{enabled:true,processStarts:handoffNewSessions,sessions:[...handoffSessions.values()].map(session=>({session:session.name,socket:session.socketPath,assignment_id:session.assignmentId,ended:session.ended})),tmuxCalls:handoffTmuxCalls.length}:{enabled:false},models:modelsState,...(nextSteps?{nextSteps:await nextStepsMeta()}:{}),...(controlResult??{})}));return;
+  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({...packageIdentity,local:localOperator,posts,resolverDiagnostics,threads,createdThreads,modelRpcCalls,modelTmuxCalls:handoffTmuxCalls,tick,boundary,threadControls:{holdThreads,holdThreadsWorkspace,failThreads,longHistory,incompleteTail,invalidRecords,listFailStatus,historyFailStatus,responseState},subscribedThreadIds:[...new Set([...subscribers].map(item=>item.thread_id))],createControls:{delayCreate,failCreate},session:{identity:sessionIdentity,ended:sessionEnded},terminal:{state:terminalState,delayMs:terminalDelayMs,openDelayMs:terminalOpenDelayMs,failAsset:terminalFailAsset,assignment:terminalAssignment,counts:terminalCounts},review:{holdDispatchPreview,holdDispatchLaunch,dispatchPreviewRefusal,dispatchLaunchRefusal,staleLaunch,holdingRun:reviewHoldingRun?.assignment_id??null},launch:{outcome:dispatchLaunchOutcome,published:[...launchedAssignments.keys()]},diagnostics:{resolvers:resolverDiagnostics},boundaryLog:boundaryLog.slice(-60),active:[...activeBoundary.values()],launchResolutions:Object.fromEntries(launchResolutions),briefWritesPending,completedBriefWrites,integration:handoffIntegration?{enabled:true,processStarts:handoffNewSessions,sessions:[...handoffSessions.values()].map(session=>({session:session.name,socket:session.socketPath,assignment_id:session.assignmentId,ended:session.ended})),tmuxCalls:handoffTmuxCalls.length}:{enabled:false},models:modelsState,requestFixture:requestFixture?{enabled:true,scenario:requestScenario,clipSamples:lastClipSamples,scenarioControl:'/__fixture/control?action=request-scenario'}:{enabled:false},...(nextSteps?{nextSteps:await nextStepsMeta()}:{}),...(controlResult??{})}));return;
  }
  const terminalAsset=/^\/api\/assignment-terminal\/([^/]+)\/([^/]+)$/.exec(url.pathname);
  if(url.pathname==='/api/assignment-terminal/open'||terminalAsset){await handleTerminalRequest(req,res,url,terminalAsset);return;}
@@ -822,6 +887,9 @@ const server=createServer(async(req,res)=>{
  if(url.pathname==='/api/models/preferred'&&req.method==='POST')modelsPreferencePosts+=1;
  if(!readKind){
   if(nextSteps&&url.pathname==='/api/next-steps'&&(nextStepsScanFail||nextStepsScanDelayMs>0)){const attempt=startBoundary('next-steps','scan');if(nextStepsScanDelayMs>0)await new Promise(resolve=>setTimeout(resolve,nextStepsScanDelayMs));if(nextStepsScanFail){finishBoundary(attempt,'fail');res.writeHead(503,{'Content-Type':'application/json'});res.end(JSON.stringify({error:'fixture-next-steps-failure'}));return;}finishBoundary(attempt,'complete');}
+  // Offline interpretation: drop the connection before the route runs so the
+  // browser transport itself fails (the store's offline recovery state).
+  if(requestFixture&&requestScenario==='interpret-offline'&&url.pathname==='/api/request/interpret'){req.socket.destroy();return;}
   dashboard.emit('request',req,res);return;
  }
  const id=url.searchParams.get('id')??'';
@@ -837,12 +905,16 @@ const server=createServer(async(req,res)=>{
  res.on('close',()=>{if(!res.writableEnded)finishBoundary(boundaryAttemptNumber,'aborted');});
  const originalEnd=res.end.bind(res);
  res.end=(body,encoding,callback)=>{
-  if(readKind==='state'&&observerMode&&(typeof body==='string'||Buffer.isBuffer(body))){
+  if(readKind==='state'&&(typeof body==='string'||Buffer.isBuffer(body))){
    const text=Buffer.isBuffer(body)?body.toString('utf8'):body;
    try{
     const parsed=JSON.parse(text);
-    delete parsed.action_token;
-    delete parsed.thread_action_token;
+    if(observerMode){delete parsed.action_token;delete parsed.thread_action_token;}
+    // Request-fixture mode needs the local completion token. The public Serve
+    // emulation above exposes the same per-server token only as
+    // thread_action_token, so mirror it into action_token for these cases
+    // (never in observer mode, where both tokens stay stripped).
+    else if(requestFixture&&typeof parsed.action_token!=='string'&&typeof parsed.thread_action_token==='string')parsed.action_token=parsed.thread_action_token;
     body=JSON.stringify(parsed);
    }catch{}
   }
@@ -874,7 +946,50 @@ const timer=setInterval(()=>{
  if(handoffIntegration){void publishIntegrationSnapshot().catch(()=>{});return;}
  tick++;void writeFile(observerFile,JSON.stringify(makeSnapshot()));void writeFile(mismatchObserverFile,JSON.stringify(makeMismatchSnapshot()));
 },1000);
-console.log(JSON.stringify({url:`http://127.0.0.1:${server.address().port}`,root,checkout,secondCheckout,otherPackage:otherPkg,...packageIdentity,thread1,thread2,thread3,worktreeTarget:docsCheckout,integration:handoffIntegration,nextSteps:nextSteps?await nextStepsMeta():undefined}));
+// Cross-links fixture (SENTINEL_SPECS_LINKS=1): the links workspace kit binds
+// "frontend" to the frontend checkout and "app" to a different physical
+// checkout, and the collision package is created through the shared package
+// lifecycle so the detail scope and Files route read real locations instead
+// of a same-name coincidence.
+let linksFrontendPath='';
+let linksCollisionPath='';
+let linksPackage='';
+let linksOther='';
+let linksAmbiguousPackage='';
+if(specsLinks){
+ const linksWorkspace=await createWorkspace(storage,{id:'links',name:'Links workspace'});
+ const linksFrontend=join(root,'links-frontend');await mkdir(linksFrontend,{recursive:true});execFileSync('git',['init','--quiet',linksFrontend],{stdio:'ignore'});
+ const linksCollision=join(root,'links-app');await mkdir(linksCollision,{recursive:true});execFileSync('git',['init','--quiet',linksCollision],{stdio:'ignore'});
+ await writeFile(join(linksFrontend,'frontend-marker.md'),'# Frontend marker\n\nCanonical frontend checkout bytes.\n');
+ await writeFile(join(linksCollision,'collision-marker.md'),'# Collision marker\n\nCollision alias checkout bytes.\n');
+ linksFrontendPath=await realpath(linksFrontend);
+ linksCollisionPath=await realpath(linksCollision);
+ await mkdir(join(linksWorkspace.directory,'context'),{recursive:true});
+ await writeFile(join(linksWorkspace.directory,'context','project-context.md'),'# Links context\nBrowser context note.\n');
+ await writeFile(join(linksWorkspace.directory,'kit.yaml'),`version: 1\nid: links\nname: Links workspace\nexecution_host: ${hostname()}\nrepositories:\n  - id: frontend\n    path: ${linksFrontendPath}\n    role: Canonical frontend checkout\n  - id: app\n    path: ${linksCollisionPath}\n    role: Collision alias checkout\ncontext:\n  - context/project-context.md\n`);
+ const created=await newPackage({root:storage,workspace:'links',slug:'links-collision',targets:[{id:'app'}]});
+ if(!created.ok)throw new Error(`Links fixture package setup failed: ${created.code} ${created.message}`);
+ linksPackage=join(linksWorkspace.directory,'specs','links-collision');
+ await writeFile(join(linksPackage,'spec.md'),'# Links collision specification\n');
+ await writeFile(join(linksPackage,'preparation-report.md'),'# Links collision preparation\n\nPrepared links collision report.\n');
+ const other=await newPackage({root:storage,workspace:'links',slug:'links-other',targets:[{id:'app'}]});
+ if(!other.ok)throw new Error(`Links fixture package setup failed: ${other.code} ${other.message}`);
+ linksOther=join(linksWorkspace.directory,'specs','links-other');
+ await writeFile(join(linksOther,'spec.md'),'# Links other specification\n');
+ await writeFile(join(linksOther,'preparation-report.md'),'# Links other preparation\n\nPrepared links other report.\n');
+ if(specsDiscuss){
+  const linksAmbiguous=await createWorkspace(storage,{id:'links-ambiguous',name:'Links ambiguous workspace'});
+  await mkdir(join(linksAmbiguous.directory,'context'),{recursive:true});
+  await writeFile(join(linksAmbiguous.directory,'context','project-context.md'),'# Links ambiguous context\nBrowser context note.\n');
+  await writeFile(join(linksAmbiguous.directory,'kit.yaml'),`version: 1\nid: links-ambiguous\nname: Links ambiguous workspace\nexecution_host: ${hostname()}\nrepositories:\n  - id: frontend\n    path: ${linksFrontendPath}\n    role: Canonical frontend checkout\n  - id: mirror\n    path: ${linksFrontendPath}\n    role: Mirrored frontend checkout\ncontext:\n  - context/project-context.md\n`);
+  const ambiguous=await newPackage({root:storage,workspace:'links-ambiguous',slug:'links-ambiguous',targets:[{id:'frontend'}]});
+  if(!ambiguous.ok)throw new Error(`Links fixture package setup failed: ${ambiguous.code} ${ambiguous.message}`);
+  linksAmbiguousPackage=join(linksAmbiguous.directory,'specs','links-ambiguous');
+  await writeFile(join(linksAmbiguousPackage,'spec.md'),'# Links ambiguous specification\n');
+  await writeFile(join(linksAmbiguousPackage,'preparation-report.md'),'# Links ambiguous preparation\n\nPrepared links ambiguous report.\n');
+ }
+}
+console.log(JSON.stringify({url:`http://127.0.0.1:${server.address().port}`,root,checkout,secondCheckout,otherPackage:otherPkg,...packageIdentity,thread1,thread2,thread3,worktreeTarget:docsCheckout,integration:handoffIntegration,links:specsLinks?{workspace:'links',package:linksPackage,other:linksOther,frontend:linksFrontendPath,collision:linksCollisionPath,ambiguousWorkspace:'links-ambiguous',ambiguousPackage:linksAmbiguousPackage}:undefined,nextSteps:nextSteps?await nextStepsMeta():undefined,requestFixture:requestFixture?{enabled:true,scenario:'happy',scenarioControl:'/__fixture/control?action=request-scenario',speechCheckout:requestSpeechCheckout}:{enabled:false}}));
 async function close(){
  clearInterval(timer);
  if(handoffIntegration||modelsFixture){

@@ -4126,6 +4126,7 @@ test("thread handoff launch links the durable assignment without owning tmux", {
     const stored = await findAssignment(storageRoot, assignmentId);
     assert.equal(stored.assignment_id, assignmentId);
     assert.equal(stored.state, "live");
+    assert.equal(stored.thread_id, threadId);
     const launchedSnapshot = await readFile(join(workspaceDirectory, "assignments", `${assignmentId}.brief.md`), "utf8");
     assert.equal(launchedSnapshot, preview.briefBytes.toString('utf8'));
     assert.match(launchedSnapshot, /^# Title\n\nbody\n/);
@@ -4161,6 +4162,7 @@ test("thread handoff launch links the durable assignment without owning tmux", {
     const repeat = await restarted.launchAssignment(launchInput());
     assert.equal(repeat.assignment.assignment_id, assignmentId);
     assert.equal(repeat.handoff.assignment_id, assignmentId);
+    assert.equal((await findAssignment(storageRoot, assignmentId)).thread_id, threadId);
     assert.equal(tmux.newSessionCount(), 1);
 
     // Assignment-published but handoff-unlinked crash: removing only the
@@ -4175,6 +4177,7 @@ test("thread handoff launch links the durable assignment without owning tmux", {
     assert.equal(relinked.handoff.assignment_id, assignmentId);
     assert.equal(tmux.newSessionCount(), 1);
     assert.equal((await findAssignment(storageRoot, assignmentId)).assignment_id, assignmentId);
+    assert.equal((await findAssignment(storageRoot, assignmentId)).thread_id, threadId);
     assert.deepEqual(
       (await readdir(join(workspaceDirectory, "assignments"))).filter((name) => name.endsWith(".json")),
       [`${assignmentId}.json`],
@@ -4745,6 +4748,7 @@ test("direct dispatch service previews and launches a repository assignment", { 
     assert.equal(launched.assignment.repository_id, "app");
     assert.equal(launched.assignment.context_references[0].id, reference.id);
     assert.equal(launched.observation.state, "live");
+    assert.equal((await findAssignment(storageRoot, assignmentId)).thread_id, null);
     assert.equal(tmux.newSessionCount(), 1);
     assert.deepEqual(
       await readFile(join(workspaceDirectory, "assignments", `${assignmentId}.brief.md`)),

@@ -13,6 +13,8 @@ SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 240s uv run --script \
   --capture-reference /path/to/designs/app-ui/screens/05-conversations.html
 SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 240s uv run --script \
   scripts/spec-observe/frontend/conversations-browser-check.py --case tail-read-errors
+SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 240s uv run --script \
+  scripts/spec-observe/frontend/conversations-browser-check.py --case cross-links
 
 route-drafts keeps the route/draft/retry regression only. journey runs the same
 traversals against the renamed Conversations adapter, then captures the
@@ -34,6 +36,11 @@ Playwright route fails exactly the settled refreshTail read, and held responses
 prove the projection/generation guards. It writes
 conversations-browser-tail-read-errors.json, records no captures and claims no
 visual parity.
+cross-links runs the step-5 launched-agent scenarios against the built App: the
+fixture runs its real discussion service, the checker persists two threads with
+ordered sent/unsent handoffs and only the final observer /api/state response is
+substituted. It writes conversations-browser-cross-links.json and step-005
+captures at 1280x900 and 1600x900 for the populated and empty launched regions.
 
 The App, route owner, API transport and adapter are real; browser-fixture.mjs
 fakes only the final discussion service/process boundary. The checker owns its
@@ -54,11 +61,12 @@ import traceback
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--case', choices=['route-drafts', 'journey', 'new-thread', 'view-states', 'response-states', 'tail-read-errors'], default='route-drafts')
+parser.add_argument('--case', choices=['route-drafts', 'journey', 'new-thread', 'view-states', 'response-states', 'tail-read-errors', 'cross-links'], default='route-drafts')
 parser.add_argument('--capture-reference', default=None)
 parser.add_argument('--reference-dir', default=None)
 options = parser.parse_args()
@@ -93,6 +101,7 @@ report = {
                      else 'not claimed (view-state coverage; captures recorded, owner inspects images)' if case == 'view-states'
                      else 'not claimed (response-state coverage; captures recorded, owner inspects images)' if case == 'response-states'
                      else 'not claimed (settled tail read-error coverage; no captures recorded)' if case == 'tail-read-errors'
+                     else 'not claimed (step-5 cross-links coverage; captures recorded, owner inspects images)' if case == 'cross-links'
                      else 'observed (production and reference captures at 1280x900 and 1600x900; see conversations-visual-inspection.md)'),
     'cleanup': {},
 }
@@ -2150,10 +2159,265 @@ def capture_visual(url, thread1, thread2):
     control('long-history', 'false')
 
 
+STEP_FIVE = evidence / 'step-005'
+CROSS_LINKS_T1 = '15151515-1111-4111-8111-111111111111'
+CROSS_LINKS_T2 = '26262626-2222-4222-8222-222222222222'
+CROSS_LINKS_BRIEF_ONE = 'briefs/browser.md'
+CROSS_LINKS_BRIEF_TWO = 'briefs/browser-2.md'
+CROSS_LINKS_ASSIGNMENT_ONE = '11111111-2222-4333-8444-555555555555'
+CROSS_LINKS_ASSIGNMENT_TWO = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+CROSS_LINKS_GENERATED_AT = '2026-10-12T12:00:00.000Z'
+
+
+def seed_cross_links_threads(root_dir):
+    """Persist two real ThreadV1 records for the fixture's real discussion list."""
+    workspace_dir = Path(root_dir) / 'storage' / 'projects' / 'fixture'
+    briefs = workspace_dir / 'briefs'
+    briefs.mkdir(parents=True, exist_ok=True)
+    (briefs / 'browser.md').write_text('A recorded brief.\n')
+    (briefs / 'browser-2.md').write_text('A second recorded brief.\n')
+    threads_dir = workspace_dir / 'threads'
+    threads_dir.mkdir(parents=True, exist_ok=True)
+    sent = [
+        {'request_id': '15151515-0000-4000-8000-000000000011', 'brief': CROSS_LINKS_BRIEF_ONE,
+         'saved_at': CROSS_LINKS_GENERATED_AT, 'assignment_id': CROSS_LINKS_ASSIGNMENT_ONE},
+        {'request_id': '15151515-0000-4000-8000-000000000012', 'brief': CROSS_LINKS_BRIEF_TWO,
+         'saved_at': CROSS_LINKS_GENERATED_AT, 'assignment_id': CROSS_LINKS_ASSIGNMENT_TWO},
+        {'request_id': '15151515-0000-4000-8000-000000000013', 'brief': 'briefs/browser-3.md',
+         'saved_at': CROSS_LINKS_GENERATED_AT},
+    ]
+    records = [
+        (CROSS_LINKS_T1, '15151515-0000-4000-8000-000000000001', 'Discussion one', sent),
+        (CROSS_LINKS_T2, '15151515-0000-4000-8000-000000000002', 'Discussion two', []),
+    ]
+    for thread_id, session_id, title, handoffs in records:
+        (workspace_dir / 'sessions' / thread_id).mkdir(parents=True, exist_ok=True)
+        record = {
+            'schema_version': 1,
+            'thread_id': thread_id,
+            'session_id': session_id,
+            'workspace_id': 'fixture',
+            'title': title,
+            'target': {'kind': 'workspace'},
+            'execution_dir': str(workspace_dir),
+            'session_dir': str(workspace_dir / 'sessions' / thread_id),
+            'session_file': None,
+            'history_only': False,
+            'queue': [],
+            'queue_paused': False,
+            'accepted_message_ids': [],
+            'handoffs': handoffs,
+            'attention': None,
+            'created_at': CROSS_LINKS_GENERATED_AT,
+            'updated_at': CROSS_LINKS_GENERATED_AT,
+            'process': None,
+            'model': None,
+        }
+        (threads_dir / (thread_id + '.json')).write_text(json.dumps(record) + '\n')
+
+
+def run_cross_links(url):
+    """Step 5 CL-7/CL-12: ordered launched-agent links on a persisted thread."""
+    STEP_FIVE.mkdir(parents=True, exist_ok=True)
+    seed_cross_links_threads(fixture_info['root'])
+
+    def record_key(workspace, assignment_id):
+        return json.dumps([workspace, assignment_id], separators=(',', ':'))
+
+    def assignment(assignment_id, workspace_id='fixture'):
+        return {
+            'assignment_id': assignment_id,
+            'workspace_id': workspace_id,
+            'spec_package': 'fixture/' + assignment_id,
+            'workflow_id': 'workflow-1',
+            'display': 'live',
+            'state': 'live',
+            'execution': 'running',
+            'task_activity': {'state': 'idle', 'reason': 'Fixture assignment is waiting for input.'},
+            'nextAction': 'Attach to ' + assignment_id,
+            'coverage': 'complete',
+            'recordedState': 'live',
+            'observedState': 'live',
+            'unrecorded': False,
+            'quiet': False,
+            'attachedCount': 0,
+            'execution_dir': '/fixture/checkout',
+            'locate_command': 'node ~/.agents/scripts/workspaces/cli.mjs locate ' + assignment_id,
+        }
+
+    state = {'value': {
+        'schema_version': 1,
+        'generated_at': CROSS_LINKS_GENERATED_AT,
+        'observers': [{
+            'observer_id': 'fixture',
+            'state': 'observing',
+            'published_at': CROSS_LINKS_GENERATED_AT,
+            'snapshot': {
+                'workspace': 'fixture',
+                'coverage': {'state': 'complete', 'observed_at': CROSS_LINKS_GENERATED_AT, 'reasons': []},
+                'runs': [],
+                'recently_completed': [],
+                'planned_packages': [],
+                'epics': [],
+                'assignments': [assignment(CROSS_LINKS_ASSIGNMENT_ONE), assignment(CROSS_LINKS_ASSIGNMENT_TWO, workspace_id='other-ws')],
+                'assignment_coverage': {'state': 'complete', 'observed_at': CROSS_LINKS_GENERATED_AT, 'reasons': []},
+            },
+        }],
+    }}
+
+    def serve_state(route):
+        route.fulfill(status=200, content_type='application/json', body=json.dumps(state['value']))
+
+    def href_params(anchor):
+        return parse_qs(urlsplit(anchor.get_attribute('href') or '').fragment.partition('?')[2])
+
+    def open_thread(thread_id):
+        page.goto(url + '/#/conversations?ws=fixture&id=' + thread_id, wait_until='domcontentloaded')
+        row = page.locator("[data-thread='" + thread_id + "']")
+        expect(row).to_be_visible()
+        expect(row).to_have_attribute('aria-pressed', 'true')
+
+    def agent_links():
+        return page.locator('p.thread-launched a.text-link').filter(has_text='Agent ')
+
+    def brief_links():
+        return page.locator('p.thread-launched a.text-link').filter(has_text='Brief ')
+
+    def capture(name, width, anchor):
+        page.set_viewport_size({'width': width, 'height': 900})
+        if anchor.count():
+            anchor.first.scroll_into_view_if_needed()
+        path = STEP_FIVE / name
+        page.screenshot(path=str(path))
+        report['captures'].append(str(path))
+
+    def modified_navigate(anchor, expected_heading):
+        fragment = (anchor.get_attribute('href') or '').partition('#')[2]
+        popup = None
+        try:
+            with context.expect_page(timeout=5000) as popup_info:
+                anchor.click(modifiers=['Control'])
+            popup = popup_info.value
+            method = 'ctrl-click opened a separate page through native modified navigation'
+        except Exception:
+            method = 'ctrl-click produced no page; the real href was opened in a second page'
+        if popup is None:
+            popup = context.new_page()
+            popup.route('**/api/state**', serve_state)
+            popup.goto(url + '/#' + fragment, wait_until='domcontentloaded')
+        else:
+            popup.set_default_timeout(10000)
+            popup.on('pageerror', lambda error: report['pageErrors'].append(str(error)))
+            popup.route('**/api/state**', serve_state)
+            popup.reload(wait_until='domcontentloaded')
+        expect(popup.locator('h1')).to_have_text(expected_heading)
+        return popup, method
+
+    page.route('**/api/state**', serve_state)
+    page.set_viewport_size({'width': 1280, 'height': 900})
+
+    open_thread(CROSS_LINKS_T1)
+    paragraph = page.locator('p.thread-launched')
+    paragraph.wait_for()
+    expect(agent_links()).to_have_count(2)
+    expect(brief_links()).to_have_count(2)
+    expect(agent_links().nth(0)).to_have_text('Agent 11111111')
+    expect(agent_links().nth(1)).to_have_text('Agent aaaaaaaa')
+    text = paragraph.inner_text()
+    assert text.index('Agent 11111111') < text.index('Agent aaaaaaaa'), text
+    assert 'Idle \u00b7 response finished' in text, text
+    assert text.count('not observed') == 1, text
+    assert text.index('not observed') > text.index('Agent aaaaaaaa'), text
+    assert 'briefs/browser-3.md' not in text, text
+
+    first_agent_href = href_params(agent_links().nth(0))
+    assert first_agent_href.get('ws') == ['fixture'], agent_links().nth(0).get_attribute('href')
+    assert first_agent_href.get('id') == [record_key('fixture', CROSS_LINKS_ASSIGNMENT_ONE)], agent_links().nth(0).get_attribute('href')
+    assert 'q' not in first_agent_href, agent_links().nth(0).get_attribute('href')
+    second_agent_href = href_params(agent_links().nth(1))
+    assert second_agent_href.get('ws') == ['fixture'], agent_links().nth(1).get_attribute('href')
+    assert second_agent_href.get('q') == [CROSS_LINKS_ASSIGNMENT_TWO], agent_links().nth(1).get_attribute('href')
+    assert 'id' not in second_agent_href, agent_links().nth(1).get_attribute('href')
+    assert record_key('other-ws', CROSS_LINKS_ASSIGNMENT_TWO) not in (agent_links().nth(1).get_attribute('href') or ''), 'the foreign-workspace row key leaked into the unobserved handoff link'
+
+    expect(brief_links().nth(0)).to_have_text('Brief ' + CROSS_LINKS_BRIEF_ONE)
+    expect(brief_links().nth(1)).to_have_text('Brief ' + CROSS_LINKS_BRIEF_TWO)
+    first_brief_href = href_params(brief_links().nth(0))
+    assert first_brief_href.get('ws') == ['fixture'] and first_brief_href.get('source') == ['workspace'] and first_brief_href.get('path') == [CROSS_LINKS_BRIEF_ONE], brief_links().nth(0).get_attribute('href')
+    second_brief_href = href_params(brief_links().nth(1))
+    assert second_brief_href.get('path') == [CROSS_LINKS_BRIEF_TWO], brief_links().nth(1).get_attribute('href')
+    report['scenarios'].append('cross-links populated: both sent handoffs render in order with the observed row key/workspace and the unobserved assignment filter, the unsent handoff is skipped, and both briefs keep source=workspace with the real paths')
+    capture('populated-1280.png', 1280, agent_links())
+    capture('populated-1600.png', 1600, agent_links())
+
+    open_thread(CROSS_LINKS_T2)
+    expect(page.locator('p.thread-launched')).to_have_count(0)
+    report['scenarios'].append('cross-links empty: a thread with no sent handoffs renders no launched region')
+    capture('empty-1280.png', 1280, page.locator('.object-head'))
+    capture('empty-1600.png', 1600, page.locator('.object-head'))
+
+    open_thread(CROSS_LINKS_T1)
+    expect(agent_links()).to_have_count(2)
+    page.reload(wait_until='domcontentloaded')
+    expect(agent_links()).to_have_count(2)
+    expect(agent_links().nth(0)).to_have_text('Agent 11111111')
+    open_thread(CROSS_LINKS_T2)
+    expect(page.locator('p.thread-launched')).to_have_count(0)
+    page.reload(wait_until='domcontentloaded')
+    expect(page.locator('p.thread-launched')).to_have_count(0)
+    open_thread(CROSS_LINKS_T1)
+    expect(agent_links()).to_have_count(2)
+    report['scenarios'].append('cross-links selection: the launched region follows the selected thread across reloads with no cross-thread retention')
+
+    agent_links().nth(0).click()
+    expect(page.locator('h1')).to_have_text('Agents')
+    report.setdefault('urls', {})['agent-destination'] = urlsplit(page.url).fragment
+    agent_destination = parse_qs(urlsplit(page.url).fragment.partition('?')[2])
+    assert agent_destination.get('ws') == ['fixture'] and agent_destination.get('id') == [record_key('fixture', CROSS_LINKS_ASSIGNMENT_ONE)], page.url
+    destination_row = page.locator("[data-assignment-key='" + record_key('fixture', CROSS_LINKS_ASSIGNMENT_ONE) + "']")
+    expect(destination_row).to_have_count(1)
+    destination_row.click()
+    expect(page.locator('article.agent-detail')).to_be_visible()
+    report['scenarios'].append('cross-links agent destination: the observed handoff opens #/agents scoped to its workspace and record key and the Agents destination identifies exactly that assignment row')
+
+    open_thread(CROSS_LINKS_T1)
+    brief_links().nth(0).click()
+    expect(page.locator('h1')).to_have_text('Files')
+    report.setdefault('urls', {})['brief-destination'] = urlsplit(page.url).fragment
+    brief_destination = parse_qs(urlsplit(page.url).fragment.partition('?')[2])
+    assert brief_destination.get('ws') == ['fixture'] and brief_destination.get('source') == ['workspace'] and brief_destination.get('path') == [CROSS_LINKS_BRIEF_ONE], page.url
+    expect(page.locator('article.detail-pane .reader #file-content')).to_contain_text('A recorded brief.')
+    report['scenarios'].append('cross-links brief destination: the brief anchor lands on the real Files workspace reader for briefs/browser.md')
+
+    open_thread(CROSS_LINKS_T1)
+    opener_fragment = urlsplit(page.url).fragment
+    popup, method = modified_navigate(agent_links().nth(0), 'Agents')
+    popup_params = parse_qs(urlsplit(popup.url).fragment.partition('?')[2])
+    assert popup_params.get('ws') == ['fixture'] and popup_params.get('id') == [record_key('fixture', CROSS_LINKS_ASSIGNMENT_ONE)], popup.url
+    expect(popup.locator("[data-assignment-key='" + record_key('fixture', CROSS_LINKS_ASSIGNMENT_ONE) + "']")).to_have_count(1)
+    popup.close()
+    assert urlsplit(page.url).fragment == opener_fragment, 'the modified click replaced the opener page instead of native-navigating'
+    report['scenarios'].append('cross-links modified click: ' + method + '; the unmodified href keeps the workspace and record key and the opener page is not replaced')
+
+    open_thread(CROSS_LINKS_T1)
+    popup, method = modified_navigate(brief_links().nth(0), 'Files')
+    popup_params = parse_qs(urlsplit(popup.url).fragment.partition('?')[2])
+    assert popup_params.get('source') == ['workspace'] and popup_params.get('path') == [CROSS_LINKS_BRIEF_ONE], popup.url
+    expect(popup.locator('article.detail-pane .reader #file-content')).to_contain_text('A recorded brief.')
+    popup.close()
+    report['scenarios'].append('cross-links modified click: ' + method + '; the brief href opens the workspace reader with the recorded marker')
+
+
+fixture_env = None
+if case == 'cross-links':
+    fixture_env = dict(os.environ)
+    fixture_env['SENTINEL_HANDOFF_INTEGRATION'] = '1'
+    fixture_env['SENTINEL_PLANNED_LAUNCH'] = '1'
 try:
     fixture = subprocess.Popen(
         ['node', str(root / 'browser-fixture.mjs')],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env=fixture_env,
     )
     if not select.select([fixture.stdout], [], [], 10)[0]:
         raise RuntimeError('Fixture readiness exceeded 10 seconds')
@@ -2185,6 +2449,8 @@ try:
                 run_response_states(fixture_info['url'], fixture_info['thread1'], fixture_info['thread2'])
             if case == 'tail-read-errors':
                 run_tail_read_errors(fixture_info['url'], fixture_info['thread1'], fixture_info['thread2'])
+            if case == 'cross-links':
+                run_cross_links(fixture_info['url'])
             assert not report['pageErrors'], report['pageErrors']
             if case == 'new-thread':
                 unexpected_console = [text for text in report['consoleErrors'] if 'Failed to load resource' not in text]

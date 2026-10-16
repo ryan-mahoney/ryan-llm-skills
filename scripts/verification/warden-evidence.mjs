@@ -64,6 +64,7 @@ export function classifySpecArtifact(tool, input, cwd) {
     if (artifact === undefined) return 'unknown';
     const known = /^(?:spec|proposal|context|learning|merge-evidence|work-tour|pr-message|pr-rebase-log|ledger)\.md$/.test(artifact)
       || /^(?:evidence-plan|merge-evidence|work-tour|pr-url)\.json$/.test(artifact)
+      || /^(?:evidence-assembly|merge-evidence\.draft|work-tour\.draft)\.json$/.test(artifact)
       || artifact === 'work-tour.html'
       || /^(?:learnings\/step-\d+-learning|step-\d+-subspec|steps\/step-\d+-(?:subspec|learning)|reviews\/(?:step|branch)-\d+-(?:review|fix))\.md$/.test(artifact);
     return known ? 'unknown' : undefined;

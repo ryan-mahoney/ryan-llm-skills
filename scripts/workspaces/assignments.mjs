@@ -94,6 +94,7 @@ const IMMUTABLE_RECORD_FIELDS = [
   "publication_authority",
   "attempt_kind",
   "supersedes",
+  "thread_id",
   "contract_digest",
   "tmux_socket",
   "tmux_session",
@@ -443,6 +444,10 @@ export async function resolveAssignment(input = {}, options = {}) {
   if (supersedes !== null && (typeof supersedes !== "string" || !UUID_PATTERN.test(supersedes))) {
     throw new Error(`supersedes must be a UUID: ${String(supersedes)}`);
   }
+  const threadId = input.thread_id ?? null;
+  if (threadId !== null && (typeof threadId !== "string" || !UUID_PATTERN.test(threadId))) {
+    throw new Error(`thread_id must be a UUID: ${String(threadId)}`);
+  }
   const workspaceId = requireNonEmptyString(input.workspace_id, "workspace_id");
   const brief = requireNonEmptyString(input.brief, "brief");
   const instructions = requireNonEmptyString(input.instructions, "instructions");
@@ -752,6 +757,7 @@ export async function resolveAssignment(input = {}, options = {}) {
     publication_authority: publicationAuthority,
     attempt_kind: attemptKind,
     supersedes,
+    thread_id: threadId,
     contract_digest: contractDigest,
     tmux_socket: tmuxSocket,
     tmux_session: tmuxSession,
@@ -952,6 +958,14 @@ async function validateAssignmentRecord(physicalRoot, workspace, path, record) {
   }
   if (typeof record.launch_token !== "string" || !UUID_PATTERN.test(record.launch_token)) {
     refuseAssignment(path, "launch_token is not an RFC4122 UUID");
+  }
+  // Origin thread is optional: a record persisted before thread_id existed
+  // reads as legacy data and is never rewritten; an explicit non-null value
+  // must be an RFC4122 UUID.
+  const persistedThreadId = record.thread_id === undefined ? null : record.thread_id;
+  if (persistedThreadId !== null
+    && (typeof persistedThreadId !== "string" || !UUID_PATTERN.test(persistedThreadId))) {
+    refuseAssignment(path, "thread_id is not an RFC4122 UUID");
   }
   if (!ASSIGNMENT_STATES.has(record.state)) {
     refuseAssignment(
@@ -1447,11 +1461,16 @@ async function approveLaunchInput(input, resolved, expectedDigest) {
 }
 
 function immutableFieldsEqual(existing, approved) {
-  return IMMUTABLE_RECORD_FIELDS.every(
-    (field) => field === 'execution_branch' && !existing.spec_package && !approved.spec_package
+  return IMMUTABLE_RECORD_FIELDS.every((field) => {
+    if (field === 'thread_id') {
+      // Optional origin thread: a retained record missing thread_id equals an
+      // approved null (and vice versa); differing UUIDs stay unequal.
+      return (existing.thread_id ?? null) === (approved.thread_id ?? null);
+    }
+    return field === 'execution_branch' && !existing.spec_package && !approved.spec_package
       ? (existing[field] ?? null) === (approved[field] ?? null)
-      : isDeepStrictEqual(existing[field], approved[field]),
-  );
+      : isDeepStrictEqual(existing[field], approved[field]);
+  });
 }
 
 function sameIdentity(left, right) {
@@ -1721,6 +1740,7 @@ export async function launchAssignment(input = {}, options = {}) {
       piPath: plan.record.pi_path,
       piArgs: approved.piArgs,
       assignmentId: id,
+      specPackage: plan.record.spec_package,
     }, tmuxOptions);
   } catch (error) {
     spawnError = error;

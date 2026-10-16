@@ -158,3 +158,10 @@ even after compaction. Do not manually duplicate the generated learning or runti
 Do not perform independent review of your own work or launch other implementation workers. Return
 outcome, learning path, commit, editor session reference, and unresolved decisions. The canonical
 learning contains the detailed evidence; do not repeat it in your response.
+
+For a fixture packet, name the existing fixture entry point, setup helper, one nearby
+case and the required observable assertion when known. Do not ask the editor to survey
+the whole application. When an editor reaches its discovery checkpoint, answer its
+concrete unresolved question or narrow the transformation; authorize only the additional
+search needed. Keep its session alive through `spec_answer`. The checkpoint does not
+waive required browser, screenshot, acceptance or independent-review obligations.

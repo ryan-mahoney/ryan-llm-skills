@@ -19,6 +19,7 @@ import {
   epicMemberRequires,
   epicPlanningSummary,
   epicRecordedState,
+  memberAgentRoute,
   memberIsMissing,
   memberRecords,
   nextToPlan,
@@ -269,13 +270,8 @@ export function EpicMembersTable(props: {
                       </Show>
                       <Show when={observed().action.kind === 'open-agent'}>
                         {(() => {
-                          const owner = observed().action.owner;
-                          const route: RouteState = {
-                            dest: 'agents',
-                            ws: text(owner?.workspace) || text(owner?.workspace_id) || workspace(),
-                            id: text(owner?.assignment_id),
-                          };
-                          return (
+                          const route = memberAgentRoute(observed().action.owner, workspace());
+                          return route ? (
                             <a
                               class="text-link"
                               data-action="open-agent"
@@ -285,7 +281,7 @@ export function EpicMembersTable(props: {
                             >
                               Open agent
                             </a>
-                          );
+                          ) : null;
                         })()}
                       </Show>
                       <Show when={observed().action.kind === 'none'}>

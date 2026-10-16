@@ -104,6 +104,28 @@ reviewed implementation. Historical root-level learnings remain usable.
 
 Required inputs for an implemented spec are `context.md`, `spec.md`, version 2 `evidence-plan.json`, all expected learnings, and `merge-evidence.json`. A final merge-ready tour requires current completion of the selected review process; default step review/fix completion is sufficient. If an older package predates one of these contracts, report the missing artifact as a blocking evidence gap; do not silently infer a pass.
 
+Start assembly with the deterministic helper, not sibling-package examples:
+
+```bash
+node ~/.agents/skills/spec-work-tour/scripts/assemble-evidence.mjs <package_dir>
+```
+
+It joins prepared claims/gates, current structured handoffs, verification receipts,
+review references and target Git revisions into `evidence-assembly.json`; for a single
+target it also creates `merge-evidence.draft.json` and a renderer-compatible
+`work-tour.draft.json`. It refuses to overwrite existing drafts. `--stdout` is read-only
+and useful when reconciling an existing tour. Missing legacy structured handoffs remain
+explicit gaps with canonical learning references. Multiple targets receive the facts
+bundle; assemble their per-repository manifests explicitly.
+
+Reconcile the scoped review verdicts and applicability, then supply behavior, context,
+architecture, QA and deployment explanations in the drafts and save the final canonical
+filenames. The helper preserves observed SHAs and marks earlier assessments stale;
+it never invents review acceptance, new executions, deployment authority or readiness.
+Do not reconstruct IDs, commands or receipt tables manually. Read original artifacts
+only for a specific gap or explanation. Runtime `spec_complete` owns canonical learning;
+assembly consumes it instead of asking an editor to rewrite it.
+
 ## Revalidate Provenance And Gates
 
 Independent step reviewers own scoped semantic evidence assessment; a branch audit does so only when explicitly selected. The tour owns faithful
@@ -291,6 +313,8 @@ The default HTML composition must expose:
   and post-deployment states; count merge closure separately from later pending work;
 - an attention queue ordered as blocking gaps and required failures, incomplete claims, audit failure, optional non-passing gates, then residual risks;
 - a concise sourced context summary with consequential decisions, omissions and new burden;
+- every ledger decision recorded as `Decided without operator:`, with its choice, rationale and
+  reversibility, so the operator can revisit decisions the run made instead of asking;
 - before/after architecture and system boundaries, with implementation decisions collapsed by default;
 - a claim list and selected inspector that colocates requirements, gates, rerunnable commands, artifacts, observed proof, rejected hypotheses, and proof boundaries;
 - QA entrypoints plus a selected scenario with steps, expected states, automation, and visual artifacts;

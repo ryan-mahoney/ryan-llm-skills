@@ -1,5 +1,6 @@
 import { createSentinelDashboard } from './sentinel-dashboard.mjs';
 import { Type } from '@earendil-works/pi-ai';
+import { isRetryableAssistantError } from '@earendil-works/pi-ai/compat';
 import { getAgentDir, compact, SettingsManager } from '@earendil-works/pi-coding-agent';
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { randomUUID, createHash } from 'node:crypto';
@@ -12,12 +13,14 @@ import { createMonitor, publicHint } from './monitor.mjs';
 import { createSentinelObserver, createVerificationRecorder, readVerificationIncidents, recordCheckpoint as recordSentinelCheckpoint, readInboxGuard, readCheckpointRecord, observeInput, reconcileRuntimeReturn, checkpointPath, createSentinelAuthority, createDiagnosisController, activatePolicy, activateRuntimePolicy, disablePolicy, handleBeforeSettle, finishIntent, considerCancellation } from './sentinel.mjs';
 import { completeWorkflowsAfterPublication } from './final-checkpoint.mjs';
 import { createScout, SCOUT_MODEL } from './scout.mjs';
+import { installDiscoveryBudget } from './discovery-budget.mjs';
 import { registerRepositorySearch } from './search.mjs';
 import { createSentinelControl } from './sentinel-control.mjs';
 import { installProgressContext, recordCheckpoint, refreshProgress } from './completion.mjs';
 import { metrics, formatMetrics } from './metrics.mjs';
 import { installContextBudget } from '../context-budget/policy.mjs';
 import { createWorkflowContinuation } from './workflow-continuation.mjs';
+import { installProviderRecovery } from './provider-recovery.mjs';
 
 const result = (value: unknown, isError = false) => ({ content: [{ type: 'text', text: JSON.stringify(value) }], details: value, isError });
 const optional = (description: string) => Type.Optional(Type.String({ description }));
@@ -101,6 +104,7 @@ export default function (pi: any) {
     const record = JSON.parse(readFileSync(process.env.SPEC_RUNTIME_RECORD!, 'utf8'));
     installProgressContext(pi, { record, role });
     const communication = createCommunication(pi, record, role, { onEvent: (name: string, detail: any) => runtimeEvent(record, name, detail) });
+    if (role === 'editor') installDiscoveryBudget(pi, { report: (name: string, detail: any) => runtimeEvent(record, name, detail) });
     const allowed = role === 'owner' ? ['read', 'grep', 'find', 'ls', 'spec_editor', 'spec_answer', 'spec_verify', 'spec_scout', 'spec_search', 'spec_advice', 'spec_complete'] : ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'spec_question'];
     pi.on('session_shutdown', () => communication.close());
     pi.on('session_start', (_event: any, ctx: any) => {
@@ -116,6 +120,11 @@ export default function (pi: any) {
       }
       pi.setActiveTools(allowed);
     });
+    if (['owner', 'editor'].includes(role)) installProviderRecovery(pi, { requestedModel: record[`${role}_model`],
+      assertActive: () => assertLease(record),
+      nativeRetryable: isRetryableAssistantError,
+      retrySettings: () => SettingsManager.inMemory(pi.getSettings()).getRetrySettings(),
+      onEvent: (data: any) => runtimeEvent(record, 'provider_recovery', { role, ...data }) });
     pi.on('tool_call', (event: any) => {
       try {
         assertLease(record);
@@ -289,10 +298,11 @@ export default function (pi: any) {
   pi.on('ui_prompt_start', () => { inputGuard = observeInput(inputGuard, { type: 'prompt_start' }); });
   pi.on('ui_prompt_end', () => { inputGuard = observeInput(inputGuard, { type: 'prompt_end' }); });
   pi.registerTool({ name: 'spec_workflow', label: 'Retain end-to-end workflow',
-    description: 'Register the explicitly requested whole-workflow objective and authority limits for this coordinator. Retains that obligation across steps, compaction and resume, and continues premature completed responses at an idle safe boundary. Does not enable Sentinel, recover failed requests, override holds, reset retry budgets or grant publication authority. Call once after registering the workflow checkpoint, before the first dispatch. Repeated identical calls are idempotent.',
+    description: 'Register the explicitly requested final outcome and authority limits, without step progress, SHAs or model routing. Retains the obligation across compaction and resume and continues premature completed responses at a safe idle boundary. Read current execution facts from canonical records. Correct obsolete objective text with update.expected_revision (the returned objective_revision) and current user/inbox authority, retaining unsuperseded limits. Updates never reset continuation budgets. Does not enable Sentinel, recover failures, override holds or grant publication authority. Register after the workflow checkpoint; identical calls are idempotent.',
     parameters: Type.Object({ package: Type.String(), workflow_id: Type.String(),
       objective: Type.String({ minLength: 1, maxLength: 2000, description: 'User-requested final outcome, including local/draft/ready publication limits' }),
       completion_stage: Type.Union(['implementation', 'work-tour', 'publication'].map(v => Type.Literal(v))),
+      update: Type.Optional(Type.Object({ expected_revision: Type.Number({ minimum: 1 }), authority: Type.String({ minLength: 1, maxLength: 2000, description: 'Current user direction or reconciled inbox source authorizing this correction; retain unsuperseded limits' }) })),
     }),
     async execute(_id: string, args: any, _signal: AbortSignal, _update: any, ctx: any) {
       return serializeWorkflow(async () => {
@@ -302,7 +312,7 @@ export default function (pi: any) {
           if (!checkpoint || checkpoint.coordinator_session !== coordinatorIdentity(ctx)
             || checkpoint.input_revision !== inputGuard.input_revision)
             throw new Error('Register and reconcile this coordinator\'s workflow checkpoint before retaining its objective');
-          return result(ownedWorkflow.register(checkpoint, args.objective, args.completion_stage));
+          return result(ownedWorkflow.register(checkpoint, args.objective, args.completion_stage, args.update));
         } catch (error: any) { return result({ error: error.message }, true); }
       });
     } });

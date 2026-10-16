@@ -12,8 +12,12 @@ tools: read, grep, find, ls, bash, edit, write, exec_command, write_stdin, apply
 
 Use the model assigned by the coordinator's REVIEW_AGENT directive. Read
 `~/.agents/skills/spec-branch-review/SKILL.md` and follow the assigned scope and fixed
-revision range. Keep all spec/review artifacts in the supplied primary-checkout
+revision range. Keep all spec/review artifacts in the supplied canonical adjacent
 package, and write only the review/evidence artifacts that the stage requires.
+The host declares this package through `PI_WARDEN_HOST_PATHS` at launch. Do not
+pre-check that variable: write the required artifact, and only when Warden actually
+holds the package write return a launch-scope error naming `PI_WARDEN_HOST_PATHS`.
+Never bypass the guard or move canonical artifacts into the checkout.
 
 Do not edit implementation code, stage or commit changes, reset the checkout, or
 launch implementation workers. Reuse valid evidence and run only necessary focused verification

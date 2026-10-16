@@ -13,6 +13,7 @@ Do not add a helper call when its answer is already available and applicable.
 | Evidence-plan schema | `skills/spec-work-tour/scripts/validate-evidence-plan.mjs` | Validate a new or changed plan; schema validity is not behavioral evidence. |
 | CI facts | `scripts/verification/ci.mjs` | Read configured CI at the relevant publication boundary. |
 | Work-tour rendering | `skills/spec-work-tour/scripts/render-work-tour.mjs` | Render sourced evidence; do not ask a model to recreate the renderer. |
+| Evidence and tour scaffolding | `skills/spec-work-tour/scripts/assemble-evidence.mjs` | Join prepared gates, current handoffs, receipts and review references; fill the blocked drafts with assessed applicability and narrative. |
 | Process completion, exclusive writer, cancellation | `pi/extensions/spec-runtime` | Runtime owns these facts; no model polling or inferred completion. |
 | Verification/review scheduling | Jev CLI/MCP; managed owner `spec_advice` | One batch at the shared policy checkpoints; reuse applicable advice. |
 | Jev effectiveness | `scripts/jev/cli.mjs report` | Inspect observed calls and uncertainty, without a service request. |
@@ -31,6 +32,17 @@ checkout without a base cannot explain the change. Truncated, redacted or missin
 remains uncertain; do not lower safeguards or repeatedly ask the same question to obtain
 a confident answer. Context reason codes distinguish these cases for later tuning.
 Uncertain/unavailable advice falls back to the owner under the existing policy.
+
+## Bounded editor discovery
+
+The editor now checkpoints discovery after 24 read/search/shell calls or three minutes
+between edits. An owner answer renews its budget in the same process. For fixture work,
+include the existing entry point, setup helper, nearby case and observable assertion.
+Compare comparable fixture packets with the prior unbounded behavior: time to first edit,
+discovery calls, compactions, owner questions and total elapsed time. Retain the threshold
+only if discovery cost falls without more review findings, repair work or unmet gates;
+adjust it when concrete questions show legitimate work is being interrupted. Do not
+relax acceptance or remove screenshots to improve the timing.
 
 ## Candidate experiment: shared source memory
 

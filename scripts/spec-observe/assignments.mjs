@@ -672,6 +672,8 @@ export function projectAssignment(
             reason: "Session response state is unavailable.",
           },
     workspace_id: record.workspace_id ?? null,
+    brief: record.brief ?? null,
+    thread_id: record.thread_id ?? null,
     attachedCount: currentAttached ?? attachedCount(record, activity),
     hasControl: false,
     workersUnconfirmed,

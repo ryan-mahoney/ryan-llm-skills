@@ -15,6 +15,7 @@ export default function ConversationsDestination(props: DestinationProps) {
         catalog={props.catalog}
         token={props.token}
         live={props.live}
+        assignments={props.assignments}
         refreshKey={props.refreshKey}
         onNavigate={props.onNavigate}
       />

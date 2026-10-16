@@ -7,6 +7,7 @@ import SpecActivity, { hasActivityFacts } from '../SpecActivity';
 import { ActionBar, EmptyState, MasterDetail, RegionalSkeleton, SectionTabs, StateNotice, StatusText, type SectionTab, type StatusTone } from '../primitives';
 import { PackagePreview } from '../PackagePreview';
 import { landedStatus, memberPlanning, planningFactsFor, positivelyPrepared, observedSpecReadiness } from '../readiness';
+import { catalogEntryForRecord, resolveCatalogEntry, type CatalogEntry } from '../scope';
 import RelaunchAssignment from '../RelaunchAssignment';
 import SpecOverview from '../SpecOverview';
 import SpecReadiness, { SpecImplementEntry } from '../SpecReadiness';
@@ -437,16 +438,26 @@ export default function SpecsDestination(props: DestinationProps) {
     else delete next.tab;
     props.onNavigate(next);
   };
+  // Mirrors App's detail workspace resolution: the URL ws wins when it is a
+  // real catalog id; otherwise the uniquely matching entry for the selected
+  // record supplies the canonical workspace. Undefined stays unresolved so the
+  // caller never guesses a workspace for the target.
+  const linkWorkspaceId = (): string | undefined => {
+    const fromUrl = props.route.ws === undefined ? undefined : resolveCatalogEntry(props.catalog, props.route.ws)?.id;
+    return fromUrl ?? catalogEntryForRecord(record() ?? {}, 'run', props.catalog, props.route.ws)?.id;
+  };
   const openAgent = () => {
     const key = assignmentKey();
     if (!key) return;
     const next: RouteState = { dest: 'agents', id: key };
-    if (props.route.ws !== undefined) next.ws = props.route.ws;
+    const ws = linkWorkspaceId();
+    if (ws !== undefined) next.ws = ws;
     props.onNavigate(next);
   };
   const openEpic = (key: string) => {
     const next: RouteState = { dest: 'epics', id: key };
-    if (props.route.ws !== undefined) next.ws = props.route.ws;
+    const ws = linkWorkspaceId();
+    if (ws !== undefined) next.ws = ws;
     props.onNavigate(next);
   };
   const openEpics = () => {
@@ -491,6 +502,9 @@ export default function SpecsDestination(props: DestinationProps) {
                 <Show when={!activityTab()}>
                   <SpecReadiness
                     record={item()}
+                    ws={linkWorkspaceId()}
+                    catalog={props.catalog}
+                    workspace={props.workspace}
                     records={props.records}
                     assignments={props.assignments}
                     epics={props.epics}
@@ -510,10 +524,13 @@ export default function SpecsDestination(props: DestinationProps) {
                 <Show when={!activityTab()}>
                   <Show
                     when={item().implementation_starting === true}
-                    fallback={<SpecOverview record={item()} assignments={props.assignments} context={context()} onOpenAgent={openAgent} onOpenEpic={openEpic} />}
+                    fallback={<SpecOverview record={item()} assignments={props.assignments} context={context()} ws={linkWorkspaceId()} workspace={props.workspace} onNavigate={props.onNavigate} onOpenAgent={openAgent} onOpenEpic={openEpic} />}
                   >
                     <SpecReadiness
                       record={item()}
+                      ws={linkWorkspaceId()}
+                      catalog={props.catalog}
+                      workspace={props.workspace}
                       records={props.records}
                       assignments={props.assignments}
                       epics={props.epics}

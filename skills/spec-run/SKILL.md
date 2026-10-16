@@ -250,9 +250,9 @@ existing authority, carrying unresolved gaps to the responsible step owner befor
 Recognize a `decision-required` handoff whose learning lists startup clarification gaps
 with no commit or edits. Answer each gap from a sourced decision: `context.md`,
 `locations.project_context`, the spec and card, prior learnings, or repository facts;
-name the source with the answer. When no source settles a gap and plausible answers
-materially change behavior, preservation, compatibility or risk, escalate that one
-decision through the existing top-level `decision-required` path; do not guess. When an
+name the source with the answer. When no source settles a gap, decide it under the shared
+contract's Decide, Record, Continue rule and record the decision; escalate through the
+top-level `decision-required` path only when it needs authority the run lacks. When an
 answer would change prepared intent or acceptance, record `needs-spec-correction` and
 return to spec-write instead of redispatching. Before redispatch, honor any hold or
 direction routed to this step under the overseer `inbox` contract above (the top-level
@@ -327,9 +327,18 @@ Fixers do not use cheap-first escalation, model inventory probes, or automatic f
 An unavailable selected model is a launch/configuration error; preserve the assignment
 and diagnose it under the existing setup-error policy.
 Before dispatching the next step, take each completed step review
-with `verdict: needs-fix` and no `step-<NNN>-fix.md`, oldest first. Run
-`spec-branch-fix review=<package_dir>/reviews/step-<NNN>-review.md` and wait for it to
-finish. Only one agent writes to the checkout at a time, so never run a fixer alongside a
+with `verdict: needs-fix` and no complete `step-<NNN>-fix.md` (missing, or with a nonempty
+`pending`), oldest first. Plan it with
+`node ~/.agents/skills/spec-branch-fix/scripts/fix-packets.mjs --review <review path>`,
+excluding IDs the fix file already decides. In `single` mode (at most three non-HIGH
+findings in one file) run one `spec-branch-fix review=<package_dir>/reviews/step-<NNN>-review.md`
+fixer. In `split` mode run one fresh fixer per packet, in order, and pass the packet text
+unchanged in the task. After each packet, confirm its commit touches only the packet's files,
+rerun the step's focused gate on the committed tree, and only then launch the next packet.
+A packet that returns without a commit or decisions is split by finding and relaunched
+fresh; never resume that session. On 2026-10-15 one fixer given seven findings landed
+nothing in 39 minutes, while single-group packets landed in 2-10 minutes each.
+Only one agent writes to the checkout at a time, so never run a fixer alongside a
 step worker. If a later step review raises a signature again after an earlier step fix
 marked it `fixed`, pass it as a terminalize instruction, as `spec-branch-refine` does.
 Fix commits become part of the next review's range. Route a fixer's `decision-required`

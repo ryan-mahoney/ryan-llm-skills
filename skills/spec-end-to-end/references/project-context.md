@@ -90,15 +90,31 @@ Retain only useful detail; a project context is not a second architecture specif
 - Name the context fact and requirement behind every new compatibility, configuration, or release
   mechanism. Account for maintained tests and proof tooling as part of its ongoing cost.
 
-## Consequential Check-ins
+## Decide, Record, Continue
 
-Resolve ordinary implementation choices autonomously. Check in only when an unresolved decision
-would materially change data preservation, compatibility commitments, release strategy, ongoing
-cost/dependencies, shared-system availability, authority, or acceptance of material residual risk.
-Do not ask again when current instructions or sourced project policy already settle it.
+The operator does not want routine questions. When a choice is open, decide: take the option a
+panel of relevant experts (the reviewer's discipline, a senior engineer in the domain, the
+project's documented practice) would most likely choose, preferring the recommended option that
+preserves acceptance, data and existing behavior. Record each such decision in the stage ledger's
+`decisions` as `Decided without operator: <question> -> <choice>; <one-line expert rationale>;
+<reversible|irreversible>; <evidence path>`, then continue. The work tour lists these decisions so
+the operator can revisit them. Do not ask the operator to approve additional review or
+verification passes, documentation or provenance notes, packet splits, routing within the
+selected roles, or evidence wording that narrows a claim to what is proven while a stronger claim
+keeps a required owner gate.
 
-The orchestrator owns the check-in. A worker reports `decision-required` with the missing fact,
-consequence, recommended option, and safe work completed; it continues independent local work.
+Stop for the operator only when the decision needs authority the run lacks: publication, merge or
+deployment beyond granted authority; any action on shared or production systems; destructive or
+irreversible changes outside the run's branch and package; new spending, credentials or accounts;
+waiving, deleting or weakening a required acceptance criterion or gate; accepting material
+residual risk; or contradicting an explicit user instruction. Even then, record the recommended
+option and continue all independent work. Do not ask again when current instructions or sourced
+project policy already settle it.
+
+The orchestrator owns decisions and check-ins. A worker reports `decision-required` only for a
+decision it cannot make within its assignment, with the missing fact, consequence, recommended
+option, and safe work completed; it continues independent local work. The orchestrator then
+decides under the rule above unless the decision needs authority the run lacks.
 A direct leaf invocation acts as its own coordinator. In headless execution, record the same
 decision and stop only dependent work. Never convert missing authorization or risk acceptance
 into an assumption. Resolve scope decisions before dependent architecture; prepare concrete

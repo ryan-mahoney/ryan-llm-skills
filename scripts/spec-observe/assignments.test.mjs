@@ -563,6 +563,32 @@ test("assignment projection publishes no locate command without an assignment id
   }
 });
 
+test("assignment relationship projection publishes brief and thread_id verbatim and null when absent", () => {
+  const recorded = project(
+    makeRecord({
+      workspace_id: "ws-a",
+      brief: "briefs/id.md",
+      thread_id: "8f3b1a2e-4c5d-4e6f-8a9b-0c1d2e3f4a5b",
+    }),
+    makeClassification(),
+  );
+  assert.equal(recorded.recordedState, "live");
+  assert.equal(recorded.workspace_id, "ws-a");
+  assert.equal(recorded.brief, "briefs/id.md");
+  assert.equal(recorded.thread_id, "8f3b1a2e-4c5d-4e6f-8a9b-0c1d2e3f4a5b");
+  assert.equal(recorded.assignment_id, ASSIGNMENT_ID);
+
+  const legacy = project(
+    makeRecord({ workspace_id: "ws-a" }),
+    makeClassification(),
+  );
+  assert.equal(legacy.recordedState, "live");
+  assert.equal(legacy.workspace_id, "ws-a");
+  assert.equal(legacy.brief, null);
+  assert.equal(legacy.thread_id, null);
+  assert.equal(legacy.assignment_id, ASSIGNMENT_ID);
+});
+
 async function fixtureSignature(path) {
   const [bytes, info] = await Promise.all([readFile(path), lstat(path)]);
   return {

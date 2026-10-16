@@ -10,13 +10,14 @@ import { Portal } from 'solid-js/web';
 import { base, str, time } from './format';
 import { ActionBar, StateNotice, StatusText } from './primitives';
 import {
-  coverageConcern, observedSpecReadiness, planningFactsFor, specReadiness,
-  type PlanningFacts, type PrerequisiteFact,
+  coverageConcern, observedSpecReadiness, planningFactsFor, specReadiness, usableDecision,
+  type PrerequisiteFact,
 } from './readiness';
-import { plannedTargetChoices, startPackageHandoff, type HandoffInput, type PackagePlanningPlan, type PlannedTarget } from './launch-handoff';
+import { discussionRepositoryTarget, plannedTargetChoices, specHandoffInput, startPackageHandoff, type PlannedTarget } from './launch-handoff';
+import { seedNewThreadDraft } from './conversations-state';
 import { linkedAssignmentKey, packageRelative } from './spec-state';
+import { catalogEntryForRecord, type CatalogEntry } from './scope';
 import { formatHash } from './route';
-import { packagePlanningPlan } from '../../../workspaces/spec-prompt.mjs';
 import type { WireRecord } from './model';
 import type { RouteState } from './route';
 
@@ -27,12 +28,16 @@ const shortId = (value: unknown): string => {
   const id = text(value);
   return id.length > 8 ? id.slice(0, 8) : id;
 };
+const modifiedClick = (event: MouseEvent): boolean => event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0;
 
 export type SpecReadinessProps = {
   record: WireRecord;
   records?: WireRecord[];
   assignments: WireRecord[];
   epics?: WireRecord[];
+  ws?: string;
+  catalog?: CatalogEntry[];
+  workspace?: WireRecord | null;
   live: boolean;
   token?: string;
   onOpenAgent: (key: string) => void;
@@ -46,26 +51,6 @@ export type SpecReadinessProps = {
   // target (standalone use) the inline ActionBar below remains the fallback.
   actionsMount?: HTMLElement;
 };
-
-// Shared hand-off seed: observed identity plus the canonical package targets
-// already carried by the record. The presentation/stage derivation stays with
-// launch-handoff and spec-prompt, never in this view.
-function handoffInput(record: WireRecord, kind: 'implement' | 'plan', facts: PlanningFacts | null): HandoffInput {
-  const ws = text(record.workspace);
-  return {
-    ws,
-    packageRef: str(record.package) || str(record.package_ref),
-    targets: Array.isArray(record.targets) ? (record.targets as PlannedTarget[]) : [],
-    planningPlan: kind === 'plan'
-      ? packagePlanningPlan({
-          proposal: facts?.proposal === true,
-          critiqueRecommended: facts?.critiqueRecommended === true,
-          critique: facts?.critique === true,
-        }) as PackagePlanningPlan
-      : undefined,
-    returnRoute: { dest: 'specs', ws, filter: 'ready' },
-  };
-}
 
 export default function SpecReadiness(props: SpecReadinessProps) {
   const record = (): WireRecord => props.record;
@@ -195,6 +180,10 @@ export default function SpecReadiness(props: SpecReadinessProps) {
       && [str(item.package), str(item.package_ref), str(item.name)].some(value => value === target || base(value) === base(target)),
     ) ?? null;
   };
+  // A prerequisite may live in its own workspace: resolve the prerequisite
+  // record's own catalog entry rather than the selected spec's scope. An
+  // unresolved entry leaves ws unset instead of guessing.
+  const prerequisiteWs = (item: WireRecord): string | undefined => catalogEntryForRecord(item, 'run', props.catalog ?? [])?.id;
   const reportPath = (): string => {
     const source = text(facts()?.preparation?.source);
     if (!source) return '';
@@ -275,7 +264,7 @@ export default function SpecReadiness(props: SpecReadinessProps) {
     setHandoffError('');
     setHandoffStatus('');
     try {
-      const outcome = await startPackageHandoff(kind, handoffInput(record(), kind, facts()), props.token, props.onNavigate);
+      const outcome = await startPackageHandoff(kind, specHandoffInput(record(), kind, facts()), props.token, props.onNavigate);
       if (!outcome.ok) {
         setHandoffError(outcome.reason);
         return;
@@ -329,8 +318,9 @@ export default function SpecReadiness(props: SpecReadinessProps) {
           class="ds-btn ds-btn--primary"
           data-action="open-prerequisite"
           data-prerequisite={name}
-          href={formatHash({ dest: 'specs', id: key })}
+          href={formatHash({ dest: 'specs', ws: prerequisiteWs(target), id: key })}
           onClick={event => {
+            if (modifiedClick(event)) return;
             event.preventDefault();
             props.onSelectPackage(text(target.workspace), base(target.package));
           }}
@@ -406,11 +396,55 @@ export default function SpecReadiness(props: SpecReadinessProps) {
       </Show>
     </>
   );
+  // Discuss hands the observed Spec decision to the real conversations seed
+  // owner: prepared text (package title, question, recommendation) and the
+  // resolved repository alias travel in memory only. The route carries no text
+  // and no thread is created here. The workspace identity is the resolved
+  // props.ws, never a directory-derived basename. A refused canonical target
+  // resolution disables the action with a visible reason instead of guessing.
+  const discussTarget = () => discussionRepositoryTarget(
+    props.workspace ?? null,
+    text(props.ws),
+    Array.isArray(record().targets) ? record().targets as PlannedTarget[] : [],
+  );
+  const discussReason = (): string => {
+    const resolution = discussTarget();
+    return resolution.ok ? '' : resolution.reason;
+  };
+  const discussTitle = (): string =>
+    text(record().title) || base(text(record().package_ref) || text(record().package)) || 'This package';
+  const discussDecision = () => {
+    const ws = text(props.ws);
+    if (!ws) return;
+    const resolution = discussTarget();
+    if (!resolution.ok) return;
+    const decision = usableDecision(facts()?.decision ?? null);
+    const question = text(decision?.question);
+    const recommendation = text(decision?.recommendation);
+    const prepared = [
+      `${discussTitle()} needs a decision.`,
+      question ? `Question: ${question}` : '',
+      recommendation ? `Recommendation: ${recommendation}` : '',
+    ].filter(Boolean).join('\n');
+    seedNewThreadDraft(ws, resolution.target ? { text: prepared, target: resolution.target } : { text: prepared });
+    props.onNavigate({ dest: 'conversations', ws, tab: 'new' });
+  };
   const decisionPrimary = () => (
     <>
       <button
         type="button"
         class="ds-btn ds-btn--primary"
+        data-action="discuss-decision"
+        disabled={Boolean(discussReason())}
+        aria-describedby={discussReason() ? 'readiness-discuss-reason' : undefined}
+        onClick={discussDecision}
+      >Discuss decision</button>
+      <Show when={discussReason()}>
+        <span class="action-note" id="readiness-discuss-reason" data-action-note="discuss-reason">{discussReason()}</span>
+      </Show>
+      <button
+        type="button"
+        class="ds-btn"
         data-action="open-preparation"
         disabled={Boolean(filesGate())}
         aria-describedby={filesGate() ? 'readiness-files-reason' : undefined}
@@ -496,8 +530,9 @@ export default function SpecReadiness(props: SpecReadinessProps) {
                     <a
                       class="text-link"
                       data-related="epic"
-                      href={formatHash({ dest: 'epics', id: epicKey() })}
+                      href={formatHash({ dest: 'epics', ws: props.ws, id: epicKey() })}
                       onClick={event => {
+                        if (modifiedClick(event)) return;
                         event.preventDefault();
                         props.onOpenEpic(epicKey());
                       }}
@@ -516,8 +551,9 @@ export default function SpecReadiness(props: SpecReadinessProps) {
                           <a
                             class="text-link"
                             data-prerequisite={fact.name}
-                            href={formatHash({ dest: 'specs', id: text(item().key) })}
+                            href={formatHash({ dest: 'specs', ws: prerequisiteWs(item()), id: text(item().key) })}
                             onClick={event => {
+                              if (modifiedClick(event)) return;
                               event.preventDefault();
                               props.onSelectPackage(text(item().workspace), base(item().package));
                             }}
@@ -626,7 +662,7 @@ export function SpecImplementEntry(props: SpecImplementEntryProps) {
     setBusy(true);
     setError('');
     try {
-      const outcome = await startPackageHandoff('implement', handoffInput(props.record, 'implement', planningFactsFor(props.record)), props.token ?? '', props.onNavigate);
+      const outcome = await startPackageHandoff('implement', specHandoffInput(props.record, 'implement', planningFactsFor(props.record)), props.token ?? '', props.onNavigate);
       if (!outcome.ok) setError(outcome.reason);
     } catch (cause) {
       setError(cause instanceof Error && cause.message

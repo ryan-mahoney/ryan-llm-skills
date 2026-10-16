@@ -29,6 +29,7 @@
 
 import { ensureTerminalHost, terminalSocketAbsent } from "./tmux-host.mjs";
 import { execFile } from "node:child_process";
+import { artifactEnvironment } from '../spec-location/artifact-environment.mjs';
 import { isAbsolute } from "node:path";
 import { inspectProcess, processIdentity, sameProcess } from "../spec-observe/process-identity.mjs";
 
@@ -335,6 +336,7 @@ export async function startSession({
   piPath,
   piArgs,
   assignmentId,
+  specPackage,
   expectedPane,
 } = {}, { run = runTmux } = {}) {
   assertAbsolutePath(socketPath, "socketPath");
@@ -354,7 +356,9 @@ export async function startSession({
     "set-option", "-s", "extended-keys", "on", ";",
     "set-option", "-sq", "extended-keys-format", "csi-u", ";",
     "new-session", "-d", "-x", "200", "-y", "50", "-s", sessionName, "-c", escapeTmuxArg(cwd),
-    "-e", `ADJACENT_ASSIGNMENT_ID=${assignmentId}`, "--", escapeTmuxArg(piPath), ...piArgs.map(escapeTmuxArg), ";",
+    "-e", `ADJACENT_ASSIGNMENT_ID=${assignmentId}`,
+    ...(specPackage ? Object.entries(artifactEnvironment(specPackage)).flatMap(([key, value]) => ['-e', escapeTmuxArg(`${key}=${value}`)]) : []),
+    "--", escapeTmuxArg(piPath), ...piArgs.map(escapeTmuxArg), ";",
     "set-option", "-t", `=${sessionName}:`, "@adjacent_assignment_id", assignmentId,
   ];
   const managed = process.platform === "linux" && run === runTmux;

@@ -22,6 +22,7 @@ export type ShellProps = {
   observedAt?: string;
   onRefresh(): void;
   onImport(file: File | undefined): void;
+  onRequestWork(trigger?: HTMLElement): void;
   children: JSX.Element;
 };
 
@@ -211,6 +212,23 @@ export default function Shell(props: ShellProps) {
           </div>
         </aside>
         <main id="main" class="main" tabindex="-1" ref={el => (main = el)}>
+          {/* Step-9 compact phone entry: a pinned 56px title/trigger header at
+              <=640px keeps Request work reachable above the stacked rail; the
+              sheet opens below it. >=641px keeps the page-head trigger. */}
+          <header class="phone-head">
+            <span class="where">
+              <span>{props.crumbs[0] ? `Sentinel · ${props.crumbs[0]}` : 'Sentinel'}</span>
+              <strong>{props.title}</strong>
+            </span>
+            <button
+              id="request-work-phone-trigger"
+              type="button"
+              class="ds-btn"
+              onClick={event => props.onRequestWork(event.currentTarget)}
+            >
+              Request work
+            </button>
+          </header>
           <header class="page-head">
             <div>
               <div class="crumb">
@@ -229,6 +247,7 @@ export default function Shell(props: ShellProps) {
                 {props.title}
               </h1>
             </div>
+            <button id="request-work-trigger" type="button" class="ds-btn" onClick={event => props.onRequestWork(event.currentTarget)}>Request work</button>
             <Show when={props.headerActions}>
               <div class="head-actions">{props.headerActions}</div>
             </Show>

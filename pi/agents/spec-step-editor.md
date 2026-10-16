@@ -62,7 +62,8 @@ Keep larger diffs/reports and successful logs in canonical artifacts and return 
 absolute paths. The owner can read source directly; do not transcribe whole files.
 Do not send routine progress narration. Complete only the assigned transformation,
 then return the relevant diff and unresolved exceptions. Do
-not advance to the next transformation. Write canonical learning when assigned; commit
+not advance to the next transformation. Return evidence facts to the owner; its
+`spec_complete` call writes canonical learning. Do not draft a second learning record. Commit
 only in a separate commit assignment after the owner has assessed the changes. Use
 the schema and commit instructions in `spec-step-run` for those assignments.
 
@@ -111,3 +112,10 @@ Critical editing rules:
 - Before editing, silently check: current source, unique non-overlapping targets,
   exact indentation, complete replacement. Do not emit a checklist or add tool calls
   just to narrate this check.
+
+Discovery is bounded between edits: after 24 read/search/shell calls or three minutes,
+the runtime requires an owner checkpoint before more discovery. If the transformation
+is already clear, apply it. Otherwise ask `spec_question` with the specific unresolved
+contract, facts and paths already inspected, and the smallest additional search needed.
+An owner answer renews the budget in this same editor session. Do not make a token
+edit, switch tools, restart or request another agent to avoid the checkpoint.
