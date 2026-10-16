@@ -117,3 +117,75 @@ test('a frozen rejected planning attempt funds replay allocation without qualify
     assert.equal(report.runs.find(r => r.run === 'corrected-none').cells[0].planning_source_valid, false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test('brief-only reuse allocates inherited owner work once while new query and catalog generation remain incurred', () => {
+  const root = mkdtempSync(join(tmpdir(), 'optimized-report-brief-'));
+  const sol = 'openai-codex/gpt-6.1-sol:low', ds = 'deepseek/deepseek-flash';
+  const plan = { operations: [{ id: 'same-plan' }] }, brief = 'Shared owner brief.\n';
+  const write = (p, value) => writeFileSync(p, typeof value === 'string' ? value : JSON.stringify(value));
+  function make(name, { briefSource = null, planningSource = null, actual = 3000, query = 100, context = 2 } = {}) {
+    const run = join(root, name), dir = join(run, '000-case'); mkdirSync(dir, { recursive: true });
+    write(join(run, 'manifest.json'), { strategy: 'owner-query-writer', selector: sol, editor_selector: ds, optimization: 'none', query_mode: 'catalog',
+      schedule: ['case'], plans_from: planningSource?.run ?? null, briefs_from: planningSource ? null : briefSource?.run ?? null });
+    write(join(dir, 'candidate.json'), '{}'); write(join(dir, 'implementation-brief.md'), brief);
+    write(join(dir, 'raw-plan.json'), plan); write(join(dir, 'plan-0.json'), plan);
+    write(join(dir, 'job.json'), { briefSource, planningSource });
+    const stages = planningSource ? ['editor'] : briefSource ? ['planning', 'editor'] : ['implementation-planning', 'planning', 'editor'];
+    const requests = stages.map((stage, i) => ({ stage, selector: stage === 'planning' ? sol : ds, reservation: `${name}-${i}` }));
+    const receipts = requests.map(q => ({ ...q, elapsed_ms: 1000, usage: { input: 4, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 5, cost: { total: 0.01 } } }));
+    write(join(dir, 'requests.jsonl'), requests.map(JSON.stringify).join('\n')); write(join(dir, 'receipts.jsonl'), receipts.map(JSON.stringify).join('\n'));
+    const r = { task: 'case', task_hash: 'task', selector: sol, editor_selector: ds, optimization: 'none', query_mode: 'catalog',
+      brief_source: briefSource, planning_source: planningSource, process_elapsed_ms: actual * 1000, implementation_brief_hash: hash(brief), candidate_hash: hash('{}'),
+      executions: [{ ok: true, plan_sha256: hash(JSON.stringify(plan)), operations: [{ executor: 'simple', status: 'passed' }] }],
+      stages: [{ name: 'implementation-planning', elapsed_ms: briefSource || planningSource ? 0 : 10000 },
+        { name: 'query-context', elapsed_ms: planningSource ? 0 : context * 1000 }, { name: 'planning', elapsed_ms: planningSource ? 0 : query * 1000 },
+        { name: 'execution', elapsed_ms: 5000 }, { name: 'visible-check', elapsed_ms: 6000 }] };
+    write(join(dir, 'result.json'), r);
+    return { run: name, cell: '000-case', brief_hash: hash(brief), result_hash: hash(readFileSync(join(dir, 'result.json'))) };
+  }
+  try {
+    const donor = make('donor');
+    const borrowed = make('catalog', { briefSource: donor, actual: 30, query: 4, context: 3 });
+    make('catalog-again', { briefSource: borrowed, actual: 20, query: 2, context: 1 });
+    const planSource = { run: borrowed.run, cell: borrowed.cell, result_hash: borrowed.result_hash, plan_artifact: 'raw-plan.json',
+      plan_hash: hash(readFileSync(join(root, borrowed.run, borrowed.cell, 'raw-plan.json'))) };
+    make('full-replay', { briefSource: borrowed, planningSource: planSource, actual: 8 });
+    let report = buildReport(root), c = report.runs.find(r => r.run === 'catalog').cells[0];
+    assert.equal(c.integrity_valid, true); assert.equal(c.brief_source_valid, true); assert.equal(c.owner_role_valid, true);
+    assert.equal(c.borrowed_planning_scope, 'owner-only'); assert.equal(c.phase_seconds.owner, 0);
+    assert.equal(c.query_context_seconds, 3); assert.equal(c.phase_seconds.query, 7);
+    assert.equal(c.allocated.seconds, 40, 'only ten owner seconds are added to thirty actual seconds');
+    assert.equal(c.incurred.model_usage.calls, 2); assert.equal(c.allocated.model_usage.calls, 3);
+    assert.equal(c.allocated.model_usage.tokens.totalTokens, 15);
+    assert.equal(c.allocated_planning.seconds, 17, 'inherited owner plus new query and context generation');
+    assert.equal(c.allocated_planning.query_context_seconds, 3);
+    assert.equal(c.allocated_owner.seconds, 10); assert.equal(c.allocated_owner.usage.calls, 1);
+    assert.equal(c.allocated.model_usage.equivalent_usd, c.incurred.model_usage.equivalent_usd + 0.01);
+    const again = report.runs.find(r => r.run === 'catalog-again').cells[0];
+    assert.equal(again.allocated.seconds, 30); assert.equal(again.allocated_planning.seconds, 13);
+    const replay = report.runs.find(r => r.run === 'full-replay').cells[0];
+    assert.equal(replay.integrity_valid, true); assert.equal(replay.allocated.seconds, 25, 'full plan replay inherits owner plus donor query/context once');
+    assert.equal(replay.allocated.model_usage.calls, 3); assert.equal(replay.allocated_planning.query_context_seconds, 3);
+    const donorDir = join(root, 'donor', '000-case');
+    write(join(donorDir, 'implementation-brief.md'), 'tampered');
+    report = buildReport(root); c = report.runs.find(r => r.run === 'catalog').cells[0];
+    assert.equal(c.brief_source_valid, false); assert.equal(c.allocated.model_usage, null);
+    write(join(donorDir, 'implementation-brief.md'), brief);
+    const rp = join(root, 'catalog', '000-case', 'result.json'), jp = join(root, 'catalog', '000-case', 'job.json');
+    const good = JSON.parse(readFileSync(rp));
+    for (const [field, value] of [['result_hash', 'wrong-result'], ['brief_hash', 'wrong-brief']]) {
+      const bad = structuredClone(good); bad.brief_source[field] = value; write(rp, bad); write(jp, { briefSource: bad.brief_source });
+      assert.equal(buildReport(root).runs.find(r => r.run === 'catalog').cells[0].allocated.seconds, null);
+    }
+    const badTask = structuredClone(good); badTask.task_hash = 'other-task'; write(rp, badTask); write(jp, { briefSource: good.brief_source });
+    assert.equal(buildReport(root).runs.find(r => r.run === 'catalog').cells[0].brief_source_valid, false);
+    write(rp, good);
+    for (const file of ['requests.jsonl', 'receipts.jsonl']) {
+      const p = join(donorDir, file), values = readFileSync(p, 'utf8').split('\n').filter(Boolean).map(JSON.parse);
+      values.find(x => x.stage === 'implementation-planning').selector = sol;
+      write(p, values.map(JSON.stringify).join('\n'));
+    }
+    c = buildReport(root).runs.find(r => r.run === 'catalog').cells[0];
+    assert.equal(c.brief_source_valid, false); assert.equal(c.allocated.seconds, null, 'a Sol request cannot be inherited as DeepSeek owner work');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

@@ -11,7 +11,7 @@ const rows = p => existsSync(p) ? readFileSync(p, 'utf8').split('\n').filter(x =
 const sum = xs => xs.reduce((a, b) => a + b, 0);
 const exactSum = xs => xs.every(Number.isFinite) ? sum(xs) : null;
 const tokenKeys = ['input', 'output', 'cacheRead', 'cacheWrite', 'totalTokens'];
-const phase = stage => stage === 'implementation-planning' ? 'owner' : ['planning', 'discovery-planning'].includes(stage) ? 'query' : stage === 'editor' || stage === 'execution' ? 'writing' : stage === 'context-routing' ? 'routing' : stage === 'optimization' ? 'optimization' : ['visible-check', 'terminal-grading'].includes(stage) ? 'checks' : 'other';
+const phase = stage => stage === 'implementation-planning' ? 'owner' : ['planning', 'discovery-planning', 'query-context'].includes(stage) ? 'query' : stage === 'editor' || stage === 'execution' ? 'writing' : stage === 'context-routing' ? 'routing' : stage === 'optimization' ? 'optimization' : ['visible-check', 'terminal-grading'].includes(stage) ? 'checks' : 'other';
 const safePlanArtifact = name => name === 'raw-plan.json' || (typeof name === 'string' && /^planning-attempt-\d+\.json$/.test(name));
 const phases = ['owner', 'query', 'routing', 'optimization', 'writing', 'checks', 'other'];
 const portable = (base, path) => relative(base, path).split('\\').join('/');
@@ -66,6 +66,7 @@ export function buildReport(runRoot) {
     verify(artifactHash('candidate.json') !== null && artifactHash('candidate.json') === r.candidate_hash, 'candidate hash');
     verify(r.selector === m.selector && r.editor_selector === m.editor_selector && m.strategy === 'owner-query-writer', 'result roles match manifest');
     verify((r.optimization ?? 'none') === (m.optimization ?? 'none'), 'result optimization matches manifest');
+    verify((r.query_mode ?? 'discovery') === (m.query_mode ?? 'discovery'), 'result query mode matches manifest');
     verify(briefHash !== null && briefHash === r.implementation_brief_hash, 'implementation brief hash');
     verify(rawHash !== null && plan !== null, 'raw and dispatched plans retained');
     verify(!r.executions?.length || (plan && hash(JSON.stringify(plan)) === r.executions[0].plan_sha256), 'dispatched plan hash');
@@ -87,6 +88,9 @@ export function buildReport(runRoot) {
     const seconds = Object.fromEntries(phases.map(p => [p, sum((r.stages ?? []).filter(x => phase(x.name) === p).map(x => x.elapsed_ms)) / 1000]));
     const job = existsSync(join(directory, 'job.json')) ? read(join(directory, 'job.json')) : {};
     const source = r.planning_source ?? job.planningSource ?? null;
+    const briefSource = r.brief_source ?? job.briefSource ?? null;
+    const queryContextSeconds = sum((r.stages ?? []).filter(s => s.name === 'query-context').map(s => s.elapsed_ms)) / 1000;
+    let briefDonor = null, briefValid = false;
     let donor = null, sourceValid = false, selectedSourceArtifact = null;
     verify((m.plans_from ?? null) === (source?.run ?? null), 'manifest planning source matches cell');
     if (r.planning_source && job.planningSource) verify(JSON.stringify(r.planning_source) === JSON.stringify(job.planningSource), 'job and result planning source match');
@@ -102,19 +106,54 @@ export function buildReport(runRoot) {
         selectedSourceArtifact = safePlanArtifact(selectedName) ? donor.planning_artifacts.find(a => a.name === selectedName) ?? null : null;
         verifySource(selectedSourceArtifact?.hash === source.plan_hash && rawHash === source.plan_hash, 'shared selected planning artifact hash');
         verifySource(donor.result_hash === source.result_hash, 'planning source result hash');
-        verifySource(donor.provider_routing_valid, 'planning source provider routing');
+        verifySource(donor.provider_routing_valid && donor.owner_role_valid, 'planning source provider routing');
+        verifySource(Boolean(donor.allocated_planning), 'planning source allocated planning available');
         verifySource(donor.implementation_brief_valid && donor.implementation_brief_hash === briefHash && donor.task_hash === r.task_hash, 'shared task and frozen brief');
         verifySource(requests.every(x => !['owner', 'query'].includes(phase(x.stage))), 'replay incurs no owner/query calls');
       }
       sourceValid = sourceChecks.every(Boolean);
-    } else verify(requests.some(x => phase(x.stage) === 'owner') && requests.some(x => phase(x.stage) === 'query'), 'original owner and query calls retained');
-    const planning = source ? sourceValid ? donor?.allocated_planning ?? null : null : { seconds: seconds.owner + seconds.query, owner_seconds: seconds.owner, query_seconds: seconds.query, usage: plus(byStage.owner, byStage.query) };
+    }
+    if (briefSource) {
+      const briefChecks = [];
+      const verifyBrief = (ok, message) => { briefChecks.push(Boolean(ok)); verify(ok, message); };
+      verifyBrief((m.briefs_from ?? m.plans_from ?? null) === briefSource.run, 'manifest brief source matches cell');
+      if (r.brief_source && job.briefSource) verifyBrief(JSON.stringify(r.brief_source) === JSON.stringify(job.briefSource), 'job and result brief source match');
+      briefDonor = cell(briefSource.run, briefSource.cell);
+      verifyBrief(Boolean(briefDonor), 'brief source completed');
+      if (briefDonor) {
+        verifyBrief(briefDonor.result_hash === briefSource.result_hash, 'brief source result hash');
+        verifyBrief(briefDonor.implementation_brief_valid && briefDonor.implementation_brief_hash === briefSource.brief_hash && briefHash === briefSource.brief_hash && briefHash === r.implementation_brief_hash, 'shared brief bytes and recorded hashes');
+        verifyBrief(briefDonor.task_hash === r.task_hash, 'brief source task hash');
+        verifyBrief(briefDonor.owner_role_valid && briefDonor.editor_selector === m.editor_selector && Boolean(briefDonor.allocated_owner), 'brief source DeepSeek owner role');
+        verifyBrief(byStage.owner.calls === 0, 'shared brief incurs no owner calls');
+      }
+      if (source) verifyBrief(source.run === briefSource.run && source.cell === briefSource.cell && source.result_hash === briefSource.result_hash, 'plan and brief source agree');
+      briefValid = briefChecks.every(Boolean);
+    } else verify(!m.briefs_from, 'brief-only manifest retains brief source');
+    if (!source) verify((briefSource ? byStage.owner.calls === 0 : byStage.owner.calls > 0) && byStage.query.calls > 0, 'original query and owner provenance retained');
+    const inherited = source ? sourceValid && (!briefSource || briefValid) : briefSource ? briefValid : true;
+    const emptyPlanning = { seconds: 0, owner_seconds: 0, query_seconds: 0, query_context_seconds: 0, usage: emptyUsage() };
+    const borrowed = !inherited ? null : source ? donor.allocated_planning : briefSource ? {
+      seconds: briefDonor.allocated_owner.seconds, owner_seconds: briefDonor.allocated_owner.seconds, query_seconds: 0, query_context_seconds: 0, usage: briefDonor.allocated_owner.usage,
+    } : emptyPlanning;
+    const planning = borrowed ? { seconds: seconds.owner + seconds.query + borrowed.seconds,
+      owner_seconds: seconds.owner + borrowed.owner_seconds, query_seconds: seconds.query + borrowed.query_seconds,
+      query_context_seconds: queryContextSeconds + (borrowed.query_context_seconds ?? 0),
+      usage: plus(plus(byStage.owner, byStage.query), borrowed.usage) } : null;
+    const borrowedOwner = source ? donor?.allocated_owner : briefSource ? briefDonor?.allocated_owner : { seconds: 0, usage: emptyUsage() };
+    const allocatedOwner = inherited && borrowedOwner ? { seconds: seconds.owner + borrowedOwner.seconds, usage: plus(byStage.owner, borrowedOwner.usage) } : null;
+    const ownerRequests = requests.filter(x => phase(x.stage) === 'owner'), ownerReceipts = receipts.filter(x => phase(x.stage) === 'owner');
+    const ownerRoleValid = m.strategy === 'owner-query-writer' && /^deepseek\//.test(m.editor_selector) && r.editor_selector === m.editor_selector &&
+      ownerRequests.every(q => q.selector === m.editor_selector) && ownerReceipts.length === ownerRequests.length &&
+      new Set(ownerRequests.map(q => q.reservation)).size === ownerRequests.length && new Set(ownerReceipts.map(q => q.reservation)).size === ownerReceipts.length &&
+      ownerReceipts.every(x => x.selector === m.editor_selector && ownerRequests.some(q => q.reservation === x.reservation)) &&
+      Boolean(allocatedOwner) && (ownerRequests.length > 0 || (source ? sourceValid && donor?.owner_role_valid : briefSource ? briefValid : false));
     const incurred = usage(requests, receipts), jev = routingUsage(r);
-    const allocated = source && planning ? plus(incurred, planning.usage) : source ? null : incurred;
+    const allocated = borrowed ? plus(incurred, borrowed.usage) : null;
     const visible = (r.checks ?? []).at(-1)?.visible;
     const candidateTests = visible?.candidate_tests ?? [];
     const applicationComplete = r.executions?.at(-1)?.ok === true;
-    const output = { task: r.task ?? cellName.replace(/^\d+-/, ''), cell: key, optimization: m.optimization ?? 'none', task_hash: r.task_hash,
+    const output = { task: r.task ?? cellName.replace(/^\d+-/, ''), cell: key, optimization: m.optimization ?? 'none', query_mode: m.query_mode ?? 'discovery', editor_selector: m.editor_selector, task_hash: r.task_hash,
       application_complete: applicationComplete, visible_accepted: r.visible_accepted ?? visible?.ok ?? null,
       candidate_tests: { count: candidateTests.length, failed: candidateTests.filter(t => t.ok !== true).length },
       base_visible_accepted: visible?.base_ok ?? visible?.visible_check_ok ?? null,
@@ -129,12 +168,16 @@ export function buildReport(runRoot) {
         donor_integrity_valid: donor?.integrity_valid ?? null, donor_application_complete: donor?.application_complete ?? null }
         : ownOrigin ? { kind: ownOrigin.kind === 'planning-attempt' ? 'undispatched-candidate-planning-attempt' : 'original-raw-plan',
           run, cell: cellName, artifact: ownOrigin.name, hash: ownOrigin.hash } : null,
-      planning_source: source, planning_source_valid: source ? sourceValid : null, reused_planning: Boolean(source), allocated_planning: planning,
+      planning_source: source, planning_source_valid: source ? sourceValid && (!briefSource || briefValid) : null,
+      brief_source: briefSource, brief_source_valid: briefSource ? briefValid : null,
+      brief_origin: briefSource ? { kind: 'reused-owner-brief', run: briefSource.run, cell: briefSource.cell, hash: briefSource.brief_hash, result_hash: briefSource.result_hash } : null,
+      reused_planning: Boolean(source || briefSource), borrowed_planning_scope: source ? 'owner-and-query' : briefSource ? 'owner-only' : 'none',
+      borrowed_planning: borrowed, allocated_planning: planning, allocated_owner: allocatedOwner, owner_role_valid: ownerRoleValid,
       incurred: { seconds: r.process_elapsed_ms / 1000, model_usage: incurred, jev, equivalent_plus_jev_estimated_usd: exactSum([incurred.equivalent_usd, jev.estimated_usd]) },
-      allocated: { seconds: source ? planning ? r.process_elapsed_ms / 1000 + planning.seconds : null : r.process_elapsed_ms / 1000,
+      allocated: { seconds: borrowed ? r.process_elapsed_ms / 1000 + borrowed.seconds : null,
         model_usage: allocated, equivalent_plus_jev_estimated_usd: allocated ? exactSum([allocated.equivalent_usd, jev.estimated_usd]) : null },
-      phase_seconds: seconds, writing_pipeline_seconds: seconds.writing + seconds.optimization + seconds.routing, model_usage_by_stage: byStage,
-      allocated_phase_seconds: { ...seconds, owner: source ? planning?.owner_seconds ?? null : seconds.owner, query: source ? planning?.query_seconds ?? null : seconds.query },
+      phase_seconds: seconds, query_context_seconds: queryContextSeconds, writing_pipeline_seconds: seconds.writing + seconds.optimization + seconds.routing, model_usage_by_stage: byStage,
+      allocated_phase_seconds: { ...seconds, owner: planning?.owner_seconds ?? null, query: planning?.query_seconds ?? null },
       optimization_metrics: r.optimization_metrics ?? null };
     cache.set(key, output); active.delete(key); return output;
   }
@@ -145,7 +188,7 @@ export function buildReport(runRoot) {
     }
     const totalUsage = cells.reduce((a, c) => plus(a, c.incurred.model_usage), emptyUsage());
     const allocatedUsage = cells.every(c => c.allocated.model_usage) ? cells.reduce((a, c) => plus(a, c.allocated.model_usage), emptyUsage()) : null;
-    return { run: name, optimization: m.optimization ?? 'none', plans_from: m.plans_from ?? null,
+    return { run: name, optimization: m.optimization ?? 'none', query_mode: m.query_mode ?? 'discovery', plans_from: m.plans_from ?? null, briefs_from: m.briefs_from ?? null,
       manifest_hash: hash(readFileSync(join(root, name, 'manifest.json'))), expected: m.schedule.length, pending,
       application_complete: cells.filter(c => c.application_complete).length, integrity_valid: cells.every(c => c.integrity_valid),
       incurred_seconds: sum(cells.map(c => c.incurred.seconds)), allocated_seconds: exactSum(cells.map(c => c.allocated.seconds)),
@@ -175,7 +218,7 @@ export function buildReport(runRoot) {
   const historicalPath = join(dirname(fileURLToPath(import.meta.url)), 'sol-only-results.json');
   const historical = existsSync(historicalPath) ? read(historicalPath) : null;
   return { schema_version: 1, label: 'Owner/query/writer optimizer study', paths_relative_to: 'run_root', cost_policy: costPolicy,
-    accounting_note: 'Actual incurred model usage excludes reused planning; allocated pipeline usage adds original owner/query work only. Jev estimated spend is separate from normalized Sol/DeepSeek cost. Allocated seconds exclude donor writing, checks, initialization and routing.',
+    accounting_note: 'Actual incurred model usage excludes reused planning. plans_from adds original owner/query work; brief_source adds only the inherited owner, retaining newly incurred query/context generation work exactly once. Jev estimated spend is separate from normalized Sol/DeepSeek cost. Allocated seconds exclude donor writing, checks, initialization and routing. Query seconds include deterministic query-context generation.',
     historical_baselines: historical ? [{ label: 'Native Sol (historical; unmatched)', ...historical.baseline },
       ...historical.iterations.filter(x => ['06-boundary-review', '07-boundary-review-repeat'].includes(x.run)).map(x => ({ label: `${x.run} (historical; unmatched)`, seconds: x.seconds, calls: x.calls, tokens: x.tokens, equivalent_usd: x.equivalent_usd }))] : [],
     historical_source: historical ? { path_relative_to_script: 'sol-only-results.json', hash: hash(readFileSync(historicalPath)) } : null,
@@ -188,7 +231,7 @@ export function markdown(report) {
   return ['# Owner/query/writer optimizer results', '', report.accounting_note, '',
     '| Run | Mode | Applied | Pending | Actual s | Allocated s | Writing s | Writing + optimizer + routing s |',
     '|---|---|---:|---:|---:|---:|---:|---:|',
-    ...report.runs.map(r => `| ${r.run} | ${r.optimization} | ${r.application_complete}/${r.expected} | ${r.pending.length} | ${f(r.incurred_seconds)} | ${f(r.allocated_seconds)} | ${f(r.writing_seconds)} | ${f(r.writing_pipeline_seconds)} |`), '',
+    ...report.runs.map(r => `| ${r.run} | ${r.optimization}/${r.query_mode} | ${r.application_complete}/${r.expected} | ${r.pending.length} | ${f(r.incurred_seconds)} | ${f(r.allocated_seconds)} | ${f(r.writing_seconds)} | ${f(r.writing_pipeline_seconds)} |`), '',
     '| Run | Calls actual / allocated | Tokens actual / allocated | Equivalent USD actual / allocated | Jev calls | Jev tokens | Jev est. USD |',
     '|---|---:|---:|---:|---:|---:|---:|',
     ...report.runs.map(r => `| ${r.run} | ${r.model_usage.calls} / ${r.allocated_model_usage?.calls ?? 'unknown'} | ${r.model_usage.tokens.totalTokens ?? 'unknown'} / ${r.allocated_model_usage?.tokens.totalTokens ?? 'unknown'} | ${f(r.model_usage.equivalent_usd, 6)} / ${f(r.allocated_model_usage?.equivalent_usd, 6)} | ${r.jev.calls} | ${r.jev.tokens ?? 'unknown'} | ${f(r.jev.estimated_usd, 6)} |`), '',
