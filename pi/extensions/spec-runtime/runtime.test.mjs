@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readdirSync, writeFileSync, readFileSync, existsSync, rmSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, writeFileSync, readFileSync, existsSync, rmSync, realpathSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
@@ -9,6 +9,7 @@ import { Runtime, launch, loadRun, summary, groupAlive, runEditor, runCommand, r
 import { createVerificationRecorder, readVerificationIncidents } from './sentinel.mjs';
 import { makePackageFixture } from './package-fixture.mjs';
 import { createOwnership } from './ownership.mjs';
+import { runCapabilityProbe } from './overlay.mjs';
 
 async function fixture(t, source) {
   const base = await makePackageFixture();
@@ -1002,7 +1003,7 @@ test('native recovery after a length stop can finish without inheriting the earl
 // Wave runtime: input/ownership binding only.
 // ---------------------------------------------------------------------------
 
-async function waveSetup(t, source) {
+async function waveSetup(t, source, composition = false) {
   const f = await fixture(t, source);
   const ownershipRoot = join(f.dir, 'ownership');
   const ownership = createOwnership({ registryRoot: ownershipRoot });
@@ -1032,19 +1033,23 @@ async function waveSetup(t, source) {
   const children = new Set();
   const services = new Map();
   const adapter = {
-    kind: 'fake', kernel_proof: false, drainOutcome: { status: 'confirmed' }, beforeRegister: null,
+    kind: 'fake', kernel_proof: false, drainOutcome: { status: 'confirmed' }, beforeRegister: null, stops: [], drains: [],
     async start(request) {
       if (adapter.beforeRegister) adapter.beforeRegister();
       launches.push({ argv: [...request.argv], env: { ...request.env }, cwd: request.cwd, deadline: request.deadline, limits: request.limits });
       const service = { unit: `fake-unit-${launches.length}`, invocation: `fake-invocation-${launches.length}`, main_pid: null, terminal: false };
-      const child = spawn(process.execPath, [fake], { cwd: request.cwd, env: { ...request.env }, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
+      // Composition mode executes the exact production argv. Only the final
+      // `pi` on PATH is a fixture; neither bootstrap nor bwrap is substituted.
+      if (composition && !request.register(service)) throw new Error('contained registration refused');
+      const [command, ...args] = composition ? request.argv : [process.execPath, fake];
+      const child = spawn(command, args, { cwd: request.cwd, env: { ...request.env }, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
       child.on('error', () => {});
       service.main_pid = child.pid;
       services.set(service.unit, { service, child });
       children.add(child);
       try {
         // A refused registration must not authorize a live bootstrap.
-        if (!request.register(service)) throw new Error('contained registration refused');
+        if (!composition && !request.register(service)) throw new Error('contained registration refused');
       } catch (error) {
         try { process.kill(-child.pid, 'SIGKILL'); } catch {}
         throw error;
@@ -1052,13 +1057,20 @@ async function waveSetup(t, source) {
       return { ok: true, status: 'running', child, main_pid: child.pid, record: service };
     },
     async stop(service) {
+      adapter.stops.push(service.unit);
       const entry = services.get(service.unit);
       if (entry && entry.child.exitCode === null && entry.child.signalCode === null) { try { process.kill(-entry.child.pid, 'SIGTERM'); } catch {} }
+      if (composition) await waitForExit(entry?.child);
       return { status: 'confirmed', service, kernel_proof: false };
     },
     async drain(service) {
+      adapter.drains.push(service.unit);
       const entry = services.get(service.unit);
+      // Unknown is absence of proof, even if the leader has already exited.
+      if (composition && adapter.drainOutcome.status !== 'confirmed')
+        return { ...adapter.drainOutcome, service, kernel_proof: false };
       if (entry && entry.child.exitCode === null && entry.child.signalCode === null) { try { process.kill(-entry.child.pid, 'SIGKILL'); } catch {} }
+      if (composition) await waitForExit(entry?.child);
       return { ...adapter.drainOutcome, service, kernel_proof: false };
     },
   };
@@ -1098,11 +1110,177 @@ async function waveSetup(t, source) {
   return { f, ownershipRoot, ownership, coordinator, waveRoot, wave, wavePath, workspace, input, adapter, launches, children, addMember, fake };
 }
 
+async function waitForExit(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('real child did not exit after stop/drain')), 5000);
+    child.once('exit', () => { clearTimeout(timer); resolve(); });
+  });
+}
+
+async function composedWave(t, source) {
+  const w = await waveSetup(t, source, true);
+  // Use production capability classification and selection, never a fabricated
+  // unavailable result. This is NOT a systemd/cgroup or EV-14 rehearsal.
+  const probe = await runCapabilityProbe({ fixtureRoot: w.f.dir });
+  w.capability = probe.result;
+  assert.notEqual(probe.result.status, 'blocked', JSON.stringify(probe));
+  w.wave.target.backend = 'auto';
+  w.wave.target.capability = probe.result;
+  await w.ownership.releaseClaim({ ...w.workspace.claim, drain: 'confirmed' });
+  w.wave.members['1'].workspace = null;
+  writeFileSync(w.wavePath, JSON.stringify(w.wave, null, 2));
+  const target = w.f.locations.targets[0].id;
+  writeFileSync(join(w.f.packagePath, 'spec-steps.json'), JSON.stringify({
+    steps: [{ step: 1, difficulty: 'hard' }],
+    setup: { [target]: { command: 'mkdir -p deps; printf prepared > deps/setup-output', environment: [], lockfiles: [] } },
+  }));
+  const bin = join(w.f.dir, 'bin');
+  mkdirSync(bin);
+  const pi = join(bin, 'pi');
+  writeFileSync(pi, `#!${process.execPath}\n${source}`);
+  chmodSync(pi, 0o700);
+  const previous = process.env.PATH;
+  process.env.PATH = `${bin}:${previous}`;
+  t.after(() => { process.env.PATH = previous; });
+  const runtime = waveRuntime(w);
+  const prepared = await runtime.prepareWaveMember(w.input);
+  w.workspace = prepared.workspace;
+  assert.equal(prepared.status, 'prepared');
+  assert.equal(prepared.preparation_receipt.trackedClean, true);
+  assert.equal(w.workspace.selectedBackend, probe.result.status === 'supported' ? 'overlayfs' : 'worktree');
+  assert.equal(w.workspace.backendReason, probe.result.reason);
+  t.diagnostic(`composition backend=${w.workspace.selectedBackend}; capability=${probe.result.reason}; probe boundary=${probe.boundary}; no systemd/cgroup or EV-14 certification`);
+  const durable = JSON.parse(readFileSync(w.wavePath, 'utf8')).members['1'];
+  assert.equal(durable.workspace.snapshotId, w.workspace.snapshotId);
+  assert.equal(durable.preparation_receipt.drain, 'confirmed');
+  assert.equal(w.launches[0].argv[0], process.execPath, 'setup executes the real root bootstrap');
+  return { ...w, runtime };
+}
+
 const waveRuntime = w => {
   const runtime = new Runtime({ ...w.f.options, ownershipRoot: w.ownershipRoot, serviceAdapter: w.adapter });
   w.f.runtimes.add(runtime);
   return runtime;
 };
+
+test('wave runtime: composition executes the submitted bootstrap and observes private worker context', async t => {
+  const previousSecret = process.env.SPEC_RUNTIME_COMPOSITION_SECRET;
+  process.env.SPEC_RUNTIME_COMPOSITION_SECRET = 'private-composition-context';
+  t.after(() => {
+    if (previousSecret === undefined) delete process.env.SPEC_RUNTIME_COMPOSITION_SECRET;
+    else process.env.SPEC_RUNTIME_COMPOSITION_SECRET = previousSecret;
+  });
+  const w = await composedWave(t, `
+    const fs = require('fs'), path = require('path');
+    const record = JSON.parse(fs.readFileSync(process.env.SPEC_RUNTIME_RECORD, 'utf8'));
+    fs.writeFileSync(path.join(record.package, 'worker-environment.json'), JSON.stringify(process.env));
+    fs.writeFileSync(path.join(record.package, 'worker-checkout.json'), JSON.stringify({
+      cwd: process.cwd(), pointer: fs.readFileSync('.git', 'utf8'),
+      head: require('child_process').execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim(),
+      setup: fs.readFileSync('deps/setup-output', 'utf8'),
+    }));
+    setInterval(() => {}, 1000);
+  `);
+  const { runtime } = w;
+  const started = await runtime.start(w.input);
+  const observed = join(w.f.packagePath, 'worker-environment.json');
+  const checkoutObserved = join(w.f.packagePath, 'worker-checkout.json');
+  for (let i = 0; i < 100 && !existsSync(checkoutObserved); i++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(existsSync(observed), true, 'submitted bootstrap must deliver the private request environment');
+  const env = JSON.parse(readFileSync(observed, 'utf8'));
+  assert.equal(env.SPEC_RUNTIME_RECORD, join(w.f.packagePath, 'runtime', 'runs', `${started.run_id}.json`));
+  assert.equal(env.SPEC_RUNTIME_ROLE, 'owner');
+  assert.equal(env.PI_INTERCOM_SCOPE_ID, started.run_id);
+  assert.equal(env.PI_INTERCOM_STABLE_ID, `spec-owner-${started.run_id}`);
+  assert.equal(env.PI_WARDEN_HOST_PATHS, realpathSync(w.f.packagePath));
+  assert.equal(env.PI_WARDEN_ENABLED, '1');
+  assert.equal(env.SPEC_RUNTIME_COMPOSITION_SECRET, 'private-composition-context');
+  for (const key of ['SPEC_RUNTIME_ROLE', 'SPEC_RUNTIME_RECORD', 'PI_INTERCOM_SCOPE_ID', 'PI_WARDEN_ENABLED', 'PI_WARDEN_HOST_PATHS', 'SPEC_RUNTIME_COMPOSITION_SECRET'])
+    assert.equal(w.launches.at(-1).env[key], undefined, `${key} is private, not transport`);
+  assert.ok(!w.launches.at(-1).argv.some(arg => arg.includes('private-composition-context')));
+  if (w.workspace.backend === 'overlayfs') {
+    const argv = w.launches.at(-1).argv;
+    assert.equal(argv[0], 'bwrap');
+    assert.ok(argv.includes('--unshare-user'));
+  }
+  const checkout = JSON.parse(readFileSync(checkoutObserved, 'utf8'));
+  assert.equal(checkout.cwd, w.workspace.merged ?? w.workspace.worktree);
+  assert.match(checkout.pointer, /^gitdir: /);
+  assert.equal(checkout.head, w.wave.target.base_commit);
+  assert.equal(checkout.setup, 'prepared');
+  await runtime.cancel(w.f.packagePath, started.run_id);
+});
+
+for (const drainStatus of ['confirmed', 'unknown']) {
+  test(`wave runtime: composition contained settled cleanup with ${drainStatus} drain retains state for phase remount (not EV-14)`, { timeout: 60000 }, async t => {
+    const w = await composedWave(t, `
+      const fs = require('fs'), path = require('path');
+      const record = JSON.parse(fs.readFileSync(process.env.SPEC_RUNTIME_RECORD, 'utf8'));
+      const retained = fs.existsSync('retained.txt') ? fs.readFileSync('retained.txt', 'utf8') : null;
+      fs.writeFileSync(path.join(record.package, record.id + '-observed.json'), JSON.stringify({
+        retained, setup: fs.readFileSync('deps/setup-output', 'utf8'),
+        head: require('child_process').execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim(),
+      }));
+      fs.writeFileSync('retained.txt', 'dirty retained bytes');
+      process.on('SIGTERM', () => process.exit(143));
+      console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'Retained handoff'}]}}));
+      console.log(JSON.stringify({type:'agent_settled',aborted:false}));
+      setInterval(() => {}, 1000);
+    `);
+    const { runtime } = w;
+    w.adapter.drainOutcome = { status: drainStatus, reason: drainStatus === 'unknown' ? 'inspection-unavailable' : undefined };
+    const started = await runtime.start(w.input);
+    const result = await w.f.finished;
+    let record = loadRun(w.f.packagePath, started.run_id);
+    const claims = () => JSON.parse(readFileSync(join(w.ownershipRoot, 'claims.json'), 'utf8')).claims;
+    const ownClaims = () => claims().filter(c => [record.capacity_claim.token, record.wave_bindings.checkout_claim].includes(c.token));
+    assert.equal(w.adapter.stops.filter(unit => unit === record.service.unit).length, 1, 'real contained settled-worker callback ran exactly once');
+    assert.ok(w.adapter.drains.includes(record.service.unit), 'Runtime.finish used contained drain');
+    const child = [...w.children].at(-1);
+    assert.notEqual(child.exitCode ?? child.signalCode, null, 'real submitted process exited before drain confirmation');
+    const receiptPath = join(w.f.packagePath, 'runtime', 'runs', `${record.id}-phase-drain.json`);
+    if (drainStatus === 'unknown') {
+      assert.equal(result.state, 'blocked');
+      assert.equal(ownClaims().length, 2, 'unknown drain retains BOTH capacity and checkout');
+      assert.equal(existsSync(receiptPath), false, 'unknown drain cannot mint release proof');
+      await assert.rejects(() => runtime.remountWaveMember(w.input), /confirmed phase drain receipt/);
+      w.adapter.drainOutcome = { status: 'confirmed' };
+      await runtime.finish(record, { code: 143, shutdown_cleanup: true, result: 'Retained handoff' });
+      record = loadRun(w.f.packagePath, started.run_id);
+    } else {
+      assert.equal(result.state, 'completed');
+      assert.equal(result.shutdown_cleanup, true, 'exit 143 from contained cleanup is not a crash');
+      assert.equal(result.error, undefined);
+    }
+    assert.equal(record.state, 'completed');
+    assert.equal(ownClaims().length, 0, 'confirmed drain/retry releases both claims');
+    assert.ok(claims().some(c => c.kind === 'package'), 'package authority is never released');
+    const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
+    assert.equal(receipt.run_id, started.run_id);
+    assert.deepEqual(receipt.released.map(c => c.kind).sort(), ['capacity', 'checkout']);
+    assert.equal(receipt.service.unit, record.service.unit);
+    const retained = w.workspace.retained;
+    const wave = JSON.parse(readFileSync(w.wavePath, 'utf8'));
+    wave.members['1'].phase = 'reviewing';
+    writeFileSync(w.wavePath, JSON.stringify(wave, null, 2));
+    const input = { ...w.input, phase: 'reviewing', assignment_id: 'retained-review-phase' };
+    const remounted = await runtime.remountWaveMember(input);
+    assert.equal(remounted.remounted, true);
+    assert.deepEqual(remounted.workspace.retained, retained, 'same immutable retained identity');
+    assert.notEqual(remounted.workspace.claim.token, w.workspace.claim.token);
+    assert.equal((await runtime.remountWaveMember(input)).idempotent, true);
+    const next = await runtime.start(input);
+    const observed = join(w.f.packagePath, `${next.run_id}-observed.json`);
+    for (let i = 0; i < 100 && !existsSync(observed); i++) await new Promise(resolve => setTimeout(resolve, 20));
+    const actual = JSON.parse(readFileSync(observed, 'utf8'));
+    assert.equal(actual.retained, 'dirty retained bytes', 'second real worker sees first worker dirty state');
+    assert.equal(actual.setup, 'prepared', 'published setup output survives phase remount');
+    assert.equal(actual.head, w.wave.target.base_commit);
+    assert.notEqual(next.run_id, started.run_id);
+    await runtime.cancel(w.f.packagePath, next.run_id);
+  });
+}
 
 test('wave runtime: a validated member binds its run and bypasses only the serial latest-run exclusion', async t => {
   const w = await waveSetup(t, 'setInterval(() => {}, 1000);');
