@@ -101,7 +101,7 @@ if(supplemental){
   for(const c of comparisons)lines.push(`| ${c.selector} | ${c.posthoc_acceptance.agent}/${c.arms.agent.n} | ${c.posthoc_acceptance.changeset}/${c.arms.changeset.n} | ${c.posthoc_new_failures} |`);
   lines.push('', '| Model | Post-hoc capped speed ratio (95% task interval) | Equivalent cost per accepted outcome, agent / changeset |', '|---|---:|---:|');
   for(const c of comparisons){const p=c.posthoc_efficiency;lines.push(`| ${c.selector} | ${f(p.capped_geometric_speed_ratio)} (${p.capped_ratio_task_bootstrap_95.map(f).join('–')}) | ${p.arms.agent.cost_per_acceptance?.toFixed(5)??'unknown'} / ${p.arms.changeset.cost_per_acceptance?.toFixed(5)??'unknown'} |`);}
-  lines.push('', 'The original timing observations remain unchanged. Original conditional speed ratios do not imply speed to a correct result under these expanded checks. Sol acceptance is unchanged; DeepSeek and Mercury require the weaker reliability conclusion shown here.');
+  lines.push('', 'The original timing observations remain unchanged. Original conditional speed ratios do not imply speed to a correct result under these expanded checks. Use the per-model supplemental acceptance and failure-adjusted efficiency above when interpreting reliability.');
 }
 lines.push('',
   '## Per-workload results under original grading', '', '| Model | Task | Agent passes | Changeset passes | Mean seconds, agent / changeset |', '|---|---|---:|---:|---:|');

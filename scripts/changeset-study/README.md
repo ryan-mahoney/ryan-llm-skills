@@ -35,6 +35,27 @@ prose describes this frozen campaign and must be reviewed if the dataset changes
 
 ## Run the study
 
+### Next campaign: awaiting more complex cases
+
+Nemotron 3.5 Super VL replaces Mercury in the next comparison. The selected models
+are `deepseek/deepseek-flash:off`, `openai-codex/gpt-6.1-sol:low`, and
+`openrouter/nvidia/nemotron-3.5-super-vl:low`. The Nemotron selector uses the
+[OpenRouter model ID](https://openrouter.ai/nvidia/nemotron-3.5-super-vl/providers)
+and retains the previous third model's `low` reasoning setting; it has not been
+exercised by this harness.
+
+**Do not run validation, tests, pilots or evaluation yet.** More complex cases will
+be added before the next campaign is frozen. The local Pi catalog inspected during
+this change did not contain Nemotron 3.5 Super VL; refresh the catalog or register
+the exact model through the supported Pi configuration before the eventual run.
+No inference request was made to check compatibility.
+
+The commands below describe the next model lineup, not a request to execute it.
+Use a new run directory, preserve the existing $50 campaign ledger, and retain the
+Sol-at-DeepSeek-rates cost policy. Run all selected models against both approaches
+on the same expanded corpus. The completed Mercury results, protocol, charts and
+HTML visual remain historical evidence; they are not Nemotron results.
+
 Requirements: Node 22, the configured managed Pi SDK and authorized provider models,
 Linux bubblewrap, Python 3, and Git history containing the two historical fixtures.
 No dependencies or network access are available to model-generated commands.
@@ -52,7 +73,7 @@ node scripts/changeset-study/cli.mjs run --phase eval --root "$STUDY_ROOT" \
   --ledger "$CAMPAIGN_LEDGER" --repeat 2 \
   --model deepseek/deepseek-flash:off \
   --model openai-codex/gpt-6.1-sol:low \
-  --model openrouter/inception/mercury-2.5:low
+  --model openrouter/nvidia/nemotron-3.5-super-vl:low
 
 node scripts/changeset-study/report.mjs "$RUN_DIRECTORY" "$REPORT_PREFIX"
 

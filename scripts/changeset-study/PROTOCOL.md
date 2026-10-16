@@ -1,6 +1,10 @@
 # Matched changeset study
 
-Status: preregistered design, before conventional-agent pilot results.
+Status: retained preregistered design for the completed Mercury/Sol/DeepSeek campaign.
+The next campaign selects Nemotron 3.5 Super VL in place of Mercury and awaits more
+complex cases; see the [next-campaign setup](README.md#next-campaign-awaiting-more-complex-cases).
+Its corpus and execution limits must be settled and frozen before execution.
+The original treatment definitions below remain the record of the completed study.
 
 The question is whether compiling a task into a changeset reduces time and resources
 to an accepted implementation compared with an ordinary tool-using coding agent.

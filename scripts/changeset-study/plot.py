@@ -14,7 +14,8 @@ models = report["manifest"]["models"]
 audited = {row["cell"]: row["supplemental_accepted"] for row in (report.get("supplemental") or {}).get("rows", [])}
 labels = {"deepseek/deepseek-flash:off": "DeepSeek V4.1 Flash",
           "openai-codex/gpt-6.1-sol:low": "Sol 6.1",
-          "openrouter/inception/mercury-2.5:low": "Mercury 2.5"}
+          "openrouter/inception/mercury-2.5:low": "Mercury 2.5",
+          "openrouter/nvidia/nemotron-3.5-super-vl:low": "Nemotron 3.5 Super VL"}
 fig, axes = plt.subplots(1, len(models), figsize=(12, 4.9), sharex=True, sharey=True)
 for ax, model in zip(axes, models):
     rows = [c for c in report["cells"] if c["selector"] == model]
@@ -32,7 +33,7 @@ for ax, model in zip(axes, models):
                    s=45, alpha=0.85, linewidths=1.5)
     ax.plot([1, 360], [1, 360], color="#777777", linestyle="--", linewidth=1)
     ax.set(xscale="log", yscale="log", xlim=(2, 360), ylim=(2, 360),
-           title=labels[model], xlabel="Conventional agent (seconds)")
+           title=labels.get(model, model), xlabel="Conventional agent (seconds)")
     ax.set_xticks([3, 10, 30, 100, 300], labels=["3", "10", "30", "100", "300"])
     ax.set_yticks([3, 10, 30, 100, 300], labels=["3", "10", "30", "100", "300"])
     ax.grid(True, which="major", alpha=0.2)
