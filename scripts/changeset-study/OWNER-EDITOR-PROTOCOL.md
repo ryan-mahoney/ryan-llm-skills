@@ -77,3 +77,36 @@ node scripts/changeset-study/iterate.mjs \
 For a repeat, add `--freeze-from "$FIRST_ITERATION"`. It copies the original
 frozen code and parser, and verifies selectors and model metadata. Do not modify
 frozen runs or recycle an output directory.
+
+## Non-thinking editor comparison
+
+The first low-thinking trial exhausted its 32,000-token allowance on an
+implementation packet, with 25,874 tokens spent on reasoning. Its repair failed
+owner review. Before final extraction results were available, select a second
+configuration with `--editor-model deepseek/deepseek-flash:off`. Preserve the owner,
+prompts, execution code, task inputs and acceptance. This changes the provider's
+thinking setting, not the output allowance or repair count. Diagnostic/reporting
+changes are outside model execution and remain separately fingerprinted.
+
+This is a new configuration, not an identical replay of the first. If it delivers
+all cases, repeat its own frozen files and selectors once. Retain the failed
+low-thinking trial in the comparison and do not pass its candidate or terminal
+feedback into the next run.
+
+## Concrete packet contracts
+
+The non-thinking handoff trial produced multiple contract defects, a hanging test
+fixture and an empty repair response. Evaluate `owner-editor-contracts` with the
+same selectors as the non-thinking run. Each owner operation must include a
+`contract` object with nonempty `implementation`, `boundaries` and `verification`
+string arrays. The owner resolves exact edit locations and algorithm steps,
+branch semantics, helper contracts, and test fixture setup/termination/cleanup.
+References to numbered specification sections do not substitute for this recipe.
+The editor receives those fields along with the original task and current source.
+
+This is a generic handoff/prompt intervention, not an additional repair or an
+expanded output budget. Every write remains delegated. No previous candidate,
+known-defect list, hidden checks or task-specific code is supplied. This revision
+was selected before the non-thinking extraction finished. Repeat unchanged frozen
+code if all cases fully deliver; otherwise retain the negative result without
+claiming that a different model or workflow would necessarily fail.

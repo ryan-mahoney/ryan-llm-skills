@@ -10,7 +10,7 @@ import { execute } from '../changeset/engine.mjs';
 import { Workspace, hash } from '../changeset/workspace.mjs';
 import { parseJson } from '../changeset/models.mjs';
 import { equivalentCost } from '../changeset-research/cost.mjs';
-import { strategyPlanner, strategyReviewer, usesCandidateChecks, usesBoundaryReview, validateStrategyPlan, patchEditor } from './strategies.mjs';
+import { strategyPlanner, strategyReviewer, usesCandidateChecks, usesBoundaryReview, usesEditor, validateStrategyPlan, patchEditor } from './strategies.mjs';
 import { changedTestCommands } from './candidate-checks.mjs';
 import { reviewContext } from './review-context.mjs';
 
@@ -83,7 +83,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
     client = await stage('initialize', () => Client.create({ selector, ...clientOptions }));
     // Exploratory mixed routing: the planner/reviewer model plans, involved leaves and
     // repairs stay on it, and only `simple` leaves go to simpleSelector. One call limit.
-    if (strategy === 'owner-editor') {
+    if (usesEditor(strategy)) {
       if (!editorSelector) throw new Error('Owner-editor requires an explicit editor selector');
       client.shared = { calls: 0 };
       simpleClient = await stage('initialize', () => Client.create({ selector: editorSelector, ...clientOptions, shared: client.shared }));
@@ -114,9 +114,9 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
       writeFileSync(join(directory, `plan-${executions.length}.json`), JSON.stringify(plan, null, 2));
       validateStrategyPlan(strategy, plan);
       const editor = (model, stageName) => ({ operation, files }) => strategy
-        ? patchEditor(model, stageName, task.spec, { operation, files }, { ranges: strategy === 'owner-editor' })
+        ? patchEditor(model, stageName, task.spec, { operation, files }, { ranges: usesEditor(strategy) })
         : model.json(editorPrompt, { task_contract: task.spec, instruction: operation.instruction, writes: operation.writes, files }, stageName);
-      const adapters = strategy === 'owner-editor' ? { simple: editor(simpleClient, 'editor'), involved: editor(simpleClient, 'editor') }
+      const adapters = usesEditor(strategy) ? { simple: editor(simpleClient, 'editor'), involved: editor(simpleClient, 'editor') }
         : simpleClient ? { simple: editor(simpleClient, 'simple-editor'), involved: editor(client, 'editor') }
         : { simple: editor(client, 'editor'), involved: editor(client, 'editor') };
       let draft;

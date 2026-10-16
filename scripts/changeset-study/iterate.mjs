@@ -8,7 +8,7 @@ import { performance } from 'node:perf_hooks';
 import { hash } from '../changeset/workspace.mjs';
 import { sdkRoot } from './client.mjs';
 import { recoverAccounting } from './accounting.mjs';
-import { strategyNames, usesCandidateChecks } from './strategies.mjs';
+import { strategyNames, usesCandidateChecks, usesEditor } from './strategies.mjs';
 import { modelRuntime, parseSelector } from '../changeset/models.mjs';
 
 const args = process.argv.slice(2);
@@ -17,7 +17,7 @@ const repo = fileURLToPath(new URL('../..', import.meta.url));
 const source = resolve(option('--source')), run = resolve(option('--output')), ledger = resolve(option('--ledger'));
 const strategy = option('--strategy'), selector = option('--model');
 const editorSelector = args.includes('--editor-model') ? option('--editor-model') : null;
-if ((strategy === 'owner-editor') !== Boolean(editorSelector)) throw new Error('Use --editor-model only and always with owner-editor');
+if (usesEditor(strategy) !== Boolean(editorSelector)) throw new Error('Use --editor-model only and always with an owner-editor strategy');
 const replay = args.includes('--freeze-from') ? resolve(option('--freeze-from')) : null;
 const codeRoot = replay ? join(replay, 'frozen') : repo;
 if (!strategyNames.includes(strategy)) throw new Error('Unknown strategy');
