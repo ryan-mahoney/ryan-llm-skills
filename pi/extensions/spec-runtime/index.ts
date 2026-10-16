@@ -1,7 +1,7 @@
 import { createSentinelDashboard } from './sentinel-dashboard.mjs';
 import { Type } from '@earendil-works/pi-ai';
 import { isRetryableAssistantError } from '@earendil-works/pi-ai/compat';
-import { getAgentDir, compact, SettingsManager } from '@earendil-works/pi-coding-agent';
+import { getAgentDir, SettingsManager } from '@earendil-works/pi-coding-agent';
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { randomUUID, createHash } from 'node:crypto';
 import { join, resolve, realpathSync } from 'node:path';
@@ -19,7 +19,7 @@ import { registerRepositorySearch } from './search.mjs';
 import { createSentinelControl } from './sentinel-control.mjs';
 import { installProgressContext, recordCheckpoint, refreshProgress } from './completion.mjs';
 import { metrics, formatMetrics } from './metrics.mjs';
-import { installContextBudget } from '../context-budget/policy.mjs';
+import installContextBudget from '../context-budget/index.ts';
 import { createWorkflowContinuation } from './workflow-continuation.mjs';
 import { installProviderRecovery } from './provider-recovery.mjs';
 
@@ -98,8 +98,8 @@ function realpathStep(step: string): string {
 }
 
 export default function (pi: any) {
-  installContextBudget(pi, { compact,
-    retrySettings: () => SettingsManager.inMemory(pi.getSettings()).getRetrySettings() });
+  // One installer wins per session; both entry points must pass the same options.
+  installContextBudget(pi);
   const role = process.env.SPEC_RUNTIME_ROLE;
   if (role) {
     const record = JSON.parse(readFileSync(process.env.SPEC_RUNTIME_RECORD!, 'utf8'));
