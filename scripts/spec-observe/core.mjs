@@ -1,13 +1,23 @@
 import { constants as fsConstants, createReadStream } from 'node:fs';
-import { open, opendir, readFile, readdir, stat } from 'node:fs/promises';
+import { lstat, open, opendir, readFile, readdir, stat } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 
 const TOKEN_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning', 'totalTokens'];
 const validTime = (value) => Number.isFinite(Date.parse(value)) ? value : null;
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+const strictTime = (value) => typeof value === 'string' && ISO_TIME.test(value) && Number.isFinite(Date.parse(value));
 const seconds = (start, end) => start && end ? Math.round((Date.parse(end) - Date.parse(start)) / 10) / 100 : null;
 const safeNumber = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+
+export const WAVE_STATES = ['open', 'running', 'ready-to-integrate', 'integrating', 'verifying', 'repairing', 'promoting', 'integrated', 'blocked', 'cancelled'];
+export const TERMINAL_WAVE_STATES = ['integrated', 'cancelled'];
+export const MEMBER_PHASES = ['queued', 'provisioning', 'implementing', 'reviewing', 'fixing', 'confirming', 'sealed', 'blocked', 'cancelled'];
+export const ACTIVE_MEMBER_PHASES = ['provisioning', 'implementing', 'reviewing', 'fixing', 'confirming'];
+const WAVE_RECORD_NAME = /^[A-Za-z0-9_-]{1,128}\.json$/;
+const WAVE_LIMIT = 100;
+const WAVE_MAX_BYTES = 262144;
 
 const CANDIDATE_LIMIT = 1000;
 const POINTER_BUFFER = 65537;
@@ -244,6 +254,147 @@ export async function discover(directory, { cwd, limit = 20 } = {}) {
   return { roots: roots.slice(0, limit), sessions, errors };
 }
 
+const positiveStep = value => Number.isSafeInteger(value) && value > 0 ? value : null;
+
+const projectMember = member => ({
+  step: positiveStep(member.step),
+  phase: member.phase ?? null,
+  run_id: member.run_id ?? null,
+  implementation_run_id: member.implementation_run_id ?? null,
+  checkout: member.workspace ? (member.workspace.merged ?? member.workspace.worktree ?? null) : null,
+  sealed_head: member.sealed_head ?? null,
+  blocking_reason: member.blocking_reason ?? null,
+  queue_reason: member.queue_reason ?? null,
+  backend: member.workspace?.backend ?? null,
+  fallback_reason: member.workspace?.backendReason ?? null,
+  snapshot_id: member.workspace?.snapshotId ?? null,
+  upper_id: member.workspace?.retained?.upperId ?? null,
+  retained: member.workspace?.retained ? {
+    lower: member.workspace.retained.lower ?? null, upper: member.workspace.retained.upper ?? null,
+    gitDir: member.workspace.retained.gitDir ?? null, worktree: member.workspace.retained.worktree ?? null }
+    : null,
+  transitions: Array.isArray(member.transitions)
+    ? member.transitions.map(x => ({ phase: x.phase, at: x.at, reason: x.reason ?? null })) : [] });
+
+// Normalize one on-disk wave record into the shared observer shape. The record
+// owns its version, identity and enums; anything unclassifiable fails closed.
+export function projectWaveRecord(value, recordPath) {
+  const fail = reason => ({ ok: false, record_path: recordPath, reason });
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return fail('invalid-shape');
+  if (value.version !== 1) return fail('unsupported-version');
+  if (typeof value.wave_id !== 'string' || value.wave_id !== path.basename(recordPath).replace(/\.json$/, '')) return fail('invalid-shape');
+  if (!WAVE_STATES.includes(value.state)) return fail('unknown-state');
+  if (!Array.isArray(value.transitions) || value.transitions.some(x => !x || !WAVE_STATES.includes(x.state) || !strictTime(x.at))) return fail('invalid-shape');
+  if (!value.members || typeof value.members !== 'object' || Array.isArray(value.members)) return fail('invalid-shape');
+  const members = [];
+  const seenSteps = new Set();
+  for (const key of Object.keys(value.members)) {
+    const keyStep = /^\d+$/.test(key) ? positiveStep(Number(key)) : null;
+    if (keyStep === null || seenSteps.has(keyStep)) return fail('invalid-shape');
+    seenSteps.add(keyStep);
+    const member = value.members[key];
+    if (!member || typeof member !== 'object' || Array.isArray(member)) return fail('invalid-shape');
+    if (!MEMBER_PHASES.includes(member.phase)) return fail('unknown-phase');
+    if (member.step !== undefined) {
+      const memberStep = positiveStep(member.step);
+      if (memberStep === null || memberStep !== keyStep) return fail('invalid-shape');
+    }
+    if (member.transitions !== undefined) {
+      if (!Array.isArray(member.transitions) || member.transitions.some(x => !x || !MEMBER_PHASES.includes(x.phase) || !strictTime(x.at))) return fail('invalid-shape');
+    }
+    members.push({ ...projectMember(member), step: keyStep });
+  }
+  members.sort((a, b) => a.step - b.step);
+  const repair = value.target?.repair;
+  const integration = value.target?.integration;
+  const candidate = repair ? {
+    n: repair.n ?? null, phase: repair.phase ?? null, run_id: repair.run_id ?? null,
+    backend: integration?.backend ?? null,
+    fallback_reason: integration?.workspace?.backendReason ?? null,
+    checkout: integration?.workspace ? (integration.workspace.merged ?? integration.workspace.worktree ?? null) : null }
+    : null;
+  return { ok: true, wave: {
+    record_path: recordPath,
+    wave_id: value.wave_id,
+    generation: Number.isInteger(value.generation) ? value.generation : null,
+    state: value.state,
+    requested_width: value.requested_width ?? null,
+    admitted_width: value.admitted_width ?? null,
+    effective_limits: value.effective_limits ?? null,
+    opened_at: value.started_at ?? null,
+    transitions: value.transitions.map(x => ({ state: x.state, at: x.at })),
+    coordinator: { session: value.coordinator?.session ?? null, epoch: value.coordinator?.epoch ?? null,
+      process_identity: value.coordinator?.process_identity ? { pid: value.coordinator.process_identity.pid, started_at: value.coordinator.process_identity.started_at } : null },
+    members,
+    candidate } };
+}
+
+// Tie one run record to its wave. A step 8 command phase takes precedence over
+// the member-stage wave_bindings it also carries; candidate model runs carry a
+// positive integer candidate and never report themselves as their member step.
+export function runWaveIdentity(run) {
+  if (!run || typeof run !== 'object') return null;
+  const command = run.command_phase;
+  if (command && typeof command === 'object' && typeof command.wave_id === 'string') {
+    return { wave_id: command.wave_id, step_number: command.subject?.kind === 'step' ? command.subject.step : null,
+      attempt_id: run.wave_bindings?.attempt_id ?? null, phase: 'command', candidate: null };
+  }
+  const bindings = run.wave_bindings;
+  if (!bindings || typeof bindings !== 'object' || typeof bindings.wave_id !== 'string') return null;
+  const candidate = Number.isInteger(bindings.candidate) && bindings.candidate > 0 ? bindings.candidate : null;
+  return { wave_id: bindings.wave_id,
+    step_number: candidate ? null : bindings.step_number ?? null,
+    attempt_id: bindings.attempt_id ?? null,
+    phase: bindings.phase ?? null,
+    candidate };
+}
+
+// Editors listed beside a run plus the legacy anchor, deduplicated.
+export function editorSessionFiles(record, listed) {
+  const files = [];
+  for (const file of Array.isArray(listed) ? listed : []) if (typeof file === 'string' && !files.includes(file)) files.push(file);
+  const legacy = record?.editor_session;
+  if (typeof legacy === 'string' && !files.includes(legacy)) files.push(legacy);
+  return files;
+}
+
+// Bounded read of regular safe-basename wave records. A missing directory is an
+// empty result; invalid or oversized records are retained in `invalid`.
+export async function readWaveRecords(packagePath, { limit = WAVE_LIMIT, maxBytes = WAVE_MAX_BYTES } = {}) {
+  const directory = path.join(path.resolve(packagePath), 'runtime', 'waves');
+  const waves = [], invalid = [];
+  let names;
+  try { names = (await readdir(directory)).filter(name => WAVE_RECORD_NAME.test(name)).sort(); }
+  catch (error) { if (error.code === 'ENOENT') return { waves, invalid, truncated: false };
+    invalid.push({ record_path: directory, reason: error.code ?? 'invalid-json' }); return { waves, invalid, truncated: false }; }
+  let truncated = false;
+  let count = 0;
+  for (const name of names) {
+    if (count >= limit) { truncated = true; break; }
+    count++;
+    const file = path.join(directory, name);
+    let text;
+    try {
+      const info = await lstat(file);
+      if (!info.isFile() || info.isSymbolicLink()) continue; // Symlinks and non-regular entries are not wave records.
+      if (info.size > maxBytes) { invalid.push({ record_path: file, reason: 'oversized' }); continue; }
+      const handle = await open(file, OPEN_FLAGS);
+      try {
+        const buffer = Buffer.alloc(maxBytes + 1);
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+        if (bytesRead > maxBytes) { invalid.push({ record_path: file, reason: 'oversized' }); continue; }
+        text = buffer.subarray(0, bytesRead).toString('utf8');
+      } finally { await handle.close(); }
+    } catch (error) { invalid.push({ record_path: file, reason: error.code === 'ENOENT' ? 'invalid-shape' : (error.code ?? 'invalid-json') }); continue; }
+    let value;
+    try { value = JSON.parse(text); }
+    catch { invalid.push({ record_path: file, reason: 'invalid-json' }); continue; }
+    const projected = projectWaveRecord(value, file);
+    if (projected.ok) waves.push(projected.wave); else invalid.push({ record_path: file, reason: projected.reason });
+  }
+  return { waves, invalid, truncated };
+}
+
 export async function discoverPackage(packagePath, options = {}) {
   const runtime = path.join(path.resolve(packagePath), 'runtime');
   const index = await discover(path.join(runtime, 'sessions'), options);
@@ -261,21 +412,45 @@ export async function discoverPackage(packagePath, options = {}) {
     for (const key of ['id', 'assignment_id', 'step', 'checkout', 'owner_model', 'editor_model', 'parent_session', 'owner_session', 'editor_session', 'state', 'pid', 'started_at', 'finished_at', 'dispatch_requested_at']) {
       if (typeof record[key] === 'string' || typeof record[key] === 'number') safe[key] = record[key];
     }
+    const identity = runWaveIdentity(record);
+    if (identity) { safe.wave_id = identity.wave_id; safe.phase = identity.phase; safe.step_number = identity.step_number; }
+    const commandRun = identity?.phase === 'command';
+    // A command run has no model session of its own; only the coordinator
+    // parent is opened. Stage runs project the session for the actual role
+    // (reviewer/fixer) rather than the generic owner anchor.
+    let modelSession;
+    if (commandRun) modelSession = undefined;
+    else if (typeof safe.wave_id === 'string' && (record.stage?.role === 'reviewer' || record.stage?.role === 'fixer'))
+      modelSession = record[`${record.stage.role}_session`];
+    else modelSession = record.owner_session;
+    if (typeof modelSession === 'string') safe.model_session = modelSession;
+    let listed = [];
     try {
-      const sessions = JSON.parse(await readFile(path.join(runtime, 'runs', `${record.id}-editor-sessions.json`), 'utf8'));
-      if (!Array.isArray(sessions) || sessions.some(file => typeof file !== 'string')) throw new Error('Invalid editor sessions');
-      safe.editor_sessions = sessions;
-    } catch (error) { if (error.code !== 'ENOENT') index.errors.push({ path: file, code: 'INVALID_EDITOR_SESSIONS' }); }
+      listed = JSON.parse(await readFile(path.join(runtime, 'runs', `${record.id}-editor-sessions.json`), 'utf8'));
+      if (!Array.isArray(listed) || listed.some(file => typeof file !== 'string')) throw new Error('Invalid editor sessions');
+    } catch (error) { listed = []; if (error.code !== 'ENOENT') index.errors.push({ path: file, code: 'INVALID_EDITOR_SESSIONS' }); }
+    const editorFiles = editorSessionFiles(record, listed);
+    const resolvedEditorFiles = [];
+    for (const editorFile of editorFiles) {
+      if (byFile.has(editorFile)) { resolvedEditorFiles.push(editorFile); continue; }
+      try { const item = await header(editorFile); if (item) { byFile.set(editorFile, item); index.sessions.push(item); resolvedEditorFiles.push(editorFile); } }
+      catch (error) {
+        // A missing unlisted legacy anchor is silent; a missing listed editor
+        // session remains a discovery error so real coverage gaps stay visible.
+        if (!(error.code === 'ENOENT' && !listed.includes(editorFile))) index.errors.push({ path: editorFile, code: error.code });
+      }
+    }
+    safe.editor_sessions = resolvedEditorFiles;
     records.push(safe);
-    for (const filePath of [record.parent_session, record.owner_session, ...(safe.editor_sessions ?? [record.editor_session])]) {
+    for (const filePath of [record.parent_session, safe.model_session]) {
       if (!filePath || typeof filePath !== 'string') continue;
       if (!byFile.has(filePath)) {
         try { const item = await header(filePath); if (item) { byFile.set(filePath, item); index.sessions.push(item); } }
         catch (error) { index.errors.push({ path: filePath, code: error.code }); }
       }
     }
-    for (const [childFile, parentFile] of [[record.owner_session, record.parent_session],
-      ...(safe.editor_sessions ?? [record.editor_session]).map(file => [file, record.owner_session])]) {
+    for (const [childFile, parentFile] of [[safe.model_session, record.parent_session],
+      ...(safe.editor_sessions ?? [record.editor_session]).map(file => [file, safe.model_session ?? record.owner_session])]) {
       const child = byFile.get(childFile);
       const parent = byFile.get(parentFile);
       if (child && parent && child !== parent) { child.parent_id = parent.id; child.parent_file = parent.file; }
@@ -323,7 +498,8 @@ export async function discoverPackage(packagePath, options = {}) {
     record.elapsed_seconds = seconds(record.started_at, record.finished_at);
     record.first_editor_started_seconds = seconds(record.started_at, ownEvents.find(event => event.event === 'editor_started')?.timestamp);
   }
-  index.runtime = { package: path.resolve(packagePath), records, events_file: eventsFile, events_truncated: eventsTruncated };
+  index.runtime = { package: path.resolve(packagePath), records, events_file: eventsFile, events_truncated: eventsTruncated,
+    waves: await readWaveRecords(packagePath) };
   return index;
 }
 

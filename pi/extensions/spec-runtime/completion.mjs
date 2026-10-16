@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { buildHistoryIndex } from '../../../skills/spec-run/scripts/build-history-index.mjs';
+import { readWaveRecords, runWaveIdentity, ACTIVE_MEMBER_PHASES } from '../../../scripts/spec-observe/core.mjs';
 
 const read = file => JSON.parse(readFileSync(file, 'utf8'));
 const now = () => new Date().toISOString();
@@ -278,11 +279,26 @@ async function computeProgress(packagePath) {
   const runsPath = join(packagePath, 'runtime/runs');
   const records = existsSync(runsPath) ? readdirSync(runsPath).filter(n => /^[\w-]+\.json$/.test(n))
     .map(n => read(join(runsPath, n))).filter(r => r.id && r.step && r.state) : [];
-  const runs = records.map(r => ({ run_id: r.id, step: r.step, checkout: r.checkout, execution: r.state, started_at: r.started_at,
-    finished_at: r.finished_at, handoff: r.handoff || completionStatus(r), verification_receipts: verificationReceipts(r).length,
-    wave: waveProvenance(r) }));
+  const waveRead = await readWaveRecords(packagePath);
+  const runs = records.map(r => {
+    const identity = runWaveIdentity(r);
+    return { run_id: r.id, step: r.step, checkout: r.checkout, execution: r.state, started_at: r.started_at,
+      finished_at: r.finished_at, handoff: r.handoff || completionStatus(r), verification_receipts: verificationReceipts(r).length,
+      wave: waveProvenance(r), wave_id: identity?.wave_id ?? null, phase: identity?.phase ?? null };
+  });
   runs.sort((a, b) => (a.started_at || '').localeCompare(b.started_at || '') || a.run_id.localeCompare(b.run_id));
+  const waves = [
+    ...waveRead.waves.map(w => ({
+      wave_id: w.wave_id, generation: w.generation, state: w.state, record_path: w.record_path,
+      member_count: w.members.length,
+      active_count: w.members.filter(m => ACTIVE_MEMBER_PHASES.includes(m.phase)).length,
+      members: w.members.map(m => ({ step: m.step, phase: m.phase, run_id: m.run_id, sealed_head: m.sealed_head, blocking_reason: m.blocking_reason })),
+    })),
+    ...waveRead.invalid.map(i => ({ wave_id: null, generation: null, state: 'unknown', record_path: i.record_path, reason: i.reason,
+      member_count: 0, active_count: 0, members: [] })),
+  ];
   const ledger = { version: 1, observed_at: now(), purpose: 'Runtime facts, not acceptance or publication authority', runs,
+    waves, waves_truncated: waveRead.truncated,
     stages: existsSync(join(packagePath, 'runtime/stages')) ? readdirSync(join(packagePath, 'runtime/stages')).filter(n => n.endsWith('.json')).map(n => read(join(packagePath, 'runtime/stages', n))) : [],
     artifacts: index.records.map(({ path, kind, step }) => ({ path, kind, step, assessment: 'inspect source; presence is not approval' })) };
   const latestStages = new Map();
@@ -337,7 +353,7 @@ export function watchProgress(packagePath, onError = () => {}, onFresh = () => {
   const reconcile = () => {
     try {
     if (closed) return;
-    const dirs = [packagePath, ...['learnings', 'reviews', 'runtime/runs'].map(d => join(packagePath, d))];
+    const dirs = [packagePath, ...['learnings', 'reviews', 'runtime', 'runtime/runs', 'runtime/waves'].map(d => join(packagePath, d))];
     const parts = [];
     for (const dir of dirs) {
       if (!existsSync(dir)) continue;
@@ -345,8 +361,10 @@ export function watchProgress(packagePath, onError = () => {}, onFresh = () => {
         try {
           const watcher = watchDirectory(dir, (_event, filename) => {
           const name = filename?.toString();
-          if (!name || /(?:learning|review|fix)\.md$/.test(name) || dir.endsWith('/runs') && name.endsWith('.json')) refresh();
+          const structured = dir.endsWith('/runs') || dir.endsWith('/waves');
+          if (!name || /(?:learning|review|fix)\.md$/.test(name) || structured && name.endsWith('.json')) refresh();
           if (dir === packagePath && ['learnings', 'reviews', 'runtime'].includes(name)) reconcile();
+          if (dir.endsWith('/runtime') && name === 'waves') reconcile();
           });
           watcher.on('error', error => {
             watchers.delete(dir);
@@ -356,7 +374,7 @@ export function watchProgress(packagePath, onError = () => {}, onFresh = () => {
           watchers.set(dir, watcher);
         } catch (error) { onError(error); }
       }
-      for (const name of readdirSync(dir)) if (/(?:learning|review|fix)\.md$/.test(name) || dir.endsWith('/runs') && name.endsWith('.json')) {
+      for (const name of readdirSync(dir)) if (/(?:learning|review|fix)\.md$/.test(name) || (dir.endsWith('/runs') || dir.endsWith('/waves')) && name.endsWith('.json')) {
         const s = lstatSync(join(dir, name)); parts.push(`${dir}/${name}:${s.mtimeMs}:${s.size}`);
       }
     }
@@ -376,9 +394,30 @@ export function unfinishedPreparedSteps(packagePath, progress) {
   const steps = read(join(packagePath, 'spec-steps.json')).steps;
   if (!Array.isArray(steps) || !steps.length || steps.some(s => !Number.isInteger(s.step) || s.step < 1))
     throw new Error('Prepared step index is missing or invalid; cannot establish package completion');
+  const waves = (Array.isArray(progress.waves) ? progress.waves : []).filter(w => w.state !== 'unknown');
+  // `opened_at` is deliberately absent from the ledger row, so read the owned
+  // record to break equal-generation ties deterministically.
+  const openedAt = row => {
+    try { const value = read(row.record_path); return typeof value.started_at === 'string' ? value.started_at : null; }
+    catch { return null; }
+  };
+  const waveForStep = step => {
+    const containing = waves.filter(w => Array.isArray(w.members) && w.members.some(m => m.step === step));
+    if (!containing.length) return null;
+    containing.sort((a, b) => (b.generation ?? 0) - (a.generation ?? 0)
+      || String(openedAt(b) || '').localeCompare(String(openedAt(a) || '')));
+    return containing[0];
+  };
   const latest = new Map();
-  for (const run of progress.runs) latest.set(Number(basename(run.step).match(/^step-(\d+)-subspec\.md$/)?.[1]), run);
+  for (const run of progress.runs) if (!run.wave_id) latest.set(Number(basename(run.step).match(/^step-(\d+)-subspec\.md$/)?.[1]), run);
   return steps.filter(step => {
+    // A wave member is finished only when sealed and the owning wave integrated;
+    // a step outside any wave keeps the legacy latest-run fallback.
+    const wave = waveForStep(step.step);
+    if (wave) {
+      const member = wave.members.find(m => m.step === step.step);
+      return !(member && member.phase === 'sealed' && wave.state === 'integrated');
+    }
     const run = latest.get(step.step);
     return !run || run.execution !== 'completed' || run.handoff?.status !== 'recorded' || !completeOutcomes.has(run.handoff.outcome);
   }).map(step => step.step);
@@ -392,11 +431,23 @@ export function recordCheckpoint(packagePath, input) {
   if (input.status === 'complete' && !input.artifacts.length) throw new Error('A complete stage must reference its actual artifacts');
   if (input.status === 'complete' && ['implementation', 'publication'].includes(input.stage)) {
     const progress = read(join(packagePath, 'runtime/progress.json'));
+    // Wave gates run before the legacy step/handoff checks: wave members can be
+    // sealed and legacy-unchecked, so only their owning wave's integration state
+    // establishes package completion.
+    // A missing waves directory permits only legacy progress without wave fields.
+    const hasWavesProperty = Object.prototype.hasOwnProperty.call(progress, 'waves');
+    if (!hasWavesProperty && existsSync(join(packagePath, 'runtime/waves'))) throw new Error('Progress predates wave records; refresh progress before closing this stage');
+    // Any persisted waves property is gated regardless of directory presence.
+    if (hasWavesProperty || progress.waves_truncated) {
+      if (!Array.isArray(progress.waves) || progress.waves_truncated || progress.waves.some(w => w.state === 'unknown')) throw new Error('Wave records are unreadable; integrated completion cannot be established');
+      const pending = progress.waves.find(w => w.state !== 'integrated' && w.state !== 'cancelled');
+      if (pending) throw new Error(`Wave ${pending.wave_id} is ${pending.state}; publication consumes only integrated canonical target heads`);
+    }
     const unfinished = unfinishedPreparedSteps(packagePath, progress);
     if (unfinished.length) throw new Error(`Unfinished prepared steps: ${unfinished.join(', ')}; attempted steps alone do not establish package completion`);
     const latest = new Map();
-    for (const r of progress.runs) latest.set(r.step, r);
-    if ([...latest.values()].some(r => r.execution !== 'completed' || r.handoff.status !== 'recorded' || !completeOutcomes.has(r.handoff.outcome))) throw new Error('Unfinished worker/handoff obligations remain; preserve them before closing this stage');
+    for (const r of progress.runs) if (!r.wave_id) latest.set(r.step, r);
+    if ([...latest.values()].some(r => !r.wave_id && (r.execution !== 'completed' || r.handoff.status !== 'recorded' || !completeOutcomes.has(r.handoff.outcome)))) throw new Error('Unfinished worker/handoff obligations remain; preserve them before closing this stage');
   }
   const directory = safePath(packagePath, join(packagePath, 'runtime/stages'));
   const value = { version: 1, ...input, recorded_at: now(), source: 'coordinator assessment; not a runtime verification verdict' };

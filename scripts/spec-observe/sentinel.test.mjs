@@ -8,6 +8,7 @@ import childProcess, { execFileSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 
 import { SENTINEL_LIMITS, collectWorkspace, reduceConditions, renderWorkspace, enrollmentReasons } from './sentinel.mjs';
+import { projectWaveRecord, runWaveIdentity, editorSessionFiles } from './core.mjs';
 import { createWorkspace, setupStorage } from '../workspaces/store.mjs';
 import { newPackage } from '../spec-location/index.mjs';
 import { makeFixture } from '../spec-location/fixture.mjs';
@@ -1707,4 +1708,245 @@ test('a receipt names its package by reference, and a foreign reference is stale
   assert.deepEqual(snapshot.runs.map(run => run.assignment_id), ['assign-moved']);
   assert.equal(snapshot.coverage.state, 'stale');
   assert.ok(snapshot.coverage.reasons.some(reason => reason.startsWith('receipt-mismatch')));
+});
+
+// Local wave fixture helpers: version 1 records keyed by member step, with
+// phase transitions and ISO times, mirroring the step 10 on-disk record shape
+// (the wave record owns version, identity, enums and members).
+const recent = ms => ago(ms);
+function waveMember(step, phase, extra = {}) {
+  return { step, phase, transitions: [{ phase: 'queued', at: recent(120000), reason: null }, { phase, at: recent(60000), reason: null }], ...extra };
+}
+function wave(pkg, id, record) {
+  const file = join(pkg, 'runtime', 'waves', `${id}.json`);
+  mkdirSync(join(pkg, 'runtime', 'waves'), { recursive: true });
+  writeFileSync(file, JSON.stringify({ version: 1, wave_id: id, generation: 1, revision: 1,
+    state: record.state, transitions: [{ state: 'open', at: recent(120000) }, { state: record.state, at: recent(60000) }],
+    members: record.members, ...(record.extra ?? {}) }));
+  return file;
+}
+// A receipt tied to a wave member: the run record carries wave_bindings, never a
+// bare wave_id, and its current phase's run_id.
+function waveReceipt(pkg, { id, step, phase, state, backend, fallback_reason, checkout, completed = false } = {}) {
+  return receipt(pkg, { id, assignment_id: id, state, step,
+    started_at: recent(90000), ...(completed ? { finished_at: recent(30000) } : {}),
+    ...(checkout ? { checkout } : {}),
+    wave_bindings: { wave_id: 'w1', step_number: step, phase, attempt_id: `attempt-${step}`, candidate: null } });
+}
+
+// Run alone: node --test --test-name-pattern='^planned inventory: wave members keep the package active' scripts/spec-observe/sentinel.test.mjs
+test('planned inventory: wave members keep the package active after one sibling finishes', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'wave-planned'), pkg = pack(repo);
+  const phases = ['sealed', 'implementing', 'reviewing', 'fixing', 'confirming'];
+  const members = {};
+  for (let step = 1; step <= 5; step++)
+    members[String(step)] = waveMember(step, phases[step - 1], { run_id: `r${step}`,
+      workspace: { backend: 'overlayfs' } });
+  const record = wave(pkg, 'w1', { state: 'running', members });
+  for (let step = 1; step <= 5; step++)
+    waveReceipt(pkg, { id: `r${step}`, step, phase: phases[step - 1], state: step === 1 ? 'completed' : 'running', completed: step === 1 });
+  // runtime/run.json is a copy of r1 (the sealed sibling's completed receipt).
+  writeFileSync(join(pkg, 'runtime', 'run.json'), JSON.stringify({
+    id: 'r1', assignment_id: 'r1', package: pkg, state: 'completed', step: 1, started_at: recent(90000), finished_at: recent(30000),
+    wave_bindings: { wave_id: 'w1', step_number: 1, phase: 'sealed', attempt_id: 'attempt-1', candidate: null } }));
+
+  const snapshot = await collect({ roots: [repo], indexDir: f.indexDir, now });
+  assert.equal(snapshot.planned_packages.some(row => row.package === pkg), false, 'a wave member keeps the package active');
+  assert.equal(snapshot.recently_completed.some(row => row.package === pkg), false, 'no recent completion while the wave runs');
+  assert.deepEqual(snapshot.runs.map(run => run.assignment_id).sort(), ['r1', 'r2', 'r3', 'r4', 'r5']);
+  for (let step = 1; step <= 5; step++) {
+    const run = snapshot.runs.find(item => item.assignment_id === `r${step}`);
+    assert.equal(run.is_current_assignment, true, `r${step} is the current assignment`);
+    assert.deepEqual(run.wave, { wave_id: 'w1', step, phase: phases[step - 1], backend: 'overlayfs', fallback_reason: null });
+  }
+  assert.equal(snapshot.waves.length, 1);
+  const row = snapshot.waves[0];
+  assert.equal(row.wave_id, 'w1');
+  assert.equal(row.state, 'running');
+  assert.equal(row.member_count, 5);
+  assert.equal(row.active_count, 4);
+  assert.equal(row.sealed_count, 1);
+  assert.equal(row.blocked_count, 0);
+  assert.equal(row.omitted_count, 0);
+  assert.equal(row.record_path, record);
+  assert.match(renderWorkspace(snapshot).join('\n'), /Wave w1 running · 5 members · 4 active · 1 sealed · 0 blocked · omitted 0/);
+});
+
+// Run alone: node --test --test-name-pattern='^planned inventory: wave additive index fields' scripts/spec-observe/sentinel.test.mjs
+test('planned inventory: wave additive index fields keep prepared readiness until a wave opens', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'wave-additive'), pkg = pack(repo);
+  writeFileSync(join(pkg, 'spec-steps.json'), JSON.stringify({ setup: { command: 'npm ci' }, steps: [
+    { step: 1, name: 'Prepare inputs', description: 'Prepare bounded inputs.', difficulty: 'medium', visualDesign: false, evidence: [],
+      requires: [], writes: ['spec.md'], wave_checks: ['unit'], resources: { cpu: 1 } },
+    { step: 2, name: 'Draft reader', description: 'Draft the bounded reader.', difficulty: 'medium', visualDesign: false, evidence: [],
+      requires: [1], writes: ['reader.mjs'], wave_checks: ['lint'], resources: { cpu: 1 } }] }));
+  writeFileSync(join(pkg, 'spec-prepare.md'), '# Preparation\n\nOutcome: prepared\nPrepared: 2026-10-06\n');
+  writeFileSync(join(pkg, 'proposal.md'), '---\nverdict: COMPATIBLE\ncritique_recommended: true\n---\n\n# Proposal\n');
+  writeFileSync(join(pkg, 'critique.md'), '# Critique\n');
+
+  const prepared = await collect({ roots: [repo], indexDir: f.indexDir, now });
+  const row = prepared.planned_packages.find(item => item.package === pkg);
+  assert.ok(row, 'a prepared package without wave records is planned inventory');
+  assert.equal(row.prepared, true);
+  assert.equal(row.step_count, 2);
+
+  const record = wave(pkg, 'w1', { state: 'open', members: {
+    1: waveMember(1, 'queued'), 2: waveMember(2, 'queued') } });
+  const opened = await collect({ roots: [repo], indexDir: f.indexDir, now });
+  assert.equal(opened.planned_packages.some(item => item.package === pkg), false, 'an open wave opens the package lifecycle');
+  assert.equal(opened.waves.length, 1);
+  assert.equal(opened.waves[0].state, 'open');
+  assert.equal(opened.waves[0].member_count, 2);
+  assert.equal(opened.waves[0].active_count, 0);
+  assert.equal(opened.waves[0].queued_count, 2);
+  assert.equal(opened.waves[0].record_path, record);
+});
+
+// Run alone: node --test --test-name-pattern='^planned inventory: wave unreadable record stays unknown' scripts/spec-observe/sentinel.test.mjs
+test('planned inventory: wave unreadable record stays unknown, never planned', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'wave-unreadable');
+  const preparedFixture = path => {
+    writeFileSync(join(path, 'spec-steps.json'), JSON.stringify({ steps: [
+      { step: 1, name: 'Prepare inputs', description: 'Prepare bounded inputs.', difficulty: 'medium', visualDesign: false, evidence: [] }] }));
+    writeFileSync(join(path, 'spec-prepare.md'), '# Preparation\n\nOutcome: prepared\nPrepared: 2026-10-06\n');
+    writeFileSync(join(path, 'proposal.md'), '---\nverdict: COMPATIBLE\ncritique_recommended: true\n---\n\n# Proposal\n');
+    writeFileSync(join(path, 'critique.md'), '# Critique\n');
+  };
+  const a = pack(repo, 'wave-invalid-json');
+  const b = pack(repo, 'wave-paused');
+  preparedFixture(a);
+  preparedFixture(b);
+  const fileA = join(a, 'runtime', 'waves', 'w1.json');
+  mkdirSync(join(a, 'runtime', 'waves'), { recursive: true });
+  writeFileSync(fileA, '{');
+  const fileB = wave(b, 'w1', { state: 'paused', members: { 1: waveMember(1, 'queued') } });
+
+  const snapshot = await collect({ roots: [repo], indexDir: f.indexDir, now });
+  for (const path of [a, b]) assert.equal(snapshot.planned_packages.some(item => item.package === path), false,
+    `${basename(path)} has no planned row while its wave record is unreadable`);
+  assert.equal(snapshot.coverage.state, 'partial');
+  assert.ok(snapshot.coverage.reasons.includes(`wave-invalid: ${fileA}`), JSON.stringify(snapshot.coverage.reasons));
+  assert.ok(snapshot.coverage.reasons.includes(`wave-invalid: ${fileB}`), JSON.stringify(snapshot.coverage.reasons));
+  assert.equal(snapshot.waves.length, 2);
+  const byPath = file => snapshot.waves.find(item => item.record_path === file);
+  assert.equal(byPath(fileA).state, 'unknown');
+  assert.equal(byPath(fileA).reason, 'invalid-json');
+  assert.equal(byPath(fileB).state, 'unknown');
+  assert.equal(byPath(fileB).reason, 'unknown-state');
+});
+
+// Run alone: node --test --test-name-pattern='^wave observation: active members survive receipt caps' scripts/spec-observe/sentinel.test.mjs
+test('wave observation: active members survive receipt caps and member display bounds', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'wave-caps'), pkg = pack(repo);
+  // 120 non-wave historical completed receipts spend the receipt walk first.
+  for (let index = 0; index < 120; index++)
+    receipt(pkg, { id: `history-${String(index).padStart(3, '0')}`, assignment_id: `history-${String(index).padStart(3, '0')}`,
+      state: 'completed', started_at: recent(300000 + index), finished_at: recent(200000 + index) });
+  const members = {};
+  for (let step = 1; step <= 16; step++) members[String(step)] = waveMember(step, 'implementing', { run_id: `a${step}` });
+  for (const step of [17, 18]) members[String(step)] = waveMember(step, 'blocked');
+  members['19'] = waveMember(19, 'cancelled');
+  for (let step = 20; step <= 29; step++) members[String(step)] = waveMember(step, 'queued');
+  for (let step = 30; step <= 40; step++) members[String(step)] = waveMember(step, 'sealed', { run_id: `s${step}` });
+  const record = wave(pkg, 'w1', { state: 'running', members });
+  for (let step = 1; step <= 16; step++)
+    receipt(pkg, { id: `a${step}`, assignment_id: `a${step}`, state: 'running', step, started_at: recent(90000),
+      wave_bindings: { wave_id: 'w1', step_number: step, phase: 'implementing', attempt_id: `attempt-${step}`, candidate: null } });
+  for (let step = 30; step <= 40; step++)
+    receipt(pkg, { id: `s${step}`, assignment_id: `s${step}`, state: 'completed', step, started_at: recent(90000), finished_at: recent(30000),
+      wave_bindings: { wave_id: 'w1', step_number: step, phase: 'sealed', attempt_id: `attempt-${step}`, candidate: null } });
+
+  const snapshot = await collect({ roots: [repo], indexDir: f.indexDir, now });
+  assert.ok(snapshot.coverage.reasons.some(reason => reason.startsWith('receipts-cap:')), JSON.stringify(snapshot.coverage.reasons));
+  for (let step = 1; step <= 16; step++) {
+    const run = snapshot.runs.find(item => item.assignment_id === `a${step}`);
+    assert.ok(run, `active member run a${step} survives the receipt cap`);
+    assert.equal(run.is_current_assignment, true, `a${step} stays a current assignment`);
+  }
+  const row = snapshot.waves.find(item => item.record_path === record);
+  assert.equal(row.member_count, 40);
+  assert.equal(row.members.length, 32);
+  assert.equal(row.omitted_count, 8);
+  assert.deepEqual(row.members.map(member => member.step),
+    [...Array.from({ length: 19 }, (_, index) => index + 1), ...Array.from({ length: 10 }, (_, index) => index + 20), 30, 31, 32]);
+  assert.equal(row.record_path, record);
+});
+
+// Run alone: node --test --test-name-pattern='^wave observation: sentinel reports wave runs from receipts' scripts/spec-observe/sentinel.test.mjs
+test('wave observation: sentinel reports wave runs from receipts without opening merged checkouts', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'wave-checkout'), pkg = pack(repo);
+  const missing = join(f.dir, 'attempts', 'a1', 'merged');
+  const empty = join(f.dir, 'attempts', 'a2', 'worktree');
+  mkdirSync(empty, { recursive: true });
+  const member1 = { step: 1, phase: 'implementing', run_id: 'a1', workspace: { backend: 'overlayfs', merged: missing } };
+  const member2 = { step: 2, phase: 'implementing', run_id: 'a2', workspace: { backend: 'worktree', backendReason: 'userns-denied', worktree: empty } };
+  // Member 3 is an external checkout: its receipt claims one path while the
+  // member records another, so the run stays stale without reading a checkout.
+  const foreignReceiptCheckout = join(f.dir, 'attempts', 'a3', 'elsewhere');
+  const member3 = { step: 3, phase: 'implementing', run_id: 'a3', workspace: { backend: 'overlayfs', merged: join(f.dir, 'attempts', 'a3', 'merged') } };
+  wave(pkg, 'w1', { state: 'running', members: { 1: member1, 2: member2, 3: member3 } });
+  waveReceipt(pkg, { id: 'a1', step: 1, phase: 'implementing', state: 'running', backend: 'overlayfs', checkout: missing });
+  waveReceipt(pkg, { id: 'a2', step: 2, phase: 'implementing', state: 'running', backend: 'worktree', fallback_reason: 'userns-denied', checkout: empty });
+  const file3 = waveReceipt(pkg, { id: 'a3', step: 3, phase: 'implementing', state: 'running', backend: 'overlayfs', checkout: foreignReceiptCheckout });
+
+  const snapshot = await collect({ roots: [repo], indexDir: f.indexDir, now });
+  const byAssignment = id => snapshot.runs.find(run => run.assignment_id === id);
+  const one = byAssignment('a1'), two = byAssignment('a2'), three = byAssignment('a3');
+  assert.equal(one.checkout, missing, 'an absent merged checkout is still the reported member checkout');
+  assert.equal(one.coverage.reasons.some(reason => reason.startsWith('checkout-')), false);
+  assert.deepEqual(one.wave && [one.wave.backend, one.wave.fallback_reason], ['overlayfs', null]);
+  assert.equal(two.checkout, empty, 'an empty worktree fallback is still the reported member checkout');
+  assert.equal(two.coverage.reasons.some(reason => reason.startsWith('checkout-')), false);
+  assert.deepEqual(two.wave && [two.wave.backend, two.wave.fallback_reason], ['worktree', 'userns-denied']);
+  assert.equal(three.coverage.state, 'stale');
+  assert.ok(three.coverage.reasons.includes(`checkout-mismatch: ${file3}`), JSON.stringify(three.coverage.reasons));
+});
+
+// Run alone: node --test --test-name-pattern='^wave observation: shared projection rejects invalid identities and timestamps' scripts/spec-observe/sentinel.test.mjs
+test('wave observation: shared projection rejects invalid identities and timestamps', () => {
+  const at = '2026-10-06T12:00:00.000Z';
+  const member = { step: 1, phase: 'implementing', transitions: [{ phase: 'implementing', at }] };
+  const record = (overrides = {}) => ({ version: 1, wave_id: 'w1', state: 'repairing',
+    transitions: [{ state: 'repairing', at }], members: { 1: { ...member } }, ...overrides });
+  const recordPath = join('/pkg/runtime/waves', 'w1.json');
+  const refusal = value => {
+    const result = projectWaveRecord(value, recordPath);
+    assert.equal(result.ok, false, `refused: ${JSON.stringify(value)}`);
+    assert.equal(result.record_path, recordPath);
+    return result.reason;
+  };
+
+  const base = projectWaveRecord(record(), recordPath);
+  assert.equal(base.ok, true, JSON.stringify(base));
+  assert.equal(base.wave.wave_id, 'w1');
+  assert.equal(base.wave.state, 'repairing');
+  assert.deepEqual(base.wave.members.map(item => item.step), [1]);
+
+  const refusals = [
+    [record({ version: 2 }), 'unsupported-version'],
+    [record({ wave_id: 'other' }), 'invalid-shape'],
+    [record({ state: 'unknownstate' }), 'unknown-state'],
+    [record({ members: { 1: { ...member, phase: 'unknownmemberphase' } } }), 'unknown-phase'],
+    [record({ members: { 1.5: member } }), 'invalid-shape'],
+    [record({ transitions: [{ state: 'repairing', at: 'not-iso' }] }), 'invalid-shape'],
+    [record({ members: { 1: { ...member, transitions: [{ phase: 'implementing', at: 'not-iso' }] } } }), 'invalid-shape'],
+  ];
+  for (const [value, reason] of refusals) assert.equal(refusal(value), reason, JSON.stringify(value));
+
+  // A command phase outranks the conflicting wave_bindings the same run carries.
+  const command = runWaveIdentity({ command_phase: { wave_id: 'cw1', subject: { kind: 'step', step: 4 } },
+    wave_bindings: { wave_id: 'bw1', step_number: 9, phase: 'implementing', attempt_id: 'attempt-9', candidate: null } });
+  assert.deepEqual(command, { wave_id: 'cw1', step_number: 4, attempt_id: 'attempt-9', phase: 'command', candidate: null });
+
+  // A candidate model run is never its member step.
+  assert.deepEqual(runWaveIdentity({ wave_bindings: { wave_id: 'w1', step_number: 2, phase: 'reviewing', candidate: 3 } }),
+    { wave_id: 'w1', step_number: null, attempt_id: null, phase: 'reviewing', candidate: 3 });
+  assert.equal(runWaveIdentity({ wave_bindings: { wave_id: 'w1', step_number: 2, candidate: 0 } }).candidate, null);
+
+  // A bare top-level wave_id is not a binding.
+  assert.equal(runWaveIdentity({ wave_id: 'w1', step: 1 }), null);
+
+  // Listed editor sessions and the legacy anchor merge without duplicates.
+  assert.deepEqual(editorSessionFiles({ editor_session: 'legacy.jsonl' }, ['a.jsonl', 'legacy.jsonl', 'a.jsonl']),
+    ['a.jsonl', 'legacy.jsonl']);
 });
