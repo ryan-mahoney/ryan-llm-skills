@@ -191,6 +191,7 @@ test('repeated starts return the same run before and after completion; a second 
   const first = await runtime.start(f.input, '/parent/session.jsonl');
   assert.equal((await runtime.start(f.input)).run_id, first.run_id);
   await assert.rejects(() => new Runtime(f.options).start({ ...f.input, assignment_id: 'another-step' }), /run-active/);
+  assert.equal(f.pids.length, 1, 'a refused second coordinator launched no process');
   const completed = await f.finished;
   assert.equal(completed.state, 'completed');
   assert.equal(completed.result, 'Implemented; focused check passed.');
@@ -199,6 +200,12 @@ test('repeated starts return the same run before and after completion; a second 
   assert.equal(record.parent_session, '/parent/session.jsonl');
   assert.throws(() => assertLease(record), /revoked/, 'a finished run no longer holds the writer role');
   assert.match(readFileSync(join(f.packagePath, 'runtime/events.jsonl'), 'utf8'), /run_finished/);
+  // A distinct assignment can start normally after the prior run ends. Cancel
+  // the replacement through the runtime that
+  // owns it so no retained deadline timer outlives the package this test removes.
+  const replacement = await runtime.start({ ...f.input, assignment_id: 'after-completion' });
+  assert.notEqual(replacement.run_id, first.run_id);
+  await runtime.cancel(f.packagePath, replacement.run_id);
 });
 
 test('a rejected cancellation preserves the lease and prevents replacement', async t => {
@@ -289,7 +296,10 @@ test('start creates the target worktree on the target branch, records it in loca
   assert.match(readFileSync(f.step, 'utf8'), /<!-- spec-location:begin -->[\s\S]*Prepared step/, 'a card written after package creation is stamped on first dispatch');
   assert.equal(JSON.parse(readFileSync(join(f.dir, 'index', `${record.id}.json`), 'utf8')).package_ref, 'demo/feature');
   assert.equal(existsSync(join(f.packagePath, 'runtime/package.lock')), false);
-  assert.deepEqual(readdirSync(join(f.packagePath, 'runtime')).filter(name => name.endsWith('.lock')), []);
+  // The two remaining `.lock` entries are synchronization anchors, not writer
+  // claims: the event-append and progress-refresh flocks never unlink their
+  // anchor file, so a waiter can always re-acquire the same inode.
+  assert.deepEqual(readdirSync(join(f.packagePath, 'runtime')).filter(name => name.endsWith('.lock')).sort(), ['events.jsonl.lock', 'progress.lock']);
 });
 
 test('a package ref starts the same run as its folder', async t => {

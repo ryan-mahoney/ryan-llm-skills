@@ -300,6 +300,9 @@ async function computeProgress(packagePath) {
 // Cross-process serialization: flock guards recompute + history/progress writes, so
 // concurrent attempts/coordinators cannot interleave a torn ledger. The process-local
 // `refreshes` chain below still coalesces callers within one process.
+// `progress.lock` is a permanent synchronization anchor: it is intentionally never
+// unlinked, since a waiter can hold the old inode after an unlink and a fresh lock
+// file would then let two refreshers proceed concurrently.
 function runRefreshWorker(packagePath) {
   mkdirSync(join(packagePath, 'runtime'), { recursive: true });
   const lock = join(packagePath, 'runtime', 'progress.lock');

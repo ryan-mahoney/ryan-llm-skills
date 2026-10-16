@@ -341,6 +341,9 @@ export function event(record, name, detail = {}) {
   // Every writer, serial or wave, appends through the same flock: no data is
   // interpolated into a shell, a serial writer cannot interleave with a
   // concurrent wave member, and a failed append is surfaced rather than lost.
+  // `${file}.lock` is a permanent synchronization anchor: it is intentionally
+  // never unlinked, since a waiter can hold the old inode after an unlink and a
+  // fresh lock file would then let two writers proceed concurrently.
   const appended = spawnSync('flock', ['-x', `${file}.lock`, process.execPath, RUNTIME_MODULE_PATH, 'append-event'],
     { input: JSON.stringify({ file, line }), encoding: 'utf8' });
   if (appended.error || appended.status !== 0)
@@ -844,6 +847,11 @@ export class Runtime {
   }
   async start(input, parentSession) {
     const requestedAt = input.dispatch_requested_at || timestamp();
+    // Overlap admission compares this request against a prior run's own clock.
+    // A caller may supply a historical dispatch_requested_at, so the overlap
+    // window is measured from the moment this process actually entered start(),
+    // never from the (possibly backdated) caller timestamp recorded on the run.
+    const enteredAt = timestamp();
     if (process.platform === 'win32') throw new Error('spec-runtime requires POSIX process groups');
     // Internal, validated run provenance is never accepted from a caller spread.
     for (const field of ['wave_bindings', 'wave_path']) {
@@ -897,15 +905,36 @@ export class Runtime {
         throw refusalError({ code: 'wave-active', message: `Package ${config.package_ref} holds an active wave claim; a serial run cannot replace it.`,
           remedy: 'Finish or recover the wave before starting a serial run.' });
     }
+    // Request-time admission: validation is async, so a prior run can reach a
+    // terminal state while this request is being resolved. A terminal prior whose
+    // lifetime overlaps this request's entry still occupied the package during
+    // admission and must refuse a different assignment. The recorded dispatch
+    // timestamp is not trusted for overlap; enteredAt is this request's own clock.
+    // Timestamp equality is not overlap: a prior run that finished in the same
+    // millisecond as this request entered can already be terminal beforehand, so
+    // overlap requires priorFinished strictly after enteredAt. ISO timestamps
+    // carry only millisecond precision, so equal values are treated
+    // conservatively as no overlap (false negative preferred to false positive).
     const latest = join(runtimeDir, 'run.json');
     if (!config.wave_bindings && existsSync(latest)) {
       const prior = read(latest);
-      if (['running', 'cancelling', 'blocked'].includes(prior.state)) {
+      const active = ['running', 'cancelling', 'blocked'].includes(prior.state);
+      const priorStarted = Number.isFinite(Date.parse(prior.started_at)) ? Date.parse(prior.started_at) : null;
+      const priorFinished = Number.isFinite(Date.parse(prior.finished_at)) ? Date.parse(prior.finished_at) : null;
+      const overlappedThisRequest = priorStarted !== null && priorFinished !== null
+        && priorStarted <= Date.parse(enteredAt) && priorFinished > Date.parse(enteredAt);
+      if (active) {
         const pid = prior.coordinator_pid ?? prior.pid;
         if (processAlive(pid)) throw refusalError({ code: 'run-active', message: `Run ${prior.id} is ${prior.state} and its coordinator (pid ${pid}) is alive.`,
           remedy: 'Await its completion or confirmed cancellation; start a new run only after it ends.' });
+        // Only an active run with a dead coordinator is marked stale; a run that
+        // completed during admission keeps its truthful terminal state.
         prior.state = 'stale'; prior.finished_at = timestamp();
         save(prior); event(prior, 'run_stale', { coordinator_pid: pid });
+      }
+      else if (overlappedThisRequest) {
+        throw refusalError({ code: 'run-active', message: `Run ${prior.id} ended at ${prior.finished_at} after this request entered the package.`,
+          remedy: 'Await its completion or confirmed cancellation; start a new run only after it ends.' });
       }
     }
     const id = randomUUID();
