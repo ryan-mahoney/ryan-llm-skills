@@ -1390,3 +1390,98 @@ test('wave integration: promotion recovery adopts an orphaned pre-intent checkou
   assert.equal(replay.ref, recovered.ref, 'the replay returns the same branch ref');
   assert.equal(git(canonical.worktree, ['rev-parse', 'refs/heads/main']), candidate, 'the replay leaves main at C');
 });
+
+// ---------------------------------------------------------------------------
+// Case 11: a thrown repair transport blocks drain-unknown and a confirmed
+// drain resumes the retained conflict from its original parents.
+// ---------------------------------------------------------------------------
+
+test('wave integration: confirmed drain resumes a blocked conflict repair', { timeout: TIMEOUT }, async t => {
+  const canonical = makeCanonical(t, 'wave-repair-drain', { extra: { 'src/shared.js': 'base-shared\n' } });
+  const waveRoot = freshRoot(t, 'wave-repair-drain-root');
+  const ownership = createOwnership({ registryRoot: freshRoot(t, 'wave-repair-drain-ownership') });
+  const wave = 'w-repair-drain';
+  const member1 = await sealedMember(t, {
+    canonical, waveRoot, ownership, wave, step: 1,
+    commits: [{ write: { path: 'src/shared.js', contents: 'one version\n' }, commit: 'step 1' }],
+  });
+  const member2 = await sealedMember(t, {
+    canonical, waveRoot, ownership, wave, step: 2,
+    commits: [{ write: { path: 'src/shared.js', contents: 'two version\n' }, commit: 'step 2' }],
+  });
+  const { recordPath } = writeWaveRecord(t, { waveId: wave });
+  const pkg = await makePackageFixture({ prefix: 'wave-repair-drain-pkg-', repos: [wave], targets: [wave] });
+  t.after(() => rmSync(pkg.dir, { recursive: true, force: true }));
+  const fixture = fixtureFor(t, wave, recordPath, canonical, waveRoot, ownership, pkg, [member1, member2]);
+  // The members keep their substituted overlay fixtures; the candidate phase
+  // itself runs on the worktree backend.
+  const ctx = await ctxFor(fixture, { mode: 'worktree' });
+
+  const stopped = await assembleCandidate(ctx);
+  ctx.revision = stopped.revision;
+  assert.equal(stopped.status, 'conflict');
+  assert.equal(stopped.conflict.step, 2);
+  const originalParents = [...stopped.conflict.parents];
+  assert.deepEqual(originalParents, [originalParents[0], member2.sealedHead], 'conflict parents are [first merge, second head]');
+
+  // Model a mid-materialize crash: the first repair command (the clean probe)
+  // throws through the transport without launching a child, so the phase is
+  // genuinely unknown and both claims stay held.
+  const originalRun = ctx.runCommand;
+  let thrown = false;
+  ctx.runCommand = async (record, command, timeoutSeconds, signal) => {
+    if (!thrown) { thrown = true; throw new Error('repair transport crashed'); }
+    return originalRun(record, command, timeoutSeconds, signal);
+  };
+
+  const blocked = await prepareIntegrationRepair(ctx);
+  ctx.revision = blocked.revision;
+  assert.equal(blocked.status, 'blocked');
+  assert.equal(blocked.reason, 'drain-unknown');
+  assert.equal(blocked.blocked_reason, 'drain-unknown');
+  assert.equal(blocked.claims, 'kept');
+
+  const blockedRecord = readWaveRecord(recordPath);
+  assert.deepEqual(blockedRecord.target.integration.conflict, stopped.conflict, 'the conflict is retained across the failed prepare');
+  assert.equal(blockedRecord.target.integration.repair_request ?? null, null, 'a drain-unknown prepare writes no repair request');
+  const strandedPhase = blockedRecord.target.integration.phase;
+  const phaseClaim = strandedPhase.claim;
+  const capacityClaim = strandedPhase.capacity_claim;
+  assert.ok(phaseClaim && capacityClaim, 'the stranded phase journals both a claim and a capacity_claim');
+  const held = (await ownership.inspectClaims({ packageId: ctx.packageId })).claims;
+  assert.ok(held.some(claim => claim.token === phaseClaim.token), 'the stranded phase claim is currently held');
+  assert.ok(held.some(claim => claim.token === capacityClaim.token), 'the stranded capacity claim is currently held');
+
+  // Without a confirmed drain the retained claims make a retry refuse rather
+  // than double-reserve; neither the journal nor the claims change.
+  const before = readFileSync(recordPath);
+  const claimsBefore = await ownership.inspectClaims({ packageId: ctx.packageId });
+  const refused = await prepareIntegrationRepair({ ...ctx, revision: readWaveRecord(recordPath).revision })
+    .then(result => ({ result }), error => ({ error }));
+  if (refused.error) {
+    assert.ok(['drain-unknown', 'no-repair-pending'].includes(refused.error.reason), 'the retry without a confirmed drain is refused');
+  } else {
+    assert.equal(refused.result.status, 'blocked', 'the retry without a confirmed drain blocks');
+    assert.ok(['drain-unknown', 'no-repair-pending'].includes(refused.result.reason ?? refused.result.blocked_reason), 'the block names a drain refusal');
+  }
+  assert.deepEqual(readFileSync(recordPath), before, 'the refused retry does not mutate the journal');
+  assert.deepEqual(await ownership.inspectClaims({ packageId: ctx.packageId }), claimsBefore, 'the refused retry leaves the retained claims unchanged');
+
+  // Restore the real transport and confirm the drain: the retry resumes the
+  // retained conflict with its original parents and releases both stranded
+  // claims.
+  ctx.runCommand = originalRun;
+  const resumed = await prepareIntegrationRepair({ ...ctx, revision: readWaveRecord(recordPath).revision }, { drain: 'confirmed' });
+  ctx.revision = resumed.revision;
+  assert.equal(resumed.status, 'repair-ready');
+  assert.equal(resumed.repair.kind, 'integration-repair');
+  assert.equal(resumed.repair.trigger, 'conflict');
+  assert.deepEqual(resumed.repair.parents, originalParents, 'the resumed repair keeps the original conflict parents');
+
+  const claimsAfter = (await ownership.inspectClaims({ packageId: ctx.packageId })).claims;
+  assert.equal(claimsAfter.some(claim => claim.token === phaseClaim.token), false, 'the stranded phase claim is released');
+  assert.equal(claimsAfter.some(claim => claim.token === capacityClaim.token), false, 'the stranded capacity claim is released');
+  assert.deepEqual([...new Set(claimsAfter.map(claim => claim.kind))], ['package'], 'only the package claim remains after the confirmed drain');
+  assert.equal(git(canonical.worktree, ['rev-parse', 'refs/heads/main']), canonical.base, 'canonical main stays at B');
+  assert.deepEqual(readWaveRecord(recordPath).target.integration.conflict, stopped.conflict, 'the original conflict is preserved');
+});

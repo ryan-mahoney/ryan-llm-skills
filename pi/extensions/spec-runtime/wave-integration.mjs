@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { recordVerification } from './completion.mjs';
 import { createOverlayPhases } from './overlay.mjs';
 import { importSealedHead, prepareCandidateWorkspace, remountRetainedWorkspace } from './step-workspaces.mjs';
+import { resumeIntegrationRepair } from './wave-integration-recovery.mjs';
 const GIT_RUN = { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] };
 const GIT_TIMEOUT_MS = 60_000;
 const WAVE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
@@ -442,9 +443,14 @@ function repairPacket({ ctx, integration, trigger, step, attempt, parents, faile
     phase_claim: phaseClaim, review_scope: { parents, head: null },
   };
 }
-export async function prepareIntegrationRepair(ctx, { explicit = false } = {}) {
-  const record = validateContext(ctx);
+export async function prepareIntegrationRepair(ctx, { explicit = false, drain } = {}) {
+  let record = validateContext(ctx);
   await inspectPackageClaim(ctx);
+  // A confirmed-drain retry of a stranded repair releases the recorded claims
+  // and CASes the journal back to a repairable state before the ordinary
+  // replay/trigger logic below sees the original conflict or failed checks.
+  record = await resumeIntegrationRepair(ctx, record, { drain }, { releaseRecordedClaim, updateWaveRecord, refuse });
+  ctx = { ...ctx, revision: record.revision };
   const integration = record.target?.integration;
   if (!integration) refuse('no-repair-pending', 'no integration state exists');
   const replay = existingRepairPacket(integration);
