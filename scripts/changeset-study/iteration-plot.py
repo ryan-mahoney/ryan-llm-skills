@@ -16,7 +16,7 @@ category = {"planning": 0, "repair-planning": 0, "discovery-planning": 0, "imple
 titles = {"hard-context-calibration": "Context calibration", "hard-dependency-handoff": "Dependency handoff",
           "hard-lifecycle-extract": "Lifecycle extraction"}
 plt.rcParams.update({"font.family": "DejaVu Sans", "svg.fonttype": "none", "font.size": 10})
-fig, axes = plt.subplots(3, 1, figsize=(12, 10.5))
+fig, axes = plt.subplots(3, 1, figsize=(12, max(10.5, 5 + len(report['iterations']) * 1.05)))
 fig.suptitle("Sol-only changesets: where each iteration spends time", x=.025, ha="left", fontsize=17, weight="bold")
 for ax, reference in zip(axes, report["references"]):
     task = reference["task"]
@@ -31,13 +31,14 @@ for ax, reference in zip(axes, report["references"]):
             stages[category.get(stage["name"], 5)] += stage["elapsed_ms"] / 1000
         seconds = cell["process_elapsed_ms"] / 1000
         stages[5] += max(0, seconds - sum(stages))
-        delivered = native or cell["delivered"]
+        delivered = native or cell.get("qualified_delivery", cell["delivered"])
         left = 0
         for duration, color in zip(stages, colors):
             ax.barh(y, duration, left=left, height=.62, color=color,
                     hatch=None if delivered else "///", edgecolor="white", linewidth=.35)
             left += duration
-        ax.text(seconds + maximum * .015, y, f'{seconds:.1f}s · {"delivered" if delivered else "incomplete"}', va="center", fontsize=9)
+        status = "known defect" if (cell.get("posthoc") or {}).get("passed") is False else "delivered" if delivered else "incomplete"
+        ax.text(seconds + maximum * .015, y, f'{seconds:.1f}s · {status}', va="center", fontsize=9)
     ax.axvline(reference["process_elapsed_ms"] / 1000, color="#374151", linestyle=":", alpha=.6)
     ax.set_yticks(range(len(rows)), [r[0] for r in rows])
     ax.set_ylim(len(rows) - .4, -.6)
@@ -48,7 +49,7 @@ for ax, reference in zip(axes, report["references"]):
     ax.grid(axis="x", alpha=.15)
     ax.set_axisbelow(True)
 fig.legend([Patch(color=c) for c in colors], groups, loc="upper left", bbox_to_anchor=(.02, .955), ncol=3, fontsize=9)
-fig.text(.025, .015, "Hatched bars did not fully deliver. Dotted lines mark the historical native reference.\n"
+fig.text(.025, .015, "Hatched bars failed delivery or required posthoc audit. Dotted lines mark the historical native reference.\n"
          "Adaptive development on three exposed tasks; no population speedup claim. Native-agent time includes its own tools and checks.",
          color="#4b5563", fontsize=9)
 fig.tight_layout(rect=[.01, .065, .99, .9], h_pad=1.7)

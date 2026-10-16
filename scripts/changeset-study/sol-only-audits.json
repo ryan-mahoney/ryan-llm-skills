@@ -1,0 +1,457 @@
+{
+  "schema_version": 1,
+  "required_tasks": [
+    "hard-dependency-handoff"
+  ],
+  "note": "Posthoc path-boundary diagnostic after candidate freeze; no model feedback. Final diagnostic uses real Git repositories and also checks Git failure. Earlier fixture assumed a standalone formatter and could not exercise the repeat that inlined parsing in runEditor; retain that fixture error separately. All five candidates were rerun with the final diagnostic.",
+  "reference_results": [
+    {
+      "task": "hard-dependency-handoff",
+      "schema_version": 2,
+      "scope": "Exact candidate dirty-state block and same-file functions against real disposable Git repositories. Does not exercise prompt launch or receipt loading. Posthoc only; no model feedback.",
+      "candidate_hash": "04d4b6f0c63216a6be5112647330c6fda883a826157d691590e68b23521d36b6",
+      "passed": true,
+      "rows": [
+        {
+          "case": "unstaged",
+          "expected": [
+            "file.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "file.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "staged",
+          "expected": [
+            "file.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "file.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "rename",
+          "expected": [
+            "new.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "new.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "mixed",
+          "expected": [
+            "staged.txt",
+            "unstaged.txt",
+            "new.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "staged.txt",
+              "unstaged.txt",
+              "new.txt"
+            ],
+            "dirty_count": 3
+          },
+          "passed": true
+        },
+        {
+          "case": "leading-space-name",
+          "expected": [
+            " leading.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              " leading.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "git-error",
+          "expected": null,
+          "actual": {
+            "dirty_paths": null,
+            "dirty_count": null
+          },
+          "passed": true
+        }
+      ],
+      "elapsed_ms": 108.247914
+    }
+  ],
+  "results": [
+    {
+      "run": "04-checked-ranges",
+      "task": "hard-dependency-handoff",
+      "schema_version": 2,
+      "scope": "Exact candidate dirty-state block and same-file functions against real disposable Git repositories. Does not exercise prompt launch or receipt loading. Posthoc only; no model feedback.",
+      "candidate_hash": "eac7d7d58082eeba8d3059c6f97c9a8bc8265634a1ec6b56b1261c0bd7b0d2b8",
+      "passed": false,
+      "rows": [
+        {
+          "case": "unstaged",
+          "expected": [
+            "file.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "ile.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": false
+        },
+        {
+          "case": "staged",
+          "expected": [
+            "file.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "file.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "rename",
+          "expected": [
+            "new.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "new.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "mixed",
+          "expected": [
+            "staged.txt",
+            "unstaged.txt",
+            "new.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "staged.txt",
+              "unstaged.txt",
+              "new.txt"
+            ],
+            "dirty_count": 3
+          },
+          "passed": true
+        },
+        {
+          "case": "leading-space-name",
+          "expected": [
+            " leading.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "leading.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": false
+        },
+        {
+          "case": "git-error",
+          "expected": null,
+          "actual": {
+            "dirty_paths": null,
+            "dirty_count": null
+          },
+          "passed": true
+        }
+      ],
+      "elapsed_ms": 104.227432
+    },
+    {
+      "run": "05-checked-ranges-repeat",
+      "task": "hard-dependency-handoff",
+      "schema_version": 2,
+      "scope": "Exact candidate dirty-state block and same-file functions against real disposable Git repositories. Does not exercise prompt launch or receipt loading. Posthoc only; no model feedback.",
+      "candidate_hash": "595d87e1eda298793c5b7dcf4f53a0ac6ee975763961235ce784ef2649061981",
+      "passed": false,
+      "rows": [
+        {
+          "case": "unstaged",
+          "expected": [
+            "file.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "file.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "staged",
+          "expected": [
+            "file.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              " file.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": false
+        },
+        {
+          "case": "rename",
+          "expected": [
+            "new.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              " new.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": false
+        },
+        {
+          "case": "mixed",
+          "expected": [
+            "staged.txt",
+            "unstaged.txt",
+            "new.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              " staged.txt",
+              "unstaged.txt",
+              "new.txt"
+            ],
+            "dirty_count": 3
+          },
+          "passed": false
+        },
+        {
+          "case": "leading-space-name",
+          "expected": [
+            " leading.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              " leading.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "git-error",
+          "expected": null,
+          "actual": {
+            "dirty_paths": null,
+            "dirty_count": null
+          },
+          "passed": true
+        }
+      ],
+      "elapsed_ms": 103.945536
+    },
+    {
+      "run": "06-boundary-review",
+      "task": "hard-dependency-handoff",
+      "schema_version": 2,
+      "scope": "Exact candidate dirty-state block and same-file functions against real disposable Git repositories. Does not exercise prompt launch or receipt loading. Posthoc only; no model feedback.",
+      "candidate_hash": "1a3ae6504801d22e4a1ba8106def1783241532fc524721c3c51220fdf1f4fc3a",
+      "passed": true,
+      "rows": [
+        {
+          "case": "unstaged",
+          "expected": [
+            "file.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "file.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "staged",
+          "expected": [
+            "file.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "file.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "rename",
+          "expected": [
+            "new.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "new.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "mixed",
+          "expected": [
+            "staged.txt",
+            "unstaged.txt",
+            "new.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "staged.txt",
+              "unstaged.txt",
+              "new.txt"
+            ],
+            "dirty_count": 3
+          },
+          "passed": true
+        },
+        {
+          "case": "leading-space-name",
+          "expected": [
+            " leading.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              " leading.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "git-error",
+          "expected": null,
+          "actual": {
+            "dirty_paths": null,
+            "dirty_count": null
+          },
+          "passed": true
+        }
+      ],
+      "elapsed_ms": 103.237555
+    },
+    {
+      "run": "07-boundary-review-repeat",
+      "task": "hard-dependency-handoff",
+      "schema_version": 2,
+      "scope": "Exact candidate dirty-state block and same-file functions against real disposable Git repositories. Does not exercise prompt launch or receipt loading. Posthoc only; no model feedback.",
+      "candidate_hash": "5e95be1fd7542fee9b7953d959aae86aa52d292cc144f2a0ab4550779df8bea0",
+      "passed": true,
+      "rows": [
+        {
+          "case": "unstaged",
+          "expected": [
+            "file.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "file.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "staged",
+          "expected": [
+            "file.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "file.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "rename",
+          "expected": [
+            "new.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "new.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "mixed",
+          "expected": [
+            "staged.txt",
+            "unstaged.txt",
+            "new.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "staged.txt",
+              "unstaged.txt",
+              "new.txt"
+            ],
+            "dirty_count": 3
+          },
+          "passed": true
+        },
+        {
+          "case": "leading-space-name",
+          "expected": [
+            " leading.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              " leading.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "git-error",
+          "expected": null,
+          "actual": {
+            "dirty_paths": null,
+            "dirty_count": null
+          },
+          "passed": true
+        }
+      ],
+      "elapsed_ms": 106.963604
+    }
+  ],
+  "diagnostic_sha256": "fae790a40240a8dc11bff467f0b95598f9eda13e3ad7823e58d93656133b738e",
+  "parser_sha256": "a8524d1734aecc543068d3c801aba2b6ad8f68dd7d751bace79d783f8ecd9e55"
+}

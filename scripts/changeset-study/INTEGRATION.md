@@ -14,12 +14,18 @@ executable edits. The current Sol + Nemotron backend did not completely deliver
 any of the six harder tasks. Mixed-model routing has not demonstrated a
 quality-preserving advantage in this study.
 
-Before integration, replace whole-file JSON rewrites with bounded patches or
-deterministic transformations, route oversized operations back to the owner, and
-make failed execution explicit in the review input. File extraction should preserve
-untouched bytes mechanically where possible. These are proposed corrections;
-the failed campaign was frozen and was not rerun with them. Evaluate a revised
+The subsequent Sol-only development implements bounded patches, execution-aware
+review, direct deterministic plans, source-range composition, candidate-test
+feedback and unchanged-helper context for review. The [development protocol](ITERATION-PROTOCOL.md) preserves
+the original tasks and one repair opportunity. These changes are in the research
+backend; the earlier mixed-model campaign remains frozen. Evaluate the revised
 backend on fresh cases before allowing it to own managed step delivery.
+
+The development runs also exposed an acceptance gap: a candidate could pass the
+fixed tests while reporting an incorrect dirty filename. Keep review supplied
+with relevant helper contracts beyond the diff, and retain discovered boundary
+cases as acceptance coverage. Passing a benchmark is not sufficient evidence of
+complete spec compliance.
 
 ## Proposed execution path
 
@@ -83,6 +89,9 @@ Keep `spec_complete`, per-step commits, and coordinator reconciliation authorita
 5. **Keep acceptance obligations.** Preserve behavioral gates, shared-helper contract
    checks and independent review. A test-first step needs a test batch, an observed
    intended failure, then an implementation batch; one final check cannot substitute.
+   Execute new or changed candidate tests before the owner's assessment, and supply
+   failures to repair. The research selector understands Node test declarations;
+   production must use each repository's supported test runner and focused commands.
 6. **Make fallback explicit.** Malformed plans, stale anchors, ambiguous behavior and
    failed checks return actionable results to the owner. Permit bounded repair, then
    the ordinary editor route without silently dropping files or acceptance criteria.
@@ -90,6 +99,12 @@ Keep `spec_complete`, per-step commits, and coordinator reconciliation authorita
 7. **Use existing telemetry.** Record planning, execution, verification, repairs,
    publication, review and fallback costs through managed receipts. The study's
    standalone provider and budget adapters are not the production authority path.
+
+The edit representation is a separate choice from this integration boundary.
+Compare a native multi-file patch batch with the prototype operation vocabulary
+under the same planner, source context and review policy. Require the same private
+staging and precondition checks for either format; a single patch response alone
+does not establish atomic publication or crash recovery.
 
 ## Rollout and the next comparison
 

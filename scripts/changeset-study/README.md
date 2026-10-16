@@ -12,6 +12,14 @@ See the [results table](hard-workflow-results.md), [raw summary](hard-workflow-r
 and [timing chart](hard-workflow-timing.svg). The HTML below remains the earlier
 small-workload study; its figures are not results from the Nemotron comparison.
 
+The subsequent [Sol-only development](SOL-ONLY-FINDINGS.md) compares bounded patches,
+direct plans, source-range moves and candidate-test feedback on three of those
+historical cases. See [every attempt](sol-only-results.md), the
+[stage chart](sol-only-timing.svg) and the [development protocol](ITERATION-PROTOCOL.md).
+The final strategy delivered all three twice, with 28.5–32.7% less elapsed time
+against the previous native Sol references. These are adaptive development results;
+the report retains failed attempts and known gaps in the original acceptance tests.
+
 ## Read the explanation
 
 - [Offline HTML visual](visual.html): interactive dependency walkthrough, performance
@@ -40,6 +48,33 @@ without adding project dependencies. The charts derive from `results.json`; the
 prose describes this frozen campaign and must be reviewed if the dataset changes.
 
 ## Run the study
+
+### Sol-only development
+
+Use the completed hard workflow as `PREVIOUS_WORKFLOW_RUN`, a fresh external
+directory as `NEW_ITERATION_DIRECTORY`, and the existing `CAMPAIGN_LEDGER`.
+`ACORN_MODULE` points to an Acorn ESM module; the measured checked strategy froze
+version 8.8.1. To repeat an existing strategy exactly, replace `--parser` with
+`--freeze-from "$PROMISING_ITERATION"`.
+
+```sh
+node scripts/changeset-study/iterate.mjs \
+  --source "$PREVIOUS_WORKFLOW_RUN" --output "$NEW_ITERATION_DIRECTORY" \
+  --ledger "$CAMPAIGN_LEDGER" --model openai-codex/gpt-6.1-sol:low \
+  --strategy boundary-review --parser "$ACORN_MODULE"
+node scripts/changeset-study/iteration-report.mjs "$ITERATIONS_ROOT" "$REPORT_PREFIX"
+uv run --with matplotlib==3.11.2 python scripts/changeset-study/iteration-plot.py \
+  "$REPORT_PREFIX.json" "$FIGURE_PREFIX"
+```
+
+The reporter reads `posthoc-audits.json` from `ITERATIONS_ROOT` when present and
+binds each audit to its candidate hash. The published [audit results](sol-only-audits.json)
+retain the final campaign's required path-boundary diagnostic. Reproduce a single
+diagnostic after candidate freeze with:
+
+```sh
+node scripts/changeset-study/path-audit.mjs "$CANDIDATE_JSON" "$ACORN_MODULE" "$AUDIT_OUTPUT"
+```
 
 ### Hard campaign: historical workloads with Nemotron
 
