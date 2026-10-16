@@ -8,7 +8,7 @@ import { performance } from 'node:perf_hooks';
 import { hash } from '../changeset/workspace.mjs';
 import { sdkRoot } from './client.mjs';
 import { recoverAccounting } from './accounting.mjs';
-import { strategyNames, usesCandidateChecks, usesEditor } from './strategies.mjs';
+import { strategyNames, usesCandidateChecks, usesEditor, deliveredResult } from './strategies.mjs';
 import { modelRuntime, parseSelector } from '../changeset/models.mjs';
 
 const args = process.argv.slice(2);
@@ -108,7 +108,7 @@ for (const id of selected) {
   Object.assign(result, recoverAccounting(directory, ledger), { process_elapsed_ms: performance.now() - began });
   if (result.process_elapsed_ms > cap) { result.accepted = false; result.outcome = 'timed-out'; }
   result.capped_time_to_success_ms = result.accepted ? result.process_elapsed_ms : cap;
-  result.delivered = result.accepted && !result.error && result.review_accepted === true && result.visible_accepted === true && result.executions?.at(-1)?.ok === true;
+  result.delivered = deliveredResult(result);
   write(path, result);
   console.log(JSON.stringify({ index, task: id, accepted: result.accepted, delivered: result.delivered, seconds: result.process_elapsed_ms / 1000, calls: result.model_calls, equivalent_usd: result.equivalent_usd, error: result.error ?? null }));
   if (/Campaign budget exhausted|Budget ledger locked/.test(result.error ?? '') || read(ledger).entries.reduce((n, e) => n + (e.charged_usd ?? e.reserved_usd), 0) >= 49) throw new Error('Budget guard; remaining cells unrun');

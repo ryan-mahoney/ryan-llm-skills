@@ -10,7 +10,7 @@ import { execute } from '../changeset/engine.mjs';
 import { Workspace, hash } from '../changeset/workspace.mjs';
 import { parseJson } from '../changeset/models.mjs';
 import { equivalentCost } from '../changeset-research/cost.mjs';
-import { strategyPlanner, strategyReviewer, usesCandidateChecks, usesBoundaryReview, usesEditor, validateStrategyPlan, patchEditor } from './strategies.mjs';
+import { strategyPlanner, strategyReviewer, usesCandidateChecks, usesBoundaryReview, usesEditor, validateStrategyPlan, patchEditor, dispatchOnly } from './strategies.mjs';
 import { changedTestCommands } from './candidate-checks.mjs';
 import { reviewContext } from './review-context.mjs';
 
@@ -54,6 +54,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
     ...(simpleSelector ? { simple_selector: simpleSelector, exploratory: true } : {}), limits,
     ...(editorSelector ? { editor_selector: editorSelector } : {}),
     ...(strategy ? { strategy, exploratory: true } : {}),
+    ...(dispatchOnly(strategy) ? { review_mode: 'executable-checks-only', checks: [] } : {}),
   };
   let client, agent, simpleClient;
   const stage = async (name, fn) => { const start = performance.now(); try { return await fn(); } finally { stages.push({ name, elapsed_ms: performance.now() - start }); } };
@@ -114,7 +115,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
       writeFileSync(join(directory, `plan-${executions.length}.json`), JSON.stringify(plan, null, 2));
       validateStrategyPlan(strategy, plan);
       const editor = (model, stageName) => ({ operation, files }) => strategy
-        ? patchEditor(model, stageName, task.spec, { operation, files }, { ranges: usesEditor(strategy) })
+        ? patchEditor(model, stageName, task.spec, { operation, files }, { ranges: usesEditor(strategy), focused: strategy === 'focused-dispatch' })
         : model.json(editorPrompt, { task_contract: task.spec, instruction: operation.instruction, writes: operation.writes, files }, stageName);
       const adapters = usesEditor(strategy) ? { simple: editor(simpleClient, 'editor'), involved: editor(simpleClient, 'editor') }
         : simpleClient ? { simple: editor(simpleClient, 'simple-editor'), involved: editor(client, 'editor') }
@@ -127,7 +128,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
       return report;
     };
     let feedback = null;
-    for (let round = 0; round <= 1; round++) {
+    for (let round = 0; round <= (dispatchOnly(strategy) ? 0 : 1); round++) {
       result.repairs = round;
       let implementation;
       try { implementation = await implement(feedback); } catch (error) { implementation = { error: error.message }; }
@@ -135,6 +136,11 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
       if (round === 0) result.first_draft_visible_pass = visible.ok;
       const files = Workspace.load(root).snapshot();
       writeFileSync(join(directory, `draft-${round}.json`), JSON.stringify(files));
+      if (dispatchOnly(strategy)) {
+        result.checks.push({ visible, implementation_error: implementation?.error ?? null });
+        result.visible_accepted = visible.ok;
+        break;
+      }
       const reviewInput = diffMode ? { task: task.spec, changes: diffs(task.files, files), visible: tail(visible, 20000) } : { task: task.spec, files, visible };
       if (strategy) reviewInput.execution = implementation;
       if (usesBoundaryReview(strategy)) {
@@ -147,8 +153,8 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
       if (visible.ok && review.accepted && !implementation?.error && implementation?.ok !== false) break;
       feedback = { visible: diffMode ? tail(visible, 20000) : visible, review, implementation };
     }
-    result.review_accepted = reviews.at(-1)?.review.accepted === true;
-    result.visible_accepted = reviews.at(-1)?.visible.ok === true;
+    result.review_accepted = dispatchOnly(strategy) ? null : reviews.at(-1)?.review.accepted === true;
+    if (!dispatchOnly(strategy)) result.visible_accepted = reviews.at(-1)?.visible.ok === true;
   } catch (error) { result.error = error.message; }
   finally {
     agent?.dispose();

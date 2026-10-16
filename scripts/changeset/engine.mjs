@@ -122,6 +122,17 @@ export function transform(op, context) {
   return changed;
 }
 
+export function validateFileSyntax(files) {
+  for (const [path, text] of Object.entries(files)) {
+    if (text === null) continue;
+    if (path.endsWith('.json')) JSON.parse(text);
+    if (/\.(mjs|js)$/.test(path)) {
+      try { execFileSync(process.execPath, ['--input-type=module', '--check'], { input: text, timeout: 3000, maxBuffer: 16384, stdio: ['pipe', 'pipe', 'pipe'] }); }
+      catch (error) { throw new Error(`Syntax check failed for ${path}: ${String(error.stderr ?? error.message).slice(0, 2000)}`); }
+    }
+  }
+}
+
 export async function execute(plan, workspace, { concurrency = 4, adapters = {}, verify, signal, onDraft } = {}) {
   const operations = compile(plan);
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 32) throw new Error('Concurrency must be 1..32');
@@ -146,14 +157,7 @@ export async function execute(plan, workspace, { concurrency = 4, adapters = {},
       if (!files || typeof files !== 'object' || Array.isArray(files) || !Object.keys(files).length) throw new Error('Executor returned no files');
       for (const [path, text] of Object.entries(files)) if (!op.writes.includes(path) || !(text === null || typeof text === 'string')) throw new Error(`Invalid executor write: ${path}`);
       if (signal?.aborted) throw new Error('Execution aborted');
-      for (const [path, text] of Object.entries(files)) {
-        if (text === null) continue;
-        if (path.endsWith('.json')) JSON.parse(text);
-        if (/\.(mjs|js)$/.test(path)) {
-          try { execFileSync(process.execPath, ['--input-type=module', '--check'], { input: text, timeout: 3000, maxBuffer: 16384, stdio: ['pipe', 'pipe', 'pipe'] }); }
-          catch (error) { throw new Error(`Syntax check failed for ${path}: ${String(error.stderr ?? error.message).slice(0, 2000)}`); }
-        }
-      }
+      validateFileSyntax(files);
       staged.apply(files);
       if (op.executor === 'deterministic') for (const edit of op.edits) {
         if (edit.kind === 'rename' && staged.modes[edit.path] !== undefined) staged.modes[edit.to] = staged.modes[edit.path];
