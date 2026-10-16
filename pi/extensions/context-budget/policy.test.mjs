@@ -57,6 +57,12 @@ test('compaction preflight sizes the sent summary text and context, not raw mess
   assert.deepEqual(await compact({ ...owner, tokensBefore: 40000, turnPrefixMessages: [{ text: 'x'.repeat(300000) }] }),
     { cancelled: true, aborted: true }, 'a ~100k split-turn prefix request');
   assert.equal(entries.at(-1).context_tokens, 40000);
+  // Codex compacts its cached history in place, so only the reported context counts there.
+  const large = { messagesToSummarize: [{ text: 'x'.repeat(510000) }], turnPrefixMessages: [], tokensBefore: 72000 };
+  const codex = async preparation => handlers.session_before_compact({ preparation }, { abort() {}, model: { provider: 'openai-codex' } });
+  assert.equal((await codex(large))?.cancel, undefined, 'a 170k native-text estimate does not block Codex at 72k context');
+  assert.equal((await codex({ ...large, tokensBefore: 95000 }))?.cancel, true);
+  assert.deepEqual(await compact(large), { cancelled: true, aborted: true }, 'the same history blocks a native summarizer');
 });
 
 // Run alone: node --test --test-name-pattern='reasoning-only' pi/extensions/context-budget/policy.test.mjs
