@@ -250,9 +250,9 @@ existing authority, carrying unresolved gaps to the responsible step owner befor
 Recognize a `decision-required` handoff whose learning lists startup clarification gaps
 with no commit or edits. Answer each gap from a sourced decision: `context.md`,
 `locations.project_context`, the spec and card, prior learnings, or repository facts;
-name the source with the answer. When no source settles a gap and plausible answers
-materially change behavior, preservation, compatibility or risk, escalate that one
-decision through the existing top-level `decision-required` path; do not guess. When an
+name the source with the answer. When no source settles a gap, decide it under the shared
+contract's Decide, Record, Continue rule and record the decision; escalate through the
+top-level `decision-required` path only when it needs authority the run lacks. When an
 answer would change prepared intent or acceptance, record `needs-spec-correction` and
 return to spec-write instead of redispatching. Before redispatch, honor any hold or
 direction routed to this step under the overseer `inbox` contract above (the top-level

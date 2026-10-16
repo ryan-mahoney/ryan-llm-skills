@@ -313,6 +313,8 @@ The default HTML composition must expose:
   and post-deployment states; count merge closure separately from later pending work;
 - an attention queue ordered as blocking gaps and required failures, incomplete claims, audit failure, optional non-passing gates, then residual risks;
 - a concise sourced context summary with consequential decisions, omissions and new burden;
+- every ledger decision recorded as `Decided without operator:`, with its choice, rationale and
+  reversibility, so the operator can revisit decisions the run made instead of asking;
 - before/after architecture and system boundaries, with implementation decisions collapsed by default;
 - a claim list and selected inspector that colocates requirements, gates, rerunnable commands, artifacts, observed proof, rejected hypotheses, and proof boundaries;
 - QA entrypoints plus a selected scenario with steps, expected states, automation, and visual artifacts;
