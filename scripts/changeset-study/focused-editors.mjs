@@ -1,5 +1,6 @@
 // Keep the complete specification with the planner; editors get bounded assignments.
 import { compile } from '../changeset/engine.mjs';
+import { compactContext } from './context-compact.mjs';
 
 export const focusedPacketRules = `Every operation must have exactly ONE writable file, plus:
 - objective: one outcome, at most 240 characters. A helper, one behavior in a function,
@@ -62,9 +63,9 @@ export function validateFocusedPlan(plan) {
   }
 }
 
-export function focusedInput(operation, files) {
+export function focusedInput(operation, files, { parse } = {}) {
   validateFocusedPlan({ operations: [operation] });
-  const excerpts = operation.context.map(({ path, start, end }) => {
+  let excerpts = operation.context.map(({ path, start, end }) => {
     const text = files[path];
     if (typeof text !== 'string') throw new Error(`Excerpt file missing: ${path}`);
     const anchor = (value, fallback) => {
@@ -74,25 +75,30 @@ export function focusedInput(operation, files) {
     };
     const a = anchor(start, 0), b = anchor(end, text.length);
     if (b <= a) throw new Error(`Invalid excerpt ordering: ${path}`);
-    return { path, start, end, text: text.slice(a, b) };
+    return { path, start, end, source_start: a, source_end: b, text: text.slice(a, b) };
   });
-  if (excerpts.reduce((n, c) => n + c.text.length, 0) > 32000) throw new Error(`Focused source exceeds 32000 characters: ${operation.id}`);
+  let compaction = null;
+  if (excerpts.reduce((n, c) => n + c.text.length, 0) > 32000) {
+    try { ({ excerpts, compaction } = compactContext(excerpts, files, { parse })); }
+    catch (error) { throw new Error(`${error.message}: ${operation.id}`); }
+  }
+  if (!compaction) excerpts = excerpts.map(({ source_start, source_end, ...excerpt }) => excerpt);
   for (const [path, text] of Object.entries(files)) {
     if (text !== null && !excerpts.some(c => c.path === path)) throw new Error(`Missing declared file excerpt: ${path}`);
   }
   return { objective: operation.objective, instruction: operation.instruction, requirements: operation.requirements,
-    writes: operation.writes, absent_files: Object.keys(files).filter(p => files[p] === null), excerpts };
+    writes: operation.writes, absent_files: Object.keys(files).filter(p => files[p] === null), excerpts, ...(compaction ? { source_compaction: compaction } : {}) };
 }
 
 // Validate only source that has not been written by an earlier operation. Future
 // generated source remains checked at execution against the actual staged state.
-export function preflightFocusedPlan(plan, files) {
+export function preflightFocusedPlan(plan, files, { parse } = {}) {
   const errors = [], changed = new Set();
   for (const operation of compile(plan)) {
     const context = operation.context.filter(c => !changed.has(c.path));
     const current = Object.fromEntries([...new Set([...operation.reads, ...operation.writes])]
       .filter(path => !changed.has(path)).map(path => [path, files[path] ?? null]));
-    try { focusedInput({ ...operation, context }, current); }
+    try { focusedInput({ ...operation, context }, current, { parse }); }
     catch (error) { errors.push(`${operation.id}: ${error.message}`); }
     operation.writes.forEach(path => changed.add(path));
   }

@@ -61,14 +61,14 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
     optimization, planning_source: planningSource,
     ...(dispatchOnly(strategy) ? { review_mode: 'executable-checks-only', checks: [] } : {}),
   };
-  let client, agent, simpleClient;
+  let client, agent, simpleClient, contextParse;
   const stage = async (name, fn) => { const start = performance.now(); try { return await fn(); } finally { stages.push({ name, elapsed_ms: performance.now() - start }); } };
   const check = async () => {
     const files = Workspace.load(root).snapshot();
     for (const path of task.protected ?? ['visible.mjs']) if (files[path] !== task.files[path]) return { ok: false, output: `Protected file changed: ${path}` };
     const visible = await sandbox(root, task.check ?? 'node visible.mjs', { signal: controller.signal, mounts, maxMs: limits.command_ms, timeoutMs: limits.command_ms });
     if (!usesCandidateChecks(strategy)) return visible;
-    const { parse } = await import('./parser/acorn.mjs');
+    const parse = contextParse ?? (await import('./parser/acorn.mjs')).parse;
     const candidateTests = [];
     for (const selected of changedTestCommands(task.files, files, parse)) {
       const checked = await sandbox(root, selected.command, { signal: controller.signal, mounts, maxMs: limits.command_ms, timeoutMs: limits.command_ms });
@@ -84,6 +84,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
     protected_files: task.protected ?? ['visible.mjs'], file_tree: Object.keys(task.files),
     ...(task.context === 'prepared' ? { files: task.files } : {}) });
   try {
+    if (strategy === 'owner-query-writer') ({ parse: contextParse } = await import('./parser/acorn.mjs'));
     const clientOptions = { ledger, receiptPath: join(directory, 'receipts.jsonl'), signal: controller.signal,
       maxCalls: limits.model_calls, maxTokens: limits.max_output_tokens, callMs: limits.call_ms };
     client = await stage('initialize', () => Client.create({ selector, ...clientOptions }));
@@ -137,7 +138,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
           writeFileSync(join(directory, `planning-attempt-${attempt}.json`), JSON.stringify(candidate, null, 2));
           let errors;
           if (candidate?.blocked) throw new Error('Query planner needs an owner decision: ' + candidate.blocked);
-          try { validateStrategyPlan(strategy, candidate); errors = preflightFocusedPlan(candidate, current.snapshot()); }
+          try { validateStrategyPlan(strategy, candidate); errors = preflightFocusedPlan(candidate, current.snapshot(), { parse: contextParse }); }
           catch (error) { errors = [error.message]; }
           if (!errors.length) return candidate;
           if (attempt === 1) throw new Error('Plan rejected before dispatch: ' + errors.join('; '));
@@ -148,7 +149,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
       if (preparedPlan) {
         plan = structuredClone(preparedPlan);
         validateStrategyPlan(strategy, plan);
-        const errors = preflightFocusedPlan(plan, current.snapshot());
+        const errors = preflightFocusedPlan(plan, current.snapshot(), { parse: contextParse });
         if (errors.length) throw new Error('Reused plan invalid: ' + errors.join('; '));
       } else if (scouted) {
         const scout = await nativeAgent({ root, client, transcript: join(directory, feedback ? 'repair-planner-transcript.jsonl' : 'planner-transcript.jsonl'), signal: controller.signal, readOnly: true,
@@ -177,7 +178,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
       writeFileSync(join(directory, `plan-${executions.length}.json`), JSON.stringify(plan, null, 2));
       validateStrategyPlan(strategy, plan);
       const editor = (model, stageName) => ({ operation, files }) => strategy
-        ? patchEditor(model, stageName, task.spec, { operation, files }, { ranges: usesEditor(strategy), focused: dispatchOnly(strategy) })
+        ? patchEditor(model, stageName, task.spec, { operation, files }, { ranges: usesEditor(strategy), focused: dispatchOnly(strategy), contextParse })
         : model.json(editorPrompt, { task_contract: task.spec, instruction: operation.instruction, writes: operation.writes, files }, stageName);
       const adapters = usesEditor(strategy) ? { simple: editor(simpleClient, 'editor'), involved: editor(simpleClient, 'editor') }
         : simpleClient ? { simple: editor(simpleClient, 'simple-editor'), involved: editor(client, 'editor') }

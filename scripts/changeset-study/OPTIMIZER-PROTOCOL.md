@@ -134,3 +134,20 @@ the exact last submitted planning attempt when the donor has no accepted raw pla
 record the source artifact name and hash. All three corrected writing arms use
 the same bounds and plan bytes. This does not imply the original plan passed its
 original runtime contract.
+
+## Deterministic context compaction
+
+The original extraction plan selected 44,600 source characters and was rejected
+before writing. The corrected backend parses oversized `.mjs` selections and
+omits interiors of long block-bodied functions, keeping signatures, surrounding
+code, and the first 160 / last 80 body characters as exact source slices. Each
+slice has original offsets; omitted ranges and definitions remain explicit.
+No file content changes during this presentation pass, and the writer is told to
+preserve unseen bodies through exact replacements or source-range operations.
+Non-code or uncompressible context still fails at 32,000 delivered characters.
+
+All corrected writer arms share this context policy. The original extraction
+selection becomes 11,775 delivered source characters, omitting 32,825; that is a
+measured payload reduction, not a demonstrated writing or correctness improvement.
+Original plan bytes remain unchanged. Source snapshots and candidate tests remain
+isolated from planning feedback as before.
