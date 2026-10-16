@@ -166,6 +166,11 @@ For a step that promises runtime- or user-observable behavior, include at least 
 
 Do not write complete routine test bodies in the subspec. A minimal harness skeleton is allowed only when fake-timer ordering, fixture construction, or a non-obvious mock boundary is itself the key planning risk; justify that skeleton in Setup.
 
+When Architecture gives an outcome table for a component this step owns, copy its rows
+into the card's verification cases. Include one case per action class and at least one
+unknown or contradictory result that must block, so the test-first cases reject the
+permissive classifier before implementation.
+
 For a refusal or failure case, identify the prerequisite that proves the fixture reaches
 the boundary under test. Assert that prerequisite before attributing failure downstream;
 use production-shaped identities and selection data, not convenient substitutes. For a

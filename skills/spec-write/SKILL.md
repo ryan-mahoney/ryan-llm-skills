@@ -210,6 +210,15 @@ enforcement owner, and AC/CL references. Preserve justified error/fallback behav
 fail-fast as a blanket replacement for a sourced contract. Use existing acceptance and evidence
 identifiers, not a parallel invariant schema.
 
+When a component classifies outcomes into different actions (fall back, refuse or block,
+retry, proceed), as with capability probes, recovery, eligibility and permission checks,
+give Architecture an outcome table. Each row is an outcome class, the observable signal
+that identifies it, and the required action. Classify unknown, corrupt, contradictory and
+resource-exhaustion results explicitly; never leave them to the implementer. In one replay,
+eight independent implementations of a probe step all let I/O errors or contradictory
+remount evidence through, because the spec named fallback-eligible classes but left
+everything else open.
+
 ### Risk Grounding
 
 Every risk, invariant, or guard (lock, lease, recovery mode, incident record, evidence gate, extra test) in the proposal, critique, or this spec has exactly one tag. A generated proposal or critique cannot authorize itself, so an untagged item, or an `observed` item without a citation, is `hypothetical`.
