@@ -22,6 +22,7 @@ import { recordCheckpoint, readCheckpointRecord, reconcileRuntimeReturn } from '
 import { validateStepIndex } from '../../../scripts/spec-observe/steps.mjs';
 import { inspectProcess } from '../../../scripts/spec-observe/process-identity.mjs';
 import { calculateResourcePolicy, DEFAULT_LIFECYCLE_MEMORY_MIB, DEFAULT_LIFECYCLE_TASKS, MIB } from './linux-resources.mjs';
+import { createProcessRegistry } from './waves-fixture-processes.mjs';
 import * as waves from './waves.mjs';
 
 export const CASE4_TIMEOUT_MS = 120000;
@@ -230,6 +231,45 @@ export async function makeCase4Fixture(t, opts = {}) {
     repos: opts.repos ?? ['repo'],
     targets: opts.targets ?? undefined
   });
+  // Own every detached worker process group this fixture spawns. The registry
+  // and its teardown are registered before the rest of the fixture is built, so
+  // even a setup failure part-way through still reaps every group (including a
+  // live descendant whose leader already closed). The teardown references only
+  // bindings that are safe no-ops until their setup step assigns them.
+  const processRegistry = createProcessRegistry();
+  let controller = null;
+  let previousEnv = null;
+  let teardownPromise = null;
+  const teardown = () => {
+    if (teardownPromise) return teardownPromise;
+    teardownPromise = (async () => {
+      const failures = [];
+      // Shut the controller down first, but a shutdown failure must never skip
+      // the positive drain of every owned group or the workspace removal.
+      try { await Promise.resolve(controller?.shutdown?.()); }
+      catch (error) { failures.push(error); }
+      try { await processRegistry.cleanup(); }
+      catch (error) { failures.push(error); }
+      // Restore the exact environment values captured before the redirect (delete
+      // names that were originally unset) only after the worker children are gone.
+      try {
+        if (previousEnv) {
+          for (const [name, value] of Object.entries(previousEnv)) {
+            if (value === undefined) delete process.env[name];
+            else process.env[name] = value;
+          }
+        }
+      } catch (error) { failures.push(error); }
+      try {
+        rmSync(pkg.dir, { recursive: true, force: true });
+        assert.equal(existsSync(pkg.dir), false, `fixture package directory must be removed: ${pkg.dir}`);
+      } catch (error) { failures.push(error); }
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1) throw new AggregateError(failures, 'fixture teardown failed');
+    })().catch(error => { teardownPromise = null; throw error; });
+    return teardownPromise;
+  };
+  t.after(teardown);
   const repo = pkg.repo;
   const packagePath = pkg.packagePath;
   const packageRef = pkg.ref;
@@ -412,7 +452,7 @@ export async function makeCase4Fixture(t, opts = {}) {
   // prepared or started: the real launch path reads PATH/HOME/config dir and the
   // scenario path from the inherited environment. Keep the exact previous values
   // so cleanup restores them after the worker children are gone.
-  const previousEnv = {
+  previousEnv = {
     PATH: process.env.PATH,
     HOME: process.env.HOME,
     PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
@@ -430,7 +470,6 @@ export async function makeCase4Fixture(t, opts = {}) {
   const services = new Map();
   const sends = [];
   const notifications = [];
-  let controller = null;
   let resolveTerminal;
   let terminalDone = false;
   const terminal = new Promise(resolve => {
@@ -489,6 +528,7 @@ export async function makeCase4Fixture(t, opts = {}) {
       child.stderr?.on('data', chunk => stderr.push(String(chunk)));
       child.on('error', error => stderr.push(String(error?.message ?? error)));
       children.add(child);
+      processRegistry.register(child);
       if (isOwnerService(argv)) {
         ownerLive.add(sandbox.unit);
         ownerPeak = Math.max(ownerPeak, ownerLive.size);
@@ -521,12 +561,21 @@ export async function makeCase4Fixture(t, opts = {}) {
     },
     async drain(service, options = {}) {
       const entry = services.get(service?.unit);
-      drains.push({ id: service?.unit ?? null, status: 'confirmed', cancel: options?.cancel === true });
-      if (entry && entry.child.exitCode === null && entry.child.signalCode === null) {
-        try { process.kill(-entry.child.pid, 'SIGKILL'); } catch { try { entry.child.kill('SIGKILL'); } catch { /* already gone */ } }
-        await new Promise(resolve => entry.child.once('close', resolve));
+      const cancel = options?.cancel === true;
+      // Positive drain through the owned-group registry: SIGKILL the selected
+      // group, await the leader close with a bounded wait and confirm via /proc
+      // that no live member remains. An unknown/unconfirmed group is reported as
+      // such instead of being converted to an unconditional confirmed.
+      let status = 'confirmed';
+      let reason = null;
+      try {
+        if (entry) await processRegistry.drainGroup(entry.child.pid);
+      } catch (error) {
+        status = 'unconfirmed';
+        reason = String(error?.message ?? error);
       }
-      return { status: 'confirmed', service, kernel_proof: false };
+      drains.push({ id: service?.unit ?? null, status, cancel, ...(reason ? { reason } : {}) });
+      return { status, service, kernel_proof: false, ...(reason ? { reason } : {}) };
     }
   };
   const serialLaunches = [];
@@ -534,6 +583,7 @@ export async function makeCase4Fixture(t, opts = {}) {
     const argv = [process.execPath, '-e', 'setTimeout(() => {}, 600000)'];
     const child = spawn(argv[0], argv.slice(1), { cwd: record.checkout, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     children.add(child);
+    processRegistry.register(child);
     child.on('close', () => children.delete(child));
     serialLaunches.push({ record, role, prompt, pid: child.pid });
     launches.push({ id: `serial-${serialLaunches.length}`, unit: null, role, cwd: record.checkout, argv, serial: true });
@@ -581,10 +631,13 @@ export async function makeCase4Fixture(t, opts = {}) {
 
   // Fresh-controller factory: a replacement controller is built over the SAME
   // Runtime, ownership registry, coordinator closure and package, so it
-  // reconciles the persisted wave record instead of forking the work.
-  const makeController = () => waves.createWaveController({
+  // reconciles the persisted wave record instead of forking the work. The
+  // dependency getter is exposed so an installed-SDK composition (F10-6) can
+  // build the REAL native controller over the same seams.
+  const controllerDependencies = () => ({
     runtime,
     ownership,
+    indexDir,
     hostCheck: opts.hostCheck ?? (async ({ readyMembers = 16, explicitCap = null } = {}) => {
       // The per-lifecycle numbers, ceilings and slot floors are the real resource
       // owner's arithmetic; only the binding label is the fixture's explicit stub,
@@ -631,6 +684,7 @@ export async function makeCase4Fixture(t, opts = {}) {
     location: pkg.location,
     now: () => Date.now()
   });
+  const makeController = () => waves.createWaveController(controllerDependencies());
 
   // Entry-call counter: every public controller entry except startup must stay 0.
   const entry = { startup: 0, advance: 0, recover: 0, status: 0, cancel: 0 };
@@ -644,14 +698,18 @@ export async function makeCase4Fixture(t, opts = {}) {
 
   controller = wireEntry(makeController());
 
+  // Bind an externally created (installed-SDK) controller over the same runtime
+  // notify route so helper notifications reach it and teardown shuts it down.
+  const bindController = next => {
+    controller = wireEntry(next);
+    return controller;
+  };
+
   // Reconcile without a restart: build a fresh controller over the same
   // dependencies and rebind the notify route's controller variable. The
   // replaced controller is deliberately left untouched (never shut down here)
   // so a caller that still holds it can observe the pre-replacement state.
-  const replaceController = () => {
-    controller = wireEntry(makeController());
-    return controller;
-  };
+  const replaceController = () => bindController(makeController());
 
   const releaseOwners = () => { rmSync(barrierFile, { force: true }); };
   // Release exactly one held owner while the global barrier stays in place: the
@@ -660,27 +718,6 @@ export async function makeCase4Fixture(t, opts = {}) {
     mkdirSync(releaseDir, { recursive: true });
     writeFileSync(join(releaseDir, `${step}.release`), 'release\n');
   };
-
-  const cleanup = async () => {
-    try {
-      await Promise.resolve(controller?.shutdown?.()).catch(() => {});
-      for (const child of [...children]) {
-        try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* already gone */ } }
-      }
-      await Promise.all([...children].map(child => (child.exitCode === null && child.signalCode === null)
-        ? new Promise(resolve => child.once('close', resolve))
-        : Promise.resolve()));
-    } finally {
-      // Restore the exact environment values captured before the redirect (delete
-      // names that were originally unset) only after the worker children are gone.
-      for (const [name, value] of Object.entries(previousEnv)) {
-        if (value === undefined) delete process.env[name];
-        else process.env[name] = value;
-      }
-      rmSync(pkg.dir, { recursive: true, force: true });
-    }
-  };
-  t.after(cleanup);
 
   return {
     pkg, repo, packagePath, packageRef, targetId, indexDir, ownershipRoot,
@@ -693,7 +730,14 @@ export async function makeCase4Fixture(t, opts = {}) {
     // A live getter so replaceController() is observable through every existing
     // `f.controller` call site.
     get controller() { return controller; },
+    controllerDependencies,
+    bindController,
     replaceController,
+    // Exposed for leak regressions: teardown positively drains every owned
+    // group, and assertDrained resolves only on positive confirmation.
+    cleanup: teardown,
+    assertDrained: () => processRegistry.assertDrained(),
+    processRegistry,
     ownerLive: () => ownerLive.size, ownerPeak: () => ownerPeak
   };
 }

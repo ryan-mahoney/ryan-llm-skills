@@ -7,7 +7,7 @@
 // observes its own first failing boundary rather than a partial effect.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { isAbsolute, join, resolve } from 'node:path';
 import { checkPackage } from '../../../scripts/spec-location/index.mjs';
@@ -330,17 +330,29 @@ export function createWaveController(deps = {}) {
   // as a replay or a fail-closed refusal rather than a second acquisition.
   async function reuseInheritedClaim({ packageRef, inheritedClaim, coordinator }) {
     const token = inheritedClaim.token;
-    const own = inheritedClaim.coordinator ?? {};
+    const inherited = inheritedClaim.coordinator ?? {};
     const { claims } = await ownership.inspectClaims({ packageId: packageRef });
     const held = (claims ?? []).find(claim => claim?.kind === 'package' && claim.token === token);
-    const matches = held
-      && held.coordinator?.session === own.session
-      && String(held.epoch) === String(own.epoch)
-      && held.coordinator?.session === coordinator.session
-      && String(held.epoch) === String(coordinator.epoch);
-    if (matches) return { status: 'acquired', claim: held };
-    if (held) return { status: 'held', claim: held };
-    return { status: 'absent', claim: { token } };
+    if (!held) return { status: 'absent', claim: { token } };
+    const heldCoordinator = held.coordinator ?? {};
+    // The held claim must still be the inherited claim at the creation epoch and
+    // session the predecessor record froze, and it must be bound to this live
+    // coordinator process. The claim-creation epoch (not the fresh process epoch)
+    // is what fences the successor; adoption preserved it on both the claim and
+    // the record, so requiring the fresh epoch here would refuse every restart.
+    const exactInherited = heldCoordinator.session === inherited.session
+      && String(held.epoch) === String(inherited.epoch);
+    const currentSession = heldCoordinator.session === coordinator.session;
+    const currentProcess = heldCoordinator.pid === coordinator.pid
+      && heldCoordinator.started_at === coordinator.started_at;
+    if (!exactInherited || !currentSession || !currentProcess) return { status: 'held', claim: held };
+    // A reused PID never authorizes the inherited claim: the recorded process
+    // must still be observably alive with its exact start time.
+    let observed;
+    try { observed = await inspectProcess(heldCoordinator.pid); } catch { observed = null; }
+    if (!observed || observed.state !== 'alive' || observed.started_at !== heldCoordinator.started_at)
+      return { status: 'held', claim: held };
+    return { status: 'acquired', claim: held };
   }
 
   // Update the durable record through the integration owner: re-read for a
@@ -482,7 +494,12 @@ export function createWaveController(deps = {}) {
     if (!coordinator || typeof coordinator.session !== 'string' || coordinator.epoch === undefined || coordinator.epoch === null)
       throw invalid('coordinator-missing', 'Wave execution requires an observable coordinator identity.');
     const ownSession = coordinator.session;
-    const epoch = coordinator.epoch;
+    // Effective epoch. A native open uses the fresh process epoch; an inherited
+    // automatic next-wave open replaces it below with the held claim's creation
+    // epoch, which adoption preserved on both the claim and the predecessor
+    // record. The record, admission context and runtime starts all fence on this
+    // effective epoch.
+    let epoch = coordinator.epoch;
     const startedAt = timestamp(nowMs());
     const recordPath = join(packagePath, 'runtime', 'waves', `${wave_id}.json`);
 
@@ -492,7 +509,7 @@ export function createWaveController(deps = {}) {
     const admissionContext = claim => ({
       recordPath, session: ownSession, parentSession,
       packagePath, packageRef, wave_id, cardPaths, input, policy, admission,
-      coordinator, targetId, claimToken: claim, epoch
+      coordinator: { ...coordinator, epoch }, targetId, claimToken: claim, epoch
     });
 
     // One package claim. An inherited claim is reused only when the ownership
@@ -518,6 +535,11 @@ export function createWaveController(deps = {}) {
         message: `Package ${packageRef} is already claimed by another live coordinator; refusing to open a competing wave.`,
         remedy: 'Wait for the owning coordinator to finish or recover the wave before retrying.' });
     }
+    // After a verified inherited claim, the successor record, admission and
+    // runtime starts are fenced by the claim-creation epoch, not the fresh
+    // process epoch.
+    if (inheritedClaim && acquired.claim?.epoch !== undefined && acquired.claim?.epoch !== null)
+      epoch = acquired.claim.epoch;
     const claimToken = acquired.claim?.token ?? null;
     if (!claimToken) throw invalid('claim-token-missing', 'Package claim carried no token.');
 
@@ -644,17 +666,72 @@ export function createWaveController(deps = {}) {
     return waveReceipt(integration.readWaveRecord(recordPath), recordPath);
   }
 
+  // A fresh startup with no active wave may re-enter after a predecessor
+  // integrated while no continuation ran (for example the automatic next wave
+  // was suppressed). Resume that predecessor instead of opening wave 1 again:
+  // select the highest-ordinal integrated record that still has a successor in
+  // the prepared validation, whose frozen inputs match, and whose package claim
+  // is still held at the record's frozen token, creation epoch and session. The
+  // record is never mutated here; the existing continuation opens the successor.
+  async function resumeIntegratedPredecessor({ packagePath, packageRef, validation, index_sha256, evidence_plan_sha256 }) {
+    const dir = join(packagePath, 'runtime', 'waves');
+    if (!existsSync(dir)) return null;
+    const own = deps.coordinator ? deps.coordinator() : null;
+    const candidates = [];
+    for (const name of readdirSync(dir)) {
+      if (!/^[A-Za-z0-9_-]{1,128}\.json$/.test(name)) continue;
+      const recordPath = join(dir, name);
+      let record;
+      try { record = integration.readWaveRecord(recordPath); } catch { continue; }
+      if (!record || record.state !== 'integrated') continue;
+      if (record.package_ref !== packageRef) continue;
+      if (record.inputs?.index_sha256 !== index_sha256) continue;
+      if (record.inputs?.evidence_plan_sha256 !== evidence_plan_sha256) continue;
+      const ordinal = Number(record.ordinal ?? 1);
+      if (!Number.isInteger(ordinal) || ordinal < 1) continue;
+      const successor = validation?.waves?.[ordinal];
+      if (!Array.isArray(successor) || successor.length === 0) continue;
+      candidates.push({ record, recordPath, wave_id: record.wave_id, ordinal });
+    }
+    if (!candidates.length) return null;
+    candidates.sort((a, b) => b.ordinal - a.ordinal);
+    let claims = [];
+    try { claims = (await ownership.inspectClaims({ packageId: packageRef }))?.claims ?? []; }
+    catch { return null; }
+    for (const candidate of candidates) {
+      const held = claims.find(claim => claim?.kind === 'package' && claim.token === candidate.record.claim_token);
+      if (!held) continue;
+      if (String(held.epoch) !== String(candidate.record.coordinator?.epoch)) continue;
+      if (held.coordinator?.session !== candidate.record.coordinator?.session) continue;
+      if (own && held.coordinator?.session !== own.session) continue;
+      return { packageDir: packagePath, ...candidate };
+    }
+    return null;
+  }
+
   async function startup(input = {}, parentSession) {
     return enqueue(async () => {
       const prepared = await prepare(input);
       if (prepared.state) return prepared;
       const { packagePath, packageRef, locations, index, validation, index_sha256, evidence_plan_sha256 } = prepared;
       const activeWaves = activeWaveRecords(packagePath);
+      const execution = input.execution ?? 'auto';
+      const serialActive = serialRunActive(packagePath);
+      // A fresh startup with no active wave may be resuming an integrated
+      // predecessor whose successor never opened. Verify that restart boundary
+      // before selection so a genuine predecessor is not misclassified as
+      // prior progress (needs_reconciliation). Only compute -- and only relax
+      // priorProgress for -- the exact non-serial, no-active-wave, healthy-
+      // validation case; every other input keeps selectExecution's behavior.
+      const couldHoldPredecessor = execution !== 'serial' && activeWaves.length === 0 && !serialActive && validation?.concurrency_ready === true;
+      const predecessor = couldHoldPredecessor
+        ? await resumeIntegratedPredecessor({ packagePath, packageRef, validation, index_sha256, evidence_plan_sha256 })
+        : null;
       const selection = selectExecution({
-        execution: input.execution ?? 'auto', validation,
+        execution, validation,
         activeWaves,
-        priorProgress: priorProgress(packagePath),
-        serialActive: serialRunActive(packagePath)
+        priorProgress: priorProgress(packagePath) && !predecessor,
+        serialActive
       });
       // Every terminal selection (needs_intake, needs_preparation,
       // needs_reconciliation) is a receipt, not a fall-through to the wave path.
@@ -680,6 +757,18 @@ export function createWaveController(deps = {}) {
           throw invalid('wave-record-unreadable', `The active wave record ${active.wave_id} has no usable generation.`);
         const recovery = await memberRecovery.recover({ package: packagePath, wave_id: active.wave_id, expected_generation: active.generation });
         return { ...recovery, loaded: true };
+      }
+      // No active wave: an integrated predecessor may still be waiting for its
+      // successor (for example the automatic next-wave continuation was
+      // suppressed). Load its owned entry -- enforcing live process identity --
+      // and let the existing continuation open the successor without opening
+      // wave 1 again. Every host/inbox/frozen-input guard stays in the
+      // continuation; this path adds no progression logic of its own.
+      if (predecessor) {
+        const entry = await memberRecovery.loadOwnedEntry(predecessor);
+        const continued = await driveAndContinue(entry);
+        if (continued && typeof continued === 'object' && continued.wave_id) return continued;
+        return waveReceipt(predecessor.record, predecessor.recordPath);
       }
       const host = hostCheck ? await hostCheck({ readyMembers: deriveWaveWidth(validation), explicitCap: input.max_parallel ?? null }) : null;
       if (!host || typeof host !== 'object') throw invalid('host-check-missing', 'Wave execution requires a host check result.');

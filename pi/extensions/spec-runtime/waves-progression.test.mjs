@@ -625,6 +625,17 @@ test('wave dispatch: pending inbox holds review and an explicit advance resumes 
     assert.equal(f.git(['rev-parse', 'HEAD']).trim(), f.baseCommit,
       'the branch HEAD must remain at base while the direction is pending');
 
+    // F10-5 precedence regression: while the inbox still holds the direction,
+    // the durable status must remain running and surface the input-pending
+    // queue ahead of any blocked classification. A blocked state here would
+    // satisfy the parking assertions above without exercising the precedence
+    // between the pending intake and the resume path.
+    assert.equal(parked.current.state, 'running',
+      'the wave must remain running while the direction is pending');
+    const pendingStatus = await f.controller.status({ package: f.packagePath, wave_id: waveId });
+    assert.match(String(pendingStatus.next_action ?? ''), /consume the inbox, then advance/,
+      'status must direct the coordinator to consume the inbox before advancing');
+
     // The coordinator consumes the direction: move it into inbox/processed and
     // issue a step-less advance at the current generation. The parked member must
     // resume its real completion route exactly once.

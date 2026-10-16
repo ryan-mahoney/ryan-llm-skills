@@ -700,12 +700,21 @@ export function createWaveRecovery(deps = {}) {
       if (expires !== null && expires <= now())
         throw invalid('recovery-blocked', 'Wave deadline has expired; refusing to adopt and launch workers.');
 
+      // The replacement coordinator handed to held claims must carry the record's
+      // claim-creation epoch so the rebound claim and the durable record agree when
+      // the runtime resumes phases. Construct a copy so the supplied identity is
+      // never mutated; the record epoch remains the fencing authority.
+      const replacementCoordinator = {
+        ...own,
+        epoch: record.coordinator?.epoch
+      };
+
       // Rebind every held claim for this package to the replacement coordinator,
       // preserving each token and epoch exactly. Nothing is released here.
       const held = await ownership.inspectClaims({ packageId: record.package_ref });
       for (const claim of held?.claims ?? []) {
         if (!claim || typeof claim.token !== 'string') continue;
-        const recovered = await ownership.recoverClaims({ token: claim.token, epoch: claim.epoch, coordinator: own });
+        const recovered = await ownership.recoverClaims({ token: claim.token, epoch: claim.epoch, coordinator: replacementCoordinator });
         if (recovered?.status !== 'recovered')
           throw invalid('recovery-claim', `Held claim ${claim.token} could not be rebound (${recovered?.status ?? 'unknown'}).`);
       }

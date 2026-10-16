@@ -35,6 +35,8 @@ import assert from 'node:assert/strict';
 import { SPEC_RUNTIME_INDEX, SDK_LOADER, loadSdk } from './wave-review-fixture.mjs';
 import { createNativeWaveController, nativeWaveAction } from './waves-native.mjs';
 import { makePackageFixture } from './package-fixture.mjs';
+import { makeCase4Fixture, waitFor } from './waves-fixture.mjs';
+import { installInstalledIndex, mutateTwoWaveIndex, twoWaveHostCheck, MODELS } from './waves-index-fixture.mjs';
 
 const here = dirname(fileURLToPath(new URL(import.meta.url)));
 const INDEX_PATH = SPEC_RUNTIME_INDEX;
@@ -477,4 +479,185 @@ test('installed loader surfaces the controller index-unreadable refusal for an a
     `an absent spec-steps.json must return the controller index-unreadable refusal, got: ${text}`);
   assert.doesNotMatch(text, /is not a function|TypeError|Cannot read propert(y|ies)/i,
     `the refusal must be the controller index-unreadable error, not an absence TypeError: ${text}`);
+});
+
+// -- F10-6: installed-SDK composition of a successful native startup ---------
+//
+// Both regressions load the REAL, complete index.ts through the installed SDK
+// loader. Only relative import specifiers are rewritten to absolute original
+// paths and only `./waves-native.mjs` is replaced by a wrapper that calls the
+// REAL synchronous createNativeWaveController over fixture seams. The index's
+// own coordinator/send adapters stay in place, so a passing run pins the epoch
+// and send-forwarding fixes at the actual composition boundary rather than in a
+// controller mock. Each case skips only when the installed loader is absent.
+
+function waveIndexCtx(root, session) {
+  return {
+    model: { provider: 'fixture', id: 'owner' },
+    sessionManager: {
+      getSessionFile: () => join(root, 'session.jsonl'),
+      getSessionId: () => session,
+      getBranch: () => [],
+    },
+    ui: { notify() {} },
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+  };
+}
+
+test('installed loader composes the native factory; a successful startup creates a durable wave and a real package claim (F10-6)', { skip: SDK_AVAILABLE ? false : 'installed pi SDK loader not found', timeout: 120_000 }, async (t) => {
+  const { loadExtensions, createExtensionRuntime } = await loadSdk();
+  // A complete, valid two-wave package: steps 1/2 open wave 1 and the dependent
+  // step 3 opens wave 2. The fixture host is ready for the initial width and
+  // refuses only the lone-ready next-wave check.
+  const f = await makeCase4Fixture(t, {
+    memberCount: 3,
+    hostCheck: twoWaveHostCheck(),
+    mutateIndex: mutateTwoWaveIndex,
+    holdOwners: true
+  });
+  const composed = installInstalledIndex({ root: f.pkg.dir, deps: f.controllerDependencies() });
+  t.after(() => composed.cleanup());
+
+  // Installed SDK cases run with no spec-runtime role so the composed index
+  // resolves its own coordinator identity from the fixture session.
+  const previousRole = process.env.SPEC_RUNTIME_ROLE;
+  delete process.env.SPEC_RUNTIME_ROLE;
+  t.after(() => {
+    if (previousRole === undefined) delete process.env.SPEC_RUNTIME_ROLE;
+    else process.env.SPEC_RUNTIME_ROLE = previousRole;
+  });
+
+  const runtime = createExtensionRuntime();
+  runtime.getAllTools = () => [];
+  runtime.getSettings = () => ({});
+  runtime.setActiveTools = () => {};
+  runtime.appendEntry = () => {};
+  runtime.sendMessage = () => {};
+
+  const loaded = await loadExtensions([composed.indexPath], f.pkg.dir, undefined, runtime);
+  assert.deepEqual(loaded.errors, [], 'the installed loader must load the rewritten index.ts without errors');
+  const extension = loaded.extensions?.[0] ?? loaded;
+  const tools = extension.tools ?? loaded.tools;
+  assert.ok(tools?.has?.('spec_dispatch'), 'the composed index.ts must register the native spec_dispatch tool');
+
+  const sdkController = composed.controller;
+  assert.ok(sdkController && typeof sdkController.routeNotification === 'function',
+    'the real createNativeWaveController must run inside the installed loader and expose a live controller');
+  f.bindController(sdkController);
+
+  const ctx = waveIndexCtx(f.pkg.dir, f.coordinator.session);
+  for (const hook of hooksOf(extension, 'session_start')) await hook({ type: 'session_start' }, ctx);
+  t.after(async () => {
+    for (const hook of hooksOf(extension, 'session_shutdown')) await hook({ type: 'session_shutdown', reason: 'quit' }, ctx);
+  });
+
+  const dispatchTool = tools.get('spec_dispatch');
+  const receipt = await dispatchTool.definition.execute(
+    `waves-index-f10-6-a-${process.pid}`,
+    { action: 'startup', package: f.packagePath, execution: 'waves', isolation: 'worktree', ...MODELS },
+    undefined, undefined, ctx,
+  );
+  const text = JSON.stringify(receipt);
+  assert.doesNotMatch(text, /is not a function|TypeError|Cannot read propert(y|ies)/i,
+    `native dispatch must reach the real composed controller: ${text}`);
+  assert.doesNotMatch(text, /index-unreadable/i,
+    `a complete mutated index must not surface an unreadable refusal: ${text}`);
+  const details = receipt?.details ?? receipt;
+  assert.ok(details?.wave_id, `a successful startup must return a durable wave id: ${text}`);
+
+  const recordPath = details.record_path ?? join(f.packagePath, 'runtime', 'waves', `${details.wave_id}.json`);
+  const record = JSON.parse(readFileSync(recordPath, 'utf8'));
+  assert.equal(String(record.wave_id), String(details.wave_id), 'the durable record must be the reported wave');
+  assert.equal(Number.isSafeInteger(record.coordinator?.epoch), true,
+    `the index coordinator epoch must be a safe integer, got ${String(record.coordinator?.epoch)}`);
+  assert.equal(typeof record.coordinator?.session, 'string', 'the durable record must carry a coordinator session');
+  assert.ok(record.coordinator.session.length > 0, 'the durable coordinator session must be non-empty');
+
+  const claim = (await f.ownership.inspectClaims({ packageId: f.packageRef }))
+    .claims.find(candidate => candidate.kind === 'package');
+  assert.ok(claim, 'a successful startup must create an actual package claim');
+  assert.equal(String(claim.epoch), String(record.coordinator.epoch),
+    'the package claim epoch must match the durable coordinator epoch');
+  assert.equal(claim.coordinator?.session, record.coordinator.session,
+    'the package claim must carry the same coordinator session as the durable record');
+
+  // Let the wave owners make progress. Returning mid-flight is safe: the
+  // fixture teardown positively drains every surviving owner process group and
+  // composed.cleanup removes the copied tree.
+  await waitFor(() => f.launches.filter(launch => launch.role === 'owner').length >= 2,
+    15_000, 'two wave owners launched');
+});
+
+test('installed loader forwards the real routine next-wave send unwrapped with triggerTurn false (F10-6)', { skip: SDK_AVAILABLE ? false : 'installed pi SDK loader not found', timeout: 120_000 }, async (t) => {
+  const { loadExtensions, createExtensionRuntime } = await loadSdk();
+  const f = await makeCase4Fixture(t, {
+    memberCount: 3,
+    hostCheck: twoWaveHostCheck(),
+    mutateIndex: mutateTwoWaveIndex
+  });
+  const composed = installInstalledIndex({ root: f.pkg.dir, deps: f.controllerDependencies() });
+  t.after(() => composed.cleanup());
+
+  // Installed SDK cases run with no spec-runtime role so the composed index
+  // resolves its own coordinator identity from the fixture session.
+  const previousRole = process.env.SPEC_RUNTIME_ROLE;
+  delete process.env.SPEC_RUNTIME_ROLE;
+  t.after(() => {
+    if (previousRole === undefined) delete process.env.SPEC_RUNTIME_ROLE;
+    else process.env.SPEC_RUNTIME_ROLE = previousRole;
+  });
+
+  const runtime = createExtensionRuntime();
+  runtime.getAllTools = () => [];
+  runtime.getSettings = () => ({});
+  runtime.setActiveTools = () => {};
+  runtime.appendEntry = () => {};
+  const sent = [];
+  runtime.sendMessage = (message, options) => { sent.push({ message, options }); };
+
+  const loaded = await loadExtensions([composed.indexPath], f.pkg.dir, undefined, runtime);
+  assert.deepEqual(loaded.errors, [], 'the installed loader must load the rewritten index.ts without errors');
+  const extension = loaded.extensions?.[0] ?? loaded;
+  const tools = extension.tools ?? loaded.tools;
+  assert.ok(tools?.has?.('spec_dispatch'), 'the composed index.ts must register the native spec_dispatch tool');
+  assert.ok(composed.controller, 'the real factory must run through the installed loader');
+  f.bindController(composed.controller);
+
+  const ctx = waveIndexCtx(f.pkg.dir, f.coordinator.session);
+  for (const hook of hooksOf(extension, 'session_start')) await hook({ type: 'session_start' }, ctx);
+  t.after(async () => {
+    for (const hook of hooksOf(extension, 'session_shutdown')) await hook({ type: 'session_shutdown', reason: 'quit' }, ctx);
+  });
+
+  const dispatchTool = tools.get('spec_dispatch');
+  await dispatchTool.definition.execute(
+    `waves-index-f10-6-b-${process.pid}`,
+    { action: 'startup', package: f.packagePath, execution: 'waves', isolation: 'worktree', ...MODELS },
+    undefined, undefined, ctx,
+  );
+
+  // Wave 1 integrates and the controller attempts the dependent wave 2. The
+  // fixture denies the lone-ready next-wave check, so the controller records the
+  // outcome and emits its ROUTINE spec-wave next-wave send through the installed
+  // runtime with triggerTurn:false. The pre-fix JSON-wrapping adapter would emit
+  // customType spec-runtime with triggerTurn:true instead, so this never matches.
+  const nextWave = await waitFor(() => {
+    for (const entry of sent) {
+      if (entry.message?.customType !== 'spec-wave') continue;
+      let content;
+      try { content = JSON.parse(entry.message.content); } catch { continue; }
+      if (content?.kind === 'next-wave') return entry;
+    }
+    return false;
+  }, 60_000, 'routine next-wave spec-wave send through runtime.sendMessage');
+
+  assert.equal(nextWave.message.customType, 'spec-wave',
+    'the next-wave send must keep the original spec-wave envelope');
+  assert.equal(nextWave.options?.triggerTurn, false,
+    'the routine next-wave send must not trigger a turn');
+  const event = JSON.parse(nextWave.message.content);
+  assert.equal(event.kind, 'next-wave', 'the unwrapped content must be the next-wave event');
+  assert.equal(event.customType, undefined,
+    'the content must be the unwrapped event, not a re-wrapped envelope');
 });

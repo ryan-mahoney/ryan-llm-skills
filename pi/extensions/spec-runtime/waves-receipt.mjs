@@ -75,6 +75,17 @@ function firstBlocked(record) {
   return blocked[0] ?? null;
 }
 
+// The first member parked on a pending inbox direction. A queued member only
+// signals intake precedence when its queue reason is `input-pending`; capacity
+// or other queue reasons keep the ordinary passive running instruction.
+function firstQueuedInputPending(record) {
+  const queued = Object.entries(record?.members ?? {})
+    .filter(([, member]) => member?.phase === 'queued' && member?.queue_reason === 'input-pending')
+    .map(([key, member]) => ({ key, step: numericStep(member?.step, key), member }));
+  queued.sort((left, right) => left.step - right.step);
+  return queued[0] ?? null;
+}
+
 // A single actionable string per durable wave state. Every branch names the
 // package and wave id and, where one exists, the concrete control entry to run;
 // no branch advises polling or a blind restart.
@@ -100,9 +111,15 @@ function nextAction(record, recordPath) {
       + ' (package ' + (record?.package ?? '') + ', wave ' + waveId + ')';
   }
 
-  if (state === 'open' || state === 'running')
+  if (state === 'open' || state === 'running') {
+    const pending = firstQueuedInputPending(record);
+    if (pending) {
+      return 'input-pending: consume the inbox, then advance (step ' + pending.step
+        + '; package ' + (record?.package ?? '') + ', wave ' + waveId + ')';
+    }
     return 'running: await native wave events; do not poll (package ' + (record?.package ?? '')
       + ', wave ' + waveId + ')';
+  }
 
   if (state === 'ready-to-integrate' || state === 'integrating' || state === 'verifying' || state === 'promoting')
     return state + ': advance or recover to continue integration without a blind restart (package '
