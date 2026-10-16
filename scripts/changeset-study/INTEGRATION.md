@@ -10,7 +10,7 @@ Prepared step and current source
                  ↓
 Existing DeepSeek step owner settles the implementation brief
                  ↓
-One Sol query-planner call binds the brief to source and compiles writer packets
+Sol binds the brief to source and compiles writer packets
                  ↓
 Deterministic optimizer; optional Jev advice on context choices
                  ↓
@@ -31,7 +31,16 @@ its advice is optional, recorded and non-authoritative. Writers remain on the ex
 selected DeepSeek route.
 
 Permit one pre-dispatch planner correction when plan validation rejects a source binding,
-before any writer starts. After dispatch, do not call Sol to review, replan or repair the
+before any writer starts. The experimental `catalog-lookup` route additionally permits
+one batch of bounded source requests before the final plan: at most eight requests and
+64,000 source characters, with a 160 KiB complete serialized request limit. Sol can use
+exact symbols, literal searches, a bounded file tail or a small whole file. The local
+resolver supplies exact source slices, hashes and unique bindings. This route makes at
+most three Sol calls, including its optional lookup and validation correction; catalog
+mode without lookup retains its 80 KiB request limit. These limits are research settings,
+not measured production defaults.
+
+After dispatch, do not call Sol to review, replan or repair the
 writer batch. A writer may receive one local application retry for a rejected edit format,
 stale anchor or syntax/application failure; that retry returns the application error and a
 bounded summary to the same writer before the candidate changes. A failed required test or
@@ -71,13 +80,14 @@ prototype must attach to those boundaries rather than publish edits itself.
 
 ## Integration obligations
 
-1. **Keep the route opt-in and bounded.** Owner brief, one Sol query, optional advice,
+1. **Keep the route opt-in and bounded.** Owner brief, Sol query calls, optional advice,
    deterministic planning and DeepSeek writer calls must be separately attributable in
    receipts. Keep complete request limits and model-call limits. Do not silently change
    provider or thinking selectors.
 2. **Bind against current staged source.** Build the source catalog from the checkout at
    dispatch time. Give the planner only the unchanged owner brief, named file tree,
-   protected paths and bounded exact source metadata. Ambiguous paths or missing anchors
+   protected paths, bounded source metadata and explicitly requested source excerpts.
+   Ambiguous paths or missing anchors
    must block before any write; unresolved names remain discovery obligations, never
    inferred writable paths. A pre-dispatch correction can fix only these bindings.
 3. **Preserve ownership and dependencies.** Each writer has a bounded packet and fenced

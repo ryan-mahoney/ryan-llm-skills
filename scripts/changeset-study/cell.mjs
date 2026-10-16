@@ -14,8 +14,9 @@ import { strategyPlanner, strategyReviewer, usesCandidateChecks, usesBoundaryRev
 import { changedTestCommands } from './candidate-checks.mjs';
 import { reviewContext } from './review-context.mjs';
 import { preflightFocusedPlan } from './focused-editors.mjs';
-import { implementationOwnerPrompt, catalogQueryRole } from './roles.mjs';
+import { implementationOwnerPrompt, catalogPlannerRole } from './roles.mjs';
 import { buildQueryCatalog } from './query-catalog.mjs';
+import { resolveSourceRequests } from './query-source.mjs';
 import { optimizePlan } from './optimizer.mjs';
 import { routeContext } from './context-router.mjs';
 
@@ -44,8 +45,8 @@ const tail = (visible, chars) => visible?.output?.length > chars ? { ...visible,
 function materialize(files, root) { rmSync(root, { recursive: true, force: true }); mkdirSync(root, { recursive: true }); new Workspace(files).materialize(root); }
 
 export async function runCell({ task, arm, selector, ledger, directory, plannerPrompt, timeoutMs, mounts = [], simpleSelector = null, editorSelector = null, strategy = null, optimization = 'none', preparedPlan = null, preparedBrief = null, planningSource = null, queryMode = 'discovery', briefSource = null }) {
-  if (!['discovery', 'catalog'].includes(queryMode)) throw new Error('Unknown query mode');
-  if (queryMode === 'catalog' && strategy !== 'owner-query-writer') throw new Error('Catalog query requires owner-query-writer');
+  if (!['discovery', 'catalog', 'catalog-lookup'].includes(queryMode)) throw new Error('Unknown query mode');
+  if (queryMode.startsWith('catalog') && strategy !== 'owner-query-writer') throw new Error('Catalog query requires owner-query-writer');
   if (briefSource && (preparedBrief === null || hash(preparedBrief) !== briefSource.brief_hash)) throw new Error('Shared brief changed');
   if (strategy) plannerPrompt = strategyPlanner(strategy, plannerPrompt);
   // Phase limits travel with the task (hard phase); dev/eval keep the original values.
@@ -117,7 +118,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
         if (!implementationBrief.trim() || implementationBrief.length > 64000) throw new Error('Implementation brief must contain 1..64000 characters');
         writeFileSync(join(directory, 'implementation-brief.md'), implementationBrief + '\n');
         result.implementation_brief_hash = hash(implementationBrief + '\n');
-        if (queryMode === 'catalog') implementationBrief += '\n';
+        if (queryMode.startsWith('catalog')) implementationBrief += '\n';
       } finally {
         for (const [name, count] of Object.entries(owner.counts)) toolCalls[name] = (toolCalls[name] ?? 0) + count;
         owner.dispose();
@@ -135,7 +136,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
         : !feedback ? JSON.parse(prompt)
         : diffMode ? { task: task.spec, file_tree: Object.keys(current.snapshot()), changes: diffs(task.files, current.snapshot()), feedback }
           : { task: task.spec, files: current.snapshot(), feedback };
-      let plan, queryCatalog;
+      let plan, queryCatalog, queryLookup;
       const beforeDispatch = async (initial, replan) => {
         if (!dispatchOnly(strategy)) return initial;
         let candidate = initial;
@@ -147,18 +148,24 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
             validateStrategyPlan(strategy, candidate);
             errors = preflightFocusedPlan(candidate, current.snapshot(), { parse: contextParse });
             if (queryCatalog) {
-              const anchors = [];
+              const anchors = new Map();
               const visit = (value, path) => {
                 if (!value || typeof value !== 'object') return;
                 path = value.path ?? path;
-                if (Object.hasOwn(value, 'start_anchor') && Object.hasOwn(value, 'end_anchor'))
-                  anchors.push({ path, start: value.start_anchor, end: value.end_anchor });
+                if (path && (Object.hasOwn(value, 'start_anchor') || Object.hasOwn(value, 'end_anchor'))) {
+                  const endpoints = anchors.get(path) ?? { starts: new Set(), ends: new Set() };
+                  if (typeof value.start_anchor === 'string') endpoints.starts.add(value.start_anchor);
+                  if (typeof value.end_anchor === 'string') endpoints.ends.add(value.end_anchor);
+                  anchors.set(path, endpoints);
+                }
                 for (const child of Object.values(value)) {
                   if (Array.isArray(child)) child.forEach(entry => visit(entry, path));
                   else if (child && typeof child === 'object') visit(child, path);
                 }
               };
               visit(queryCatalog);
+              for (const snippet of queryLookup?.snippets ?? [])
+                visit({ path: snippet.path, start_anchor: snippet.start, end_anchor: snippet.end });
               const generated = new Set();
               const absent = new Set(queryCatalog.files.filter(file => !file.exists).map(file => file.path));
               const initialFiles = current.snapshot();
@@ -169,7 +176,12 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
                 }
                 for (const excerpt of operation.context) {
                   const generatedWhole = generated.has(excerpt.path) && excerpt.start === null && excerpt.end === null;
-                  if (!generatedWhole && !anchors.some(anchor => anchor.path === excerpt.path && anchor.start === excerpt.start && anchor.end === excerpt.end))
+                  const catalogFile = queryCatalog.files.find(file => file.path === excerpt.path && file.exists) ||
+                    queryLookup?.snippets.find(snippet => snippet.path === excerpt.path);
+                  const endpoints = anchors.get(excerpt.path);
+                  const startKnown = excerpt.start === null || endpoints?.starts.has(excerpt.start);
+                  const endKnown = excerpt.end === null || endpoints?.ends.has(excerpt.end);
+                  if (!generatedWhole && (!catalogFile || !startKnown || !endKnown))
                     errors.push(`${operation.id}: needs discovery: context binding is absent from catalog: ${excerpt.path}`);
                 }
                 operation.writes.filter(path => absent.has(path)).forEach(path => generated.add(path));
@@ -188,7 +200,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
         validateStrategyPlan(strategy, plan);
         const errors = preflightFocusedPlan(plan, current.snapshot(), { parse: contextParse });
         if (errors.length) throw new Error('Reused plan invalid: ' + errors.join('; '));
-      } else if (queryMode === 'catalog') {
+      } else if (queryMode.startsWith('catalog')) {
         let catalog;
         try { catalog = await stage('query-context', () => buildQueryCatalog(current.snapshot(), implementationBrief, { parse: contextParse })); }
         catch (error) { throw new Error('needs discovery: ' + error.message); }
@@ -196,8 +208,9 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
         const catalogBytes = JSON.stringify(catalog, null, 2) + '\n';
         writeFileSync(join(directory, 'catalog.json'), catalogBytes);
         result.catalog_hash = hash(catalogBytes);
-        const system = plannerPrompt + '\n' + catalogQueryRole;
-        const input = { ...planningInput, catalog };
+        const lookupMode = queryMode === 'catalog-lookup';
+        const system = plannerPrompt + '\n' + catalogPlannerRole({ lookup: lookupMode });
+        let input = { ...planningInput, catalog };
         const normalize = (value, attempt) => {
           const normalized = structuredClone(value);
           for (const [index, op] of (Array.isArray(normalized?.operations) ? normalized.operations : []).entries()) {
@@ -213,14 +226,48 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
           }
           return normalized;
         };
-        const query = async (payload, attempt) => {
-          // Bound the complete serialized system and input, including corrections.
-          if (Buffer.byteLength(JSON.stringify({ systemPrompt: system, input: payload })) > 80 * 1024)
-            throw new Error('needs discovery: catalog query exceeds 80 KiB');
-          return normalize(await stage('planning', () => client.json(system, payload, 'planning')), attempt);
+        let queryCalls = 0;
+        const query = async payload => {
+          // Bound every complete request, including source followup and correction.
+          const maxKiB = lookupMode ? 160 : 80;
+          if (Buffer.byteLength(JSON.stringify({ systemPrompt: system, input: payload })) > maxKiB * 1024)
+            throw new Error(`needs discovery: catalog query exceeds ${maxKiB} KiB`);
+          if (queryCalls >= (lookupMode ? 3 : 2)) throw new Error('Query call bound exceeded');
+          return normalize(await stage('planning', () => client.json(system, payload, 'planning')), queryCalls++);
         };
-        plan = await query(input, 0);
-        plan = await beforeDispatch(plan, correction => query({ ...input, ...correction, previous_plan: plan }, 1));
+        const requirePlan = value => {
+          if (Object.hasOwn(value ?? {}, 'source_requests'))
+            throw new Error('needs discovery: source lookup is allowed only once, before the final plan');
+          return value;
+        };
+        plan = await query(input);
+        if (lookupMode && Object.hasOwn(plan ?? {}, 'source_requests')) {
+          if (Object.hasOwn(plan, 'operations') || Object.hasOwn(plan, 'blocked'))
+            throw new Error('needs discovery: source_requests must be returned without a plan or blocked result');
+          const requests = plan.source_requests;
+          const requestBytes = JSON.stringify(requests, null, 2) + '\n';
+          writeFileSync(join(directory, 'source-requests.json'), requestBytes);
+          result.source_requests_hash = hash(requestBytes);
+          try {
+            queryLookup = await stage('query-context', () => resolveSourceRequests(task.files, requests,
+              { parse: contextParse, maxCharacters: 64000, maxRequests: 8 }));
+          } catch (error) {
+            const failureBytes = JSON.stringify({ ok: false, error: error.message,
+              request_index: error.request_index ?? null, matches: error.matches ?? null, candidates: error.candidates ?? [] }, null, 2) + '\n';
+            writeFileSync(join(directory, 'source-lookup.json'), failureBytes);
+            result.source_lookup_hash = hash(failureBytes);
+            throw error;
+          }
+          const lookupBytes = JSON.stringify(queryLookup, null, 2) + '\n';
+          writeFileSync(join(directory, 'source-lookup.json'), lookupBytes);
+          result.source_lookup_hash = hash(lookupBytes);
+          result.source_lookup_characters = queryLookup.source_characters;
+          input = { ...input, source_requests: requests, source_lookup: queryLookup,
+            instruction: 'The single source lookup batch is complete. Return the complete final plan JSON or a blocked result; no further source requests are available.' };
+          plan = requirePlan(await query(input));
+        } else if (lookupMode) plan = requirePlan(plan);
+        plan = await beforeDispatch(plan, async correction => requirePlan(await query({ ...input, ...correction, previous_plan: plan })));
+
       } else if (scouted) {
         const scout = await nativeAgent({ root, client, transcript: join(directory, feedback ? 'repair-planner-transcript.jsonl' : 'planner-transcript.jsonl'), signal: controller.signal, readOnly: true,
           stage: feedback ? 'repair-planning' : 'discovery-planning', ...toolOptions,

@@ -48,8 +48,11 @@ own source bindings and plan once. That correction must preserve the owner's dec
 export const catalogQueryRole = `Source discovery is unavailable in this catalog query.
 The catalog is deterministic source metadata, not an implementation proposal. Bind the
 settled owner brief using only exact start_anchor/end_anchor values from the catalog
-for the corresponding path. Use those values as context start/end, including null
-only when the catalog explicitly supplies it. Offsets are descriptive, not edit anchors.
+for the corresponding path. Choose start and end independently from that path's
+supplied start_anchor and end_anchor endpoints. For a known existing catalog path,
+null may select BOF or EOF, even when no individual row spells out that whole range.
+Preflight still checks ordering, uniqueness and delivered size. Offsets are descriptive,
+not edit anchors.
 For a catalog path marked absent, its creation packet needs no context for that path.
 A later dependent packet may select that newly generated file with start:null,end:null;
 the runtime supplies its staged contents under the same source-size bound. Do not use
@@ -76,3 +79,41 @@ If necessary bindings or source context are missing, return only
 {"blocked":"needs discovery: the exact missing source binding or context"}.
 The same catalog is available for at most one pre-dispatch correction.
 `;
+
+export const catalogLookupRole = `This is catalog-lookup mode. Before returning your
+final plan, you may instead return only {"source_requests":[...]} for ONE bounded
+batch of at most eight frozen-source reads, totaling at most 64000 source characters.
+Each request has an exact checkout-relative path from file_tree and exactly one selector:
+{"path":"file.mjs","symbol":"prepare"} selects a uniquely named function, method or
+variable or named class (Class.method and object.method names are supported);
+{"path":"file.mjs","search":"exact literal","occurrence":0} selects the enclosing
+module statement or test; a class match selects its containing method. occurrence is
+zero-based and optional only for a single match. No semantic search is performed;
+{"path":"file.mjs","tail":true} selects an exact EOF suffix of at most 8000 characters,
+starting at a uniquely bound complete line, for existing append context;
+{"path":"small-file","whole":true} reads a small complete file under the batch cap.
+Do not request unknown or generated files, tests to run, shell commands or writes.
+The runtime returns source_lookup.snippets with exact text, whole-file source_hash,
+source_start/source_end offsets and start/end context anchors. You may use the supplied
+snippet endpoints, catalog endpoints, BOF(null) and EOF(null) on that same source path;
+normal preflight still validates ordering, source sizes and all writer assignments.
+Literal ambiguity, missing symbols or excessive context fails explicitly; do not guess
+which occurrence or invent a binding. Keep requests narrow enough for one batch.
+The next reply after source lookup MUST be a complete final plan or blocked result.
+After the final plan, at most one correction of your own plan is available before
+writers run; source requests are then unavailable. You have no repository tools,
+original step specification or behavioral feedback. Preserve the owner's decisions.
+Complete serialized system+input is capped at 160 KiB on every call in this mode.
+`;
+
+export function catalogPlannerRole({ lookup = false } = {}) {
+  if (!lookup) return catalogQueryRole;
+  return catalogQueryRole
+    .replace('Source discovery is unavailable in this catalog query.',
+      'This catalog query permits one bounded frozen-source lookup before the final plan.')
+    .replace('Only catalog, unchanged implementation_brief, file_tree and protected_files are supplied;',
+      'The initial input contains catalog, unchanged implementation_brief, file_tree and protected_files;')
+    .replace('If necessary bindings or source context are missing, return only\n{"blocked":"needs discovery: the exact missing source binding or context"}.',
+      'If necessary source bindings or context are missing, use the single source_requests batch described below before returning a plan. After that batch, report a blocked result if necessary source or settled owner decisions are still missing.')
+    + '\n' + catalogLookupRole;
+}

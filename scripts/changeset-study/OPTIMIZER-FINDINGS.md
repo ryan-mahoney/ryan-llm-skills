@@ -1,8 +1,8 @@
-# Optimizer findings: runs 03–07
+# Optimizer findings: runs 03–08
 
 Deterministic grouping produced the best fully passing DeepSeek calibration observation. No three-role configuration completed all three cases, and none established a quality-preserving win over the retained Sol controls. These exposed development cases and historical controls do not establish reliability or a global optimum.
 
-The [measurement tables](optimized-results.md) and [JSON evidence](optimized-results.json) retain actual and allocated accounting, phase times, provider checks and artifact hashes. [Sol-only measurements](sol-only-results.json) provide historical, unmatched controls.
+The [measurement tables](optimized-results.md), [JSON evidence](optimized-results.json) and [interactive report](optimized-results.html) retain actual and allocated accounting, phase times, provider checks and artifact hashes. [Sol-only measurements](sol-only-results.json) provide historical, unmatched controls.
 
 Run 03 used a DeepSeek implementation owner, a Sol query planner and DeepSeek writers. Calibration stopped after an invalid create edit; its retry classifier mistakenly matched `budget` in a source path. Handoff exceeded a redundant instruction sublimit. Extraction selected 44,600 source characters against the 32,000 delivered-character limit. Those rejected plans and all charges remain retained.
 
@@ -15,6 +15,7 @@ Runs 04–06 share one corrected backend freeze: exact retry classification, a 4
 | 05 deterministic | 1/3 | 3/3 | 1/2 selected cells | 1/3 | 1/3 |
 | 06 contextual | 1/3 | 2/3 | 0/1 selected cells | 1/3 | 0/3 |
 | 07 catalog | 1/3 | 2/3 | 0/1 selected cells | 1/3 | 0/3 |
+| 08 richer catalog | 1/3 | 2/3 | 0/1 selected cells | 1/3 | 0/3 |
 
 Zero selected candidate checks means no candidate check ran; it is not a pass. Base visible checks can pass on an unchanged or partial candidate. Application completion is the primary outcome.
 
@@ -30,7 +31,7 @@ On matched calibration, deterministic grouping reduced assignments from six to t
 
 Jev made two successful routing calls in 06: 4,294 tokens and $0.000169 estimated spend. It selected no vetoes or context changes. Every dispatched plan was byte-identical to 05, so these measurements show no benefit from Jev. Contextual calibration failed visible/candidate checks despite passing external grading. Its shorter handoff checks included no selected candidate tests, which prevents a quality-preserving speed claim.
 
-Actual model usage counts newly incurred requests. Allocated usage adds the original owner/query work for 04–06 and only original owner work for 07. It excludes donor writing and checks. Reused planning is an allocation, not a new charge. Cache-write tokens are zero in all rows. Jev usage is separate from the Sol/DeepSeek columns.
+Actual model usage counts newly incurred requests. Allocated usage adds the original owner/query work for 04–06 and only original owner work for 07–08. It excludes donor writing and checks. Reused planning is an allocation, not a new charge. Cache-write tokens are zero in all rows. Jev usage is separate from the Sol/DeepSeek columns.
 
 | Actual run | Calls | Input | Output | Cache read | Total tokens | Normalized USD |
 |---|---:|---:|---:|---:|---:|---:|
@@ -39,6 +40,7 @@ Actual model usage counts newly incurred requests. Allocated usage adds the orig
 | 05 deterministic | 14 | 18,813 | 12,282 | 17,792 | 48,887 | 0.020489052 |
 | 06 contextual | 15 | 5,926 | 16,633 | 32,128 | 54,687 | 0.021930168 |
 | 07 catalog | 7 | 48,759 | 6,708 | 384 | 55,851 | 0.022679604 |
+| 08 richer catalog | 6 | 44,395 | 6,451 | 1,152 | 51,998 | 0.021066612 |
 
 | Allocated run | Calls | Input | Output | Cache read | Total tokens | Normalized USD |
 |---|---:|---:|---:|---:|---:|---:|
@@ -47,6 +49,7 @@ Actual model usage counts newly incurred requests. Allocated usage adds the orig
 | 05 deterministic | 85 | 347,357 | 78,096 | 2,528,640 | 2,954,093 | 0.213094140 |
 | 06 contextual | 86 | 334,470 | 82,447 | 2,542,976 | 2,959,893 | 0.214535256 |
 | 07 catalog | 67 | 168,182 | 50,428 | 2,509,568 | 2,728,178 | 0.126025608 |
+| 08 richer catalog | 66 | 163,818 | 50,171 | 2,510,336 | 2,724,325 | 0.124412616 |
 
 Phase totals below are actual seconds. Query includes deterministic catalog generation. Phase sums exclude initialization and process overhead; elapsed totals use process wall time.
 
@@ -57,6 +60,7 @@ Phase totals below are actual seconds. Query includes deterministic catalog gene
 | 05 deterministic | 0.000 | 0.000 | 0.000 | 0.004 | 44.651 | 159.834 | 205.188 | 817.609 |
 | 06 contextual | 0.000 | 0.000 | 0.402 | 0.004 | 40.631 | 94.997 | 136.757 | 749.178 |
 | 07 catalog | 0.000 | 79.311 | 0.000 | 0.001 | 8.414 | 30.632 | 120.177 | 419.725 |
+| 08 richer catalog | 0.000 | 68.957 | 0.000 | 0.001 | 7.346 | 30.637 | 108.783 | 408.332 |
 
 04–06 each allocate 612.420656s of original owner/query planning. Run 07 allocates 299.548442s of original owner work and incurs 79.310576s of fresh query/context work, including 0.128773s of catalog generation. Its allocated planning is 378.859018s; allocated elapsed is 419.725242s. No later Sol review or repair occurred after writers started.
 
@@ -72,10 +76,22 @@ Extraction returned:
 
 These are planner-reported blockers, not claims that source compaction cannot handle those ranges. The rejected cells retain valid brief provenance and complete accounting, but lack valid raw/dispatched plans.
 
+Run 08 measured richer variable, comment, nested helper and import bindings under a new freeze, while retaining the owner briefs and writer backend. Calibration required one Sol query instead of two: query/context took 26.815192s and writing 7.346148s. It applied all three optimized assignments and passed external acceptance, but still failed visible and candidate checks. Both larger cases stopped before writing; the lower elapsed total does not establish a completion-quality improvement.
+
+08 handoff returned:
+
+> needs discovery: runtime.test.mjs lacks a catalog range for the EOF append location and selectable source context for the existing launchProcess prompt-capture wrappers and prepare helper needed by the five regression cases. Supply exact start_anchor/end_anchor bindings for those ranges.
+
+08 extraction produced a seven-operation first plan that passed strategy validation and source preflight with compaction. The catalog harness nevertheless rejected six context bindings: two in `create-lifecycle` and four in `rewire-runtime`. Each start and end was a genuine catalog endpoint, recombined across listed pairs. Strict pair membership rejected these combinations; the source anchors were unique, ordered and within the delivered-source limit after compaction. The plan and candidate were not manually changed.
+
+The initial complete extraction request was 70,674 bytes. Its correction, including the previous 10,599-byte plan and validation errors, was 82,206 bytes against an 81,920-byte cap: 286 bytes over. The runtime refused that correction before transport. Final failure was `needs discovery: catalog query exceeds 80 KiB`, with one paid extraction query and zero writer calls. This separates a harness binding restriction from a source-preflight defect and from the correction-payload bound.
+
+08 incurred 108.783377s, six calls and 51,998 tokens at $0.021066612 normalized cost ($0.123617412 in receipt charges). Owner-only allocation gives 408.331819s, 66 calls, 2,724,325 tokens and $0.124412616 normalized. No owner was rerun and no Sol call followed writing.
+
 The retained historical Sol controls completed all three cases: native Sol took 474.961857s at $0.166108800 normalized, and the boundary-review runs took 319.735002s/$0.107606136 and 339.549391s/$0.106832772. Successful completion across the cases remains missing from every measured three-role configuration, so no win over these controls is established.
 
-Budget snapshot at 2026-10-16T23:37:53.027128+00:00: the current reset ledger has 134 settled entries, 0 unsettled entries, and $0.947944412 settled exposure against its $50 limit. Retained exposure is also $0.947944412. Trial model receipts total $0.947685412; Jev routing adds $0.000169000. One other settled Jev entry contributes $0.000090000. The prior ledger archive is excluded from this reset balance.
+Budget snapshot at 2026-10-16T23:49:52.175501+00:00: the current reset ledger has 140 settled entries, 0 unsettled entries, and $1.071561824 settled exposure against its $50 limit. Retained exposure is also $1.071561824. Trial model receipts total $1.071302824; Jev routing adds $0.000169000. One other settled Jev entry contributes $0.000090000. The prior ledger archive is excluded from this reset balance.
 
-Normalized model cost for 03–07 is $0.290061096, or $0.290230096 including trial Jev routing. The comparison tariff reprices Sol at DeepSeek rates; ledger settlements and comparison estimates are separate measures. Subscription invoices and quota are unmeasured. Allocated totals must not be summed as campaign spend because they reuse donor charges.
+Normalized model cost for 03–08 is $0.311127708, or $0.311296708 including trial Jev routing. The comparison tariff reprices Sol at DeepSeek rates; ledger settlements and comparison estimates are separate measures. Subscription invoices and quota are unmeasured. Allocated totals must not be summed as campaign spend because they reuse donor charges.
 
-Next work is offline: enrich the catalog with variable declarations, comment boundaries and nested helper signatures, then verify bounded source bindings and interface coverage before another live experiment. That work is outstanding. No repeat or further paid run is included in these findings.
+The next follow-up is a separate `catalog-lookup` mode with one bounded source batch (64 KiB) and a 160 KiB complete-request limit. Integration is pending and the mode is unmeasured. These bounds do not apply retroactively to 07 or 08. Source bindings, fixture interfaces and correction payloads still need offline verification before another live experiment; no repeat or lookup run is included in these findings.

@@ -32,9 +32,20 @@ test('catalog query reuses exact brief bytes and dispatches only query then writ
           else {
             const file=input.catalog.files.find(file=>file.path==='answer.mjs');
             const definition=file.preamble;
+            let start=definition.start_anchor,end=definition.end_anchor;
+            if(input.implementation_brief.includes('cross-entry-context')) {
+              start=file.symbols.find(symbol=>symbol.name==='before').start_anchor;
+              end=file.symbols.find(symbol=>symbol.name==='between').end_anchor;
+            } else if(input.implementation_brief.includes('cross-file-binding')&&!input.planning_validation_errors) {
+              start=input.catalog.files.find(file=>file.path==='other.mjs').symbols[0].start_anchor;
+              end=file.symbols.find(symbol=>symbol.name==='answer').end_anchor;
+            } else if(input.implementation_brief.includes('eof-append-context')) {
+              start=file.symbols.find(symbol=>symbol.name==='answer').start_anchor;
+              end=null;
+            } else if(input.implementation_brief.includes('bad-catalog-binding')&&!input.planning_validation_errors) start='invented anchor';
             value={schema_version:1,operations:[{id:'answer',executor:'simple',reads:'answer.mjs',writes:'answer.mjs',
               objective:'Change answer',instruction:'Return correct',requirements:['Keep other files.'],
-              context:[{path:'answer.mjs',start:input.implementation_brief.includes('bad-catalog-binding')&&!input.planning_validation_errors?'invented anchor':definition.start_anchor,end:definition.end_anchor}]}]};
+              context:[{path:'answer.mjs',start,end}]}]};
             if(input.implementation_brief.includes('unknown-create')) value.operations.push({
               id:'unknown',executor:'simple',reads:[],writes:['invented/new.mjs'],depends_on:[],
               objective:'Create unknown file',instruction:'create unknown',requirements:['Keep unrelated source.'],context:[]});
@@ -55,10 +66,11 @@ test('catalog query reuses exact brief bytes and dispatches only query then writ
     })};`);
     process.env.CHANGESET_MODEL_RUNTIME = fake;
     const { runCell } = await import(pathToFileURL(join(root, 'scripts/changeset-study/cell.mjs')));
-    const brief = 'Change: answer.mjs function answer returns correct. Preserve other files.\r\nReturn: edits.\n\n';
+    const brief = 'Change: answer.mjs function answer returns correct. Preserve before, between, after and other.mjs.\r\nReturn: edits.\n\n';
     const briefSource = { run: 'donor', cell: 'answer', brief_hash: hash(brief), result_hash: 'donor-result-hash' };
     const task = { id: 'catalog-answer', spec: 'ORIGINAL TASK MUST NOT REACH QUERY', context: 'discovery',
-      files: { 'answer.mjs': "export function answer() { return 'wrong'; }\n" }, protected: [],
+      files: { 'answer.mjs': "// Foreign anchor text: const other = 3;\nexport function before() { return 0; }\nexport function between() { return 1; }\nexport function answer() { return 'wrong'; }\nexport function after() { return 2; }\n",
+        'other.mjs': 'const other = 3;\n' }, protected: [],
       check: 'node --input-type=module -e "import { answer } from \'./answer.mjs\'; if(answer()!==\'correct\') process.exit(1)"',
       hidden: "import {answer} from '/work/answer.mjs'; if(answer()!=='correct') throw Error('wrong answer');",
       limits: { cell_ms: 5000, grade_ms: 3000 } };
@@ -83,7 +95,18 @@ test('catalog query reuses exact brief bytes and dispatches only query then writ
     const response = JSON.parse(readFileSync(join(directory, 'responses.jsonl'), 'utf8').split('\n')[0]);
     assert.equal(JSON.parse(response.response.content[0].text).operations[0].writes, 'answer.mjs');
     assert.equal(result.executions[0]?.ok, true, JSON.stringify(result));
-    assert.equal(readFileSync(join(directory, 'repository/answer.mjs'), 'utf8'), "export function answer() { return 'correct'; }\n");
+    assert.equal(readFileSync(join(directory, 'repository/answer.mjs'), 'utf8'),
+      "// Foreign anchor text: const other = 3;\nexport function before() { return 0; }\nexport function between() { return 1; }\nexport function answer() { return 'correct'; }\nexport function after() { return 2; }\n");
+
+    const crossEntryDirectory = join(root, 'cross-entry');
+    const crossEntry = await runCell({ ...options, preparedBrief: brief + 'cross-entry-context', briefSource: null, directory: crossEntryDirectory });
+    assert.deepEqual(readFileSync(join(crossEntryDirectory, 'requests.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line).stage), ['planning', 'editor']);
+    assert.equal(crossEntry.executions[0]?.ok, true, JSON.stringify(crossEntry));
+
+    const eofDirectory = join(root, 'eof-context');
+    const eofContext = await runCell({ ...options, preparedBrief: brief + 'eof-append-context', briefSource: null, directory: eofDirectory });
+    assert.deepEqual(readFileSync(join(eofDirectory, 'requests.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line).stage), ['planning', 'editor']);
+    assert.equal(eofContext.executions[0]?.ok, true, JSON.stringify(eofContext));
 
     const correctionDirectory = join(root, 'correction');
     const correction = await runCell({ ...options, preparedBrief: brief + 'bad-catalog-binding', briefSource: null, directory: correctionDirectory });
@@ -93,6 +116,13 @@ test('catalog query reuses exact brief bytes and dispatches only query then writ
     assert.match(correctedInput.planning_validation_errors.join(';'), /absent from catalog/);
     assert.deepEqual(correctedInput.catalog, JSON.parse(correctionRequests[0].context.messages[0].content).catalog);
     assert.equal(correction.executions[0]?.ok, true, JSON.stringify(correction));
+
+    const crossFileDirectory = join(root, 'cross-file');
+    await runCell({ ...options, preparedBrief: brief + 'cross-file-binding', briefSource: null, directory: crossFileDirectory });
+    const crossFileRequests = readFileSync(join(crossFileDirectory, 'requests.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    assert.deepEqual(crossFileRequests.map(request => request.stage), ['planning', 'planning', 'editor']);
+    const crossFileCorrection = JSON.parse(crossFileRequests[1].context.messages[0].content);
+    assert.match(crossFileCorrection.planning_validation_errors.join(';'), /absent from catalog/);
 
     const generatedDirectory = join(root, 'generated');
     const generatedBrief = brief + ' Create src/new.mjs, then finish it. generated-context';

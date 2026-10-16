@@ -21,9 +21,9 @@ if (!['none', 'deterministic', 'contextual'].includes(optimization)) throw new E
 const plansFrom = args.includes('--plans-from') ? resolve(option('--plans-from')) : null;
 const briefsFrom = args.includes('--briefs-from') ? resolve(option('--briefs-from')) : null;
 const queryMode = args.includes('--query-mode') ? option('--query-mode') : 'discovery';
-if (!['discovery', 'catalog'].includes(queryMode)) throw new Error('Unknown query mode');
+if (!['discovery', 'catalog', 'catalog-lookup'].includes(queryMode)) throw new Error('Unknown query mode');
 if (plansFrom && briefsFrom) throw new Error('--plans-from and --briefs-from are mutually exclusive');
-if ((queryMode === 'catalog' || briefsFrom) && strategy !== 'owner-query-writer') throw new Error('Catalog queries and shared briefs require owner-query-writer');
+if ((queryMode.startsWith('catalog') || briefsFrom) && strategy !== 'owner-query-writer') throw new Error('Catalog queries and shared briefs require owner-query-writer');
 const editorSelector = args.includes('--editor-model') ? option('--editor-model') : null;
 if (usesEditor(strategy) !== Boolean(editorSelector)) throw new Error('Use --editor-model only and always with an owner-editor strategy');
 const replay = args.includes('--freeze-from') ? resolve(option('--freeze-from')) : null;

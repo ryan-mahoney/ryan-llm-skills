@@ -226,3 +226,62 @@ promising. No behavioral grading feedback enters planning or writer recovery.
 This is a new catalog freeze and an exploratory refinement of the failed attempt,
 not a replay of the first catalog's query plans. The separate experiments proposed
 in the user's later research recommendations begin only after the current goal.
+
+## Protocol 09: catalog with one bounded source lookup
+
+Protocol 08 still blocked handoff before writing because its catalog did not supply
+sufficient prompt-capture fixture context or a useful existing EOF append binding.
+Extraction also selected a source-preflight-valid range whose endpoints came from
+different entries on the same path. The exact-pair catalog validator rejected that
+range, and the resulting correction request exceeded the 80 KiB guard by 286 bytes.
+Retain both results. Protocol 09 accepts independently supplied same-path endpoints
+and BOF/EOF boundaries, and provides a separate larger complete-request allowance.
+Protocol 09 adds a separate `--query-mode catalog-lookup` treatment;
+`discovery` remains the default and `catalog` retains its 80 KiB request guard.
+
+Reuse the exact hash-verified original owner briefs and frozen task sources. The
+initial Sol request contains only the unchanged brief, deterministic catalog, file
+tree and protected-file list. Before producing the final plan, Sol may return only
+`{"source_requests":[...]}` for one deterministic batch of at most eight reads and
+64,000 delivered UTF-16 source characters. There are no repository tools, shell
+commands, writes, original step specification or behavioral grading feedback.
+Requests name an exact existing frozen source path and one selector:
+
+- `symbol` selects a uniquely named AST function, method, variable or class; qualified
+  class/object method names are allowed. Unambiguous leading comments remain.
+- `search` selects a literal match's enclosing module statement or test, or its
+  containing class method. Multiple matches require an explicit zero-based
+  `occurrence`; ambiguity reports bounded candidate offsets and headers.
+- `tail:true` selects an EOF suffix of at most 8,000 characters, beginning at a
+  uniquely bound complete line when possible, for existing append context.
+- `whole:true` reads an existing small file under the same total batch bound.
+
+The source resolver uses only the supplied frozen input map. It returns exact
+source slices, whole-file hashes, offsets and unique context anchors; it never
+chooses a semantic match or reads generated candidates. Missing paths, ambiguous
+symbols, invalid selectors, unavailable unique anchors or excessive source fail
+explicitly. No further lookup batch is available after either success or failure.
+
+Sol receives the unchanged initial packet plus the successful lookup result and
+must then return a complete final plan or blocked result. The existing single
+pre-dispatch validation correction remains available; it can correct its own plan
+but cannot request more source. Thus the query planner makes at most three calls:
+initial, optional lookup followup, optional validation correction. All are charged
+normally at stage `planning`; every complete serialized system-plus-input request,
+including lookup text and any previous plan, must fit 160 KiB in this mode. Nothing
+is silently truncated. No lookup, query, model review or owner repair follows writing.
+
+Looked-up snippets establish known-existing paths and add their exact endpoints
+to the same-path context bindings. Supplied start/end endpoints may be combined;
+BOF/EOF null boundaries are available on known existing paths. Source ordering,
+uniqueness, protected paths and the unchanged 32,000-character delivered writer
+context limit remain checked by preflight. Initially absent writes still need an
+explicit absent-path catalog binding; source lookup cannot invent new destinations.
+
+Persist `source-requests.json`, `source-lookup.json` and their result hashes,
+including an explicit failed-lookup artifact when resolution fails. Catalog and
+lookup construction time both use deterministic `query-context` stages. Preserve
+all original model requests/responses, normalized raw plans, receipts and writer
+results. This is another exploratory protocol revision; it does not establish a
+completion-preserving speed gain, isolate lookup effects from changed plans, or
+start the separate experiments proposed in the later research recommendations.

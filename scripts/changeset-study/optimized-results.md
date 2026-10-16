@@ -9,6 +9,7 @@ Actual incurred model usage excludes reused planning. plans_from adds original o
 | 05-deterministic | deterministic/discovery | 1/3 | 0 | 205.19 | 817.61 | 44.65 | 44.66 |
 | 06-contextual | contextual/discovery | 1/3 | 0 | 136.76 | 749.18 | 40.63 | 41.04 |
 | 07-catalog-deterministic | deterministic/catalog | 1/3 | 0 | 120.18 | 419.73 | 8.41 | 8.41 |
+| 08-richer-catalog-deterministic | deterministic/catalog | 1/3 | 0 | 108.78 | 408.33 | 7.35 | 7.35 |
 
 | Run | Calls actual / allocated | Tokens actual / allocated | Equivalent USD actual / allocated | Jev calls | Jev tokens | Jev est. USD |
 |---|---:|---:|---:|---:|---:|---:|
@@ -17,6 +18,7 @@ Actual incurred model usage excludes reused planning. plans_from adds original o
 | 05-deterministic | 14 / 85 | 48887 / 2954093 | 0.020489 / 0.213094 | 0 | 0 | 0.000000 |
 | 06-contextual | 15 / 86 | 54687 / 2959893 | 0.021930 / 0.214535 | 2 | 4294 | 0.000169 |
 | 07-catalog-deterministic | 7 / 67 | 55851 / 2728178 | 0.022680 / 0.126026 | 0 | 0 | 0.000000 |
+| 08-richer-catalog-deterministic | 6 / 66 | 51998 / 2724325 | 0.021067 / 0.124413 | 0 | 0 | 0.000000 |
 
 | Cell | Valid | Applied | Visible base | Candidate failures | External | Owner s* | Query s* | Routing s | Optimization s | Writing s | Checks s |
 |---|---|---|---|---:|---|---:|---:|---:|---:|---:|---:|
@@ -35,6 +37,9 @@ Actual incurred model usage excludes reused planning. plans_from adds original o
 | 07-catalog-deterministic/000-hard-context-calibration | true | true | false | 1/1 | true | 54.72 | 56.10 | 0.00 | 0.00 | 8.41 | 0.26 |
 | 07-catalog-deterministic/001-hard-dependency-handoff | false | false | true | 0/0 | false | 63.66 | 3.55 | 0.00 | 0.00 | 0.00 | 1.85 |
 | 07-catalog-deterministic/002-hard-lifecycle-extract | false | false | true | 0/0 | false | 181.16 | 19.66 | 0.00 | 0.00 | 0.00 | 28.53 |
+| 08-richer-catalog-deterministic/000-hard-context-calibration | true | true | false | 1/1 | true | 54.72 | 26.82 | 0.00 | 0.00 | 7.35 | 0.25 |
+| 08-richer-catalog-deterministic/001-hard-dependency-handoff | false | false | true | 0/0 | false | 63.66 | 5.66 | 0.00 | 0.00 | 0.00 | 1.87 |
+| 08-richer-catalog-deterministic/002-hard-lifecycle-extract | false | false | true | 0/0 | false | 181.16 | 36.48 | 0.00 | 0.00 | 0.00 | 28.51 |
 
 *Owner and query seconds include allocated original planning for replays. JSON retains actual phase time and all stage calls/tokens separately. Application completion means execute returned ok, independently of downstream checks.
 
