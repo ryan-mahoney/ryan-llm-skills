@@ -6,7 +6,7 @@ import { performance } from 'node:perf_hooks';
 import { Client } from './client.mjs';
 import { nativeAgent } from './agent.mjs';
 import { sandbox, grade } from './sandbox.mjs';
-import { execute } from '../changeset/engine.mjs';
+import { execute, compile } from '../changeset/engine.mjs';
 import { Workspace, hash } from '../changeset/workspace.mjs';
 import { parseJson } from '../changeset/models.mjs';
 import { equivalentCost } from '../changeset-research/cost.mjs';
@@ -14,7 +14,8 @@ import { strategyPlanner, strategyReviewer, usesCandidateChecks, usesBoundaryRev
 import { changedTestCommands } from './candidate-checks.mjs';
 import { reviewContext } from './review-context.mjs';
 import { preflightFocusedPlan } from './focused-editors.mjs';
-import { implementationOwnerPrompt } from './roles.mjs';
+import { implementationOwnerPrompt, catalogQueryRole } from './roles.mjs';
+import { buildQueryCatalog } from './query-catalog.mjs';
 import { optimizePlan } from './optimizer.mjs';
 import { routeContext } from './context-router.mjs';
 
@@ -42,7 +43,10 @@ function diffs(before, after, limit = 200000) {
 const tail = (visible, chars) => visible?.output?.length > chars ? { ...visible, output: '[earlier output omitted]\n' + visible.output.slice(-chars) } : visible;
 function materialize(files, root) { rmSync(root, { recursive: true, force: true }); mkdirSync(root, { recursive: true }); new Workspace(files).materialize(root); }
 
-export async function runCell({ task, arm, selector, ledger, directory, plannerPrompt, timeoutMs, mounts = [], simpleSelector = null, editorSelector = null, strategy = null, optimization = 'none', preparedPlan = null, preparedBrief = null, planningSource = null }) {
+export async function runCell({ task, arm, selector, ledger, directory, plannerPrompt, timeoutMs, mounts = [], simpleSelector = null, editorSelector = null, strategy = null, optimization = 'none', preparedPlan = null, preparedBrief = null, planningSource = null, queryMode = 'discovery', briefSource = null }) {
+  if (!['discovery', 'catalog'].includes(queryMode)) throw new Error('Unknown query mode');
+  if (queryMode === 'catalog' && strategy !== 'owner-query-writer') throw new Error('Catalog query requires owner-query-writer');
+  if (briefSource && (preparedBrief === null || hash(preparedBrief) !== briefSource.brief_hash)) throw new Error('Shared brief changed');
   if (strategy) plannerPrompt = strategyPlanner(strategy, plannerPrompt);
   // Phase limits travel with the task (hard phase); dev/eval keep the original values.
   const limits = { cell_ms: 300000, model_calls: 32, max_output_tokens: 16000, call_ms: 120000, command_ms: 30000, grade_ms: null, review_input: 'files', ...task.limits };
@@ -58,7 +62,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
     ...(simpleSelector ? { simple_selector: simpleSelector, exploratory: true } : {}), limits,
     ...(editorSelector ? { editor_selector: editorSelector } : {}),
     ...(strategy ? { strategy, exploratory: true } : {}),
-    optimization, planning_source: planningSource,
+    optimization, planning_source: planningSource, query_mode: queryMode, brief_source: briefSource,
     ...(dispatchOnly(strategy) ? { review_mode: 'executable-checks-only', checks: [] } : {}),
   };
   let client, agent, simpleClient, contextParse;
@@ -105,7 +109,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
       writeFileSync(join(directory, 'implementation-brief.md'), preparedBrief);
       result.implementation_brief_hash = hash(preparedBrief);
     }
-    if (strategy === 'owner-query-writer' && !preparedPlan) {
+    if (strategy === 'owner-query-writer' && !preparedPlan && preparedBrief === null) {
       const owner = await nativeAgent({ root, client: simpleClient, transcript: join(directory, 'implementation-owner-transcript.jsonl'),
         signal: controller.signal, readOnly: true, stage: 'implementation-planning', ...toolOptions, extraPrompt: dependencyNote + implementationOwnerPrompt });
       try {
@@ -113,6 +117,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
         if (!implementationBrief.trim() || implementationBrief.length > 64000) throw new Error('Implementation brief must contain 1..64000 characters');
         writeFileSync(join(directory, 'implementation-brief.md'), implementationBrief + '\n');
         result.implementation_brief_hash = hash(implementationBrief + '\n');
+        if (queryMode === 'catalog') implementationBrief += '\n';
       } finally {
         for (const [name, count] of Object.entries(owner.counts)) toolCalls[name] = (toolCalls[name] ?? 0) + count;
         owner.dispose();
@@ -130,7 +135,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
         : !feedback ? JSON.parse(prompt)
         : diffMode ? { task: task.spec, file_tree: Object.keys(current.snapshot()), changes: diffs(task.files, current.snapshot()), feedback }
           : { task: task.spec, files: current.snapshot(), feedback };
-      let plan;
+      let plan, queryCatalog;
       const beforeDispatch = async (initial, replan) => {
         if (!dispatchOnly(strategy)) return initial;
         let candidate = initial;
@@ -138,7 +143,39 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
           writeFileSync(join(directory, `planning-attempt-${attempt}.json`), JSON.stringify(candidate, null, 2));
           let errors;
           if (candidate?.blocked) throw new Error('Query planner needs an owner decision: ' + candidate.blocked);
-          try { validateStrategyPlan(strategy, candidate); errors = preflightFocusedPlan(candidate, current.snapshot(), { parse: contextParse }); }
+          try {
+            validateStrategyPlan(strategy, candidate);
+            errors = preflightFocusedPlan(candidate, current.snapshot(), { parse: contextParse });
+            if (queryCatalog) {
+              const anchors = [];
+              const visit = (value, path) => {
+                if (!value || typeof value !== 'object') return;
+                path = value.path ?? path;
+                if (Object.hasOwn(value, 'start_anchor') && Object.hasOwn(value, 'end_anchor'))
+                  anchors.push({ path, start: value.start_anchor, end: value.end_anchor });
+                for (const child of Object.values(value)) {
+                  if (Array.isArray(child)) child.forEach(entry => visit(entry, path));
+                  else if (child && typeof child === 'object') visit(child, path);
+                }
+              };
+              visit(queryCatalog);
+              const generated = new Set();
+              const absent = new Set(queryCatalog.files.filter(file => !file.exists).map(file => file.path));
+              const initialFiles = current.snapshot();
+              for (const operation of compile(candidate)) {
+                for (const path of operation.writes) {
+                  if (typeof initialFiles[path] !== 'string' && !absent.has(path))
+                    errors.push(`${operation.id}: needs discovery: absent write has no explicit catalog binding: ${path}`);
+                }
+                for (const excerpt of operation.context) {
+                  const generatedWhole = generated.has(excerpt.path) && excerpt.start === null && excerpt.end === null;
+                  if (!generatedWhole && !anchors.some(anchor => anchor.path === excerpt.path && anchor.start === excerpt.start && anchor.end === excerpt.end))
+                    errors.push(`${operation.id}: needs discovery: context binding is absent from catalog: ${excerpt.path}`);
+                }
+                operation.writes.filter(path => absent.has(path)).forEach(path => generated.add(path));
+              }
+            }
+          }
           catch (error) { errors = [error.message]; }
           if (!errors.length) return candidate;
           if (attempt === 1) throw new Error('Plan rejected before dispatch: ' + errors.join('; '));
@@ -151,6 +188,39 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
         validateStrategyPlan(strategy, plan);
         const errors = preflightFocusedPlan(plan, current.snapshot(), { parse: contextParse });
         if (errors.length) throw new Error('Reused plan invalid: ' + errors.join('; '));
+      } else if (queryMode === 'catalog') {
+        let catalog;
+        try { catalog = await stage('query-context', () => buildQueryCatalog(current.snapshot(), implementationBrief, { parse: contextParse })); }
+        catch (error) { throw new Error('needs discovery: ' + error.message); }
+        queryCatalog = catalog;
+        const catalogBytes = JSON.stringify(catalog, null, 2) + '\n';
+        writeFileSync(join(directory, 'catalog.json'), catalogBytes);
+        result.catalog_hash = hash(catalogBytes);
+        const system = plannerPrompt + '\n' + catalogQueryRole;
+        const input = { ...planningInput, catalog };
+        const normalize = (value, attempt) => {
+          const normalized = structuredClone(value);
+          for (const [index, op] of (Array.isArray(normalized?.operations) ? normalized.operations : []).entries()) {
+            if (!op || typeof op !== 'object') continue;
+            for (const field of ['reads', 'writes', 'depends_on']) {
+              const before = op[field];
+              if (typeof before === 'string') op[field] = [before];
+              else if (before === undefined && field !== 'writes') op[field] = [];
+              else continue;
+              (result.query_normalizations ??= []).push({ attempt, operation: op.id ?? index, field,
+                from: before === undefined ? 'missing' : before, to: op[field] });
+            }
+          }
+          return normalized;
+        };
+        const query = async (payload, attempt) => {
+          // Bound the complete serialized system and input, including corrections.
+          if (Buffer.byteLength(JSON.stringify({ systemPrompt: system, input: payload })) > 80 * 1024)
+            throw new Error('needs discovery: catalog query exceeds 80 KiB');
+          return normalize(await stage('planning', () => client.json(system, payload, 'planning')), attempt);
+        };
+        plan = await query(input, 0);
+        plan = await beforeDispatch(plan, correction => query({ ...input, ...correction, previous_plan: plan }, 1));
       } else if (scouted) {
         const scout = await nativeAgent({ root, client, transcript: join(directory, feedback ? 'repair-planner-transcript.jsonl' : 'planner-transcript.jsonl'), signal: controller.signal, readOnly: true,
           stage: feedback ? 'repair-planning' : 'discovery-planning', ...toolOptions,

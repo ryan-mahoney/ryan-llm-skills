@@ -44,3 +44,22 @@ Do not run tests or verification. No model reviews or revises the batch after di
 The runtime may return planning_validation_errors before any writer starts; correct your
 own source bindings and plan once. That correction must preserve the owner's decisions.
 `;
+
+export const catalogQueryRole = `Source discovery is unavailable in this catalog query.
+The catalog is deterministic source metadata, not an implementation proposal. Bind the
+settled owner brief using only exact start_anchor/end_anchor values from the catalog
+for the corresponding path. Use those values as context start/end, including null
+only when the catalog explicitly supplies it. Offsets are descriptive, not edit anchors.
+For a catalog path marked absent, its creation packet needs no context for that path.
+A later dependent packet may select that newly generated file with start:null,end:null;
+the runtime supplies its staged contents under the same source-size bound. Do not use
+this exception for an existing file or before its creation. Unresolved references in
+the catalog are not source bindings or known new file paths. If they are needed to
+perform the brief, report the missing binding; an explicitly unchanged file needs no edit.
+Do not invent anchors, copy inventory names as anchors, or infer missing source.
+Only catalog, unchanged implementation_brief, file_tree and protected_files are supplied;
+you have no repository tools or original task. Preserve every owner decision.
+If necessary bindings or source context are missing, return only
+{"blocked":"needs discovery: the exact missing source binding or context"}.
+The same catalog is available for at most one pre-dispatch correction.
+`;

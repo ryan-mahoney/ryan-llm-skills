@@ -151,3 +151,60 @@ selection becomes 11,775 delivered source characters, omitting 32,825; that is a
 measured payload reduction, not a demonstrated writing or correctness improvement.
 Original plan bytes remain unchanged. Source snapshots and candidate tests remain
 isolated from planning feedback as before.
+
+## Bounded query-planning comparison
+
+The original three-role run spent 26.67, 192.28 and 93.93 seconds in Sol query
+planning. The harder cases repeatedly discovered source and regenerated plans
+for schema/context failures. A subsequent exploratory treatment will reuse the
+exact original DeepSeek owner briefs and replace query discovery with one direct
+Sol request containing a deterministic source catalog. It may make the existing
+single correction of its own plan before dispatch; it never reviews writer output.
+
+The catalog includes relevant named paths, exact unique source anchors and
+structural information, with a 48 KiB catalog bound and 80 KiB complete request
+bound. Insufficient catalog information produces a needs-discovery result rather
+than an invented binding. Obvious scalar path/dependency fields may be normalized
+to arrays locally; this does not add implementation decisions. Preserve original
+responses and normalization metadata. Record catalog generation time and hashes.
+
+Reuse the fastest application-complete writer configuration observed in the
+matched writing comparison, with explicit downstream-quality limits. If none
+completes all cases, retain that result and diagnose application failures before
+claiming a preferred configuration. Query comparison measures new query plans and
+therefore may change grouping and writer behavior; it is not an isolated model
+substitution. Allocate original owner time/usage only, and count new query work
+as incurred. Future plan replays allocate both that owner's and the new query's
+work. Require hash-verified brief provenance and no owner request during reuse.
+
+Run the three cases once with the new query configuration and repeat a promising
+frozen configuration before treating its result as stable. Retain all attempts,
+all intermediate failed results, and the same active spending guard. Report the
+best configuration observed within this search, not a global optimum. A cheaper
+or faster writing subsystem is not sufficient for an end-to-end speed claim.
+
+The matched corrected comparison completed only calibration in every arm; none
+completed handoff or extraction. Deterministic grouping reduced calibration from
+six writer calls to three and was the only arm with all downstream calibration
+checks passing. Jev chose the same grouping as fixed policy on every eligible
+pair, so there is no evidence to pay for its routing on this workload. The next
+exploratory run uses deterministic grouping provisionally, not as a proven
+suite-wide winner.
+
+Before that run, a second generic backend revision unions overlapping context
+selections and progressively elides function-body interiors under the same
+32,000-character cap. On the retained staged handoff failure, selected source
+falls from 130,702 to 26,389 characters. Writer prompts state the sole destination,
+its current existence, and that compose creates once rather than appending;
+recovery includes every rejected edit's kind and path even when its text is
+truncated. These fixes address observed application failures without adding task
+behavior or test answers. New query plans and this backend revision are jointly
+exploratory; a result cannot isolate either one's causal effect.
+
+The initial 24 KiB catalog proposal rejected a complete extraction inventory.
+The revised 48 KiB catalog cap retains every named entry. Dry-run complete query
+requests for the three original briefs are approximately 19, 68 and 67 kB, each
+under the unchanged 80 KiB request guard. Unresolved bare names remain explicit
+metadata, never invented destinations. New paths require an explicit catalog
+binding. Later operations on newly created files may use bounded staged contents;
+initial source anchors remain exact catalog pairs.

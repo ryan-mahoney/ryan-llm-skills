@@ -19,6 +19,11 @@ const strategy = option('--strategy'), selector = option('--model');
 const optimization = args.includes('--optimization') ? option('--optimization') : 'none';
 if (!['none', 'deterministic', 'contextual'].includes(optimization)) throw new Error('Unknown optimization');
 const plansFrom = args.includes('--plans-from') ? resolve(option('--plans-from')) : null;
+const briefsFrom = args.includes('--briefs-from') ? resolve(option('--briefs-from')) : null;
+const queryMode = args.includes('--query-mode') ? option('--query-mode') : 'discovery';
+if (!['discovery', 'catalog'].includes(queryMode)) throw new Error('Unknown query mode');
+if (plansFrom && briefsFrom) throw new Error('--plans-from and --briefs-from are mutually exclusive');
+if ((queryMode === 'catalog' || briefsFrom) && strategy !== 'owner-query-writer') throw new Error('Catalog queries and shared briefs require owner-query-writer');
 const editorSelector = args.includes('--editor-model') ? option('--editor-model') : null;
 if (usesEditor(strategy) !== Boolean(editorSelector)) throw new Error('Use --editor-model only and always with an owner-editor strategy');
 const replay = args.includes('--freeze-from') ? resolve(option('--freeze-from')) : null;
@@ -44,7 +49,7 @@ const sdkFiles = () => Object.fromEntries(['pi-agent-core', 'pi-coding-agent', '
 const original = read(join(source, 'manifest.json'));
 if (hash(readFileSync(join(source, 'tasks.json'))) !== original.tasks_file_hash) throw new Error('Reference task bytes changed');
 const replayManifest = replay ? read(join(replay, 'manifest.json')) : null;
-if (replayManifest && (replayManifest.strategy !== strategy || replayManifest.selector !== selector || (replayManifest.editor_selector ?? null) !== editorSelector || !equal(files(codeRoot), replayManifest.frozen_files))) throw new Error('Replay strategy, selectors or frozen bytes differ');
+if (replayManifest && (replayManifest.strategy !== strategy || replayManifest.selector !== selector || (replayManifest.editor_selector ?? null) !== editorSelector || (replayManifest.query_mode ?? 'discovery') !== queryMode || !equal(files(codeRoot), replayManifest.frozen_files))) throw new Error('Replay strategy, selectors or frozen bytes differ');
 if (original.comparison !== 'sol-native-vs-sol-nemotron-workflow' || original.models[0] !== selector) throw new Error('Use previous workflow run and identical Sol selector');
 const selected = ['hard-context-calibration', 'hard-dependency-handoff', 'hard-lifecycle-extract'];
 const tasks = read(join(source, 'tasks.json'));
@@ -55,6 +60,33 @@ const references = selected.map(task => {
   if (!result.accepted || !Number.isFinite(result.process_elapsed_ms)) throw new Error('Reference is not a finalized pass');
   return { task, source_cell: name, result_hash: hash(readFileSync(path)), result };
 });
+// Validate every inherited brief and task before any inference can begin.
+const inherited = new Map();
+if (plansFrom || briefsFrom) {
+  const donor = plansFrom ?? briefsFrom;
+  for (const [index, id] of selected.entries()) {
+    const task = structuredClone(tasks.find(t => t.id === id)); delete task.gold;
+    const sourceCell = join(donor, `${String(index).padStart(3, '0')}-${id}`);
+    const resultBytes = readFileSync(join(sourceCell, 'result.json'));
+    const sourceResult = JSON.parse(resultBytes);
+    if (sourceResult.task_hash !== hash(JSON.stringify(task))) throw new Error('Shared brief task differs');
+    const briefBytes = readFileSync(join(sourceCell, 'implementation-brief.md'));
+    if (hash(briefBytes) !== sourceResult.implementation_brief_hash) throw new Error('Shared brief changed');
+    const preparedBrief = briefBytes.toString('utf8');
+    if (!Buffer.from(preparedBrief).equals(briefBytes)) throw new Error('Shared brief is not lossless UTF-8');
+    const briefSource = { run: basename(donor), cell: basename(sourceCell), brief_hash: hash(briefBytes), result_hash: hash(resultBytes) };
+    let preparedPlan = null, planningSource = null;
+    if (plansFrom) {
+      const planArtifact = existsSync(join(sourceCell, 'raw-plan.json')) ? 'raw-plan.json'
+        : readdirSync(sourceCell).filter(name => /^planning-attempt-\d+\.json$/.test(name)).sort((a, b) => Number(b.match(/\d+/)[0]) - Number(a.match(/\d+/)[0]))[0];
+      if (!planArtifact) throw new Error('No submitted query plan available for replay');
+      const planBytes = readFileSync(join(sourceCell, planArtifact));
+      preparedPlan = JSON.parse(planBytes);
+      planningSource = { run: basename(donor), cell: basename(sourceCell), plan_hash: hash(planBytes), plan_artifact: planArtifact, result_hash: hash(resultBytes) };
+    }
+    inherited.set(id, { preparedBrief, briefSource, preparedPlan, planningSource });
+  }
+}
 if (!equal(sdkFiles(), original.sdk_files) || !equal(files(original.mounts[0][0]), original.dependency_files)) throw new Error('SDK or dependencies differ from reference');
 const runtime = await modelRuntime();
 const models = [selector, editorSelector].filter(Boolean).map(selected => {
@@ -77,7 +109,8 @@ if (replayManifest && !equal(frozen, replayManifest.frozen_files)) throw new Err
 write(join(run, 'tasks.json'), selected.map(id => tasks.find(t => t.id === id)));
 write(join(run, 'references.json'), references);
 const manifest = { schema_version: 1, comparison: strategy === 'owner-query-writer' ? 'deepseek-owner-sol-query-deepseek-writer' : editorSelector ? 'sol-owner-deepseek-editor' : 'adaptive-sol-only-development', exploratory: true, strategy, selector,
-  editor_selector: editorSelector, models, optimization, plans_from: plansFrom ? basename(plansFrom) : null,
+  editor_selector: editorSelector, models, optimization, query_mode: queryMode,
+  plans_from: plansFrom ? basename(plansFrom) : null, briefs_from: briefsFrom ? basename(briefsFrom) : null,
   ...(strategy === 'owner-query-writer' ? { roles: { implementation_owner: editorSelector, query_planner: selector, writer: editorSelector } } : {}),
   replay_of: replay ? basename(replay) : null,
   created_at: new Date().toISOString(), source_run: basename(source), source_manifest_hash: hash(readFileSync(join(source, 'manifest.json'))),
@@ -92,20 +125,8 @@ for (const id of selected) {
   if (!equal(files(join(run, 'frozen')), frozen) || !equal(sdkFiles(), original.sdk_files) || !equal(files(original.mounts[0][0]), original.dependency_files)) throw new Error('Frozen dependencies changed');
   const directory = join(run, `${String(index++).padStart(3, '0')}-${id}`); mkdirSync(directory);
   const task = structuredClone(tasks.find(t => t.id === id)); delete task.gold;
-  let preparedPlan = null, preparedBrief = null, planningSource = null;
-  if (plansFrom) {
-    const sourceCell = join(plansFrom, `${String(index - 1).padStart(3, '0')}-${id}`);
-    const sourceResult = read(join(sourceCell, 'result.json'));
-    if (sourceResult.task_hash !== hash(JSON.stringify(task))) throw new Error('Shared plan task differs');
-    const planArtifact = existsSync(join(sourceCell, 'raw-plan.json')) ? 'raw-plan.json'
-      : readdirSync(sourceCell).filter(name => /^planning-attempt-\d+\.json$/.test(name)).sort((a, b) => Number(b.match(/\d+/)[0]) - Number(a.match(/\d+/)[0]))[0];
-    if (!planArtifact) throw new Error('No submitted query plan available for replay');
-    const planBytes = readFileSync(join(sourceCell, planArtifact));
-    preparedPlan = JSON.parse(planBytes); preparedBrief = readFileSync(join(sourceCell, 'implementation-brief.md'), 'utf8');
-    if (hash(preparedBrief) !== sourceResult.implementation_brief_hash) throw new Error('Shared brief changed');
-    planningSource = { run: basename(plansFrom), cell: basename(sourceCell), plan_hash: hash(planBytes), plan_artifact: planArtifact, result_hash: hash(readFileSync(join(sourceCell, 'result.json'))) };
-  }
-  const job = { task, optimization, preparedPlan, preparedBrief, planningSource, arm: 'changeset', strategy, selector, editorSelector, ledger, directory, mounts: original.mounts,
+  const { preparedPlan = null, preparedBrief = null, planningSource = null, briefSource = null } = inherited.get(id) ?? {};
+  const job = { task, optimization, queryMode, preparedPlan, preparedBrief, planningSource, briefSource, arm: 'changeset', strategy, selector, editorSelector, ledger, directory, mounts: original.mounts,
     plannerPrompt: readFileSync(join(run, 'frozen/skills/spec-changeset-plan/SKILL.md'), 'utf8') };
   write(join(directory, 'job.json'), job);
   const began = performance.now(), cap = task.limits.cell_ms + task.limits.grade_ms;
