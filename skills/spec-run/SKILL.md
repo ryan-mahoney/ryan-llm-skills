@@ -306,6 +306,12 @@ made since the previous review. The reviewer needs to read files, run `git`, and
 `scope=step step=<NNN> since=<pinned base sha> head=<pinned head sha>`. Pass the target checkout, `package_dir`, and the model assigned to step review. Don't wait for it: it reads fixed commits,
 so the next step worker can edit the checkout while it runs. Reviews may overlap.
 
+In the same turn, when undispatched steps remain, launch one background card refresher for the
+same pinned range with the review model, following [Card Refresh](references/card-refresh.md). It
+writes only to `package_dir`: the cards of undispatched steps and `reviews/step-<NNN>-consumer-review.md`.
+Treat a consumer review with actionable findings like a `needs-fix` step review: its findings join
+that step's fix set. Declare any path it reports in `spec-steps.json` before dispatching that step.
+
 **Record results.** When a reviewer finishes, read only the leading `review:` YAML block
 of its file: verdict and finding identities. Derive actionable counts from
 `findings[].actionable`; explanations remain in the review for the fixer. Accept the

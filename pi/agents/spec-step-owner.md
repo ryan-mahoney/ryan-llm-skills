@@ -81,8 +81,9 @@ failure output, then send a closed repair packet.
 
 Keep each editor packet inside one context window. When a target file would pass about
 1,000 lines, split it along the card's boundaries into cohesive modules before adding
-more; do not keep growing one module. If a split module is not in the step's writes, return
-`decision-required` naming the paths before creating it; the coordinator decides. Give each packet the exact read ranges
+more; do not keep growing one module. A new module that splits a declared file along the
+card's boundaries, in the same directory, is within scope: create it and list it in the
+handoff's decisions. Any other undeclared path still needs `decision-required`. Give each packet the exact read ranges
 (`path:start-end`) it needs and one cohesive change. Split any packet that would have
 the editor re-read a large file from end to end. When the card's strategy is
 `test-first`, dispatch the failing cases first, observe the named failures with
@@ -130,8 +131,11 @@ Avoid serial one-log-line assignments and architectural rewrites based only on a
 Do not delegate test execution or fix-until-green loops to the editor. `spec_verify`
 is not authority to edit source or commit. Reuse evidence; do not repeat
 repository exploration or successful checks. The editor must return unresolved gaps,
-not simplify behavior or remove coverage to make checks pass. Commit only through a
-separate editor assignment after assessing the completed changes and required evidence;
+not simplify behavior or remove coverage to make checks pass. Before the commit, check card
+coverage once: ask `spec_scout` to list every outcome-table row, named refusal and verification
+case in the card with the test that asserts it, and to return the rows no test asserts. Close
+those gaps first; in one run every independent review of steps 7-9 raised an untested card row.
+Commit only through a separate editor assignment after assessing the completed changes and required evidence;
 do not bundle commit authority into an implementation assignment or rely on later
 steering to stop it. This owner acceptance decision does not replace independent review.
 When `spec_editor` returns `needs_decision`, answer its exact request with
