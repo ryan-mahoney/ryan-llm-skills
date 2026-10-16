@@ -1,5 +1,43 @@
 # Matched changeset study
 
+## Current scope: Sol with Nemotron
+
+On 2026-10-16, after three of the planned 72 hard trials completed and a fourth
+was running, the operator reduced the campaign because of elapsed time. The final
+selection is **six hard tasks, one trial per workflow (12 total)**:
+
+- Native Sol agent, with Sol reviewing and repairing.
+- Sol changeset planner and reviewer, Nemotron for `simple` editor operations,
+  Sol for `involved` operations and batch repair planning.
+
+This is an exploratory comparison of two deployable workflows. It cannot isolate
+the changeset architecture from the effect of model routing. Tasks, initial source,
+worker code, prompts, hidden checks, limits and cost policy remain frozen at the
+start of the original hard campaign. No hard result guides implementation tuning.
+The narrower schedule takes Sol's repetition-zero pairs from the original schedule,
+preserving order and replacing its changeset arm with `changeset-mixed`. Repetition
+one and DeepSeek trials are retained as additional observations outside this comparison.
+With one repetition, arm order is randomized by the original seed but not balanced
+within each task.
+
+Every already completed native trial eligible for this schedule is reused regardless
+of outcome: one dependency-handoff trial. Its measured process duration and accounting
+are preserved, not charged twice. The running Sol-only changeset trial finishes and
+remains outside the new comparison. All prior outcomes remain available; changing
+scope after observing results limits confirmatory claims even though selection was
+based on time and model roles, not task success.
+
+`workflow.mjs prepare` copies and verifies the original freeze, selects the schedule,
+and records carried-over evidence before further inference. `execute` uses those
+frozen workers and the original SDK and dependency hashes. It refuses altered bytes
+or an unfinished trial on resume. There are no extra repetitions or automatic retries.
+Report actual Nemotron dispatches: a plan using only deterministic or involved
+operations does not establish that Nemotron contributed. Timing includes discovery,
+execution, checks, review, allowed repair and terminal grading; failures receive the
+same 1,500-second cap. The shared $50 reservation ledger still applies.
+
+The sections below retain the original and superseded campaign designs.
+
 Status: retained preregistered design for the completed Mercury/Sol/DeepSeek campaign.
 The next campaign selects Nemotron 3.5 Super VL in place of Mercury and includes six historical
 workloads; see the [hard-campaign setup](README.md#hard-campaign-historical-workloads-with-nemotron).

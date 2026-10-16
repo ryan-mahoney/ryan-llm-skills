@@ -44,10 +44,28 @@ are `deepseek/deepseek-flash:off`, `openai-codex/gpt-6.1-sol:low`, and
 and retains the previous third model's `low` reasoning setting.
 
 The six historical workloads from `changeset-hard-workloads` are integrated.
-The hard campaign compares all three models in both primary arms, with two
-repetitions (72 cells). A separate exploratory Sol/Nemotron routing campaign has
-12 cells and runs afterward only if budget remains. The study freezes its code,
-prompts, corpus, SDK and model metadata before the primary run.
+The original 72-cell matrix was reduced during execution at the operator's request.
+The active comparison has **12 trials**: native Sol versus Sol planning/reviewing
+with Nemotron handling simple edits, once each on all six tasks. Prior observations
+are retained; one eligible completed native trial is reused. The
+[protocol amendment](PROTOCOL.md#current-scope-sol-with-nemotron) records the scope
+change and the limits on interpretation. Frozen workers, prompts, tasks, SDK and
+grading remain unchanged.
+
+To prepare and run that workflow comparison from the original frozen hard campaign:
+
+```sh
+node scripts/changeset-study/workflow.mjs prepare \
+  --source "$ORIGINAL_HARD_RUN" --output "$WORKFLOW_RUN" \
+  --model openai-codex/gpt-6.1-sol:low \
+  --simple-model openrouter/nvidia/nemotron-3.5-super-vl:low
+node scripts/changeset-study/workflow.mjs execute \
+  --run "$WORKFLOW_RUN" --ledger "$CAMPAIGN_LEDGER"
+```
+
+Stop the original scheduler before executing the reduced run, and let any current
+worker finish. Only one study trial runs at a time. The `execute` command can resume
+after completed trials; an interrupted trial requires explicit accounting recovery.
 
 `model-catalog.mjs` registers the exact paid Nemotron model inside the study runtime
 using public OpenRouter metadata observed on 2026-10-16; global model configuration
@@ -55,8 +73,8 @@ and credentials are unchanged. Validate its native-tool and structured-output pa
 on development data before the hard campaign.
 
 Use a new run directory, preserve the existing $50 campaign ledger, and retain the
-Sol-at-DeepSeek-rates cost policy. Run all selected models against both approaches
-on the same expanded corpus. The completed Mercury results, protocol, charts and
+Sol-at-DeepSeek-rates cost policy. Compare both workflows on the same expanded corpus.
+The completed Mercury results, protocol, charts and
 HTML visual remain historical evidence; they are not Nemotron results.
 
 Requirements: Node 22, the configured managed Pi SDK and authorized provider models,
