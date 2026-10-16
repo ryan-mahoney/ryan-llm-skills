@@ -45,6 +45,11 @@ export function estimatePayload(payload) {
   return Math.ceil(Buffer.byteLength(text || '', 'utf8') / 3) + images * 4096 + 1024;
 }
 
+// Summary prompt text, not a provider payload; 2k covers Pi's summarization prompt.
+export function estimateText(...parts) {
+  return Math.ceil(parts.reduce((n, part) => n + Buffer.byteLength(part || '', 'utf8'), 0) / 3) + 2048;
+}
+
 export function inputTokens(usage) {
   return ['input', 'cacheRead', 'cacheWrite'].reduce((sum, key) =>
     sum + (Number.isFinite(usage?.[key]) ? usage[key] : 0), 0);
@@ -64,7 +69,7 @@ export function boundedToolContent(content, artifact) {
     ...content.filter(block => block.type !== 'text')];
 }
 
-export function installContextBudget(pi, { compact, retrySettings } = {}) {
+export function installContextBudget(pi, { compact, serialize, retrySettings } = {}) {
   if (installed.has(pi)) return;
   installed.add(pi);
   // Pi gives each extension a different API object. Elect one installer on its
@@ -101,12 +106,20 @@ export function installContextBudget(pi, { compact, retrySettings } = {}) {
   pi.on('before_agent_start', apply);
   pi.on('session_before_compact', async (event, ctx) => {
     const p = event.preparation;
-    const estimate = estimatePayload({ messages: p.messagesToSummarize,
-      prefix: p.turnPrefixMessages, summary: p.previousSummary,
-      instructions: event.customInstructions });
-    const blocked = projected(estimate) >= POLICY.requestEstimateLimit;
+    // Size the requests a summarizer actually sends. Native Pi sends serialized text
+    // (thinking omitted, tool results truncated) and the split-turn prefix separately;
+    // Codex compacts the cached provider history, whose size is p.tokensBefore. Raw
+    // message JSON counted encrypted reasoning and tool details: a Sol owner at 73k
+    // real context was refused at a 208k estimate on 2026-10-16.
+    const estimate = serialize
+      ? Math.max(estimateText(serialize(p.messagesToSummarize ?? []), p.previousSummary, event.customInstructions),
+          estimateText(serialize(p.turnPrefixMessages ?? [])))
+      : estimatePayload({ messages: p.messagesToSummarize, prefix: p.turnPrefixMessages,
+          summary: p.previousSummary, instructions: event.customInstructions });
+    const expected = serialize ? Math.max(estimate, Number.isFinite(p.tokensBefore) ? p.tokensBefore : 0) : projected(estimate);
+    const blocked = expected >= POLICY.requestEstimateLimit;
     record({ event: 'compaction_request', estimated_input_tokens: estimate,
-      projected_input_tokens: projected(estimate), blocked });
+      context_tokens: p.tokensBefore ?? null, projected_input_tokens: expected, blocked });
     if (blocked) {
       const message = 'Context budget refused an oversized compaction request. Resume in a fresh session from canonical artifacts and a bounded handoff; preserve the original transcript.';
       ctx.ui?.notify(message, 'error');
