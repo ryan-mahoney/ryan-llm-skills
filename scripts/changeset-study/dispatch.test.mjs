@@ -71,6 +71,24 @@ test('dispatch runs no owner review or repair after either successful or failed 
       assert.equal(result.stages.some(s => s.name === 'impact-review' || s.name === 'repair-planning'), false);
       assert.equal(deliveredResult(result), ['correct', 'plan-correction', 'three-role'].includes(outcome), result.error ?? JSON.stringify(result.checks));
     }
+
+    const sourceDirectory = join(root, 'three-role');
+    const replayDirectory = join(root, 'three-role-replay');
+    const replay = await runCell({ arm: 'changeset', strategy: 'owner-query-writer', optimization: 'deterministic',
+      selector: 'test/planner', editorSelector: 'test/editor', ledger: join(root, 'budget.json'), directory: replayDirectory,
+      plannerPrompt: 'planner', preparedPlan: JSON.parse(readFileSync(join(sourceDirectory, 'raw-plan.json'), 'utf8')),
+      preparedBrief: readFileSync(join(sourceDirectory, 'implementation-brief.md'), 'utf8'), task: {
+        id: 'three-role', spec: 'three-role', context: 'prepared', files: { 'answer.txt': 'wrong' }, protected: [],
+        check: 'test "$(cat answer.txt)" = correct',
+        hidden: "import {readFileSync} from 'node:fs'; if(readFileSync('/work/answer.txt','utf8')!=='correct') throw Error('wrong answer');",
+        limits: { cell_ms: 5000, grade_ms: 3000 },
+      } });
+    const replayRequests = readFileSync(join(replayDirectory, 'requests.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    assert.deepEqual(replayRequests.map(request => request.stage), ['editor']);
+    assert.deepEqual(replayRequests.map(request => request.selector), ['test/editor']);
+    assert.equal(replay.optimization, 'deterministic');
+    assert.equal(readFileSync(join(replayDirectory, 'repository/answer.txt'), 'utf8'), 'correct');
+    assert.equal(deliveredResult(replay), true, replay.error ?? JSON.stringify(replay.checks));
   } finally {
     if (previous === undefined) delete process.env.CHANGESET_MODEL_RUNTIME;
     else process.env.CHANGESET_MODEL_RUNTIME = previous;
