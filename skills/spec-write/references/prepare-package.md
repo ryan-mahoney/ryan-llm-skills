@@ -151,7 +151,8 @@ execute this card with only the card and the context pack, without further disco
 questions? List every open decision, unlisted consumed contract, and test case that lacks
 an exact assertion." Correct the card from that list, or record why an item is deliberately
 left to dispatch. A card that adds a path to edit also adds it to that step's `writes` in
-`spec-steps.json`: dispatch enforces the index, so an owner stops at startup on any mismatch. In one run, every editor question on a hard step traced back to an undecided
+`spec-steps.json`: dispatch enforces the index, so an owner stops at startup on any mismatch.
+When a target would pass about 1,000 lines, the card names the split modules and declares them too. In one run, every editor question on a hard step traced back to an undecided
 choice or a missing contract, and editors re-read the target and prerequisite files more
 than 250 times.
 For an easy card, plan directly; delegation adds nothing. Deepen any card only when repository evidence exposes a missing target, new public or ownership boundary, ambiguous acceptance behavior, unavailable focused verifier, architecture conflict, concurrency or migration risk, destructive data change, security boundary, or uncertain external runtime contract.

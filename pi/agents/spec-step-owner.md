@@ -81,7 +81,8 @@ failure output, then send a closed repair packet.
 
 Keep each editor packet inside one context window. When a target file would pass about
 1,000 lines, split it along the card's boundaries into cohesive modules before adding
-more; do not keep growing one module. Give each packet the exact read ranges
+more; do not keep growing one module. If a split module is not in the step's writes, return
+`decision-required` naming the paths before creating it; the coordinator decides. Give each packet the exact read ranges
 (`path:start-end`) it needs and one cohesive change. Split any packet that would have
 the editor re-read a large file from end to end. When the card's strategy is
 `test-first`, dispatch the failing cases first, observe the named failures with
