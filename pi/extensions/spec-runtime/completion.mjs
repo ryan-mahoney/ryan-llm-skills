@@ -213,7 +213,7 @@ export function submitCompletion(r, input) {
   atomic(safePath(r.package, learningPath(r)), render(submission), true);
   return completionStatus(r);
 }
-export function completionStatus(r, { checkHead = false } = {}) {
+export function completionStatus(r, { checkHead = isWave(r) } = {}) {
   if (!r.completion_contract) return { status: 'legacy_unchecked', missing: ['legacy handoff needs coordinator reconciliation'] };
   try {
     const file = runFile(r, 'completion');
@@ -221,7 +221,9 @@ export function completionStatus(r, { checkHead = false } = {}) {
     const submission = read(file);
     if (submission.invalidated_at) throw new Error('work continued after submission; submit the updated handoff');
     if (submission.run_id !== r.id || readFileSync(safePath(r.package, learningPath(r)), 'utf8') !== render(submission)) throw new Error('canonical learning missing, changed, or belongs to another attempt');
-    if (checkHead && isWave(r)) {
+    if (isWave(r)) {
+      // Wave provenance is mandatory even for aggregate/default callers or an
+      // explicit checkHead:false. The option only controls live Git for non-waves.
       // Never run git against an unmounted/empty overlay checkout: require the
       // durable same-run revision receipt recorded inside the namespace instead.
       const proof = revisionReceipt(r), binding = r.wave_bindings;

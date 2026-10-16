@@ -432,3 +432,59 @@ for (const proof of ['valid', 'missing', 'mismatched']) {
     assert.equal(existsSync(join(w.pkg, 'learnings/step-001-learning.md')), proof === 'valid');
   });
 }
+
+for (const proof of ['missing', 'mismatched']) {
+  test(`wave runtime: unknown-drain finish and refresh reject ${proof} revision proof and allow confirmed retry`, async t => {
+    const { Runtime } = await import('./runtime.mjs');
+    const { createOwnership } = await import('./ownership.mjs');
+    const w = await waveRuns(t, [{ id: 'wave-a', attempt_id: 'attempt-a', started_at: '2026-01-01T00:00:00.000Z' }]);
+    const [a] = w.runs;
+    assert.equal(submitCompletion(a.r, a.input).status, 'recorded');
+    const receiptFile = join(w.pkg, 'runtime/runs', `${a.r.id}-revision.json`);
+    const receipt = JSON.parse(readFileSync(receiptFile, 'utf8'));
+    if (proof === 'missing') rmSync(receiptFile);
+    else writeFileSync(receiptFile, JSON.stringify({ ...receipt, commit: '0'.repeat(40) }));
+    const ownership = createOwnership({ registryRoot: join(dirname(w.pkg), 'ownership') });
+    const coordinator = { session: 'completion-test', epoch: 1, pid: process.pid, started_at: new Date().toISOString() };
+    const capacity = await ownership.reserveCapacity({ packageId: w.pkg, attempt: a.attempt_id,
+      request: { memoryBytes: 1024, tasks: 1 }, coordinator });
+    const checkout = await ownership.reserveCheckout({ packageId: w.pkg, attempt: a.attempt_id,
+      checkout: { gitCommonDir: a.checkout, worktreeGitDir: a.checkout }, coordinator });
+    assert.equal(capacity.status, 'reserved');
+    assert.equal(checkout.status, 'reserved');
+    a.r.capacity_claim = { token: capacity.claim.token, epoch: capacity.claim.epoch };
+    a.r.wave_bindings.checkout_claim = checkout.claim.token;
+    a.r.wave_bindings.checkout_claim_epoch = checkout.claim.epoch;
+    a.r.service = { unit: 'completion-test.service', invocation: 'same-run' };
+    rmSync(a.checkout, { recursive: true, force: true });
+    let drainStatus = 'unknown';
+    const runtime = new Runtime({ ownership, serviceAdapter: {
+      drain: async () => ({ status: drainStatus, reason: 'test-transport; not kernel proof' }),
+    } });
+    const ownClaims = async () => (await ownership.inspectClaims({ packageId: w.pkg })).claims
+      .filter(claim => [capacity.claim.token, checkout.claim.token].includes(claim.token));
+    await runtime.finish(a.r, { result: 'Done' });
+    const saved = JSON.parse(readFileSync(join(w.pkg, 'runtime/runs', `${a.r.id}.json`), 'utf8'));
+    assert.equal(saved.state, 'blocked');
+    assert.deepEqual((await ownClaims()).map(claim => claim.kind).sort(), ['capacity', 'checkout']);
+    assert.equal(existsSync(join(w.pkg, 'runtime/runs', `${a.r.id}-phase-drain.json`)), false);
+    const progress = await refreshProgress(w.pkg);
+    const run = progress.runs.find(run => run.run_id === a.r.id);
+    assert.equal(run.execution, 'blocked');
+    assert.equal(run.handoff.status, 'handoff_incomplete');
+    assert.equal(completionStatus(a.r).status, 'handoff_incomplete');
+    assert.equal(completionStatus(a.r, { checkHead: false }).status, 'handoff_incomplete', 'wave proof cannot be opted out of');
+    assert.equal(existsSync(join(w.pkg, 'learnings/step-001-learning.md')), false);
+    // Restore the same-run proof, not the absent checkout. Neither refresh nor
+    // the confirmed retry may need Git outside the retained namespace.
+    writeFileSync(receiptFile, JSON.stringify(receipt));
+    drainStatus = 'confirmed';
+    await runtime.finish(a.r, { result: 'Done' });
+    assert.equal(a.r.state, 'completed');
+    assert.equal(a.r.handoff.status, 'recorded');
+    assert.deepEqual(await ownClaims(), []);
+    const retried = await refreshProgress(w.pkg);
+    assert.equal(retried.runs.find(run => run.run_id === a.r.id).handoff.status, 'recorded');
+    assert.equal(existsSync(join(w.pkg, 'learnings/step-001-learning.md')), true);
+  });
+}
