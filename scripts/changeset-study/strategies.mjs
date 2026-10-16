@@ -1,6 +1,10 @@
 import { transform } from '../changeset/engine.mjs';
 
-export const strategyNames = ['patch-editors', 'direct-edits', 'source-ranges', 'checked-ranges'];
+export const strategyNames = ['patch-editors', 'direct-edits', 'source-ranges', 'checked-ranges', 'boundary-review'];
+export const usesCandidateChecks = strategy => ['checked-ranges', 'boundary-review'].includes(strategy);
+export function strategyReviewer(strategy, original) {
+  return strategy !== 'boundary-review' ? original : original + '\nBefore the verdict, include a coverage array of {behavior, checked, defect} for each independent changed behavior. Review the entire change even when tests already fail: collect independent defects together so a single repair can address them. Trace calls through supplied unchanged helper definitions; do not infer helper contracts from names. Inspect valid representation variants at parsing and serialization boundaries, including significant whitespace and delimiters. Passing tests do not establish coverage of all valid variants. Keep findings concrete and tied to required behavior; do not invent requirements.';
+}
 const rangeContract = `Additional deterministic edits avoid regenerating unchanged source:
 {"kind":"compose","path":"absent/new-file","parts":[{"text":"new header\\n"},{"path":"source/file","start":"unique inclusive start anchor","end":"unique exclusive end anchor"},{"text":"new footer\\n"}]}
 {"kind":"replace-range","path":"source/file","start":"unique inclusive start anchor","end":"unique exclusive end anchor","text":"replacement"}
@@ -18,8 +22,9 @@ export function strategyPlanner(strategy, original) {
     ? 'For this experiment, produce only deterministic operations with concrete edits. Resolve implementation details during read-only discovery. Do not delegate or return instructions for another editor. Batch all settled implementation and required test edits in the final executable plan.'
     : 'Editors return bounded exact edits, not entire existing files. Use deterministic edits when already settled; delegate only unresolved local work. Editors cannot run commands or investigate beyond declared files. Their assignment must include required tests as edits, not ask them to run tests.') +
     '\nPreserve the complete task contract. The harness runs visible checks and impact review after execution. Do not run test commands during read-only planning; inspect source and existing tests instead.' +
-    (['source-ranges', 'checked-ranges'].includes(strategy) ? '\n' + rangeContract +
-      '\nBefore emitting the plan, audit it against every requested implementation and regression-test artifact. Include the required tests in the first batch, unless the task forbids test edits. Preserve distinctions between absent values, intentional null values, and unknown states; check each required return shape and rejection case. This is an internal completeness pass, not another model call or a request for prose.' : '');
+    (['source-ranges', 'checked-ranges', 'boundary-review'].includes(strategy) ? '\n' + rangeContract +
+      '\nBefore emitting the plan, audit it against every requested implementation and regression-test artifact. Include the required tests in the first batch, unless the task forbids test edits. Preserve distinctions between absent values, intentional null values, and unknown states; check each required return shape and rejection case. This is an internal completeness pass, not another model call or a request for prose.' : '') +
+    (strategy === 'boundary-review' ? '\nInspect the actual semantics of existing helpers used by new behavior. At parsing or serialization boundaries, preserve significant whitespace and delimiters; consider distinct valid representations instead of adapting one sample string. Where tests may be added, cover those boundary variants alongside the required regressions.' : '');
 }
 
 export async function patchEditor(model, stage, task, { operation, files }) {

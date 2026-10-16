@@ -8,7 +8,7 @@ import { performance } from 'node:perf_hooks';
 import { hash } from '../changeset/workspace.mjs';
 import { sdkRoot } from './client.mjs';
 import { recoverAccounting } from './accounting.mjs';
-import { strategyNames } from './strategies.mjs';
+import { strategyNames, usesCandidateChecks } from './strategies.mjs';
 
 const args = process.argv.slice(2);
 const option = name => { const i = args.indexOf(name); if (i < 0 || !args[i + 1]) throw new Error(`${name} required`); return args[i + 1]; };
@@ -54,7 +54,7 @@ mkdirSync(join(run, 'frozen/scripts'), { recursive: true });
 for (const folder of ['changeset-study', 'changeset', 'changeset-research']) cpSync(join(codeRoot, 'scripts', folder), join(run, 'frozen/scripts', folder), { recursive: true });
 mkdirSync(join(run, 'frozen/skills/spec-changeset-plan'), { recursive: true });
 cpSync(join(codeRoot, 'skills/spec-changeset-plan/SKILL.md'), join(run, 'frozen/skills/spec-changeset-plan/SKILL.md'));
-if (strategy === 'checked-ranges' && !replay) {
+if (usesCandidateChecks(strategy) && !replay) {
   const parser = resolve(option('--parser'));
   mkdirSync(join(run, 'frozen/scripts/changeset-study/parser'), { recursive: true });
   cpSync(parser, join(run, 'frozen/scripts/changeset-study/parser/acorn.mjs'));

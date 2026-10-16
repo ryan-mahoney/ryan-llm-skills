@@ -84,8 +84,18 @@ iteration is immutable even while the next strategy is being developed.
    This adds feedback available to the native agent through its coding tools.
    All check time counts. A diagnostic on the frozen iteration-3 candidate showed
    its own focused tests reproduce both terminal defects in about 2.1 seconds.
+5. `boundary-review`: retain candidate-test feedback and source-range operations.
+   Ask the planner to inspect existing helper semantics and valid representations
+   at parsing/serialization boundaries. Supply unchanged same-file helper
+   definitions directly called by changed syntactic units to review, bounded to
+   24,000 characters with omissions marked. Ask review to record coverage of every
+   independent changed behavior and collect defects even when tests already fail.
+   This bundles context and prompt changes; it does not isolate either effect.
+   The motivating repeat passed terminal checks but failed final review on path
+   parsing. A posthoc diagnostic also found a related defect in the earlier pass;
+   neither counts as a verified win. Original results remain untouched.
 
-The checked strategy requires `--parser "$ACORN_MODULE"`, pointing to an Acorn ESM
+Strategies using candidate tests require `--parser "$ACORN_MODULE"`, pointing to an Acorn ESM
 module. This campaign uses the locally installed Acorn 8.8.1; its exact bytes are
 copied into each freeze and fingerprinted with the worker. A `--freeze-from` replay
 copies that parser unchanged and does not require the original parser path.
@@ -100,3 +110,10 @@ From the source-range iteration onward, subscription-model reservations use the
 advertised full context/output capacity because the adapter does not enforce the
 requested output limit. This strengthens the existing $50 guard without changing
 request options or token-based comparison costs. Earlier frozen runs remain intact.
+
+Known posthoc defects disqualify a development win even when recorded delivery
+passed. Retain audit outcomes separately from the original trial results and mark
+that distinction in reports. A newly discovered diagnostic runs after candidate
+freeze; its cases and output do not enter a trial's model feedback or replace the
+fixed terminal oracle. Generic strategy development may respond to the failure
+class. Check the same known defect class before accepting subsequent candidates.
