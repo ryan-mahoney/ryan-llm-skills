@@ -52,7 +52,7 @@ function installOwnershipFacade(target, initialBackend) {
   };
 }
 
-export async function createNativeWaveController(options = {}) {
+export function createNativeWaveController(options = {}) {
   const {
     runtime,
     coordinator,
@@ -104,5 +104,5 @@ export async function createNativeWaveController(options = {}) {
     lifecycle
   };
 
-  return await createController(deps);
+  return createController(deps);
 }

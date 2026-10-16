@@ -158,10 +158,10 @@ export function createMemberEvents(deps = {}) {
       member.transitions.push({ phase: 'blocked', at: at(), reason });
       draft.state = 'blocked';
       draft.blocking_reason = 'member-blocked';
-      const waveBlocked = (draft.transitions ?? []).some(transition => transition.phase === 'blocked');
+      const waveBlocked = (draft.transitions ?? []).some(transition => transition.state === 'blocked');
       if (!waveBlocked) {
         draft.transitions = draft.transitions ?? [];
-        draft.transitions.push({ phase: 'blocked', at: at(), reason: 'member-blocked' });
+        draft.transitions.push({ state: 'blocked', at: at(), reason: 'member-blocked' });
       }
     });
   }

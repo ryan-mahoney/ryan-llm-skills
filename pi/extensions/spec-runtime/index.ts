@@ -3,7 +3,7 @@ import { Type } from '@earendil-works/pi-ai';
 import { isRetryableAssistantError } from '@earendil-works/pi-ai/compat';
 import { getAgentDir, SettingsManager } from '@earendil-works/pi-coding-agent';
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
-import { randomUUID, createHash } from 'node:crypto';
+import { randomUUID, createHash, randomInt } from 'node:crypto';
 import { join, resolve, realpathSync } from 'node:path';
 import { homedir } from 'node:os';
 import { Runtime, loadRun, summary, assertLease, assertManagedModel, ROLE_CONTRACT, FENCED_EDITOR_TOOLS, waveSiblingConflict, runEditor, runEditorBatch, fencedPath, runCommand, runVerification, runAdvice, runCompletion, packageDirOf, assertIdleWriter, event as runtimeEvent } from './runtime.mjs';
@@ -629,6 +629,11 @@ export default function (pi: any) {
   });
   const verificationRecorder = createVerificationRecorder();
   let waveController: any;
+  // One stable native coordinator epoch per composed native lifecycle (not per
+  // callback): a random 48-bit safe integer, retained across callbacks for this
+  // extension instance.
+  const nativeCoordinatorEpoch = randomInt(2 ** 48 - 1);
+  const nativeCoordinatorProcess = processIdentity(process.pid);
   const runtime = new Runtime({ indexDir: join(getAgentDir(), 'spec-runtime'), notify: (value: any) => {
     // A wave-bound notification is consumed by the native wave controller before
     // the legacy per-run reconciliation runs; an unrecognized notification falls
@@ -689,8 +694,8 @@ export default function (pi: any) {
   waveController = createNativeWaveController({
     runtime,
     indexDir: join(getAgentDir(), 'spec-runtime'),
-    coordinator: () => ({ session: coordinatorIdentity(sessionCtx), ...processIdentity(process.pid) }),
-    send: (value: any) => pi.sendMessage({ customType: 'spec-runtime', content: JSON.stringify(value), display: true }, { triggerTurn: true }),
+    coordinator: () => ({ session: coordinatorIdentity(sessionCtx), epoch: nativeCoordinatorEpoch, ...nativeCoordinatorProcess }),
+    send: (message: any, options: any) => pi.sendMessage(message, options),
   });
   function diagnoseObserved(record: any, incident: any) {
       const routed = runtimeAuthorityFor(record);

@@ -224,6 +224,32 @@ test('wave dispatch: explicit review repair is consumed by one fix and a new con
     assert.equal(blocked.current.state, 'blocked', 'the wave must be blocked while member 002 is blocked');
     assert.equal(fixerLaunches().length, 1, 'no automatic fixer may launch after a confirmation-failed block');
 
+    // F10-4: the wave's own blocked transition must use the wave-level `state`
+    // key, while the member transition keeps `phase`. The durable wave must
+    // carry exactly one state-blocked entry and no wave transition written with
+    // the member key.
+    assert.equal((blocked.current.transitions ?? []).filter(entry => entry?.state === 'blocked').length, 1,
+      'the blocked wave must record exactly one state-blocked transition');
+    assert.equal((blocked.current.transitions ?? []).filter(entry => entry?.phase === 'blocked').length, 0,
+      'wave transitions must not use the member phase key');
+    assert.equal((blocked.m2.transitions ?? []).filter(entry => entry?.phase === 'blocked').length, 1,
+      'the blocked member must still record exactly one phase-blocked transition');
+
+    // F10-5: the status receipt projects a bounded member preview and a
+    // state-specific repair route from the durable record. Blocked previews
+    // first, so the blocked step 2 leads the two-member preview.
+    const statusReceipt = await f.controller.status({ package: f.packagePath, wave_id: receipt.wave_id ?? WAVE_ID });
+    assert.equal(statusReceipt.member_count, 2, 'the receipt must count both members');
+    assert.equal(statusReceipt.omitted_count, 0, 'a two-member wave must omit no members');
+    const statusPreview = statusReceipt.members ?? [];
+    assert.ok(statusPreview.length >= 1, 'the receipt must preview its members');
+    assert.equal(statusPreview[0]?.step, 2, 'blocked members must preview first');
+    assert.equal(statusPreview[0]?.phase, 'blocked', 'the first previewed member must be the blocked step 2');
+    assert.match(String(statusReceipt.next_action ?? ''), /review-repair/,
+      'a confirmation-failed block must expose the review-repair route');
+    assert.match(String(statusReceipt.next_action ?? ''), /step=2/,
+      'the repair route must name step 2');
+
     // Member 002's durable repair state must not yet exist, and the failed
     // confirmation rounds must be durably recorded by the real review plane.
     const beforeRepair = readRecord();
@@ -347,6 +373,8 @@ test('wave dispatch: explicit review repair is consumed by one fix and a new con
       'exactly two fixing transitions (round 1 packet and the explicit repair)');
     assert.equal(transitions.filter(entry => entry?.phase === 'confirming').length, 2,
       'exactly two confirming transitions (the failed rounds 2 and 3)');
+    assert.equal((reblocked.current.transitions ?? []).filter(entry => entry?.state === 'blocked').length, 1,
+      'the reblocked wave must still record exactly one state-blocked transition');
 
     // Member 001's sealed head and ref survive its sibling's repair and reblock.
     assert.equal(reblocked.current.members?.['1']?.sealed_head, member1SealedHead,
@@ -432,6 +460,14 @@ test('wave dispatch: explicit ownership adaptation retries the blocked seal with
       'the wave must not be integrated while member 002 is blocked');
     assert.equal(blocked.current.target?.candidate_commit ?? null, null,
       'a blocked wave must not promote a candidate');
+
+    // F10-5: an undeclared-write block points the coordinator at the ownership
+    // adaptation route for the blocked step.
+    const adaptationStatus = await f.controller.status({ package: f.packagePath, wave_id: waveId });
+    assert.match(String(adaptationStatus.next_action ?? ''), /adaptations/,
+      'an undeclared-write block must expose the adaptations route');
+    assert.match(String(adaptationStatus.next_action ?? ''), /step=2/,
+      'the adaptation route must name step 2');
 
     // The blocked seal receipt is durable, and the sibling's seal facts survive.
     const blockedSeal = readSeal();

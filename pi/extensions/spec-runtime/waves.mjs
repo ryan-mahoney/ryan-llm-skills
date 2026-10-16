@@ -17,6 +17,7 @@ import { validateStepIndex } from '../../../scripts/spec-observe/steps.mjs';
 import { activeWaveRecords, atomic, loadRun, refusalError, serialRunActive } from './runtime.mjs';
 import { createMemberEvents } from './waves-events.mjs';
 import { createMemberRepair } from './waves-repair.mjs';
+import { waveReceipt } from './waves-receipt.mjs';
 import { createWaveRecovery } from './waves-recovery.mjs';
 import { createWaveBarrier, WAVE_PROGRESSING_STATES } from './waves-barrier.mjs';
 import { createWaveContinuation } from './waves-next.mjs';
@@ -219,23 +220,6 @@ function canonicalTarget(target) {
   }
   const baseCommit = execFileSync('git', ['-C', integrationCheckout, 'rev-parse', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   return { integration_checkout: integrationCheckout, common, branch, base_commit: baseCommit };
-}
-
-// Wave receipts are projections of the durable record, so a replay returns the
-// same fields a first open returned.
-function waveReceipt(record, recordPath, extra = {}) {
-  return {
-    execution: 'waves',
-    state: record.state,
-    wave_id: record.wave_id,
-    record_path: recordPath,
-    generation: record.generation,
-    requested_width: record.requested_width,
-    admitted_width: record.admitted_width,
-    software_ceiling: record.software_ceiling,
-    effective_limits: record.effective_limits,
-    ...extra
-  };
 }
 
 // The controller shape from the Interfaces section. `startup` resolves canonical
