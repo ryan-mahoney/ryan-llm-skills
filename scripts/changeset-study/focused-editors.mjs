@@ -1,16 +1,7 @@
 // Keep the complete specification with the planner; editors get bounded assignments.
 import { compile } from '../changeset/engine.mjs';
 
-export const focusedPlanner = `
-Act as the query planner and dispatcher. You retain the full task and own completeness,
-interfaces and dependencies. You produce one plan; there is no later owner review or repair. Editors implement one small outcome
-each; they do NOT receive the original task. This overrides earlier grouping advice and
-statements that editors receive the original task. Resolve design decisions yourself.
-Before dispatch, the runtime validates the plan and current-source excerpts. If it
-returns planning_validation_errors, correct your own plan once; no editor has run.
-Check exact callback signatures and fixture invocation arguments when assigning tests.
-
-Every operation must have exactly ONE writable file, plus:
+export const focusedPacketRules = `Every operation must have exactly ONE writable file, plus:
 - objective: one outcome, at most 240 characters. A helper, one behavior in a function,
   one regression scenario, one profile update, or one mechanical source move is an outcome.
 - instruction: resolved local recipe, at most 2400 characters. Do not bundle independent
@@ -41,6 +32,17 @@ original obligation to a packet or existing verified behavior, including require
 Return the ordinary plan JSON; no edits,
 deterministic operations, or extra contract object. Every write goes to the editor.
 `;
+
+export const focusedPlanner = `
+Act as the query planner and dispatcher. You retain the full task and own completeness,
+interfaces and dependencies. You produce one plan; there is no later owner review or repair. Editors implement one small outcome
+each; they do NOT receive the original task. This overrides earlier grouping advice and
+statements that editors receive the original task. Resolve design decisions yourself.
+Before dispatch, the runtime validates the plan and current-source excerpts. If it
+returns planning_validation_errors, correct your own plan once; no editor has run.
+Check exact callback signatures and fixture invocation arguments when assigning tests.
+
+` + focusedPacketRules;
 
 export function validateFocusedPlan(plan) {
   for (const op of plan.operations) {

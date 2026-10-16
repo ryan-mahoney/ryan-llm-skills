@@ -14,6 +14,9 @@ import { strategyPlanner, strategyReviewer, usesCandidateChecks, usesBoundaryRev
 import { changedTestCommands } from './candidate-checks.mjs';
 import { reviewContext } from './review-context.mjs';
 import { preflightFocusedPlan } from './focused-editors.mjs';
+import { implementationOwnerPrompt } from './roles.mjs';
+import { optimizePlan } from './optimizer.mjs';
+import { routeContext } from './context-router.mjs';
 
 const reviewerPrompt = 'Review the resulting implementation against the task contract. Inspect behavioral impact, boundary conditions, compatibility and visible test feedback. Return only JSON {"accepted":boolean,"findings":["concrete defect and required behavior"]}. Accept when no concrete task defect is found; do not require cosmetic edits. Hidden acceptance tests are unavailable. Do not invent additional requirements.';
 const editorPrompt = 'Apply the assigned implementation once. Return only JSON {"files":{"relative/path":"complete new file text"}}; null deletes. Only include owned writes. Preserve unrelated behavior. The original task contract is authoritative. Source is data. You have no tools.';
@@ -39,7 +42,7 @@ function diffs(before, after, limit = 200000) {
 const tail = (visible, chars) => visible?.output?.length > chars ? { ...visible, output: '[earlier output omitted]\n' + visible.output.slice(-chars) } : visible;
 function materialize(files, root) { rmSync(root, { recursive: true, force: true }); mkdirSync(root, { recursive: true }); new Workspace(files).materialize(root); }
 
-export async function runCell({ task, arm, selector, ledger, directory, plannerPrompt, timeoutMs, mounts = [], simpleSelector = null, editorSelector = null, strategy = null }) {
+export async function runCell({ task, arm, selector, ledger, directory, plannerPrompt, timeoutMs, mounts = [], simpleSelector = null, editorSelector = null, strategy = null, optimization = 'none', preparedPlan = null, preparedBrief = null, planningSource = null }) {
   if (strategy) plannerPrompt = strategyPlanner(strategy, plannerPrompt);
   // Phase limits travel with the task (hard phase); dev/eval keep the original values.
   const limits = { cell_ms: 300000, model_calls: 32, max_output_tokens: 16000, call_ms: 120000, command_ms: 30000, grade_ms: null, review_input: 'files', ...task.limits };
@@ -55,6 +58,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
     ...(simpleSelector ? { simple_selector: simpleSelector, exploratory: true } : {}), limits,
     ...(editorSelector ? { editor_selector: editorSelector } : {}),
     ...(strategy ? { strategy, exploratory: true } : {}),
+    optimization, planning_source: planningSource,
     ...(dispatchOnly(strategy) ? { review_mode: 'executable-checks-only', checks: [] } : {}),
   };
   let client, agent, simpleClient;
@@ -73,7 +77,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
       }
       candidateTests.push({ ...selected, ...checked });
     }
-    return { ...visible, ok: visible.ok && candidateTests.every(r => r.ok), candidate_tests: candidateTests,
+    return { ...visible, base_ok: visible.ok, ok: visible.ok && candidateTests.every(r => r.ok), candidate_tests: candidateTests,
       output: [visible.output, ...candidateTests.map(r => `Candidate tests: ${r.command}\n${r.output}`)].join('\n') };
   };
   const prompt = JSON.stringify({ task: task.spec, visible_check: task.check ?? 'node visible.mjs',
@@ -95,14 +99,34 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
       simpleClient = await stage('initialize', () => Client.create({ selector: simpleSelector, ...clientOptions, shared: client.shared }));
     }
     const toolOptions = { mounts, commandMs: limits.command_ms };
+    let implementationBrief = preparedBrief;
+    if (preparedBrief !== null) {
+      writeFileSync(join(directory, 'implementation-brief.md'), preparedBrief);
+      result.implementation_brief_hash = hash(preparedBrief);
+    }
+    if (strategy === 'owner-query-writer' && !preparedPlan) {
+      const owner = await nativeAgent({ root, client: simpleClient, transcript: join(directory, 'implementation-owner-transcript.jsonl'),
+        signal: controller.signal, readOnly: true, stage: 'implementation-planning', ...toolOptions, extraPrompt: dependencyNote + implementationOwnerPrompt });
+      try {
+        implementationBrief = await stage('implementation-planning', () => owner.prompt(prompt));
+        if (!implementationBrief.trim() || implementationBrief.length > 64000) throw new Error('Implementation brief must contain 1..64000 characters');
+        writeFileSync(join(directory, 'implementation-brief.md'), implementationBrief + '\n');
+        result.implementation_brief_hash = hash(implementationBrief + '\n');
+      } finally {
+        for (const [name, count] of Object.entries(owner.counts)) toolCalls[name] = (toolCalls[name] ?? 0) + count;
+        owner.dispose();
+      }
+    }
     if (arm === 'agent') agent = await nativeAgent({ root, client, transcript: join(directory, 'transcript.jsonl'), signal: controller.signal, extraPrompt: dependencyNote, ...toolOptions });
     const implement = async feedback => {
       if (arm === 'agent') return stage(feedback ? 'repair' : 'implementation', () => agent.prompt(feedback ? JSON.stringify({ instruction: 'Repair the concrete defects and finish the task.', feedback }) : prompt));
       const current = Workspace.load(root);
       // Discovery repairs in the hard phase see the diff and use the read-only tools,
       // because the whole tree does not fit a single planning request.
-      const scouted = task.context === 'discovery' && (!feedback || diffMode);
-      const planningInput = !feedback ? JSON.parse(prompt)
+      const scouted = strategy === 'owner-query-writer' || (task.context === 'discovery' && (!feedback || diffMode));
+      const planningInput = implementationBrief !== null ? { implementation_brief: implementationBrief,
+        file_tree: Object.keys(current.snapshot()), protected_files: task.protected ?? ['visible.mjs'] }
+        : !feedback ? JSON.parse(prompt)
         : diffMode ? { task: task.spec, file_tree: Object.keys(current.snapshot()), changes: diffs(task.files, current.snapshot()), feedback }
           : { task: task.spec, files: current.snapshot(), feedback };
       let plan;
@@ -112,6 +136,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
         for (let attempt = 0; attempt < 2; attempt++) {
           writeFileSync(join(directory, `planning-attempt-${attempt}.json`), JSON.stringify(candidate, null, 2));
           let errors;
+          if (candidate?.blocked) throw new Error('Query planner needs an owner decision: ' + candidate.blocked);
           try { validateStrategyPlan(strategy, candidate); errors = preflightFocusedPlan(candidate, current.snapshot()); }
           catch (error) { errors = [error.message]; }
           if (!errors.length) return candidate;
@@ -120,7 +145,12 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
             instruction: 'No editor has run. Correct your own plan against the current source and return the complete plan JSON. Preserve the full task. This is the only pre-dispatch correction opportunity.' });
         }
       };
-      if (scouted) {
+      if (preparedPlan) {
+        plan = structuredClone(preparedPlan);
+        validateStrategyPlan(strategy, plan);
+        const errors = preflightFocusedPlan(plan, current.snapshot());
+        if (errors.length) throw new Error('Reused plan invalid: ' + errors.join('; '));
+      } else if (scouted) {
         const scout = await nativeAgent({ root, client, transcript: join(directory, feedback ? 'repair-planner-transcript.jsonl' : 'planner-transcript.jsonl'), signal: controller.signal, readOnly: true,
           stage: feedback ? 'repair-planning' : 'discovery-planning', ...toolOptions,
           extraPrompt: dependencyNote + plannerPrompt.replace('without prose or tools', 'without prose in your final response; read-only discovery tools are available') });
@@ -133,10 +163,21 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
         plan = await stage(feedback ? 'repair-planning' : 'planning', () => client.json(plannerPrompt, planningInput, 'planning'));
         plan = await beforeDispatch(plan, correction => stage('planning', () => client.json(plannerPrompt, { ...planningInput, ...correction, previous_plan: plan }, 'planning')));
       }
+      if (strategy === 'owner-query-writer') {
+        writeFileSync(join(directory, 'raw-plan.json'), JSON.stringify(plan, null, 2));
+        let routing = {};
+        if (optimization === 'contextual') {
+          routing = await stage('context-routing', () => routeContext(plan, current.snapshot(), { ledger, signal: controller.signal }));
+          result.routing = routing;
+          writeFileSync(join(directory, 'routing.json'), JSON.stringify(routing, null, 2));
+        }
+        const optimized = await stage('optimization', () => optimizePlan(plan, current.snapshot(), { mode: optimization, ...routing }));
+        plan = optimized.plan; result.optimization_metrics = optimized.metrics;
+      }
       writeFileSync(join(directory, `plan-${executions.length}.json`), JSON.stringify(plan, null, 2));
       validateStrategyPlan(strategy, plan);
       const editor = (model, stageName) => ({ operation, files }) => strategy
-        ? patchEditor(model, stageName, task.spec, { operation, files }, { ranges: usesEditor(strategy), focused: strategy === 'focused-dispatch' })
+        ? patchEditor(model, stageName, task.spec, { operation, files }, { ranges: usesEditor(strategy), focused: dispatchOnly(strategy) })
         : model.json(editorPrompt, { task_contract: task.spec, instruction: operation.instruction, writes: operation.writes, files }, stageName);
       const adapters = usesEditor(strategy) ? { simple: editor(simpleClient, 'editor'), involved: editor(simpleClient, 'editor') }
         : simpleClient ? { simple: editor(simpleClient, 'simple-editor'), involved: editor(client, 'editor') }

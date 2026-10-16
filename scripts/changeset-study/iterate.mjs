@@ -16,6 +16,9 @@ const option = name => { const i = args.indexOf(name); if (i < 0 || !args[i + 1]
 const repo = fileURLToPath(new URL('../..', import.meta.url));
 const source = resolve(option('--source')), run = resolve(option('--output')), ledger = resolve(option('--ledger'));
 const strategy = option('--strategy'), selector = option('--model');
+const optimization = args.includes('--optimization') ? option('--optimization') : 'none';
+if (!['none', 'deterministic', 'contextual'].includes(optimization)) throw new Error('Unknown optimization');
+const plansFrom = args.includes('--plans-from') ? resolve(option('--plans-from')) : null;
 const editorSelector = args.includes('--editor-model') ? option('--editor-model') : null;
 if (usesEditor(strategy) !== Boolean(editorSelector)) throw new Error('Use --editor-model only and always with an owner-editor strategy');
 const replay = args.includes('--freeze-from') ? resolve(option('--freeze-from')) : null;
@@ -73,8 +76,9 @@ const frozen = files(join(run, 'frozen'));
 if (replayManifest && !equal(frozen, replayManifest.frozen_files)) throw new Error('Replay freeze changed');
 write(join(run, 'tasks.json'), selected.map(id => tasks.find(t => t.id === id)));
 write(join(run, 'references.json'), references);
-const manifest = { schema_version: 1, comparison: editorSelector ? 'sol-owner-deepseek-editor' : 'adaptive-sol-only-development', exploratory: true, strategy, selector,
-  editor_selector: editorSelector, models,
+const manifest = { schema_version: 1, comparison: strategy === 'owner-query-writer' ? 'deepseek-owner-sol-query-deepseek-writer' : editorSelector ? 'sol-owner-deepseek-editor' : 'adaptive-sol-only-development', exploratory: true, strategy, selector,
+  editor_selector: editorSelector, models, optimization, plans_from: plansFrom ? basename(plansFrom) : null,
+  ...(strategy === 'owner-query-writer' ? { roles: { implementation_owner: editorSelector, query_planner: selector, writer: editorSelector } } : {}),
   replay_of: replay ? basename(replay) : null,
   created_at: new Date().toISOString(), source_run: basename(source), source_manifest_hash: hash(readFileSync(join(source, 'manifest.json'))),
   revision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim(), node: process.version,
@@ -88,7 +92,17 @@ for (const id of selected) {
   if (!equal(files(join(run, 'frozen')), frozen) || !equal(sdkFiles(), original.sdk_files) || !equal(files(original.mounts[0][0]), original.dependency_files)) throw new Error('Frozen dependencies changed');
   const directory = join(run, `${String(index++).padStart(3, '0')}-${id}`); mkdirSync(directory);
   const task = structuredClone(tasks.find(t => t.id === id)); delete task.gold;
-  const job = { task, arm: 'changeset', strategy, selector, editorSelector, ledger, directory, mounts: original.mounts,
+  let preparedPlan = null, preparedBrief = null, planningSource = null;
+  if (plansFrom) {
+    const sourceCell = join(plansFrom, `${String(index - 1).padStart(3, '0')}-${id}`);
+    const sourceResult = read(join(sourceCell, 'result.json'));
+    if (sourceResult.task_hash !== hash(JSON.stringify(task))) throw new Error('Shared plan task differs');
+    const planBytes = readFileSync(join(sourceCell, 'raw-plan.json'));
+    preparedPlan = JSON.parse(planBytes); preparedBrief = readFileSync(join(sourceCell, 'implementation-brief.md'), 'utf8');
+    if (hash(preparedBrief) !== sourceResult.implementation_brief_hash) throw new Error('Shared brief changed');
+    planningSource = { run: basename(plansFrom), cell: basename(sourceCell), plan_hash: hash(planBytes), result_hash: hash(readFileSync(join(sourceCell, 'result.json'))) };
+  }
+  const job = { task, optimization, preparedPlan, preparedBrief, planningSource, arm: 'changeset', strategy, selector, editorSelector, ledger, directory, mounts: original.mounts,
     plannerPrompt: readFileSync(join(run, 'frozen/skills/spec-changeset-plan/SKILL.md'), 'utf8') };
   write(join(directory, 'job.json'), job);
   const began = performance.now(), cap = task.limits.cell_ms + task.limits.grade_ms;

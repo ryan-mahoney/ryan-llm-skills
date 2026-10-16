@@ -1,11 +1,12 @@
 import { transform, validateFileSyntax } from '../changeset/engine.mjs';
-import { focusedPlanner, validateFocusedPlan, focusedInput } from './focused-editors.mjs';
+import { focusedPlanner, focusedPacketRules, validateFocusedPlan, focusedInput } from './focused-editors.mjs';
+import { queryPlannerRole } from './roles.mjs';
 
-export const strategyNames = ['patch-editors', 'direct-edits', 'source-ranges', 'checked-ranges', 'boundary-review', 'owner-editor', 'owner-editor-contracts', 'focused-dispatch'];
-export const usesEditor = strategy => ['owner-editor', 'owner-editor-contracts', 'focused-dispatch'].includes(strategy);
+export const strategyNames = ['patch-editors', 'direct-edits', 'source-ranges', 'checked-ranges', 'boundary-review', 'owner-editor', 'owner-editor-contracts', 'focused-dispatch', 'owner-query-writer'];
+export const usesEditor = strategy => ['owner-editor', 'owner-editor-contracts', 'focused-dispatch', 'owner-query-writer'].includes(strategy);
 export const usesBoundaryReview = strategy => strategy === 'boundary-review' || usesEditor(strategy);
 export const usesCandidateChecks = strategy => strategy === 'checked-ranges' || usesBoundaryReview(strategy);
-export const dispatchOnly = strategy => strategy === 'focused-dispatch';
+export const dispatchOnly = strategy => ['focused-dispatch', 'owner-query-writer'].includes(strategy);
 export const deliveredResult = result => Boolean(result.accepted && !result.error && result.visible_accepted === true &&
   result.executions?.at(-1)?.ok === true && (dispatchOnly(result.strategy)
     ? result.review_mode === 'executable-checks-only' && result.review_accepted === null && result.repairs === 0
@@ -19,7 +20,7 @@ export function validateStrategyPlan(strategy, plan) {
       ['implementation', 'boundaries', 'verification'].some(key => !Array.isArray(op.contract?.[key]) || !op.contract[key].length || op.contract[key].some(x => typeof x !== 'string' || !x.trim())))) {
       throw new Error('Each editor packet requires a contract with nonempty implementation, boundaries and verification string arrays');
     }
-    if (strategy === 'focused-dispatch') validateFocusedPlan(plan);
+    if (dispatchOnly(strategy)) validateFocusedPlan(plan);
   } else if (strategy && strategy !== 'patch-editors' && plan.operations?.some(op => op.executor !== 'deterministic')) {
     throw new Error('Direct strategy requires deterministic operations');
   }
@@ -40,6 +41,7 @@ Replacements apply in order and require the exact declared match count. Use smal
 
 export function strategyPlanner(strategy, original) {
   if (!strategyNames.includes(strategy)) throw new Error(`Unknown strategy: ${strategy}`);
+  if (strategy === 'owner-query-writer') return queryPlannerRole + '\n' + focusedPacketRules + '\nThe writer supports these source-range edits; provide the corresponding anchors in its instructions.\n' + rangeContract;
   return original + '\n\n' + (usesEditor(strategy)
     ? 'For this experiment, act as the implementation owner. Discover source and settle the required behavior, interfaces, dependencies, edge cases and test obligations. Delegate EVERY write to the selected editor using simple or involved operations with instruction, reads, writes and depends_on; do not emit edits or deterministic operations. This overrides the default preference for deterministic operations. The editor receives the original task and only declared current files; include all helper dependencies and settled design decisions it needs. Use concise implementation instructions, not full replacement code. Group edits that share design and file ownership to avoid repeated handoffs. Separate independent work when it can execute concurrently. Editors have no discovery tools or test loop. The same division applies to repairs.'
     : strategy !== 'patch-editors'

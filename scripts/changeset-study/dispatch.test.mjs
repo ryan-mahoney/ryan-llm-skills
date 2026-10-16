@@ -18,7 +18,23 @@ test('dispatch runs no owner review or repair after either successful or failed 
     cpSync(process.env.CHANGESET_TEST_PARSER, join(root, 'scripts/changeset-study/parser/acorn.mjs'));
     const fake = join(root, 'fake-runtime.mjs');
     writeFileSync(fake, `export const ModelRuntime={create:async()=>({
-      getModel:(_provider,id)=>({id,cost:{input:0.3,output:1.2}}),hasConfiguredAuth:()=>true,
+      getModel:(provider,id)=>({provider,id,api:'test',cost:{input:0.3,output:1.2}}),hasConfiguredAuth:()=>true,
+      streamSimple:(model,context)=>{
+        const message=context.messages.filter(m=>m.role==='user').at(-1);
+        const input=JSON.parse(typeof message.content==='string'?message.content:message.content.map(c=>c.text??'').join(''));
+        let text;
+        if(model.id==='editor') {
+          if(input.task!=='three-role') throw Error('Step owner did not receive original task');
+          text='Change: set answer.txt to correct. Preserve other files. Return edits only.';
+        } else {
+          if(input.task!==undefined || input.files!==undefined || !input.implementation_brief) throw Error('Query planner must receive settled brief, not original task');
+          text=JSON.stringify({schema_version:1,operations:[{id:'answer',executor:'simple',reads:[],writes:['answer.txt'],depends_on:[],
+            objective:'Change answer',instruction:'correct',requirements:['Keep other files.'],context:[{path:'answer.txt',start:null,end:null}]}]});
+        }
+        const response={role:'assistant',model:model.id,provider:model.provider,api:'test',stopReason:'stop',timestamp:Date.now(),
+          usage:{cost:{total:0.000001}},content:[{type:'text',text}]};
+        return {result:async()=>response,async *[Symbol.asyncIterator](){yield {type:'done',reason:'stop',message:response};}};
+      },
       completeSimple:async(model,context)=>{
         const input=JSON.parse(context.messages[0].content);
         let value;
@@ -33,9 +49,9 @@ test('dispatch runs no owner review or repair after either successful or failed 
     })};`);
     process.env.CHANGESET_MODEL_RUNTIME = fake;
     const { runCell } = await import(pathToFileURL(join(root, 'scripts/changeset-study/cell.mjs')));
-    for (const outcome of ['correct', 'bad-anchor', 'incorrect-behavior', 'plan-correction']) {
+    for (const outcome of ['correct', 'bad-anchor', 'incorrect-behavior', 'plan-correction', 'three-role']) {
       const directory = join(root, outcome);
-      const result = await runCell({ arm: 'changeset', strategy: 'focused-dispatch', selector: 'test/planner', editorSelector: 'test/editor',
+      const result = await runCell({ arm: 'changeset', strategy: outcome === 'three-role' ? 'owner-query-writer' : 'focused-dispatch', selector: 'test/planner', editorSelector: 'test/editor',
         ledger: join(root, 'budget.json'), directory, plannerPrompt: 'planner', task: {
           id: outcome, spec: outcome, context: 'prepared', files: { 'answer.txt': 'wrong' }, protected: [],
           check: 'test "$(cat answer.txt)" = correct',
@@ -44,14 +60,16 @@ test('dispatch runs no owner review or repair after either successful or failed 
         } });
       const requests = readFileSync(join(directory, 'requests.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
       const stages = { correct: ['planning', 'editor'], 'bad-anchor': ['planning', 'editor', 'editor'],
-        'incorrect-behavior': ['planning', 'editor'], 'plan-correction': ['planning', 'planning', 'editor'] };
+        'incorrect-behavior': ['planning', 'editor'], 'plan-correction': ['planning', 'planning', 'editor'],
+        'three-role': ['implementation-planning', 'discovery-planning', 'editor'] };
       assert.deepEqual(requests.map(r => r.stage), stages[outcome]);
+      if (outcome === 'three-role') assert.deepEqual(requests.map(r => r.selector), ['test/editor', 'test/planner', 'test/editor']);
       assert.equal(result.review_accepted, null);
       assert.equal(result.review_mode, 'executable-checks-only');
       assert.equal(result.repairs, 0);
       assert.deepEqual(result.reviews, []);
       assert.equal(result.stages.some(s => s.name === 'impact-review' || s.name === 'repair-planning'), false);
-      assert.equal(deliveredResult(result), ['correct', 'plan-correction'].includes(outcome), result.error ?? JSON.stringify(result.checks));
+      assert.equal(deliveredResult(result), ['correct', 'plan-correction', 'three-role'].includes(outcome), result.error ?? JSON.stringify(result.checks));
     }
   } finally {
     if (previous === undefined) delete process.env.CHANGESET_MODEL_RUNTIME;
