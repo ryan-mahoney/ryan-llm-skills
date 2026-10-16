@@ -63,6 +63,19 @@ coherent change you understand; reference the card for unchanged acceptance deta
 For test-code changes, choose the scenario and observable expectation yourself; the
 editor can implement them using existing fixture conventions but does not run them.
 
+Keep each editor packet inside one context window. When a target file would pass about
+1,000 lines, split it along the card's boundaries into cohesive modules before adding
+more; do not keep growing one module. Give each packet the exact read ranges
+(`path:start-end`) it needs and one cohesive change. Split any packet that would have
+the editor re-read a large file from end to end. When the card's strategy is
+`test-first`, dispatch the failing cases first, observe the named failures with
+`spec_verify`, and only then dispatch the implementation. Map each refusal, failure or
+unknown-effect condition the card or its live invariants name to a case that asserts it.
+Building first and testing at the end is a departure: record it as
+`implementation-first` with the reason. In one run, a step grew a single module to
+2,565 lines over 12 packets. Each editor compacted 5-6 times re-reading it, and the
+first gate run, after the implementation, failed 9 of 35 cases.
+
 Read missing source facts directly before deciding. Reserve read-only editor assignments
 for a specific blocking fact you cannot obtain with your tools, such as command output;
 request a bounded answer. Normally combine the editor's needed reads with its edits. Do not make the editor choose
