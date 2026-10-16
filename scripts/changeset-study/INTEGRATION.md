@@ -21,6 +21,16 @@ the original tasks and one repair opportunity. These changes are in the research
 backend; the earlier mixed-model campaign remains frozen. Evaluate the revised
 backend on fresh cases before allowing it to own managed step delivery.
 
+The later [Sol owner / DeepSeek editor experiment](OWNER-EDITOR-FINDINGS.md) retains
+those checks while delegating all initial and repair writes. Low thinking,
+non-thinking, and more detailed owner contracts delivered 2/3, 1/3 and 0/3 of the
+same exposed tasks. The owner still incurred substantial discovery/review work;
+editor generation and failed repairs added cost and time. Keep direct executable
+plans as the reference backend. These results do not justify a DeepSeek default
+for managed editors. Preserve explicit routing, per-role accounting, source
+ownership and complete delivery gates in any future integration; never treat
+fast partial edits or a benchmark-only pass as completed work.
+
 The development runs also exposed an acceptance gap: a candidate could pass the
 fixed tests while reporting an incorrect dirty filename. Keep review supplied
 with relevant helper contracts beyond the diff, and retain discovered boundary

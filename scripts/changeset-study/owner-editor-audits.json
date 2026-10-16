@@ -1,0 +1,756 @@
+{
+  "schema_version": 4,
+  "diagnostic_hash": "f5275b71a9c1b5336f9f9592e2dffc16d074df499eb314b9c995a4307b88fff6",
+  "required_tasks": [
+    "hard-dependency-handoff"
+  ],
+  "reference_results": [
+    {
+      "run": "native",
+      "task": "hard-dependency-handoff",
+      "schema_version": 4,
+      "selection": "inline-dirty-state-block",
+      "scope": "Exact candidate dirty-state block or function against real disposable Git repositories. Local aliases are resolved from dirty_paths/dirty_count object fields. Does not exercise prompt launch or receipt loading. Posthoc only; no model feedback.",
+      "candidate_hash": "04d4b6f0c63216a6be5112647330c6fda883a826157d691590e68b23521d36b6",
+      "passed": true,
+      "rows": [
+        {
+          "case": "unstaged",
+          "expected": [
+            "file.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "file.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "staged",
+          "expected": [
+            "file.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "file.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "rename",
+          "expected": [
+            "new.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "new.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "mixed",
+          "expected": [
+            "staged.txt",
+            "unstaged.txt",
+            "new.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "staged.txt",
+              "unstaged.txt",
+              "new.txt"
+            ],
+            "dirty_count": 3
+          },
+          "passed": true
+        },
+        {
+          "case": "leading-space-name",
+          "expected": [
+            " leading.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              " leading.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "git-error",
+          "expected": null,
+          "actual": {
+            "dirty_paths": null,
+            "dirty_count": null
+          },
+          "passed": true
+        }
+      ],
+      "elapsed_ms": 109.99991499999999
+    },
+    {
+      "run": "04-checked-ranges",
+      "task": "hard-dependency-handoff",
+      "schema_version": 4,
+      "selection": "inline-dirty-state-block",
+      "scope": "Exact candidate dirty-state block or function against real disposable Git repositories. Local aliases are resolved from dirty_paths/dirty_count object fields. Does not exercise prompt launch or receipt loading. Posthoc only; no model feedback.",
+      "candidate_hash": "eac7d7d58082eeba8d3059c6f97c9a8bc8265634a1ec6b56b1261c0bd7b0d2b8",
+      "passed": false,
+      "rows": [
+        {
+          "case": "unstaged",
+          "expected": [
+            "file.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "ile.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": false
+        },
+        {
+          "case": "staged",
+          "expected": [
+            "file.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "file.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "rename",
+          "expected": [
+            "new.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "new.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "mixed",
+          "expected": [
+            "staged.txt",
+            "unstaged.txt",
+            "new.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "staged.txt",
+              "unstaged.txt",
+              "new.txt"
+            ],
+            "dirty_count": 3
+          },
+          "passed": true
+        },
+        {
+          "case": "leading-space-name",
+          "expected": [
+            " leading.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "leading.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": false
+        },
+        {
+          "case": "git-error",
+          "expected": null,
+          "actual": {
+            "dirty_paths": null,
+            "dirty_count": null
+          },
+          "passed": true
+        }
+      ],
+      "elapsed_ms": 105.377946
+    },
+    {
+      "run": "05-checked-ranges-repeat",
+      "task": "hard-dependency-handoff",
+      "schema_version": 4,
+      "selection": "inline-dirty-state-block",
+      "scope": "Exact candidate dirty-state block or function against real disposable Git repositories. Local aliases are resolved from dirty_paths/dirty_count object fields. Does not exercise prompt launch or receipt loading. Posthoc only; no model feedback.",
+      "candidate_hash": "595d87e1eda298793c5b7dcf4f53a0ac6ee975763961235ce784ef2649061981",
+      "passed": false,
+      "rows": [
+        {
+          "case": "unstaged",
+          "expected": [
+            "file.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "file.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "staged",
+          "expected": [
+            "file.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              " file.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": false
+        },
+        {
+          "case": "rename",
+          "expected": [
+            "new.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              " new.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": false
+        },
+        {
+          "case": "mixed",
+          "expected": [
+            "staged.txt",
+            "unstaged.txt",
+            "new.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              " staged.txt",
+              "unstaged.txt",
+              "new.txt"
+            ],
+            "dirty_count": 3
+          },
+          "passed": false
+        },
+        {
+          "case": "leading-space-name",
+          "expected": [
+            " leading.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              " leading.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "git-error",
+          "expected": null,
+          "actual": {
+            "dirty_paths": null,
+            "dirty_count": null
+          },
+          "passed": true
+        }
+      ],
+      "elapsed_ms": 102.881292
+    },
+    {
+      "run": "06-boundary-review",
+      "task": "hard-dependency-handoff",
+      "schema_version": 4,
+      "selection": "inline-dirty-state-block",
+      "scope": "Exact candidate dirty-state block or function against real disposable Git repositories. Local aliases are resolved from dirty_paths/dirty_count object fields. Does not exercise prompt launch or receipt loading. Posthoc only; no model feedback.",
+      "candidate_hash": "1a3ae6504801d22e4a1ba8106def1783241532fc524721c3c51220fdf1f4fc3a",
+      "passed": true,
+      "rows": [
+        {
+          "case": "unstaged",
+          "expected": [
+            "file.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "file.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "staged",
+          "expected": [
+            "file.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "file.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "rename",
+          "expected": [
+            "new.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "new.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "mixed",
+          "expected": [
+            "staged.txt",
+            "unstaged.txt",
+            "new.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "staged.txt",
+              "unstaged.txt",
+              "new.txt"
+            ],
+            "dirty_count": 3
+          },
+          "passed": true
+        },
+        {
+          "case": "leading-space-name",
+          "expected": [
+            " leading.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              " leading.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "git-error",
+          "expected": null,
+          "actual": {
+            "dirty_paths": null,
+            "dirty_count": null
+          },
+          "passed": true
+        }
+      ],
+      "elapsed_ms": 110.031476
+    },
+    {
+      "run": "07-boundary-review-repeat",
+      "task": "hard-dependency-handoff",
+      "schema_version": 4,
+      "selection": "inline-dirty-state-block",
+      "scope": "Exact candidate dirty-state block or function against real disposable Git repositories. Local aliases are resolved from dirty_paths/dirty_count object fields. Does not exercise prompt launch or receipt loading. Posthoc only; no model feedback.",
+      "candidate_hash": "5e95be1fd7542fee9b7953d959aae86aa52d292cc144f2a0ab4550779df8bea0",
+      "passed": true,
+      "rows": [
+        {
+          "case": "unstaged",
+          "expected": [
+            "file.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "file.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "staged",
+          "expected": [
+            "file.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "file.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "rename",
+          "expected": [
+            "new.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "new.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "mixed",
+          "expected": [
+            "staged.txt",
+            "unstaged.txt",
+            "new.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "staged.txt",
+              "unstaged.txt",
+              "new.txt"
+            ],
+            "dirty_count": 3
+          },
+          "passed": true
+        },
+        {
+          "case": "leading-space-name",
+          "expected": [
+            " leading.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              " leading.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "git-error",
+          "expected": null,
+          "actual": {
+            "dirty_paths": null,
+            "dirty_count": null
+          },
+          "passed": true
+        }
+      ],
+      "elapsed_ms": 119.28397800000002
+    }
+  ],
+  "results": [
+    {
+      "run": "01-owner-editor",
+      "task": "hard-dependency-handoff",
+      "schema_version": 4,
+      "selection": "same-file-function:dirtyPaths",
+      "scope": "Exact candidate dirty-state block or function against real disposable Git repositories. Local aliases are resolved from dirty_paths/dirty_count object fields. Does not exercise prompt launch or receipt loading. Posthoc only; no model feedback.",
+      "candidate_hash": "90fcddfee712c43f04cd8739475dfc61d73d09a60549ee4509095745738c82d4",
+      "passed": true,
+      "rows": [
+        {
+          "case": "unstaged",
+          "expected": [
+            "file.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "file.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "staged",
+          "expected": [
+            "file.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "file.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "rename",
+          "expected": [
+            "new.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "new.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "mixed",
+          "expected": [
+            "staged.txt",
+            "unstaged.txt",
+            "new.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "staged.txt",
+              "unstaged.txt",
+              "new.txt"
+            ],
+            "dirty_count": 3
+          },
+          "passed": true
+        },
+        {
+          "case": "leading-space-name",
+          "expected": [
+            " leading.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              " leading.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "git-error",
+          "expected": null,
+          "actual": {
+            "dirty_paths": null,
+            "dirty_count": null
+          },
+          "passed": true
+        }
+      ],
+      "elapsed_ms": 107.208781
+    },
+    {
+      "run": "02-editor-off",
+      "task": "hard-dependency-handoff",
+      "candidate_hash": "42b394b107d00c554ce57a219055f17b7e8d90da5099bcb2922f20c57fec489c",
+      "passed": null,
+      "status": "fixture-incompatible",
+      "scope": "Diagnostic could not identify expected inline block or record-taking helper; candidate already fails candidate checks, execution and final review. No path verdict."
+    },
+    {
+      "run": "03-concrete-contracts",
+      "task": "hard-dependency-handoff",
+      "schema_version": 4,
+      "selection": "inline-dirty-state-block",
+      "scope": "Exact candidate dirty-state block or function against real disposable Git repositories. Local aliases are resolved from dirty_paths/dirty_count object fields. Does not exercise prompt launch or receipt loading. Posthoc only; no model feedback.",
+      "candidate_hash": "9b5935ce4561043a2a8ad7078485a66677f98e8857d3c6db97e8aa27537d5646",
+      "passed": false,
+      "rows": [
+        {
+          "case": "unstaged",
+          "expected": [
+            "file.txt"
+          ],
+          "actual": {
+            "dirty_paths": [],
+            "dirty_count": 0
+          },
+          "passed": false
+        },
+        {
+          "case": "staged",
+          "expected": [
+            "file.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "file.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "rename",
+          "expected": [
+            "new.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "new.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": true
+        },
+        {
+          "case": "mixed",
+          "expected": [
+            "staged.txt",
+            "unstaged.txt",
+            "new.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "staged.txt",
+              "unstaged.txt",
+              "new.txt"
+            ],
+            "dirty_count": 3
+          },
+          "passed": true
+        },
+        {
+          "case": "leading-space-name",
+          "expected": [
+            " leading.txt"
+          ],
+          "actual": {
+            "dirty_paths": [
+              "leading.txt"
+            ],
+            "dirty_count": 1
+          },
+          "passed": false
+        },
+        {
+          "case": "git-error",
+          "expected": null,
+          "actual": {
+            "dirty_paths": null,
+            "dirty_count": null
+          },
+          "passed": true
+        }
+      ],
+      "elapsed_ms": 106.51961800000001
+    }
+  ],
+  "extraction_results": [
+    {
+      "run": "01-owner-editor",
+      "task": "hard-lifecycle-extract",
+      "candidate_hash": "1566df83e02d467de71965fe66c284885fca98c10b36294d016d6a1a60544b0c",
+      "scope": "Sixteen moved function/method bodies compared as exact text and AST with source offsets removed. Raw string and template values retained. Separate checks cover wiring and dependencies.",
+      "rows": [
+        {
+          "name": "environmentFacts",
+          "found": true,
+          "byte_identical": true,
+          "ast_identical": true
+        },
+        {
+          "name": "sanitizeTransport",
+          "found": true,
+          "byte_identical": true,
+          "ast_identical": true
+        },
+        {
+          "name": "targetSetup",
+          "found": true,
+          "byte_identical": false,
+          "ast_identical": true
+        },
+        {
+          "name": "declaredEnvironment",
+          "found": true,
+          "byte_identical": true,
+          "ast_identical": true
+        },
+        {
+          "name": "shQuote",
+          "found": true,
+          "byte_identical": true,
+          "ast_identical": true
+        },
+        {
+          "name": "waveSetupScript",
+          "found": true,
+          "byte_identical": true,
+          "ast_identical": true
+        },
+        {
+          "name": "readSetupReceipt",
+          "found": true,
+          "byte_identical": true,
+          "ast_identical": true
+        },
+        {
+          "name": "waitForSetupClose",
+          "found": true,
+          "byte_identical": true,
+          "ast_identical": true
+        },
+        {
+          "name": "buildWaveStaging",
+          "found": true,
+          "byte_identical": false,
+          "ast_identical": true
+        },
+        {
+          "name": "gitList",
+          "found": true,
+          "byte_identical": true,
+          "ast_identical": true
+        },
+        {
+          "name": "partitionUntracked",
+          "found": true,
+          "byte_identical": true,
+          "ast_identical": true
+        },
+        {
+          "name": "containedRoot",
+          "found": true,
+          "byte_identical": true,
+          "ast_identical": true
+        },
+        {
+          "name": "ensureWaveDeadline",
+          "found": true,
+          "byte_identical": true,
+          "ast_identical": true
+        },
+        {
+          "name": "drainContainedService",
+          "found": true,
+          "byte_identical": true,
+          "ast_identical": true
+        },
+        {
+          "name": "prepareWaveMember",
+          "found": true,
+          "byte_identical": true,
+          "ast_identical": true
+        },
+        {
+          "name": "remountWaveMember",
+          "found": true,
+          "byte_identical": true,
+          "ast_identical": true
+        }
+      ],
+      "tests_unchanged": true,
+      "runtime_lines": 1454
+    }
+  ],
+  "extraction_diagnostic_hash": "63b7ef1fe41d465f649b6f9eefabdffe89e4f2bb7acc06f182ffbad4653ee9a2"
+}

@@ -20,6 +20,12 @@ The final strategy delivered all three twice, with 28.5–32.7% less elapsed tim
 against the previous native Sol references. These are adaptive development results;
 the report retains failed attempts and known gaps in the original acceptance tests.
 
+The [Sol owner / DeepSeek editor study](OWNER-EDITOR-FINDINGS.md) then delegated
+every write, including repairs, to DeepSeek V4.1 Flash through its native provider.
+Three configurations delivered 2/3, 1/3 and 0/3 tasks; none improved on the successful
+Sol-only runs. See the [results](owner-editor-results.md) and
+[owner/editor protocol](OWNER-EDITOR-PROTOCOL.md) for roles, settings and retained failures.
+
 ## Read the explanation
 
 - [Offline HTML visual](visual.html): interactive dependency walkthrough, performance
@@ -48,6 +54,22 @@ without adding project dependencies. The charts derive from `results.json`; the
 prose describes this frozen campaign and must be reviewed if the dataset changes.
 
 ## Run the study
+
+### Sol owner / DeepSeek editor
+
+Use the [owner/editor protocol](OWNER-EDITOR-PROTOCOL.md). `owner-editor` accepts
+ordinary delegated instructions; `owner-editor-contracts` additionally requires
+implementation, boundary and verification arrays in each packet. Both require an
+explicit `--editor-model`. Generate the comparison from retained external runs:
+
+```sh
+node scripts/changeset-study/owner-editor-report.mjs "$OWNER_EDITOR_RUNS" \
+  scripts/changeset-study/sol-only-results.json "$REPORT_PREFIX"
+```
+
+The reporter reads required posthoc audits, verifies candidate identity and routing,
+and reports costs/tokens as unknown when a call lacks complete accounting. It does
+not perform inference or change frozen trial results.
 
 ### Sol-only development
 

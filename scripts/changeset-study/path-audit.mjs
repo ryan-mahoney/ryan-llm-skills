@@ -18,12 +18,23 @@ const tree = parse(source, { ecmaVersion: 'latest', sourceType: 'module' });
 const functions = tree.body.map(n => n.declaration ?? n).filter(n => n.type === 'FunctionDeclaration');
 const declarations = functions.map(n => source.slice(n.start, n.end)).join('\n');
 const slices = [];
+const aliases = new Map([['dirty_paths,dirty_count', ['dirty_paths', 'dirty_count']]]);
+function findAliases(node) {
+  if (!node || typeof node !== 'object') return;
+  if (node.type === 'ObjectExpression') {
+    const pair = ['dirty_paths', 'dirty_count'].map(key => node.properties.find(p => (p.key?.name ?? p.key?.value) === key)?.value);
+    if (pair.every(n => n?.type === 'Identifier')) aliases.set(pair.map(n => n.name).join(','), pair.map(n => n.name));
+  }
+  for (const value of Object.values(node)) if (Array.isArray(value)) value.forEach(findAliases); else if (value && typeof value === 'object') findAliases(value);
+}
+findAliases(tree);
 function visit(node) {
   if (!node || typeof node !== 'object') return;
   if (node.type === 'BlockStatement') for (let i = 0; i < node.body.length; i++) {
     const first = node.body[i], next = node.body[i + 1];
-    if (first.type === 'VariableDeclaration' && ['dirty_paths', 'dirty_count'].every(name => first.declarations.some(d => d.id.name === name)) && next?.type === 'TryStatement') {
-      slices.push(source.slice(first.start, next.end));
+    const pair = first.type === 'VariableDeclaration' && [...aliases.values()].find(names => names.every(name => first.declarations.some(d => d.id.name === name)));
+    if (pair && next?.type === 'TryStatement') {
+      slices.push({ source: source.slice(first.start, next.end), names: pair });
     }
   }
   for (const value of Object.values(node)) if (Array.isArray(value)) value.forEach(visit); else if (value && typeof value === 'object') visit(value);
@@ -46,7 +57,7 @@ const callsWithRecord = (node, name) => {
 };
 let calculation, selection;
 if (slices.length === 1) {
-  calculation = '(() => {' + slices[0] + ';return {dirty_paths,dirty_count};})()';
+  calculation = '(() => {' + slices[0].source + `;return {dirty_paths:${slices[0].names[0]},dirty_count:${slices[0].names[1]}};})()`;
   selection = 'inline-dirty-state-block';
 } else if (slices.length === 0 && helpers.length === 1 && callsWithRecord(tree, helpers[0].id.name)) {
   calculation = `${helpers[0].id.name}(record)`;
@@ -81,7 +92,7 @@ for (const [name, expected] of cases) {
       passed: !error && JSON.stringify(actual.dirty_paths) === JSON.stringify(expected) && actual.dirty_count === (expected?.length ?? null) });
   } finally { rmSync(root, { recursive: true, force: true }); }
 }
-const result = { schema_version: 3, selection, scope: 'Exact candidate dirty-state block or function against real disposable Git repositories. Does not exercise prompt launch or receipt loading. Posthoc only; no model feedback.',
+const result = { schema_version: 4, selection, scope: 'Exact candidate dirty-state block or function against real disposable Git repositories. Local aliases are resolved from dirty_paths/dirty_count object fields. Does not exercise prompt launch or receipt loading. Posthoc only; no model feedback.',
   candidate_hash: createHash('sha256').update(bytes).digest('hex'), passed: rows.every(r => r.passed), rows, elapsed_ms: performance.now() - began };
 writeFileSync(output, JSON.stringify(result, null, 2) + '\n');
 console.log(JSON.stringify(result));

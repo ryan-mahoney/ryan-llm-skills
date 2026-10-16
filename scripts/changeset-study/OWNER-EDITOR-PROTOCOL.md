@@ -45,6 +45,8 @@ two successful Sol-only changeset runs (319.74/339.55 seconds, 16/17 calls,
 328,670/340,136 tokens). Report delivery before efficiency. A performance win
 requires all three audited deliveries, lower summed time and equivalent cost,
 and a geometric mean paired speed ratio above one against the named comparator.
+For failure-adjusted ratios, assign each unqualified task the retained 1,500-second
+cap; report actual elapsed totals separately, including failed attempts.
 Call counts and tokens include both roles, planning, reviews and repairs. Include
 owner/editor breakdowns so offloading is measurable. Full timing includes grading.
 
@@ -102,7 +104,7 @@ same selectors as the non-thinking run. Each owner operation must include a
 string arrays. The owner resolves exact edit locations and algorithm steps,
 branch semantics, helper contracts, and test fixture setup/termination/cleanup.
 References to numbered specification sections do not substitute for this recipe.
-The editor receives those fields along with the original task and current source.
+The editor receives those fields along with the original task and current source. The owner also limits editor reads to implementation-relevant files; verification-only test source stays with the owner when it does not establish an interface the editor needs.
 
 This is a generic handoff/prompt intervention, not an additional repair or an
 expanded output budget. Every write remains delegated. No previous candidate,
