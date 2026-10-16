@@ -8,9 +8,18 @@ to four closed packets concurrently when their write paths are disjoint. Changes
 can extend that existing boundary with deterministic application, dependency-aware
 staging and fewer model calls. They do not require another workflow coordinator.
 
-The recommendation follows the [matched findings](FINDINGS.md): start with capable
-planning and exact executable edits. Mixed-model routing has not demonstrated a
+The recommendation follows the [small-workload findings](FINDINGS.md) and
+[hard-workload findings](HARD-FINDINGS.md): start with capable planning and exact
+executable edits. The current Sol + Nemotron backend did not completely deliver
+any of the six harder tasks. Mixed-model routing has not demonstrated a
 quality-preserving advantage in this study.
+
+Before integration, replace whole-file JSON rewrites with bounded patches or
+deterministic transformations, route oversized operations back to the owner, and
+make failed execution explicit in the review input. File extraction should preserve
+untouched bytes mechanically where possible. These are proposed corrections;
+the failed campaign was frozen and was not rerun with them. Evaluate a revised
+backend on fresh cases before allowing it to own managed step delivery.
 
 ## Proposed execution path
 
@@ -49,7 +58,7 @@ Paths in this table are relative to the repository root; links resolve from this
 | [Executor](../changeset/engine.mjs) and [workspace](../changeset/workspace.mjs) | Compile dependencies and stage exact or model-produced edits. | Adapt snapshot and publication to the managed checkout lifecycle. |
 | [Completion](../../pi/extensions/spec-runtime/completion.mjs) | Records evidence and learning for the current revision. | Reference managed changeset receipts without creating a second acceptance ledger. |
 
-The prototype's `workflow.mjs` contains its own verification/review callbacks.
+The [prototype workflow](../changeset/workflow.mjs) contains its own verification/review callbacks.
 Adapt those responsibilities to the existing owner, `spec_verify`, and independent
 review. Do not invoke an extra research-review loop around the managed workflow.
 Keep `spec_complete`, per-step commits, and coordinator reconciliation authoritative.

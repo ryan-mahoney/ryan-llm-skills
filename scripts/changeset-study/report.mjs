@@ -6,6 +6,7 @@ import { costPolicy } from '../changeset-research/cost.mjs';
 const [input, output, supplementalInput] = process.argv.slice(2);
 if (!input || !output) throw new Error('Usage: report RUN_DIRECTORY OUTPUT_PREFIX');
 const run=resolve(input), manifest=JSON.parse(readFileSync(join(run,'manifest.json'),'utf8'));
+if (manifest.comparison) throw new Error('Use workflow-report.mjs for a combined-workflow comparison; its native and mixed arms must remain separate');
 const cells=readdirSync(run,{withFileTypes:true}).filter(e=>e.isDirectory()&&/^\d+-/.test(e.name)).map(e=>{
   const result=JSON.parse(readFileSync(join(run,e.name,'result.json'),'utf8'));
   const {reviews,executions,hidden,...compact}=result;

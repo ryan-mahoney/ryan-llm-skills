@@ -38,6 +38,19 @@ same 1,500-second cap. The shared $50 reservation ledger still applies.
 
 The sections below retain the original and superseded campaign designs.
 
+### Adapter audit during the hard run
+
+An offline request-payload audit found that the pinned Sol subscription adapter
+forwards instructions and `reasoning.effort: low`, but does **not** forward the
+requested `maxTokens: 32000` to the provider. The output-token values below are
+requested configuration, not a demonstrated Sol provider limit. The five-minute
+call abort and overall implementation/grading deadlines are enforced by the harness.
+Nemotron receipts do show `length` stops at 32,000 reported output tokens, including
+reasoning tokens. Do not attribute Sol's empty responses to that token limit or
+claim identical provider-enforced output budgets. Run `provider-audit.mjs` to inspect
+the installed adapter without sending a request. This audit does not alter the
+frozen campaign or retry failed trials.
+
 Status: retained preregistered design for the completed Mercury/Sol/DeepSeek campaign.
 The next campaign selects Nemotron 3.5 Super VL in place of Mercury and includes six historical
 workloads; see the [hard-campaign setup](README.md#hard-campaign-historical-workloads-with-nemotron).
@@ -172,9 +185,10 @@ Excluded tests, each excluded for every arm and for validation:
 
 - `wave runtime: composition …` (native kernel overlay): needs nested unprivileged
   user namespaces, which the study sandbox lacks. The portable fallback variants run.
-- "writes no lock fields" and "repeated starts return the same run" in the
-  fallback-setup and lifecycle-extract tasks: they fail at both the initial and gold
-  revisions; the admission task's commits later fixed them.
+- "writes no lock fields" in fallback-setup and lifecycle-extract, and
+  "repeated starts return the same run" in lifecycle-extract: these fail at both
+  the initial and gold revisions. The repeated-start check remains enabled in
+  fallback-setup and passes its gold validation.
 - `wave workspaces: interrupted fallback publication …`: it rewrites the gold source
   text and checks a marker path the gold implementation chose, which the task text
   cannot fairly require.
@@ -195,7 +209,7 @@ tests, and hidden versions overwrite them at grading.
 | Implementation deadline per cell | 300 s | 1,200 s | Original Sol-medium owners took 10-15 minutes on these steps. |
 | Terminal grading deadline | inside cell | 300 s, separate | The runtime test file alone takes about 60 s in the sandbox. |
 | Model calls per cell | 32 | 96 | Original owners used about 37 calls with editor delegation. |
-| Output tokens per call | 16,000 | 32,000 | A changeset plan for feature delivery carries all edits. |
+| Requested output tokens per call | 16,000 | 32,000 | A changeset plan for feature delivery carries all edits; see the Sol adapter audit above. |
 | Per-call deadline | 120 s | 300 s | 32,000 output tokens at observed Sol rates. |
 | Command deadline | 30 s | 180 s | Focused runtime tests take 30-60 s. |
 

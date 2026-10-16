@@ -1,0 +1,19 @@
+{
+  "observed": {
+    "model": "gpt-6.1-sol",
+    "instructions": "Offline instruction marker",
+    "reasoning": {
+      "effort": "low",
+      "summary": "auto"
+    },
+    "text": {
+      "verbosity": "low"
+    },
+    "max_output_tokens": null,
+    "max_completion_tokens": null
+  },
+  "requested_max_tokens": 32000,
+  "transport": "aborted in onPayload before headers/network",
+  "module": "pi-ai/dist/api/openai-codex-responses.js",
+  "module_sha256": "4d90da82aaac68f9f0e1fd7daec39f1aa285c111bf04c7ddefa52e920b41b2cc"
+}

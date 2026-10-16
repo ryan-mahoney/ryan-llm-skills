@@ -6,6 +6,12 @@ The earlier [executor findings](../changeset-research/FINDINGS.md) remain separa
 The completed [matched findings](FINDINGS.md) explain the measured result and its limits;
 [results.json](results.json) retains the compact campaign evidence.
 
+The newer [hard-workload findings](HARD-FINDINGS.md) cover native Sol versus Sol with
+Nemotron editors on six historical tasks: complete delivery was **4/6 versus 0/6**.
+See the [results table](hard-workflow-results.md), [raw summary](hard-workflow-results.json)
+and [timing chart](hard-workflow-timing.svg). The HTML below remains the earlier
+small-workload study; its figures are not results from the Nemotron comparison.
+
 ## Read the explanation
 
 - [Offline HTML visual](visual.html): interactive dependency walkthrough, performance
@@ -37,7 +43,7 @@ prose describes this frozen campaign and must be reviewed if the dataset changes
 
 ### Hard campaign: historical workloads with Nemotron
 
-Nemotron 3.5 Super VL replaces Mercury in the next comparison. The selected models
+Nemotron 3.5 Super VL replaced Mercury in the expanded campaign. The selected models
 are `deepseek/deepseek-flash:off`, `openai-codex/gpt-6.1-sol:low`, and
 `openrouter/nvidia/nemotron-3.5-super-vl:low`. The Nemotron selector uses the
 [OpenRouter model ID](https://openrouter.ai/nvidia/nemotron-3.5-super-vl/providers)
@@ -45,7 +51,7 @@ and retains the previous third model's `low` reasoning setting.
 
 The six historical workloads from `changeset-hard-workloads` are integrated.
 The original 72-cell matrix was reduced during execution at the operator's request.
-The active comparison has **12 trials**: native Sol versus Sol planning/reviewing
+The completed comparison has **12 trials**: native Sol versus Sol planning/reviewing
 with Nemotron handling simple edits, once each on all six tasks. Prior observations
 are retained; one eligible completed native trial is reused. The
 [protocol amendment](PROTOCOL.md#current-scope-sol-with-nemotron) records the scope
@@ -61,11 +67,17 @@ node scripts/changeset-study/workflow.mjs prepare \
   --simple-model openrouter/nvidia/nemotron-3.5-super-vl:low
 node scripts/changeset-study/workflow.mjs execute \
   --run "$WORKFLOW_RUN" --ledger "$CAMPAIGN_LEDGER"
+node scripts/changeset-study/workflow-report.mjs \
+  "$WORKFLOW_RUN" "$REPORT_PREFIX" "$ORIGINAL_HARD_RUN"
+uv run --with matplotlib==3.11.2 python scripts/changeset-study/workflow-plot.py \
+  "$REPORT_PREFIX.json" "$FIGURE_PREFIX"
 ```
 
 Stop the original scheduler before executing the reduced run, and let any current
 worker finish. Only one study trial runs at a time. The `execute` command can resume
 after completed trials; an interrupted trial requires explicit accounting recovery.
+Use `workflow-report.mjs` for this comparison; `report.mjs` handles the earlier
+single-model matched arms and separate mixed-only campaigns.
 
 `model-catalog.mjs` registers the exact paid Nemotron model inside the study runtime
 using public OpenRouter metadata observed on 2026-10-16; global model configuration
