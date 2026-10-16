@@ -23,6 +23,7 @@ import { runCommand as runtimeRunCommand } from './runtime.mjs';
 import {
   assembleCandidate, mergeTreeOutcome, prepareIntegrationRepair,
   acceptIntegrationRepair, promoteWave, recoverPromotion, runCandidateChecks, readWaveRecord,
+  updateWaveRecord,
 } from './wave-integration.mjs';
 
 const GIT = { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] };
@@ -760,6 +761,7 @@ test('wave integration: promotion refuses dirty, moved, foreign-held or changed 
     if (name === 'before-cas') git(hook.canonical.worktree, ['update-ref', 'refs/heads/main', externalCommit, hook.canonical.base]);
   } };
   const beforeHook = snapshotTreeDigest(hook.canonical.worktree);
+  const beforeHookIndex = cachedIndexStatus(hook.canonical.worktree);
   const blocked = await promoteWave(hookCtx);
   assert.equal(blocked.status, 'blocked');
   assert.equal(blocked.reason, 'ref-changed');
@@ -767,6 +769,7 @@ test('wave integration: promotion refuses dirty, moved, foreign-held or changed 
   assert.equal(blockedRecord.target.promotion.state, 'blocked');
   assert.equal(git(hook.canonical.worktree, ['rev-parse', 'refs/heads/main']), externalCommit, 'main equals the external commit');
   assert.equal(snapshotTreeDigest(hook.canonical.worktree), beforeHook, 'the module wrote no canonical bytes');
+  assert.equal(cachedIndexStatus(hook.canonical.worktree), beforeHookIndex, 'the before-cas hook left the cached index status unchanged');
 });
 
 // ---------------------------------------------------------------------------
@@ -917,4 +920,403 @@ test('wave integration: recovery rejects a different wave without touching its j
   assert.equal(result.status, 'blocked');
   assert.equal(result.reason, 'journal-corrupt');
   assert.deepEqual(readFileSync(recordPath), before, 'the other wave cannot touch this journal');
+});
+
+// ---------------------------------------------------------------------------
+// Promotion safety regressions: ignored collisions, changed input identity and
+// promoted replay. The module must never let untracked-but-ignored bytes hide a
+// promotion collision, never promote overlapped inputs, and always return the
+// same branch ref for a promoted journal.
+// ---------------------------------------------------------------------------
+
+// A fresh verified candidate whose canonical tree declares no feature.txt.
+// Collisions are introduced only by the subcase, so the baseline is clean.
+async function promotionBaseline(t, label) {
+  const verified = await verifiedFixture(t, label);
+  const { canonical, ctx, candidate, recordPath } = verified;
+  assert.equal(git(canonical.worktree, ['rev-parse', 'refs/heads/main']), canonical.base, `${label}: main starts at B`);
+  const before = {
+    digest: snapshotTreeDigest(canonical.worktree),
+    index: cachedIndexStatus(canonical.worktree),
+    main: git(canonical.worktree, ['rev-parse', 'refs/heads/main']),
+    record: readFileSync(recordPath),
+  };
+  return { ...verified, before };
+}
+
+test('wave integration: ignored collisions refuse promotion without touching bytes', { timeout: TIMEOUT }, async t => {
+  const collisions = [
+    // feature.txt is ignored via .git/info/exclude; the candidate also ships a
+    // tracked feature.txt, so promotion would overwrite valuable ignoring state.
+    { label: 'ignored-file', exclude: 'feature.txt\n', mutate: ({ canonical }) => writeFileSync(join(canonical.worktree, 'feature.txt'), 'valuable ignored\n') },
+    // feature.txt is ignored and exists as a directory holding a valuable child,
+    // which a file collision would replace.
+    { label: 'ignored-directory', exclude: 'feature.txt/\n', mutate: ({ canonical }) => {
+      mkdirSync(join(canonical.worktree, 'feature.txt'), { recursive: true });
+      writeFileSync(join(canonical.worktree, 'feature.txt', 'valuable.txt'), 'valuable child\n');
+    } },
+  ];
+  for (const scenario of collisions) {
+    const baseline = await promotionBaseline(t, `ignored-${scenario.label}`);
+    const { canonical, ctx, recordPath } = baseline;
+    // Install the ignore rule and the valuable bytes the candidate collides with.
+    mkdirSync(join(canonical.worktree, '.git', 'info'), { recursive: true });
+    writeFileSync(join(canonical.worktree, '.git', 'info', 'exclude'), scenario.exclude);
+    scenario.mutate({ canonical });
+    // Pre-mutation index status is re-observed because the ignore rule itself
+    // changes what is tracked-clean. The raw index bytes are captured too so the
+    // refusal can prove it did not rewrite the checkout's index file.
+    const beforeIndex = cachedIndexStatus(canonical.worktree);
+    const beforeRawIndex = readFileSync(join(canonical.worktree, '.git', 'index'));
+    const beforeBytes = snapshotTreeDigest(canonical.worktree);
+    const refused = await promoteWave(ctx).then(result => ({ result }), error => ({ error }));
+    // The module may either throw (refusal, leaving the journal at no intent) or
+    // return a blocked result; both preserve the canonical bytes, the raw index
+    // and main at B.
+    if (refused.error) {
+      assert.equal(refused.error.code, 'integration-refusal', `${scenario.label}: refusal raises integration-refusal`);
+      assert.ok(typeof refused.error.reason === 'string' && refused.error.reason.length > 0, `${scenario.label}: refusal names a reason`);
+      assert.equal(readWaveRecord(recordPath).target.promotion, null, `${scenario.label}: refusal writes no journal intent`);
+    } else {
+      assert.equal(refused.result.status, 'blocked', `${scenario.label}: promotion blocks`);
+      const blockedRecord = readWaveRecord(recordPath);
+      assert.equal(blockedRecord.target.promotion.state, 'blocked', `${scenario.label}: the journal marks the promotion blocked`);
+    }
+    assert.equal(snapshotTreeDigest(canonical.worktree), beforeBytes, `${scenario.label}: canonical bytes are unchanged`);
+    assert.equal(cachedIndexStatus(canonical.worktree), beforeIndex, `${scenario.label}: the raw index status is unchanged`);
+    assert.deepEqual(readFileSync(join(canonical.worktree, '.git', 'index')), beforeRawIndex, `${scenario.label}: the raw index is unchanged`);
+    assert.equal(git(canonical.worktree, ['rev-parse', 'refs/heads/main']), canonical.base, `${scenario.label}: main stays at B`);
+    const valuableFile = scenario.label === 'ignored-file'
+      ? join(canonical.worktree, 'feature.txt')
+      : join(canonical.worktree, 'feature.txt', 'valuable.txt');
+    assert.equal(readFileSync(valuableFile, 'utf8'),
+      scenario.label === 'ignored-file' ? 'valuable ignored\n' : 'valuable child\n',
+      `${scenario.label}: valuable ignored bytes survive`);
+  }
+
+  // The unrelated ignored fixture the canonical repo already ships stays intact
+  // in every subcase, proving the refusal is targeted at the collision.
+  const sentinelBaseline = await promotionBaseline(t, 'ignored-sentinel-intact');
+  const { canonical: sentinelCanonical, ctx: sentinelCtx } = sentinelBaseline;
+  mkdirSync(join(sentinelCanonical.worktree, '.git', 'info'), { recursive: true });
+  writeFileSync(join(sentinelCanonical.worktree, '.git', 'info', 'exclude'), 'feature.txt\n');
+  writeFileSync(join(sentinelCanonical.worktree, 'feature.txt'), 'valuable ignored\n');
+  await promoteWave(sentinelCtx).then(() => {}, () => {});
+  assert.equal(readFileSync(join(sentinelCanonical.worktree, '.cache', 'user.txt'), 'utf8'), 'ignored sentinel\n', 'the unrelated ignored fixture is preserved');
+});
+
+test('wave integration: a collision introduced before read-tree blocks and preserves bytes', { timeout: TIMEOUT }, async t => {
+  const baseline = await promotionBaseline(t, 'ignored-before-read-tree');
+  const { canonical, ctx, recordPath } = baseline;
+  // The candidate ships feature.txt; an untracked-but-ignored feature.txt is
+  // planted at the before-read-tree seam, after the ref CAS but before the index
+  // read, so the module must block rather than clobber it while materializing.
+  // Snapshot the planted bytes and raw index inside the hook, immediately after
+  // the collision is planted and before the module reads the tree, so both the
+  // blocked result and the later recovery can be compared against the exact
+  // state the module was handed.
+  const snapshots = {};
+  const collisionCtx = { ...ctx, onBoundary: name => {
+    if (name !== 'before-read-tree') return;
+    mkdirSync(join(canonical.worktree, '.git', 'info'), { recursive: true });
+    writeFileSync(join(canonical.worktree, '.git', 'info', 'exclude'), 'feature.txt\n');
+    writeFileSync(join(canonical.worktree, 'feature.txt'), 'valuable ignored\n');
+    snapshots.bytes = snapshotTreeDigest(canonical.worktree);
+    snapshots.index = readFileSync(join(canonical.worktree, '.git', 'index'));
+    snapshots.indexStatus = cachedIndexStatus(canonical.worktree);
+  } };
+  const result = await promoteWave(collisionCtx);
+  assert.equal(result.status, 'blocked', 'the before-read-tree collision blocks promotion');
+  const blockedRecord = readWaveRecord(recordPath);
+  assert.equal(blockedRecord.target.promotion.state, 'blocked', 'the journal records the block');
+  assert.equal(snapshotTreeDigest(canonical.worktree), snapshots.bytes, 'the blocked result preserves the planted canonical bytes');
+  assert.deepEqual(readFileSync(join(canonical.worktree, '.git', 'index')), snapshots.index, 'the blocked result preserves the planted raw index');
+  assert.equal(cachedIndexStatus(canonical.worktree), snapshots.indexStatus, 'the blocked result preserves the planted raw index status');
+  // Recovery from the blocked journal must stay blocked and preserve both.
+  ctx.revision = readWaveRecord(recordPath).revision;
+  const recovered = await recoverPromotion(ctx);
+  assert.equal(recovered.status, 'blocked', 'recovery remains blocked');
+  assert.equal(readWaveRecord(recordPath).target.promotion.state, 'blocked', 'the journal is still blocked');
+  assert.equal(snapshotTreeDigest(canonical.worktree), snapshots.bytes, 'recovery preserves the canonical bytes');
+  assert.deepEqual(readFileSync(join(canonical.worktree, '.git', 'index')), snapshots.index, 'recovery preserves the raw index');
+  assert.equal(cachedIndexStatus(canonical.worktree), snapshots.indexStatus, 'recovery preserves the raw index status');
+  assert.equal(readFileSync(join(canonical.worktree, 'feature.txt'), 'utf8'), 'valuable ignored\n', 'the valuable ignored bytes survive recovery');
+});
+
+test('wave integration: moved sealed head and retention ref reject promotion', { timeout: TIMEOUT }, async t => {
+  // After a promoted candidate is assembled, moving the sealed head together
+  // with its retention ref to canonical.base changes the input identity.
+  const { canonical, ctx, recordPath, before } = await promotionBaseline(t, 'input-identity-move');
+  const member = ctx.members[0];
+  git(canonical.worktree, ['update-ref', member.retentionRef, canonical.base, member.sealedHead]);
+  const movedCtx = { ...ctx, members: [{ ...member, sealedHead: canonical.base }] };
+  const beforeIndex = cachedIndexStatus(canonical.worktree);
+  const beforeRawIndex = readFileSync(join(canonical.worktree, '.git', 'index'));
+  const beforeBytes = snapshotTreeDigest(canonical.worktree);
+  const refused = await promoteWave(movedCtx).then(result => ({ result }), error => ({ error }));
+  if (refused.error) {
+    assert.equal(refused.error.reason, 'integration-input-changed', 'a member identity moved with its refs refuses as integration-input-changed');
+  } else {
+    assert.equal(refused.result.status, 'blocked', 'a changed member identity blocks promotion');
+    assert.equal(refused.result.reason, 'integration-input-changed', 'the block names integration-input-changed');
+  }
+  assert.deepEqual(readFileSync(recordPath), before.record, 'the raw journal is unchanged');
+  assert.equal(snapshotTreeDigest(canonical.worktree), beforeBytes, 'the canonical bytes are unchanged');
+  assert.equal(cachedIndexStatus(canonical.worktree), beforeIndex, 'the raw index status is unchanged');
+  assert.deepEqual(readFileSync(join(canonical.worktree, '.git', 'index')), beforeRawIndex, 'the raw index is unchanged');
+  assert.equal(git(canonical.worktree, ['rev-parse', 'refs/heads/main']), canonical.base, 'main stays at B');
+});
+
+test('wave integration: recovery refuses moved inputs after a before-cas crash', { timeout: TIMEOUT }, async t => {
+  const { canonical, ctx, candidate, recordPath } = await promotionBaseline(t, 'input-identity-crash');
+  const member = ctx.members[0];
+  // Run promotion in this process but trip a sentinel at before-cas so the
+  // journal is left at intent with the checkout still at B.
+  const sentinel = new Error('before-cas-sentinel');
+  const crashed = await promoteWave({ ...ctx, onBoundary: name => { if (name === 'before-cas') throw sentinel; } })
+    .then(() => null, error => error);
+  assert.equal(crashed, sentinel, 'the before-cas sentinel is caught by the test');
+  const journalBefore = readFileSync(recordPath);
+  const indexBefore = cachedIndexStatus(canonical.worktree);
+  const rawIndexBefore = readFileSync(join(canonical.worktree, '.git', 'index'));
+  const bytesBefore = snapshotTreeDigest(canonical.worktree);
+  assert.notEqual(git(canonical.worktree, ['rev-parse', 'refs/heads/main']), candidate, 'the crash left main unpromoted');
+  // Move the sealed head and its retention ref together to canonical.base.
+  git(canonical.worktree, ['update-ref', member.retentionRef, canonical.base, member.sealedHead]);
+  ctx.members = [{ ...member, sealedHead: canonical.base }];
+  ctx.revision = readWaveRecord(recordPath).revision;
+  const recovered = await recoverPromotion(ctx).then(result => ({ result }), error => ({ error }));
+  if (recovered.error) {
+    assert.equal(recovered.error.reason, 'integration-input-changed', 'recovery refuses the moved member identity');
+  } else {
+    assert.equal(recovered.result.status, 'blocked', 'recovery blocks on changed inputs');
+    assert.ok(['integration-input-changed', 'candidate-unverified', 'journal-corrupt'].includes(recovered.result.reason), 'recovery names a refusal reason');
+  }
+  assert.deepEqual(readFileSync(recordPath), journalBefore, 'the raw journal is unchanged by the refused recovery');
+  assert.equal(snapshotTreeDigest(canonical.worktree), bytesBefore, 'the canonical bytes are unchanged');
+  assert.equal(cachedIndexStatus(canonical.worktree), indexBefore, 'the raw index status is unchanged');
+  assert.deepEqual(readFileSync(join(canonical.worktree, '.git', 'index')), rawIndexBefore, 'the raw index is unchanged');
+  assert.equal(git(canonical.worktree, ['rev-parse', 'refs/heads/main']), canonical.base, 'main stays at B after refusal');
+});
+
+test('wave integration: promoted replay returns the same branch ref', { timeout: TIMEOUT }, async t => {
+  const { canonical, ctx, candidate, recordPath } = await promotionBaseline(t, 'promoted-replay-ref');
+  const promoted = await promoteWave(ctx);
+  assert.equal(promoted.status, 'promoted', 'the fresh promotion succeeds');
+  assert.equal(promoted.ref, 'refs/heads/main', 'a fresh promotion returns refs/heads/main');
+  assert.equal(git(canonical.worktree, ['rev-parse', 'refs/heads/main']), candidate, 'main equals C after promotion');
+  ctx.revision = readWaveRecord(recordPath).revision;
+  const recovered = await recoverPromotion(ctx);
+  assert.equal(recovered.status, 'promoted', 'recoverPromotion returns promoted');
+  assert.equal(recovered.ref, promoted.ref, 'recoverPromotion returns the same ref as the fresh promotion');
+  const replayed = await promoteWave({ ...ctx, revision: readWaveRecord(recordPath).revision });
+  assert.equal(replayed.status, 'promoted', 'promoteWave on the synced journal returns promoted');
+  assert.equal(replayed.ref, promoted.ref, 'promoteWave replay returns the same ref');
+  assert.equal(git(canonical.worktree, ['rev-parse', 'refs/heads/main']), candidate, 'replay leaves main at C');
+});
+
+// ---------------------------------------------------------------------------
+// Case 10: capacity queuing, drain-unknown and orphan-promotion recovery.
+// ---------------------------------------------------------------------------
+
+test('wave integration: a queued candidate check leaves a repair-ready journal', { timeout: TIMEOUT }, async t => {
+  const { ctx, ownership, registryRoot } = await verifiedFixture(t, 'queued-check');
+  ctx.checks = [{ id: 'EV-12', command: 'false', artifact: 'evidence/queued.txt', ownerStep: 1 }];
+
+  // Force the gate to fail so a composition repair is requested, then make the
+  // internal repair's own capacity reservation queue: the confirmed drain at the
+  // end of the gate record installs a zero-task ownership on the same registry.
+  const originalEnd = ctx.endPhaseRecord;
+  const originalOwnership = ctx.ownership;
+  let swapped = false;
+  ctx.endPhaseRecord = async (record, options) => {
+    const ended = await originalEnd(record, options);
+    if (!swapped && options?.drained === true) {
+      swapped = true;
+      ctx.ownership = createOwnership({ registryRoot, budgets: { tasks: 0 } });
+    }
+    return ended;
+  };
+
+  const failed = await runCandidateChecks(ctx);
+  ctx.ownership = originalOwnership;
+
+  assert.equal(failed.status, 'queued', 'the internal repair capacity reservation is queued, not silently dropped');
+  assert.equal(failed.revision, readWaveRecord(ctx.recordPath).revision, 'the queued result reports the current journal revision');
+  assert.equal(failed.repair, null, 'a queued repair has no repair packet');
+  assert.ok(failed.constraint, 'a queued result carries the constraint that queued it');
+
+  // With the blocked drain the repair request was never written, so a fresh
+  // prepare at the queued revision must still be able to reach repair-ready.
+  const prepared = await prepareIntegrationRepair({ ...ctx, revision: failed.revision });
+  assert.equal(prepared.status, 'repair-ready', 'a fresh prepare succeeds repair-ready, not revision-mismatch');
+  assert.equal(prepared.repair.kind, 'integration-repair');
+  assert.equal(prepared.repair.attempt, 'repair-1');
+  assert.equal(ownership, ctx.ownership);
+});
+
+test('wave integration: a thrown gate transport blocks drain-unknown and keeps claims until a confirmed retry', { timeout: TIMEOUT }, async t => {
+  for (const state of ['checking', 'blocked']) {
+    const { ctx, ownership, recordPath } = await verifiedFixture(t, `drain-unknown-${state}`);
+    const gate = { id: 'EV-13', command: 'test -f feature.txt', artifact: 'evidence/drain.txt', ownerStep: 1 };
+    ctx.checks = [gate];
+
+    // Model a mid-gate crash: only this one configured command's transport throws
+    // (launching no gate child), so the phase is genuinely unknown. Every other
+    // status/materialization command delegates to the real seam.
+    const originalRun = ctx.runCommand;
+    let thrown = false;
+    ctx.runCommand = async (record, command, timeoutSeconds, signal) => {
+      if (!thrown && command === gate.command) { thrown = true; throw new Error('gate transport crashed'); }
+      return originalRun(record, command, timeoutSeconds, signal);
+    };
+    // The first pass runs the throw from the current verified status: the
+    // nonreplay gate leaves the phase unknown, so the run blocks and retains
+    // both the phase and capacity claims.
+    const blocked = await runCandidateChecks(ctx);
+    assert.equal(blocked.status, 'blocked', `${state}: an unknown drain blocks`);
+    assert.equal(blocked.blocked_reason, 'drain-unknown', `${state}: the block reason is drain-unknown`);
+    assert.equal(blocked.claims, 'kept', `${state}: the phase and capacity claims are retained`);
+
+    if (state === 'checking') {
+      // Persist a mid-gate crash fingerprint: status checking at the exact
+      // blocked revision, with no live processes and no completed run record.
+      updateWaveRecord(recordPath, { expectedRevision: blocked.revision }, draft => {
+        draft.target.integration = { ...draft.target.integration, status: 'checking' };
+      });
+      ctx.revision = readWaveRecord(recordPath).revision;
+    }
+
+    // Without a confirmed drain the retained claims make a retry refuse as
+    // drain-unknown rather than double-reserve; the journal and claims are
+    // unchanged by that refusal.
+    const before = readFileSync(recordPath);
+    const claimsBefore = await ownership.inspectClaims({ packageId: ctx.packageId });
+    await assert.rejects(
+      () => runCandidateChecks({ ...ctx, revision: readWaveRecord(recordPath).revision }),
+      error => error?.reason === 'drain-unknown',
+      `${state}: a retry without a confirmed drain is refused as drain-unknown while claims are held`,
+    );
+    assert.deepEqual(readFileSync(recordPath), before, `${state}: the refused retry does not mutate the journal`);
+    assert.deepEqual(await ownership.inspectClaims({ packageId: ctx.packageId }), claimsBefore, `${state}: the refused retry leaves the retained claims unchanged`);
+
+    // Restore the real transport and confirm the drain: because the thrown
+    // command launched no gate child, the drain is real. The retry must pass on a
+    // fresh pass receipt at canonical B with no claims left except the package.
+    ctx.runCommand = originalRun;
+    const retried = await runCandidateChecks({ ...ctx, revision: readWaveRecord(recordPath).revision }, { drain: 'confirmed' });
+    assert.equal(retried.status, 'passed', `${state}: the confirmed retry passes`);
+    assert.equal(retried.replayed, false, `${state}: the pass is a fresh receipt, not a replay`);
+    const record = readWaveRecord(recordPath);
+    assert.equal(record.target.integration.status, 'verified', `${state}: the journal reaches verified`);
+    assert.equal(record.target.candidate_commit, record.target.integration.checks[0].observed_commit, `${state}: the receipt is bound to the candidate`);
+    assert.equal(git(ctx.target.worktree, ['rev-parse', 'refs/heads/main']), ctx.baseCommit, `${state}: canonical main stays at B`);
+    const { claims } = await ownership.inspectClaims({ packageId: ctx.packageId });
+    const remaining = (claims ?? []).filter(claim => claim.kind !== 'package');
+    assert.deepEqual(remaining, [], `${state}: only the package claim remains`);
+  }
+});
+
+test('wave integration: a spent automatic repair blocks until an explicit reviewed repair is accepted', { timeout: TIMEOUT }, async t => {
+  const { ctx, candidate, recordPath, fixture } = await verifiedFixture(t, 'explicit-repair');
+  const repairRoot = fixture.canonical.worktree;
+  const repairEnv = editorEnv();
+  const gate = { id: 'EV-14', command: 'false', artifact: 'evidence/explicit.txt', ownerStep: 1 };
+  ctx.checks = [gate];
+
+  // First automatic repair: the failing gate requests one repair, which we review
+  // and accept as R1 (a child of C in the candidate worktree).
+  const first = await runCandidateChecks(ctx);
+  ctx.revision = first.revision;
+  assert.equal(first.status, 'failed');
+  assert.equal(first.repair.attempt, 'repair-1');
+  const packet = await prepareIntegrationRepair(ctx);
+  ctx.revision = packet.revision;
+  assert.equal(packet.status, 'repair-ready');
+  const r1Root = packet.repair.workspace.worktree;
+  writeFileSync(join(r1Root, 'repair-1.txt'), 'r1\n');
+  git(r1Root, ['add', 'repair-1.txt']);
+  const r1Tree = git(r1Root, ['write-tree']);
+  const r1 = execFileSync('git', ['-C', r1Root, 'commit-tree', r1Tree, '-p', candidate, '-m', 'repair-1'], { ...GIT, env: repairEnv }).trim();
+  git(r1Root, ['update-ref', 'HEAD', r1, candidate]);
+  const accepted1 = await acceptIntegrationRepair(ctx, { head: r1, review: { verdict: 'pass', head: r1, artifact: 'evidence/repair-1.txt' } });
+  ctx.revision = accepted1.revision;
+  assert.equal(accepted1.status, 'accepted');
+
+  // Re-assemble at R1 and fail again: the automatic limit is spent, so a fresh
+  // automatic prepare must block repair-unresolved before any explicit call.
+  const second = await assembleCandidate(ctx);
+  ctx.revision = second.revision;
+  assert.equal(second.candidate.commit, r1);
+  const auto = await runCandidateChecks(ctx);
+  ctx.revision = auto.revision;
+  assert.equal(auto.status, 'blocked', 'the automatic path blocks once the repair limit is spent');
+  assert.equal(auto.blocked_reason, 'repair-unresolved');
+
+  // An explicit reviewed repair is still allowed: prepare must reach repair-ready
+  // with a durable repair_request whose attempt is repair-2.
+  const explicit = await prepareIntegrationRepair(ctx, { explicit: true });
+  ctx.revision = explicit.revision;
+  assert.equal(explicit.status, 'repair-ready', 'an explicit prepare overrides the spent automatic limit');
+  assert.equal(explicit.repair.attempt, 'repair-2');
+  assert.ok(readWaveRecord(recordPath).target.integration.repair_request, 'the repair_request is durable in the journal');
+  assert.equal(readWaveRecord(recordPath).target.integration.repair_request.attempt, 'repair-2');
+
+  // R2 is a child of R1; accepting it explicitly records a second repair with
+  // head R2 and the revised status per the current API.
+  const r2Root = explicit.repair.workspace.worktree;
+  writeFileSync(join(r2Root, 'repair-2.txt'), 'r2\n');
+  git(r2Root, ['add', 'repair-2.txt']);
+  const r2Tree = git(r2Root, ['write-tree']);
+  const r2 = execFileSync('git', ['-C', r2Root, 'commit-tree', r2Tree, '-p', r1, '-m', 'repair-2'], { ...GIT, env: repairEnv }).trim();
+  git(r2Root, ['update-ref', 'HEAD', r2, r1]);
+  const accepted2 = await acceptIntegrationRepair(ctx, { head: r2, explicit: true, review: { verdict: 'pass', head: r2, artifact: 'evidence/repair-2.txt' } });
+  ctx.revision = accepted2.revision;
+  assert.equal(accepted2.status, 'accepted', 'the explicit repair is accepted');
+  const record = readWaveRecord(recordPath);
+  assert.equal(record.target.integration.repairs.length, 2, 'both reviewed repairs are recorded');
+  assert.equal(record.target.integration.repairs[1].head, r2, 'the second repair head is R2');
+  assert.equal(record.target.integration.repairs[1].explicit, true, 'the second repair is flagged explicit');
+  assert.equal(record.target.candidate_commit, r2, 'the candidate advances to R2');
+  assert.equal(git(repairRoot, ['rev-parse', 'refs/heads/main']), ctx.baseCommit, 'accepting the repair never touches canonical main');
+});
+
+test('wave integration: promotion recovery adopts an orphaned pre-intent checkout claim', { timeout: TIMEOUT }, async t => {
+  const { canonical, ctx, ownership, candidate, recordPath } = await verifiedFixture(t, 'orphan-promotion');
+  assert.equal(readWaveRecord(recordPath).target.promotion ?? null, null, 'no promotion intent exists before recovery');
+
+  // Model a crash immediately after the real reservation and before the intent:
+  // reserve the canonical checkout directly through ownership under this wave's
+  // promotion attempt, with the same epoch and exact observed paths.
+  const checkout = realpathSync(canonical.worktree);
+  const gitCommonDir = realpathSync(git(canonical.worktree, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
+  const worktreeGitDir = realpathSync(git(canonical.worktree, ['rev-parse', '--path-format=absolute', '--absolute-git-dir']));
+  await ownership.reserveCheckout({
+    packageId: ctx.packageId,
+    attempt: `${ctx.waveId}:promotion`,
+    checkout: { gitCommonDir, worktreeGitDir },
+    coordinator: { ...ctx.coordinator, session: 'old-promotion-coordinator' },
+  });
+
+  assert.equal(readWaveRecord(recordPath).target.promotion ?? null, null, 'the orphan reservation alone writes no promotion intent');
+
+  // Recovery under the current coordinator session adopts the retained
+  // pre-intent claim and promotes, returning the branch ref, the candidate, a
+  // synced journal and only the package claim remaining (the orphan checkout
+  // claim is released).
+  const recovered = await recoverPromotion({ ...ctx, revision: readWaveRecord(recordPath).revision });
+  assert.equal(recovered.status, 'promoted', 'recovery adopts the orphan claim and promotes');
+  assert.equal(recovered.ref, 'refs/heads/main');
+  assert.equal(git(canonical.worktree, ['rev-parse', 'refs/heads/main']), candidate, 'recovery promotes main to C');
+  assert.ok(recovered.promotion, 'the recovered promotion is reported');
+  assert.equal(readWaveRecord(recordPath).target.promotion.state, 'synced', 'the recovered journal is synced');
+  const { claims } = await ownership.inspectClaims({ packageId: ctx.packageId });
+  const remaining = (claims ?? []).filter(claim => claim.kind !== 'package');
+  assert.deepEqual(remaining, [], 'the adopted checkout claim is released, leaving only the package');
+
+  // A second recovery is a synced replay returning the same ref.
+  const replay = await recoverPromotion({ ...ctx, revision: readWaveRecord(recordPath).revision, coordinator: { ...ctx.coordinator, session: 'old-promotion-coordinator' } });
+  assert.equal(replay.status, 'promoted', 'a synced journal replays as promoted');
+  assert.equal(replay.ref, recovered.ref, 'the replay returns the same branch ref');
+  assert.equal(git(canonical.worktree, ['rev-parse', 'refs/heads/main']), candidate, 'the replay leaves main at C');
 });

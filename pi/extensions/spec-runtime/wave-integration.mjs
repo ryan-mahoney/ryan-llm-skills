@@ -30,6 +30,24 @@ function runGit(args, options = {}) {
 }
 function gitMaybe(repo, args) { const result = runGit(['-C', repo, ...args]); return result.status !== 0 ? null : String(result.stdout).trim(); }
 const isTreeObject = (repo, sha) => typeof sha === 'string' && SHA_PATTERN.test(sha) && gitMaybe(repo, ['cat-file', '-t', sha]) === 'tree';
+// A promotion must never ride on an ignored path that differs between the
+// candidate tree and the canonical checkout: materialization cannot account for
+// ignored bytes, so an equal path or a segment-prefix ancestor in either
+// direction blocks. Non-zero git status is an observation we could not make.
+function promotionCollision(repo, candidate) {
+  const ignored = runGit(['-C', repo, 'ls-files', '--others', '--ignored', '--exclude-standard', '-z']);
+  if (ignored.status !== 0) return { unknown: true };
+  const candidateFiles = runGit(['-C', repo, 'ls-tree', '-r', '--name-only', '-z', candidate]);
+  if (candidateFiles.status !== 0) return { unknown: true };
+  const ignoredPaths = String(ignored.stdout ?? '').split('\0').filter(Boolean);
+  const candidatePaths = String(candidateFiles.stdout ?? '').split('\0').filter(Boolean);
+  for (const ignoredPath of ignoredPaths) {
+    for (const candidatePath of candidatePaths) {
+      if (candidatePath === ignoredPath || candidatePath.startsWith(`${ignoredPath}/`) || ignoredPath.startsWith(`${candidatePath}/`)) return { collision: true, ignored: ignoredPath };
+    }
+  }
+  return null;
+}
 export function readWaveRecord(path) {
   requireString(path, 'recordPath');
   if (!existsSync(path)) refuse('journal-missing', `no wave record at ${path}`);
@@ -288,6 +306,17 @@ async function leaveCandidatePhase(ctx, phase, confirmed) {
   phase.capacityClaim = null;
   return { drained: 'confirmed', released: true };
 }
+// Release a claim the journal still records after a stranded phase. A claim the
+// registry no longer holds was already released (idempotent); a live claim at a
+// different epoch is not ours to release and refuses.
+async function releaseRecordedClaim(ctx, recorded) {
+  const { claims } = await ctx.ownership.inspectClaims({ packageId: ctx.packageId });
+  const held = claims.find(claim => claim.token === recorded.token);
+  if (!held) return { released: false, absent: true };
+  if (held.epoch !== recorded.epoch) refuse('phase-claim-mismatch', `phase claim ${recorded.token} is at epoch ${held.epoch}, journal records ${recorded.epoch}`);
+  await ctx.ownership.releaseClaim({ token: recorded.token, epoch: recorded.epoch, drain: 'confirmed' });
+  return { released: true, absent: false };
+}
 async function blockCandidate(ctx, phase, reason) {
   if (phase.record) await leaveCandidatePhase(ctx, phase, false);
   patchJournal(ctx, phase, current => { current.status = 'blocked'; current.blocked_reason = reason; });
@@ -413,7 +442,7 @@ function repairPacket({ ctx, integration, trigger, step, attempt, parents, faile
     phase_claim: phaseClaim, review_scope: { parents, head: null },
   };
 }
-export async function prepareIntegrationRepair(ctx) {
+export async function prepareIntegrationRepair(ctx, { explicit = false } = {}) {
   const record = validateContext(ctx);
   await inspectPackageClaim(ctx);
   const integration = record.target?.integration;
@@ -425,16 +454,34 @@ export async function prepareIntegrationRepair(ctx) {
     return { status: 'repair-ready', revision: record.revision, repair: replay, replayed: true };
   }
   let trigger; let parents; let step; let failedGates = [];
-  if (integration.status === 'conflict') { trigger = 'conflict'; parents = conflictParents(integration); step = Number(integration.conflict?.step); }
+  if (explicit && integration.status === 'blocked' && integration.blocked_reason === 'repair-unresolved') {
+    // An operator re-opens a spent automatic budget. The conflict trigger is
+    // inferred from the retained conflict state, else it is a composition retry.
+    if (integration.conflict) { trigger = 'conflict'; parents = conflictParents(integration); step = Number(integration.conflict?.step); }
+    else {
+      trigger = 'composition'; step = null; parents = [record.target?.candidate_commit].filter(Boolean);
+      if (parents.length !== 1) refuse('no-repair-pending', 'composition repair requires a candidate commit');
+      failedGates = (integration.checks ?? []).filter(entry => entry.outcome === 'fail').map(entry => entry.gate);
+    }
+  } else if (integration.status === 'conflict') { trigger = 'conflict'; parents = conflictParents(integration); step = Number(integration.conflict?.step); }
   else if (integration.status === 'checks-failed') {
     trigger = 'composition'; step = null; parents = [record.target?.candidate_commit].filter(Boolean);
     if (parents.length !== 1) refuse('no-repair-pending', 'composition repair requires a candidate commit');
     failedGates = (integration.checks ?? []).filter(entry => entry.outcome === 'fail').map(entry => entry.gate);
   } else refuse('no-repair-pending', `integration status ${integration.status} has no repair pending`);
   const spent = autoRepairCount(integration, trigger, step);
-  if (spent >= REPAIR_LIMIT) {
+  if (spent >= REPAIR_LIMIT && !explicit) {
     const next = updateWaveRecord(ctx.recordPath, { expectedRevision: ctx.revision }, draft => { draft.target.integration = { ...draft.target.integration, status: 'blocked', blocked_reason: 'repair-unresolved' }; });
     return { status: 'blocked', revision: next.revision, reason: 'repair-unresolved', blocked_reason: 'repair-unresolved' };
+  }
+  if (spent >= REPAIR_LIMIT) {
+    // Explicit re-open of a spent budget: journal the durable packet over the
+    // operator's already-prepared workspace without materializing or resetting it.
+    const explicitPacket = repairPacket({ ctx, integration: readWaveRecord(ctx.recordPath).target.integration, trigger, step, attempt: `repair-${spent + 1}`, parents, failedGates, phaseClaim: null });
+    const next = updateWaveRecord(ctx.recordPath, { expectedRevision: ctx.revision }, draft => {
+      draft.target.integration = { ...draft.target.integration, status: 'repairing', checks: [], blocked_reason: null, repair_request: explicitPacket };
+    });
+    return { status: 'repair-ready', revision: next.revision, repair: explicitPacket, replayed: false };
   }
   const attempt = `repair-${spent + 1}`;
   const phase = await enterCandidatePhase(ctx);
@@ -474,8 +521,16 @@ export async function acceptIntegrationRepair(ctx, options = {}) {
   const integration = record.target?.integration;
   if (!integration) refuse('no-repair-pending', 'no integration state exists');
   const request = existingRepairPacket(integration);
-  if (!request) refuse('no-repair-pending', 'no repair request is pending');
   const explicit = options.explicit === true;
+  if (!request) {
+    if (!explicit) refuse('no-repair-pending', 'no repair request is pending');
+    // An explicit acceptance may re-open a spent automatic budget first; the
+    // returned revision then drives a normal acceptance on the new packet.
+    const prepared = await prepareIntegrationRepair({ ...ctx, revision: record.revision }, { explicit: true });
+    if (prepared.status === 'queued') return prepared;
+    if (prepared.status === 'blocked') return prepared;
+    return acceptIntegrationRepair({ ...ctx, revision: prepared.revision }, options);
+  }
   if (typeof options.head !== 'string' || !SHA_PATTERN.test(options.head)) refuse('repair-invalid', 'repair head must be a full commit id');
   const head = options.head;
   const review = options.review;
@@ -524,7 +579,7 @@ export async function acceptIntegrationRepair(ctx, options = {}) {
   });
   return { status: 'accepted', revision: next.revision, repair: reviewEntry };
 }
-export async function runCandidateChecks(ctx) {
+export async function runCandidateChecks(ctx, options = {}) {
   const record0 = validateContext(ctx);
   await inspectPackageClaim(ctx);
   const mode = ctx.workspace?.mode;
@@ -539,6 +594,9 @@ export async function runCandidateChecks(ctx) {
   if (!integration) refuse('no-integration', 'no integration state to check');
   const candidate = record0.target?.candidate_commit;
   if (!candidate) refuse('no-candidate', 'no candidate commit has been assembled');
+  // Every check run is bound to the current inputs: a mismatch means another
+  // step or member changed the wave under this caller and must re-enter first.
+  if (!sameInputs(integration, ctx)) refuse('integration-input-changed', 'integration inputs changed since the candidate was assembled');
   if (integration.status === 'verified' && (integration.checks ?? []).length > 0 && sameInputs(integration, ctx)) {
     const allPass = (integration.checks ?? []).every(entry => entry.outcome === 'pass' && entry.observed_commit === candidate);
     const receipts = new Set((integration.checks ?? []).map(entry => entry.receipt_id).filter(Boolean));
@@ -547,8 +605,34 @@ export async function runCandidateChecks(ctx) {
       return { status: 'passed', revision: record0.revision, replayed: true, checks: integration.checks, repair: null };
     }
   }
-  if (integration.status !== 'assembled' && integration.status !== 'verified') {
-    refuse('candidate-not-assembled', `integration status ${integration.status} is not an assembled candidate`);
+  if (integration.status !== 'assembled' && integration.status !== 'verified' && integration.status !== 'checking') {
+    const blockedCandidate = integration.status === 'blocked' && integration.blocked_reason !== 'repair-unresolved'
+      && !existingRepairPacket(integration) && !integration.conflict
+      && (integration.merged?.length ?? 0) === ctx.members.length;
+    if (!blockedCandidate) refuse('candidate-not-assembled', `integration status ${integration.status} is not an assembled candidate`);
+  }
+  // A stranded `checking` phase or a candidate-phase block may only be resumed
+  // once the operator confirms the prior drain, then the retained phase claims
+  // are released from the recorded journal entries and the candidate is reset.
+  const stranded = integration.status === 'checking' || integration.status === 'blocked';
+  if (stranded) {
+    if (options.drain !== 'confirmed') refuse('drain-unknown', 'a stranded candidate phase needs a confirmed drain');
+    verifyMembers(ctx, ctx.target.worktree);
+    const realTree = gitMaybe(ctx.target.worktree, ['rev-parse', '--verify', '--quiet', `${candidate}^{tree}`]);
+    const recordedTree = record0.target?.candidate_tree ?? null;
+    if (!realTree || !recordedTree || recordedTree !== realTree) refuse('candidate-tree-changed', 'recorded candidate tree does not match the canonical candidate');
+    const phase = integration.phase ?? {};
+    const capacity = phase.capacity_claim ?? null;
+    if (capacity) await releaseRecordedClaim(ctx, capacity);
+    if (phase.claim) await releaseRecordedClaim(ctx, phase.claim);
+    const rebound = updateWaveRecord(ctx.recordPath, { expectedRevision: record0.revision }, draft => {
+      const current = draft.target.integration;
+      draft.target.integration = { ...current, status: 'assembled', checks: [], blocked_reason: null };
+      draft.target.integration.phase = { ...(current.phase ?? {}), capacity_claim: null, claim: null };
+    });
+    ctx = { ...ctx, revision: rebound.revision };
+    record0.target = rebound.target;
+    record0.revision = rebound.revision;
   }
   const phase = await enterCandidatePhase(ctx);
   const reserved = await reserveCapacity(ctx, phase);
@@ -599,7 +683,7 @@ export async function runCandidateChecks(ctx) {
   const repair = await prepareIntegrationRepair({ ...ctx, revision: latest.revision });
   if (repair.status === 'repair-ready') return { status: 'failed', revision: repair.revision, checks: entries, failed_gate: failed.gate, repair: repair.repair, replayed: repair.replayed ?? false };
   if (repair.status === 'blocked') return { status: 'blocked', revision: repair.revision, reason: repair.reason, blocked_reason: repair.blocked_reason, checks: entries };
-  return { status: 'failed', revision: next.revision, checks: entries, failed_gate: failed.gate, repair: null };
+  return { status: 'queued', revision: repair.revision, checks: entries, failed_gate: failed.gate, repair: null, constraint: repair.constraint };
 }
 const PROMOTION_STATES = ['intent', 'ref-updated', 'synced', 'blocked'];
 // The only promoted publication target is the canonical checkout named by
@@ -652,6 +736,7 @@ function promotionValidation({ promotion, fresh, ctx }) {
   requireSha(promotion.expected_old ?? '', 'promotion.expected_old');
   requireSha(promotion.candidate ?? '', 'promotion.candidate');
   if (!integration || integration.status !== 'verified') refuse('candidate-unverified', `integration status ${integration?.status ?? 'none'} is not verified`);
+  if (!sameInputs(integration, ctx)) refuse('integration-input-changed', 'promotion inputs changed since verification');
   if (promotion.expected_old !== ctx.baseCommit) refuse('journal-corrupt', 'promotion expected_old does not match ctx.baseCommit');
   if (candidate !== promotion.candidate) refuse('journal-corrupt', 'promotion candidate does not match the record candidate');
   if (promotion.candidate_tree !== (fresh.target?.candidate_tree ?? null)) refuse('journal-corrupt', 'promotion candidate_tree does not match the record candidate tree');
@@ -676,6 +761,7 @@ function blockPromotion(ctx, reason, observed) {
 function requireVerifiedCandidate({ fresh, ctx }) {
   const integration = fresh.target?.integration ?? null;
   if (!integration || integration.status !== 'verified') refuse('candidate-unverified', `integration status ${integration?.status ?? 'none'} is not verified`);
+  if (!sameInputs(integration, ctx)) refuse('integration-input-changed', 'promotion inputs changed since verification');
   verifyMembers(ctx, ctx.target.worktree);
   const candidate = fresh.target?.candidate_commit;
   if (!candidate) refuse('candidate-unverified', 'no candidate commit is recorded');
@@ -751,17 +837,24 @@ function promotionObserved(observed) {
 async function resumePromotion(ctx, { freshClaim }) {
   let fresh = readWaveRecord(ctx.recordPath);
   let promotion = readPromotion(fresh);
+  promotionValidation({ promotion, fresh, ctx });
+  const collisionReason = result => (result?.unknown ? 'observation-unknown' : 'ignored-path-collision');
+  const revalidate = () => { const current = readWaveRecord(ctx.recordPath); promotionValidation({ promotion: readPromotion(current) ?? promotion, fresh: current, ctx }); };
   if (promotion.state === 'synced') {
     await releaseConfirmed(ctx, promotion);
-    return { status: 'promoted', revision: fresh.revision, replayed: true, promotion };
+    return { status: 'promoted', revision: fresh.revision, replayed: true, ref: promotion.branch, promotion };
   }
   const checkout = promotion.checkout;
+  const guardCollision = () => { const result = promotionCollision(checkout, promotion.candidate); return result ? blockPromotion(ctx, collisionReason(result), null) : null; };
+  { const blocked = guardCollision(); if (blocked) return blocked; }
   const observed = observePromotion(checkout, promotion.branch, promotion.expected_old, promotion.candidate);
   if (observed.unknown) return blockPromotion(ctx, 'observation-unknown', null);
   if (observed.headBranch !== promotion.branch) return blockPromotion(ctx, 'checkout-branch-changed', observed);
   if (observed.ref === promotion.expected_old) {
     if (observed.cachedOld && observed.trackedClean && !observed.untracked) {
       await boundary(ctx, 'before-cas');
+      revalidate();
+      { const blocked = guardCollision(); if (blocked) return blocked; }
       const cas = promoteRef(ctx, promotion);
       if (cas !== 0) {
         if (typeof cas !== 'number') return blockPromotion(ctx, 'observation-unknown', null);
@@ -775,6 +868,8 @@ async function resumePromotion(ctx, { freshClaim }) {
       fresh = journalPromotion(ctx, () => ({ ...promotion, state: 'ref-updated' }));
       promotion = fresh.target.promotion;
       await boundary(ctx, 'before-read-tree');
+      revalidate();
+      { const blocked = guardCollision(); if (blocked) return blocked; }
       if (!readTree(ctx, promotion)) return blockPromotion(ctx, 'observation-unknown', null);
       await boundary(ctx, 'after-read-tree');
       const done = observePromotion(checkout, promotion.branch, promotion.expected_old, promotion.candidate);
@@ -797,6 +892,8 @@ async function resumePromotion(ctx, { freshClaim }) {
     if (!observed.cachedOld) return blockPromotion(ctx, 'index-unknown', observed);
     if (!observed.trackedClean || observed.untracked) return blockPromotion(ctx, 'checkout-dirty-after-ref', observed);
     await boundary(ctx, 'before-read-tree');
+    revalidate();
+    { const blocked = guardCollision(); if (blocked) return blocked; }
     if (!readTree(ctx, promotion)) return blockPromotion(ctx, 'observation-unknown', null);
     await boundary(ctx, 'after-read-tree');
     const done = observePromotion(checkout, promotion.branch, promotion.expected_old, promotion.candidate);
@@ -818,7 +915,25 @@ export async function recoverPromotion(ctx) {
   let promotion;
   try { promotion = readPromotion(fresh); }
   catch (error) { if (error?.reason === 'journal-corrupt') return { status: 'blocked', revision: fresh.revision, reason: 'journal-corrupt', blocked_reason: 'journal-corrupt' }; throw error; }
-  if (!promotion) return { status: 'not-started', revision: fresh.revision, reason: 'not-started' };
+  if (!promotion) {
+    await inspectPackageClaim(ctx);
+    const attempt = `${ctx.waveId}:promotion`;
+    const { claims } = await ctx.ownership.inspectClaims({ packageId: ctx.packageId });
+    const orphan = (claims ?? []).find(claim => claim.kind === 'checkout' && claim.packageId === ctx.packageId && claim.attempt === attempt);
+    if (!orphan) return { status: 'not-started', revision: fresh.revision, reason: 'not-started' };
+    requireVerifiedCandidate({ fresh, ctx });
+    const { gitCommonDir, worktreeGitDir } = promotionCheckout(ctx);
+    if (orphan.epoch !== ctx.packageClaim.epoch) refuse('package-claim-mismatch', 'the retained checkout claim is not at the package claim epoch');
+    const bound = await ctx.ownership.reserveCheckout({ packageId: ctx.packageId, attempt, checkout: { gitCommonDir, worktreeGitDir }, coordinator: ctx.coordinator });
+    if (bound.status === 'reserved') {
+      await releasePromotionCheckout(ctx, bound.claim);
+      return { status: 'not-started', revision: fresh.revision, reason: 'not-started' };
+    }
+    if (bound.claim?.token !== orphan.token || bound.claim?.epoch !== orphan.epoch) refuse('checkout-held', 'the canonical checkout is held by another owner');
+    const recovered = await ctx.ownership.recoverClaims({ token: orphan.token, epoch: orphan.epoch, coordinator: ctx.coordinator });
+    if (recovered?.status !== 'recovered') refuse('checkout-held', 'the retained checkout claim could not be recovered');
+    return promoteWave({ ...ctx, revision: fresh.revision });
+  }
   try { validatePromotionJournal({ promotion, fresh, ctx }); }
   catch (error) {
     if (error?.reason === 'journal-corrupt' || error?.reason === 'sha-invalid') return { status: 'blocked', revision: fresh.revision, reason: 'journal-corrupt', blocked_reason: 'journal-corrupt' };
@@ -827,7 +942,7 @@ export async function recoverPromotion(ctx) {
   if (promotion.state === 'synced') {
     await inspectPackageClaim(ctx);
     await releaseConfirmed(ctx, promotion);
-    return { status: 'promoted', revision: fresh.revision, replayed: true, promotion };
+    return { status: 'promoted', revision: fresh.revision, replayed: true, ref: promotion.branch, promotion };
   }
   await inspectPackageClaim(ctx);
   const reserved = await reservePromotionCheckout(ctx, { acquire: false });
@@ -846,6 +961,8 @@ export async function promoteWave(ctx) {
   const checkout = realpathSync(ctx.target.worktree);
   const baseTree = gitMaybe(checkout, ['rev-parse', `${ctx.baseCommit}^{tree}`]);
   if (!baseTree) refuse('observation-unknown', 'cannot read the base tree for the promotion intent');
+  const collision = promotionCollision(checkout, candidate);
+  if (collision) refuse(collision.unknown ? 'observation-unknown' : 'ignored-path-collision', 'candidate collides with an ignored path in the canonical checkout');
   const claimed = await reservePromotionCheckout(ctx, { acquire: true });
   const expectedBranch = ctx.target.branch ? `refs/heads/${ctx.target.branch}` : '';
   const beforeIntent = observePromotion(checkout, expectedBranch, ctx.baseCommit, candidate);
