@@ -47,9 +47,9 @@ own source bindings and plan once. That correction must preserve the owner's dec
 
 export const catalogQueryRole = `Source discovery is unavailable in this catalog query.
 The catalog is deterministic source metadata, not an implementation proposal. Bind the
-settled owner brief using only exact start_anchor/end_anchor values from the catalog
-for the corresponding path. Choose start and end independently from that path's
-supplied start_anchor and end_anchor endpoints. For a known existing catalog path,
+settled owner brief using only exact start_anchor/end_anchor values supplied by the
+catalog or query lookup for the corresponding path. Any supplied endpoint for that
+same path may be used as either the start or end of a range. For a known existing catalog path,
 null may select BOF or EOF, even when no individual row spells out that whole range.
 Preflight still checks ordering, uniqueness and delivered size. Offsets are descriptive,
 not edit anchors.
@@ -83,6 +83,8 @@ The same catalog is available for at most one pre-dispatch correction.
 export const catalogLookupRole = `This is catalog-lookup mode. Before returning your
 final plan, you may instead return only {"source_requests":[...]} for ONE bounded
 batch of at most eight frozen-source reads, totaling at most 64000 source characters.
+Return this object as your final answer and stop; do not anticipate the lookup result
+or add a second answer. The runtime supplies source results in a later call.
 Each request has an exact checkout-relative path from file_tree and exactly one selector:
 {"path":"file.mjs","symbol":"prepare"} selects a uniquely named function, method or
 variable or named class (Class.method and object.method names are supported);
@@ -100,8 +102,9 @@ normal preflight still validates ordering, source sizes and all writer assignmen
 Literal ambiguity, missing symbols or excessive context fails explicitly; do not guess
 which occurrence or invent a binding. Keep requests narrow enough for one batch.
 The next reply after source lookup MUST be a complete final plan or blocked result.
-After the final plan, at most one correction of your own plan is available before
-writers run; source requests are then unavailable. You have no repository tools,
+One shared correction is available for invalid JSON or an invalid plan before
+writers run; a format correction consumes that same allowance. Source requests
+are unavailable after the final plan. You have no repository tools,
 original step specification or behavioral feedback. Preserve the owner's decisions.
 Complete serialized system+input is capped at 160 KiB on every call in this mode.
 `;

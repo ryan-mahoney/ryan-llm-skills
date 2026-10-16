@@ -14,6 +14,14 @@ export function sdkRoot() {
 }
 export async function sdkImport(path) { return import(pathToFileURL(join(sdkRoot(), path)).href); }
 
+export class ModelJsonParseError extends SyntaxError {
+  constructor(error, text) {
+    super(error.message, { cause: error });
+    this.name = 'ModelJsonParseError';
+    this.responseExcerpt = text.slice(0, 12000);
+  }
+}
+
 export class Client {
   static async create(options) {
     const runtime = await modelRuntime();
@@ -63,7 +71,12 @@ export class Client {
     try {
       response = await this.runtime.completeSimple(this.model, context, options); finish(response);
       if (response.stopReason !== 'stop') throw new Error(`Model stopped: ${response.stopReason}: ${response.errorMessage ?? ''}`);
-      return parseJson(response.content.filter(c => c.type === 'text').map(c => c.text).join('\n'));
+      const text = response.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
+      try { return parseJson(text); }
+      catch (error) {
+        if (error instanceof SyntaxError) throw new ModelJsonParseError(error, text);
+        throw error;
+      }
     } catch (error) { finish(response, error); throw error; }
   }
   stream(stage) {

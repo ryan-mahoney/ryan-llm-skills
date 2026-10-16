@@ -36,6 +36,9 @@ test('catalog query reuses exact brief bytes and dispatches only query then writ
             if(input.implementation_brief.includes('cross-entry-context')) {
               start=file.symbols.find(symbol=>symbol.name==='before').start_anchor;
               end=file.symbols.find(symbol=>symbol.name==='between').end_anchor;
+            } else if(input.implementation_brief.includes('start-anchor-as-end-context')) {
+              start=file.symbols.find(symbol=>symbol.name==='before').start_anchor;
+              end=file.symbols.find(symbol=>symbol.name==='answer').start_anchor;
             } else if(input.implementation_brief.includes('cross-file-binding')&&!input.planning_validation_errors) {
               start=input.catalog.files.find(file=>file.path==='other.mjs').symbols[0].start_anchor;
               end=file.symbols.find(symbol=>symbol.name==='answer').end_anchor;
@@ -102,6 +105,11 @@ test('catalog query reuses exact brief bytes and dispatches only query then writ
     const crossEntry = await runCell({ ...options, preparedBrief: brief + 'cross-entry-context', briefSource: null, directory: crossEntryDirectory });
     assert.deepEqual(readFileSync(join(crossEntryDirectory, 'requests.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line).stage), ['planning', 'editor']);
     assert.equal(crossEntry.executions[0]?.ok, true, JSON.stringify(crossEntry));
+
+    const startAsEndDirectory = join(root, 'start-as-end-context');
+    const startAsEnd = await runCell({ ...options, preparedBrief: brief + 'start-anchor-as-end-context', briefSource: null, directory: startAsEndDirectory });
+    assert.deepEqual(readFileSync(join(startAsEndDirectory, 'requests.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line).stage), ['planning', 'editor']);
+    assert.equal(startAsEnd.executions[0]?.ok, true, JSON.stringify(startAsEnd));
 
     const eofDirectory = join(root, 'eof-context');
     const eofContext = await runCell({ ...options, preparedBrief: brief + 'eof-append-context', briefSource: null, directory: eofDirectory });

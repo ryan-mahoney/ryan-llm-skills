@@ -44,7 +44,10 @@ test('catalog lookup reads frozen source once before the final plan and permits 
             throw Error('Writer did not receive bound helper source');
           value={edits:[{kind:'replace',path:'answer.mjs',search:"'wrong'",text:"'correct'"}]};
         }
-        return {stopReason:'stop',usage:{cost:{total:0.000001}},content:[{type:'text',text:JSON.stringify(value)}]};
+        const malformed=model.id==='planner' && input.implementation_brief.includes('malformed') &&
+          (input.implementation_brief.includes('malformed-twice') || (!input.source_lookup && !input.json_format_error));
+        if(model.id==='planner' && input.implementation_brief.includes('transport-syntax-error')) throw new SyntaxError('provider decoding failed');
+        return {stopReason:'stop',usage:{cost:{total:0.000001}},content:[{type:'text',text:JSON.stringify(value)+(malformed?' extra text':'')}]};
       }
     })};`);
     process.env.CHANGESET_MODEL_RUNTIME = fake;
@@ -99,6 +102,28 @@ test('catalog lookup reads frozen source once before the final plan and permits 
     const oversized = await runCell({ ...options, directory: oversizedDirectory, preparedBrief: brief + 'direct ' + 'x '.repeat(85000) });
     assert.equal(existsSync(join(oversizedDirectory, 'requests.jsonl')), false);
     assert.match(oversized.checks[0].implementation_error, /exceeds 160 KiB/);
+
+    for (const [mode, expectedStages, succeeds] of [
+      ['malformed-once direct', ['planning', 'planning', 'editor'], true],
+      ['malformed-before-lookup', ['planning', 'planning', 'planning', 'editor'], true],
+      ['malformed-twice direct', ['planning', 'planning'], false],
+      ['malformed-once correction direct', ['planning', 'planning'], false],
+      ['transport-syntax-error direct', ['planning'], false],
+    ]) {
+      const formatDirectory = join(root, mode.replaceAll(' ', '-'));
+      const formatted = await runCell({ ...options, directory: formatDirectory, preparedBrief: brief + mode });
+      const calls = readFileSync(join(formatDirectory, 'requests.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+      assert.deepEqual(calls.map(call => call.stage), expectedStages, mode);
+      assert.equal(formatted.executions[0]?.ok === true, succeeds, mode);
+      if (mode.startsWith('malformed')) {
+        const retryInput = JSON.parse(calls[1].context.messages[0].content);
+        assert.ok(retryInput.json_format_error, mode);
+        assert.match(retryInput.previous_response_excerpt, /extra text$/, mode);
+        assert.equal(formatted.query_format_recoveries.length, 1, mode);
+      }
+      if (mode === 'malformed-once correction direct')
+        assert.match(formatted.checks[0].implementation_error, /correction allowance already used/);
+    }
   } finally {
     if (previous === undefined) delete process.env.CHANGESET_MODEL_RUNTIME;
     else process.env.CHANGESET_MODEL_RUNTIME = previous;

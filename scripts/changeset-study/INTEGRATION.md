@@ -37,7 +37,9 @@ one batch of bounded source requests before the final plan: at most eight reques
 exact symbols, literal searches, a bounded file tail or a small whole file. The local
 resolver supplies exact source slices, hashes and unique bindings. This route makes at
 most three Sol calls, including its optional lookup and validation correction; catalog
-mode without lookup retains its 80 KiB request limit. These limits are research settings,
+mode without lookup retains its 80 KiB request limit. In lookup mode, malformed JSON
+may use the same single correction allowance as a rejected plan; the three-call
+ceiling still counts the malformed response. These limits are research settings,
 not measured production defaults.
 
 After dispatch, do not call Sol to review, replan or repair the

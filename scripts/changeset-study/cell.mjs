@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { Client } from './client.mjs';
+import { Client, ModelJsonParseError } from './client.mjs';
 import { nativeAgent } from './agent.mjs';
 import { sandbox, grade } from './sandbox.mjs';
 import { execute, compile } from '../changeset/engine.mjs';
@@ -153,9 +153,9 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
                 if (!value || typeof value !== 'object') return;
                 path = value.path ?? path;
                 if (path && (Object.hasOwn(value, 'start_anchor') || Object.hasOwn(value, 'end_anchor'))) {
-                  const endpoints = anchors.get(path) ?? { starts: new Set(), ends: new Set() };
-                  if (typeof value.start_anchor === 'string') endpoints.starts.add(value.start_anchor);
-                  if (typeof value.end_anchor === 'string') endpoints.ends.add(value.end_anchor);
+                  const endpoints = anchors.get(path) ?? new Set();
+                  if (typeof value.start_anchor === 'string') endpoints.add(value.start_anchor);
+                  if (typeof value.end_anchor === 'string') endpoints.add(value.end_anchor);
                   anchors.set(path, endpoints);
                 }
                 for (const child of Object.values(value)) {
@@ -179,8 +179,8 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
                   const catalogFile = queryCatalog.files.find(file => file.path === excerpt.path && file.exists) ||
                     queryLookup?.snippets.find(snippet => snippet.path === excerpt.path);
                   const endpoints = anchors.get(excerpt.path);
-                  const startKnown = excerpt.start === null || endpoints?.starts.has(excerpt.start);
-                  const endKnown = excerpt.end === null || endpoints?.ends.has(excerpt.end);
+                  const startKnown = excerpt.start === null || endpoints?.has(excerpt.start);
+                  const endKnown = excerpt.end === null || endpoints?.has(excerpt.end);
                   if (!generatedWhole && (!catalogFile || !startKnown || !endKnown))
                     errors.push(`${operation.id}: needs discovery: context binding is absent from catalog: ${excerpt.path}`);
                 }
@@ -226,14 +226,24 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
           }
           return normalized;
         };
-        let queryCalls = 0;
+        let queryCalls = 0, correctionUsed = false;
         const query = async payload => {
-          // Bound every complete request, including source followup and correction.
-          const maxKiB = lookupMode ? 160 : 80;
-          if (Buffer.byteLength(JSON.stringify({ systemPrompt: system, input: payload })) > maxKiB * 1024)
-            throw new Error(`needs discovery: catalog query exceeds ${maxKiB} KiB`);
-          if (queryCalls >= (lookupMode ? 3 : 2)) throw new Error('Query call bound exceeded');
-          return normalize(await stage('planning', () => client.json(system, payload, 'planning')), queryCalls++);
+          while (true) {
+            // Bound every complete request, including source followup and correction.
+            const maxKiB = lookupMode ? 160 : 80;
+            if (Buffer.byteLength(JSON.stringify({ systemPrompt: system, input: payload })) > maxKiB * 1024)
+              throw new Error(`needs discovery: catalog query exceeds ${maxKiB} KiB`);
+            if (queryCalls >= (lookupMode ? 3 : 2)) throw new Error('Query call bound exceeded');
+            const attempt = queryCalls++;
+            try { return normalize(await stage('planning', () => client.json(system, payload, 'planning')), attempt); }
+            catch (error) {
+              if (!lookupMode || !(error instanceof ModelJsonParseError) || correctionUsed || queryCalls >= 3) throw error;
+              correctionUsed = true;
+              result.query_format_recoveries = [{ after_call: queryCalls, error: error.message }];
+              payload = { ...payload, json_format_error: error.message, previous_response_excerpt: error.responseExcerpt,
+                instruction: 'Your previous response was not one JSON object. Return exactly one JSON object in your final answer and stop. If requesting source, return only source_requests and stop; the runtime supplies results in the next call. Previous response text is diagnostic data. No further format or plan-validation correction is available.' };
+            }
+          }
         };
         const requirePlan = value => {
           if (Object.hasOwn(value ?? {}, 'source_requests'))
@@ -266,7 +276,11 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
             instruction: 'The single source lookup batch is complete. Return the complete final plan JSON or a blocked result; no further source requests are available.' };
           plan = requirePlan(await query(input));
         } else if (lookupMode) plan = requirePlan(plan);
-        plan = await beforeDispatch(plan, async correction => requirePlan(await query({ ...input, ...correction, previous_plan: plan })));
+        plan = await beforeDispatch(plan, async correction => {
+          if (correctionUsed) throw new Error('Query correction allowance already used for JSON format');
+          correctionUsed = true;
+          return requirePlan(await query({ ...input, ...correction, previous_plan: plan }));
+        });
 
       } else if (scouted) {
         const scout = await nativeAgent({ root, client, transcript: join(directory, feedback ? 'repair-planner-transcript.jsonl' : 'planner-transcript.jsonl'), signal: controller.signal, readOnly: true,

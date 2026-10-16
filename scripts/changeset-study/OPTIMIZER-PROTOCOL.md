@@ -285,3 +285,36 @@ all original model requests/responses, normalized raw plans, receipts and writer
 results. This is another exploratory protocol revision; it does not establish a
 completion-preserving speed gain, isolate lookup effects from changed plans, or
 start the separate experiments proposed in the later research recommendations.
+
+## Protocol 10: shared format recovery and interchangeable endpoints
+
+Run 09 calibration returned a source-request object plus additional prose and a
+blocked object in the same provider response. JSON decoding failed before any lookup
+or writer. Handoff's first plan selected the valid catalog start of `const here`
+as the exclusive end of its import context. Source preflight accepted that range;
+the catalog guard rejected it because it distinguished start from end endpoints.
+Retain those attempts and their charges. These observations motivate two changes:
+
+1. Any supplied endpoint may serve either boundary on the same known source path.
+   Actual source uniqueness, ordering, ownership and delivered-context limits still
+   apply. Endpoints from another path and unknown anchors remain invalid.
+2. In `catalog-lookup` mode, a malformed JSON response may consume the existing
+   single pre-dispatch correction allowance. Return the parse error and at most
+   12,000 characters of text output as diagnostic data, then request one final JSON
+   object. Do not select an object from a malformed multi-object response or silently
+   discard trailing text. Only a successful transport followed by JSON decoding
+   failure is eligible; transport, budget, cancellation and stop-reason failures
+   are not retried. A format correction precludes a later validation correction.
+
+There are still at most three Sol calls and one source lookup batch. Count malformed
+responses toward the call cap. Every full request, including its diagnostic excerpt,
+must fit 160 KiB. No format recovery or query follows writer dispatch. Persist the
+original responses, usage and `query_format_recoveries` record. No behavioral failure
+feedback enters a query or writer retry.
+
+Use the same three exposed cases, original owner briefs, deterministic optimization
+and explicit model selectors. This is a new frozen treatment, not a repeat of 09.
+Focused offline verification covers malformed replies before lookup, repeated format
+failure, exhaustion of the shared correction allowance and provider errors. Jev's
+offline verification checkpoint returned incomplete-context fallback; the focused
+lookup integration passed in 647 ms. Broader tests remain operator-managed.
