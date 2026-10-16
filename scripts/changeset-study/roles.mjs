@@ -56,6 +56,19 @@ the runtime supplies its staged contents under the same source-size bound. Do no
 this exception for an existing file or before its creation. Unresolved references in
 the catalog are not source bindings or known new file paths. If they are needed to
 perform the brief, report the missing binding; an explicitly unchanged file needs no edit.
+Catalog signatures are exact declaration headers, not behavior descriptions. Leading
+comments belong to the following definition; paired ranges end before the next
+leading comment. symbol_inventory and method_inventory tuples are [kind,name];
+test_inventory holds names. Import specifier tuples are [imported,local]. These compact
+inventories preserve names but have no selectable anchors. import_refs maps explicit
+relative import sources to uniquely resolved existing checkout paths. Named local helpers are
+bound only when their declaration name identifies one definition in that file.
+A selected .mjs AST range may exceed 32000 characters before presentation: the runtime
+unions overlaps and can elide complete function bodies while retaining exact source
+slices, signatures and explicit omission metadata. Bind the supplied AST range and
+let preflight decide whether it can fit; do not reject it solely from its raw offsets.
+The delivered context still has a hard 32000-character cap. Non-function excess or
+partial definitions may fail preflight and require a narrower catalog binding or discovery.
 Do not invent anchors, copy inventory names as anchors, or infer missing source.
 Only catalog, unchanged implementation_brief, file_tree and protected_files are supplied;
 you have no repository tools or original task. Preserve every owner decision.

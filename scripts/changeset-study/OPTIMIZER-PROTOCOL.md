@@ -208,3 +208,21 @@ under the unchanged 80 KiB request guard. Unresolved bare names remain explicit
 metadata, never invented destinations. New paths require an explicit catalog
 binding. Later operations on newly created files may use bounded staged contents;
 initial source anchors remain exact catalog pairs.
+
+## Catalog binding refinement after the first attempt
+
+The first catalog run completed calibration writes but blocked both larger cases
+before dispatch. Its shorter aggregate query time is not a completion-preserving
+gain. Retain those results. The next frozen catalog attempt adds deterministic
+bindings for named constants, leading comments, uniquely named local helpers and
+named imports, including exact declaration signatures. Compact inventories retain
+all names; catalog and complete-request bounds remain 48 and 80 KiB. The query
+prompt explains the existing source compactor so raw AST range length alone does
+not cause the planner to refuse an otherwise executable binding.
+
+Reuse the original owner briefs, deterministic optimizer and writer behavior.
+Run all three cases once; repeat only if application completion makes the result
+promising. No behavioral grading feedback enters planning or writer recovery.
+This is a new catalog freeze and an exploratory refinement of the failed attempt,
+not a replay of the first catalog's query plans. The separate experiments proposed
+in the user's later research recommendations begin only after the current goal.

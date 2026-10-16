@@ -48,7 +48,7 @@ test('catalog keeps only named files and emits exact anchors for requested sourc
   const runtimeClass = runtimeFile.classes.find(item => item.name === 'Runtime');
   assert.ok(runtimeClass?.detailed);
   assert.ok(runtimeClass.methods.some(method => method.name === 'start' && method.detailed));
-  assert.ok(runtimeClass.methods.some(method => method.name === 'finish' && !method.detailed));
+  assert.ok(runtimeClass.method_inventory.some(([kind, name]) => kind === 'method' && name === 'finish'));
   assertAnchors(runtime, runtimeClass);
   assertAnchors(runtime, runtimeClass.methods.find(method => method.name === 'start'));
   assertAnchors(runtime, runtimeFile.preamble);
@@ -56,7 +56,7 @@ test('catalog keeps only named files and emits exact anchors for requested sourc
 
   const testFile = catalog.files.find(file => file.path === 'src/runtime.test.mjs');
   assert.ok(testFile.tests.some(item => item.name === 'seed calibration from latest usage' && item.detailed));
-  assert.ok(testFile.tests.some(item => item.name === 'other behavior' && !item.detailed));
+  assert.ok(testFile.test_inventory.includes('other behavior'));
   assertAnchors(tests, testFile.tests.find(item => item.name === 'seed calibration from latest usage'));
   assertAnchors(tests, testFile.preamble);
 
@@ -89,4 +89,68 @@ test('catalog resolves parent segments within the checkout and leaves escaping r
   assert.deepEqual(catalog.unresolved_refs.map(ref => ref.reference), ['../outside/file.mjs', 'src/../../escape.mjs']);
   assert.ok(catalog.unresolved_refs.every(ref => ref.reason.includes('escapes the checkout')));
   assert.ok(!catalog.files.some(file => ['src/lib/target.mjs', 'outside/file.mjs', 'src/escape.mjs'].includes(file.path)));
+});
+
+// Run alone: CHANGESET_TEST_PARSER=/path/to/acorn.mjs node --test --test-name-pattern='constants and local helper' scripts/changeset-study/query-catalog.test.mjs
+test('constants and local helper bindings retain exact signatures and leading comments with paired boundaries', async () => {
+  const source = `// Transport environment names.
+const TRANSPORT_ENV_NAMES = ['A', 'B']; // belongs to transport
+
+// Fixed bootstrap program.
+const ROOT_BOOTSTRAP = 'program';
+
+// Owner command must stay in this module.
+function nativeCommand(record, role, prompt, options = {}) { return options; }
+
+function install() {
+  // One local helper.
+  const nestedHelper = (value, { enabled = true } = {}) => { return enabled ? value : null; };
+  return nestedHelper;
+}
+function one() { const duplicate = () => 1; return duplicate(); }
+function two() { const duplicate = () => 2; return duplicate(); }
+const unrelated = 3;
+`;
+  const catalog = buildQueryCatalog({ 'src/runtime.mjs': source },
+    'Update src/runtime.mjs TRANSPORT_ENV_NAMES ROOT_BOOTSTRAP nativeCommand nestedHelper duplicate.', { parse: await parser() });
+  const file = catalog.files[0];
+  const transport = file.symbols.find(item => item.name === 'TRANSPORT_ENV_NAMES');
+  const bootstrap = file.symbols.find(item => item.name === 'ROOT_BOOTSTRAP');
+  const command = file.symbols.find(item => item.name === 'nativeCommand');
+  const local = file.symbols.find(item => item.name === 'nestedHelper');
+  for (const item of [transport, bootstrap, command, local]) assertAnchors(source, item);
+  assert.equal(source.slice(transport.start_offset, transport.end_offset), "// Transport environment names.\nconst TRANSPORT_ENV_NAMES = ['A', 'B']; // belongs to transport\n\n");
+  assert.equal(source.slice(bootstrap.start_offset, bootstrap.end_offset), "// Fixed bootstrap program.\nconst ROOT_BOOTSTRAP = 'program';\n\n");
+  assert.equal(bootstrap.end_offset, command.start_offset);
+  assert.ok(source.slice(command.start_offset).startsWith('// Owner command must stay in this module.\nfunction nativeCommand'));
+  assert.equal(command.signature, 'function nativeCommand(record, role, prompt, options = {})');
+  assert.equal(bootstrap.signature, 'const ROOT_BOOTSTRAP =');
+  assert.equal(local.signature, 'const nestedHelper = (value, { enabled = true } = {}) =>');
+  assert.equal(local.kind, 'local-variable');
+  assert.ok(source.slice(local.start_offset, local.end_offset).startsWith('// One local helper.'));
+  assert.ok(!file.symbols.some(item => item.name === 'duplicate'), 'a repeated local name cannot identify one source binding');
+  assert.ok(file.symbol_inventory.some(([kind, name]) => kind === 'const' && name === 'unrelated'), 'compact inventory retains unselected declaration kind and name');
+});
+
+// Run alone: CHANGESET_TEST_PARSER=/path/to/acorn.mjs node --test --test-name-pattern='named imported helpers' scripts/changeset-study/query-catalog.test.mjs
+test('named imported helpers add uniquely resolved source signatures without guessing missing module locations', async () => {
+  const files = {
+    'src/deep/runtime.test.mjs': "import { fixture } from './fixture.mjs';\nimport { ignored } from './ignored.mjs';\nexport function testRuntime() {}\n",
+    'src/deep/fixture.mjs': "export async function fixture({ targets = ['repo'] } = {}) { return targets; }\n",
+    'src/deep/ignored.mjs': 'export function ignored() {}',
+    'scripts/steps.mjs': 'export function validateStepIndex(index, options = {}) { return index; }\n',
+  };
+  const brief = 'Update src/deep/runtime.test.mjs using fixture. Create src/deep/handoff.mjs. Import `validateStepIndex` from `../../scripts/steps.mjs`. Preserve ../outside/missing.mjs.';
+  const catalog = buildQueryCatalog(files, brief, { parse: await parser() });
+  assert.ok(!catalog.files.some(file => file.path === 'src/deep/ignored.mjs'));
+  const fixture = catalog.files.find(file => file.path === 'src/deep/fixture.mjs').symbols.find(item => item.name === 'fixture');
+  const validate = catalog.files.find(file => file.path === 'scripts/steps.mjs').symbols.find(item => item.name === 'validateStepIndex');
+  assert.equal(fixture.signature, "export async function fixture({ targets = ['repo'] } = {})");
+  assert.equal(validate.signature, 'export function validateStepIndex(index, options = {})');
+  assert.deepEqual(catalog.import_refs.find(ref => ref.reference === '../../scripts/steps.mjs'), { reference: '../../scripts/steps.mjs', path: 'scripts/steps.mjs' });
+  assert.ok(!catalog.unresolved_refs.some(ref => ref.reference === '../../scripts/steps.mjs'));
+  assertAnchors(files['src/deep/fixture.mjs'], fixture);
+  assertAnchors(files['scripts/steps.mjs'], validate);
+  assert.ok(!catalog.files.some(file => file.path === 'outside/missing.mjs'));
+  assert.ok(catalog.unresolved_refs.some(ref => ref.reference === '../outside/missing.mjs'));
 });
