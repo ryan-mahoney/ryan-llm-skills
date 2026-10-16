@@ -1,0 +1,41 @@
+{
+  "id": "invoice-rollup",
+  "skill": "spec-changeset-plan",
+  "driver": "changeset",
+  "status": "ready",
+  "phase": "train",
+  "purpose": "Implement invoice totals. In src/invoice.mjs replace total with an exported summarize(lines, discountBps=0) that returns {subtotalCents,discountCents,totalCents}. Every line needs nonnegative safe integer priceCents and quantity; lines must be an array; discountBps is an integer in 0..10000. Reject invalid values and unsafe multiplication/sums with RangeError. Round discount to nearest cent, with half cents rounding up, without losing integer precision. Preserve exported total(lines) as summarize(lines).totalCents. Empty lines return zeros.",
+  "task": "Compile the supplied specification into one executable changeset plan.",
+  "fixture": {
+    "feature": "invoice-rollup"
+  },
+  "timeout_ms": 480000,
+  "execution": {
+    "concurrency": 4,
+    "review_model": "openai-codex/gpt-6.1-sol:low",
+    "repair_model": "openai-codex/gpt-6.1-sol:low",
+    "max_repairs": 1,
+    "simple_model": "openrouter/inception/mercury-2.5:low",
+    "involved_model": "deepseek/deepseek-flash:off",
+    "max_tokens": 16000
+  },
+  "expectation_sources": [
+    "input/package/spec.md"
+  ],
+  "checks": [
+    {
+      "id": "behavior",
+      "kind": "node-check",
+      "script": "graders/behavior.mjs",
+      "timeout_ms": 10000
+    },
+    {
+      "id": "unrelated",
+      "kind": "git-untouched",
+      "root": "repo",
+      "paths": [
+        "keep.txt"
+      ]
+    }
+  ]
+}

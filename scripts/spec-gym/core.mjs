@@ -16,7 +16,7 @@ export const PREPARED_PACKAGE_FILES = [
   '../project-context.md',
 ];
 
-export const CHECK_KINDS = ['file-exists', 'file-absent', 'line-1', 'text-match', 'json-equals', 'git-untouched', 'run-state'];
+export const CHECK_KINDS = ['file-exists', 'file-absent', 'line-1', 'text-match', 'json-equals', 'git-untouched', 'run-state', 'node-check'];
 
 const INDEX_SENTENCE = 'Scenarios in this index exercise only the listed purposes; behaviors absent from this table are not covered.';
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/;
@@ -115,7 +115,7 @@ export function loadScenario(folder) {
 
 export function scenarioVersion(folder) {
   const { status, ...rest } = readScenarioFile(folder);
-  const entries = [{ relativePath: 'scenario.json', content: JSON.stringify(sortedValue(rest)) }, ...walkEntries(folder)];
+  const entries = [{ relativePath: 'scenario.json', content: JSON.stringify(sortedValue(rest)) }, ...walkEntries(folder), ...walkEntries(folder, join(folder, 'graders'))];
   entries.sort((a, b) => byString(a.relativePath, b.relativePath));
   const hash = createHash('sha256');
   for (const entry of entries) {
@@ -146,8 +146,8 @@ export function validateScenario(folder, { git = defaultGit } = {}) {
     errors.push(`scenario.json: skill ${JSON.stringify(scenario.skill)} does not match folder ${JSON.stringify(skillFolder)}`);
   }
 
-  if (scenario.driver !== 'leaf' && scenario.driver !== 'managed-step') {
-    errors.push("scenario.json: driver must be 'leaf' or 'managed-step'");
+  if (!['leaf', 'managed-step', 'changeset'].includes(scenario.driver)) {
+    errors.push("scenario.json: driver must be 'leaf', 'managed-step' or 'changeset'");
   }
   if (scenario.status !== 'draft' && scenario.status !== 'ready') {
     errors.push("scenario.json: status must be 'draft' or 'ready'");
@@ -165,6 +165,22 @@ export function validateScenario(folder, { git = defaultGit } = {}) {
     errors.push('scenario.json: fixture.feature must be a non-empty string');
   }
 
+  if (scenario.driver === 'changeset') {
+    const execution = scenario.execution;
+    if (!execution || !Number.isInteger(execution.concurrency) || execution.concurrency < 1 || execution.concurrency > 32
+      || !['simple_model', 'involved_model'].every(key => typeof execution[key] === 'string' && execution[key].includes('/')))
+      errors.push('scenario.json: changeset requires execution concurrency and both model selectors');
+    if (execution?.max_tokens !== undefined && (!Number.isInteger(execution.max_tokens) || execution.max_tokens < 1 || execution.max_tokens > 32000))
+      errors.push('scenario.json: max_tokens must be 1..32000');
+    if (execution?.review_model !== undefined && (typeof execution.review_model !== 'string' || !execution.review_model.includes('/')))
+      errors.push('scenario.json: review_model must be provider/model[:thinking]');
+    if (execution?.repair_model !== undefined && (typeof execution.repair_model !== 'string' || !execution.repair_model.includes('/')))
+      errors.push('scenario.json: repair_model must be provider/model[:thinking]');
+    if (execution?.max_repairs !== undefined && (!Number.isInteger(execution.max_repairs) || execution.max_repairs < 0 || execution.max_repairs > 2))
+      errors.push('scenario.json: max_repairs must be 0..2');
+    if (!existsSync(join(folder, 'input/package/spec.md'))) errors.push('changeset requires input/package/spec.md');
+
+  }
   const roles = scenario.roles;
   if (roles !== undefined && (typeof roles !== 'object' || roles === null || Array.isArray(roles))) {
     errors.push('scenario.json: roles must be an object');
@@ -193,6 +209,10 @@ export function validateScenario(folder, { git = defaultGit } = {}) {
       }
       if (typeof check.id !== 'string' || !check.id.trim()) {
         errors.push('scenario.json: check must have a non-empty id');
+      }
+      if (check.kind === 'node-check') {
+        try { const script = graderPath(folder, check); execFileSync(process.execPath, ['--check', script], { timeout: 3000, stdio: 'pipe' }); } catch (error) { errors.push(`scenario.json: ${error.message}`); }
+        if (!Number.isInteger(check.timeout_ms) || check.timeout_ms < 1 || check.timeout_ms > 60000) errors.push('node-check timeout_ms must be 1..60000');
       }
       if (!CHECK_KINDS.includes(check.kind)) {
         errors.push(`scenario.json: check ${JSON.stringify(check.id)} has unknown kind ${JSON.stringify(check.kind)}`);
@@ -360,10 +380,30 @@ function rootCommit(repo) {
   }
 }
 
+function graderPath(folder, check) {
+  if (typeof check.script !== 'string' || !/^graders\/[a-zA-Z0-9_/-]+\.mjs$/.test(check.script) || check.script.split('/').includes('..')) throw new Error('node-check script must be under graders/');
+  let path = folder;
+  for (const part of check.script.split('/')) {
+    path = join(path, part);
+    if (lstatSync(path).isSymbolicLink()) throw new Error('node-check symlink refused');
+  }
+  if (!lstatSync(path).isFile()) throw new Error('node-check script must be a file');
+  return path;
+}
+
 export function evaluateCheck(check, roots, context = {}) {
   const id = check?.id;
   let resolved;
   try {
+    if (check?.kind === 'node-check') {
+      const script = graderPath(context.scenarioFolder, check);
+      if (!Number.isInteger(check.timeout_ms) || check.timeout_ms < 1 || check.timeout_ms > 60000) throw new Error('Invalid grader deadline');
+      const output = execFileSync(process.execPath, [script, roots.checkout ?? roots.repo, roots.package], {
+        cwd: roots.checkout ?? roots.repo, timeout: check.timeout_ms, killSignal: 'SIGKILL', maxBuffer: 65536,
+        env: { PATH: process.env.PATH, LANG: 'C.UTF-8' }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      return { id, ok: true, detail: `${check.script}: ${output.trim().slice(0, 4000) || 'passed'}` };
+    }
     if (check?.kind === 'run-state') {
       if (context.driver !== 'managed-step') return { id, ok: false, detail: 'run-state requires managed-step' };
       const ok = context.state === check.equals;
@@ -484,6 +524,7 @@ export function gradeCell(cellResult, scenario, roots) {
   const fixtureCommit = cellResult.fixture_commit ?? roots?.fixtureCommit ?? (roots?.repo ? rootCommit(roots.repo) : null);
   const context = {
     fixtureCommit,
+    scenarioFolder: scenario?.folder,
     state: driver === 'managed-step' ? cellResult.record?.state ?? cellResult.state ?? null : null,
     driver,
   };
@@ -493,6 +534,7 @@ export function gradeCell(cellResult, scenario, roots) {
   const sessionFiles = [cellResult.sessions, cellResult.session].flat().filter(Boolean);
   const result = { ...cellResult, checks };
   if (contaminated(sessionFiles, scenario?.folder)) return { ...result, outcome: 'invalid', reason: 'grader-read' };
+  if (cellResult.outcome === 'failed') return { ...result, outcome: 'failed', reason: cellResult.reason ?? 'execution failed' };
   if (cellResult.outcome === 'invalid') return { ...result, outcome: 'invalid', reason: cellResult.reason ?? 'invalid' };
   if (cellResult.outcome === 'timed-out') return { ...result, outcome: 'timed-out', reason: cellResult.reason ?? null };
   if (cellResult.outcome === 'blocked') return { ...result, outcome: 'blocked', reason: cellResult.reason ?? null };

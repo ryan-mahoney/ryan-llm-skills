@@ -84,3 +84,15 @@ Runs are retained under `<run root>/<run-id>/`; the runner never deletes them. C
 
 See [scenario-contract.md](references/scenario-contract.md) for the curated scenario
 format, ready rules and check semantics.
+
+
+## Changeset experiments
+
+The `changeset` driver runs the experimental planner and bounded executors directly
+through configured model providers. Set `CHANGESET_BUDGET` to the persistent ledger;
+select the planner through `--model` and executor/reviewer models explicitly in the
+curated scenario. It copies the runtime, skill, fixture and external graders into
+`frozen/` at launch. Each worker receives source and contract text, has no tools,
+and retains every batch draft, review, bounded repair and model usage receipt.
+The driver checks integrated behavior before publishing. This is a trusted local
+research harness, with the same lack of OS sandbox as other gym drivers.

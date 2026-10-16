@@ -103,6 +103,20 @@ export function createRun({ repoRoot = process.cwd(), root, skill, scenarios = [
 }
 
 export function freezeManifest(run) {
+  if (run.scenarios.some(({ scenario }) => scenario.driver === 'changeset')) {
+    const frozen = join(run.runDir, 'frozen');
+    for (const path of ['scripts/changeset', 'scripts/spec-gym', `skills/${run.skill}`]) copyTree(join(run.repoRoot, path), join(frozen, path));
+    run.scenarios = run.scenarios.map(entry => {
+      if (entry.scenario.driver !== 'changeset') return entry;
+      const destination = join(frozen, 'scenarios', run.skill, entry.scenario.id);
+      copyTree(entry.folder, destination);
+      const snapshot = loadScenario(destination);
+      if (snapshot.version !== entry.version) throw new Error('Scenario changed while freezing');
+      return snapshot;
+    });
+    run.runtimeRoot = frozen;
+    run.skillDir = join(frozen, 'skills', run.skill);
+  }
   const manifest = {
     schema_version: 1,
     run_id: run.runId,
@@ -111,6 +125,7 @@ export function freezeManifest(run) {
     pi: { command: run.pi, version: piVersion(run.pi) },
     skill: run.skill,
     skill_sha256: hashTree(run.skillDir),
+    ...(run.scenarios.some(({ scenario }) => scenario.driver === 'changeset') ? { changeset_sha256: hashTree(run.runtimeRoot ?? run.repoRoot, ['scripts/changeset', 'scripts/spec-gym']) } : {}),
     ...(run.scenarios.some(({ scenario }) => scenario.driver === 'managed-step')
       ? { managed_sha256: hashTree(run.repoRoot, MANAGED_INSTRUCTION_PATHS) }
       : {}),
@@ -515,11 +530,13 @@ export async function runCampaign(options, { log = () => {} } = {}) {
       writeRunRecord(run, record);
       log(`start ${cell.id}`);
 
-      const scenario = loaded.find(entry => entry.scenario.id === cell.scenarioId);
+      const scenario = run.scenarios.find(entry => entry.scenario.id === cell.scenarioId);
       const materialized = await materializeCell(run, cell, scenario);
       const graded = scenario.scenario.driver === 'managed-step'
         ? await runManagedCell(run, cell, scenario, materialized, { onRuntime: value => { activeRuntime = value; } })
-        : await runLeafCell(run, cell, scenario, materialized, { onPid: pid => { activePid = pid; } });
+        : scenario.scenario.driver === 'changeset'
+          ? await runChangesetCell(run, cell, scenario, materialized, { onPid: pid => { activePid = pid; } })
+          : await runLeafCell(run, cell, scenario, materialized, { onPid: pid => { activePid = pid; } });
       activePid = null;
       activeRuntime = null;
       if (stopRequested) await new Promise(() => {});
@@ -528,7 +545,7 @@ export async function runCampaign(options, { log = () => {} } = {}) {
       const result = gradeCell(graded, scenario, {
         package: materialized.packageDir,
         repo: materialized.repoDir,
-        checkout: driver === 'leaf' ? materialized.repoDir : checkoutDirFor(materialized.cellDir),
+        checkout: driver !== 'managed-step' ? materialized.repoDir : checkoutDirFor(materialized.cellDir),
         fixtureCommit: materialized.fixtureCommit,
       });
       recordCell.state = 'finished';
@@ -558,6 +575,7 @@ export async function runCampaign(options, { log = () => {} } = {}) {
 
 function artifactsFor(run, result) {
   const artifacts = {};
+  if (result.execution_report) artifacts.execution_report = toPosix(relative(run.runDir, result.execution_report));
   if (result.stream) artifacts.stream = toPosix(relative(run.runDir, result.stream));
   if (result.session) artifacts.session = toPosix(relative(run.runDir, result.session));
   const sessionNames = ['owner_session', 'editor_session'];
@@ -705,4 +723,43 @@ function copyTree(source, destination) {
   mkdirSync(dirname(destination), { recursive: true });
   writeFileSync(destination, readFileSync(source));
   chmodSync(destination, info.mode & 0o777);
+}
+
+export async function runChangesetCell(run, cell, scenario, materialized, hooks = {}) {
+  if (!process.env.CHANGESET_BUDGET) throw new Error('Changeset gym requires CHANGESET_BUDGET pointing to a persistent ledger');
+  const configFile = join(materialized.cellDir, 'changeset-config.json');
+  const resultFile = join(materialized.cellDir, 'execution.json');
+  const calls = join(materialized.cellDir, 'calls.jsonl');
+  const stream = join(materialized.cellDir, 'worker.jsonl');
+  const stderr = join(materialized.cellDir, 'worker.stderr');
+  const timeoutMs = scenario.scenario.timeout_ms;
+  atomicWrite(configFile, JSON.stringify({
+    repo: materialized.repoDir, package: materialized.packageDir, model: cell.model,
+    skill: join(run.skillDir, 'SKILL.md'), task: scenario.scenario.task,
+    execution: scenario.scenario.execution, budget: resolve(process.env.CHANGESET_BUDGET),
+    timeout_ms: timeoutMs, result: resultFile, calls,
+    verification: scenario.scenario.checks.filter(c => c.kind === 'node-check').map(c => ({ script: join(scenario.folder, c.script), timeout_ms: c.timeout_ms })),
+  }));
+  const started = Date.now(), started_at = new Date().toISOString();
+  const { pid, done } = spawnWithDeadline({ command: process.execPath,
+    args: [join(run.runtimeRoot ?? run.repoRoot, 'scripts/changeset/gym-worker.mjs'), configFile],
+    cwd: materialized.repoDir, env: cellEnvironment(process.env), timeoutMs, stream, stderr });
+  hooks.onPid?.(pid);
+  const execution = await done;
+  let result = {};
+  try { result = JSON.parse(readFileSync(resultFile, 'utf8')); } catch { /* preserve process failure */ }
+  let receipts = result.receipts;
+  if (!receipts) {
+    try { receipts = readFileSync(calls, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse); } catch { receipts = []; }
+  }
+  const costKnown = receipts.length > 0 && receipts.every(r => Number.isFinite(r.usage?.cost?.total) && r.usage.cost.total > 0);
+  return {
+    id: cell.id, scenario: cell.scenarioId, version: cell.version, model: cell.model,
+    state: 'finished', outcome: execution.timedOut ? 'timed-out' : result.outcome ?? 'blocked',
+    reason: execution.timedOut ? 'deadline exceeded' : result.error ?? (result.outcome === 'failed' ? 'changeset operation failed' : null),
+    started_at, finished_at: new Date().toISOString(), elapsed_ms: Date.now() - started,
+    tokens: { input_tokens: receipts.reduce((n, r) => n + (r.usage?.input ?? 0) + (r.usage?.cacheRead ?? 0) + (r.usage?.cacheWrite ?? 0), 0), output_tokens: receipts.reduce((n, r) => n + (r.usage?.output ?? 0), 0) },
+    cost_usd: costKnown ? receipts.reduce((n, r) => n + r.usage.cost.total, 0) : null,
+    stream, stderr, execution_report: resultFile, checks: [],
+  };
 }

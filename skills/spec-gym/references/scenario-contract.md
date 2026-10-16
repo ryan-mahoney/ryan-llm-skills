@@ -22,7 +22,7 @@ tree never enter a worker's repository.
 
 - `id` matches `^[a-z0-9][a-z0-9-]{1,63}$` and equals the folder name.
 - `skill` equals the parent folder name and is an eligible `spec-*` skill.
-- `driver` is `leaf` or `managed-step`.
+- `driver` is `leaf`, `managed-step`, or `changeset`.
 - `status` is `draft` or `ready`.
 - `timeout_ms` is a positive integer.
 - `task` and `purpose` are non-empty.
@@ -87,3 +87,35 @@ Every check records `{ id, ok, detail }`; `detail` cites the inspected path or v
 Checks never enter worker inputs: only `input/` materializes. A retained session
 whose `read`, `grep`, `find`, `ls` or `bash` tool call arguments name the absolute
 scenario folder marks the cell `invalid` with reason `grader-read`.
+
+## Experimental changeset driver
+
+`driver: changeset` runs a tool-free planner once through the configured Pi model
+runtime, then executes the emitted plan through `scripts/changeset/`. It requires
+`input/package/spec.md` and `execution` with `concurrency` (1..32), `simple_model`
+and `involved_model` selectors; optional `max_tokens` is 1..32000. Set the
+`CHANGESET_BUDGET` environment variable to a persistent ledger outside the checkout.
+The ledger caps the campaign at USD 50 including conservative reservations for
+unknown charges. Provider pricing metadata is an estimate, not an invoice.
+
+The manifest freezes `changeset_sha256` over runtime and gym sources. Each cell
+retains `execution.json`, planner JSON, and receipts for every planner/editor call;
+reported model usage includes all tiers. Cells share no mutable workspace.
+
+`node-check` runs a trusted curator-owned Node script under `graders/`, outside
+worker inputs. Specify `script: graders/name.mjs` and `timeout_ms: 1..60000`.
+The script receives checkout and package paths as argv[2] and argv[3]. Exit zero
+passes; nonzero, timeout or excess output fails. Environment contains PATH and LANG
+only. Grader files are included in the frozen scenario version. Scripts and their
+parents must not be symlinks. This is process isolation, not an OS sandbox; graders
+must be trusted and must not spawn persistent child processes. A check can inspect
+behavior without relying on worker-authored assertions or claimed results.
+
+`execution.review_model` enables the integrated impact workflow;
+`execution.max_repairs` is an integer 0..2. Optional `execution.repair_model`
+selects the model used for model operations in subsequent repair batches. These
+selectors are curator-owned and must be explicitly authorized. Repairs retain
+successful staged outputs, and each repaired batch repeats behavior verification
+and impact review. The original plan, per-round drafts, repairs and all calls are
+retained. Changing execution settings changes the scenario version even when
+source inputs and assertions stay identical.

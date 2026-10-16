@@ -1,0 +1,21 @@
+import a from 'node:assert/strict';
+import {readFileSync,existsSync} from 'node:fs';
+import {join} from 'node:path';
+import {pathToFileURL} from 'node:url';
+const [repo,pkg]=process.argv.slice(2);
+const text=p=>readFileSync(join(repo,p),'utf8');
+const json=p=>JSON.parse(text(p));
+const moduleAt=p=>import(pathToFileURL(join(repo,p)).href);
+const plan=JSON.parse(readFileSync(join(pkg,'change-plan.json'),'utf8'));
+a.equal(text('keep.txt'),'preserve this exact text\n');
+const m=await moduleAt('src/store.mjs'), f=await moduleAt('src/label.mjs');
+const x=Object.freeze({id:'same',tenantId:'a',name:'One'}), y=Object.freeze({id:'same',tenantId:'b',name:'Two'}), rows=Object.freeze([x,y]);
+a.deepEqual(m.list(rows,'a'),[x]); a.deepEqual(m.remove(rows,'a','same'),[y]); a.equal(m.remove(rows,'a','absent')[1],y);
+const z={id:'same',tenantId:'a',name:'New'}; a.deepEqual(m.upsert(rows,'a',z),[z,y]); a.equal(m.upsert(rows,'a',z)[1],y);
+const fresh={id:'new',tenantId:'a',name:'N'}; a.deepEqual(m.upsert(rows,'a',fresh),[x,y,fresh]); a.deepEqual(rows,[x,y]);
+for(const tenant of ['',null,3]) { a.throws(()=>m.list(rows,tenant),TypeError); a.throws(()=>m.remove(rows,tenant,'same'),TypeError); a.throws(()=>m.upsert(rows,tenant,z),TypeError); }
+a.throws(()=>m.upsert(rows,'a',y),TypeError); a.throws(()=>m.upsert(rows,'a',{id:'',tenantId:'a'}),TypeError);
+a.equal(f.label({id:'q',name:'  Hello  '}),'Hello (#q)'); a.equal(f.label({id:'q',name:'  '}),'Untitled (#q)'); a.equal(f.label({id:'q'}),'Untitled (#q)');
+a.equal(json('config.json').features.tenantIsolation,true); a.equal(json('config.json').pageSize,25);
+for(const tier of ['deterministic','simple','involved']) a.ok(plan.operations.some(o=>o.executor===tier), 'missing executor '+tier);
+console.log('Behavior and preserved data passed');
