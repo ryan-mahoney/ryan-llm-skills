@@ -102,21 +102,37 @@ export function installContextBudget(pi, { compact, serialize, retrySettings } =
     } finally { applying = false; }
   };
   pi.on('session_start', apply);
+  // A resumed session starts a new process at calibration 1, so its first request was
+  // judged on the raw estimate: a retained Sol owner at about 65k real input was refused
+  // at 121k on 2026-10-16. Seed the ratio from the session's last recorded usage.
+  pi.on('session_start', (_event, ctx) => {
+    const entries = ctx.sessionManager?.getEntries?.() ?? [];
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const data = entries[i]?.customType === 'context-budget' ? entries[i].data : undefined;
+      if (data?.event === 'usage' && data.input_tokens > 0 && data.estimated_input_tokens > 0) {
+        calibration = Math.min(2, Math.max(0.5, data.input_tokens / data.estimated_input_tokens));
+        return;
+      }
+    }
+  });
   pi.on('model_select', apply);
   pi.on('before_agent_start', apply);
   pi.on('session_before_compact', async (event, ctx) => {
     const p = event.preparation;
     // Size the requests a summarizer actually sends. Native Pi sends serialized text
     // (thinking omitted, tool results truncated) and the split-turn prefix separately;
-    // Codex compacts the cached provider history, whose size is p.tokensBefore. Raw
-    // message JSON counted encrypted reasoning and tool details: a Sol owner at 73k
-    // real context was refused at a 208k estimate on 2026-10-16.
+    // Codex compacts the cached provider history, whose size is p.tokensBefore, and never
+    // sends the native summary. Raw message JSON counted encrypted reasoning and tool
+    // details: a Sol owner at 73k real context was refused at a 208k estimate, and a
+    // serialized-text estimate (170k) refused another at 72k, both on 2026-10-16.
+    const inPlace = ctx.model?.provider === 'openai-codex';
     const estimate = serialize
       ? Math.max(estimateText(serialize(p.messagesToSummarize ?? []), p.previousSummary, event.customInstructions),
           estimateText(serialize(p.turnPrefixMessages ?? [])))
       : estimatePayload({ messages: p.messagesToSummarize, prefix: p.turnPrefixMessages,
           summary: p.previousSummary, instructions: event.customInstructions });
-    const expected = serialize ? Math.max(estimate, Number.isFinite(p.tokensBefore) ? p.tokensBefore : 0) : projected(estimate);
+    const context = Number.isFinite(p.tokensBefore) ? p.tokensBefore : 0;
+    const expected = !serialize ? projected(estimate) : inPlace ? context : Math.max(estimate, context);
     const blocked = expected >= POLICY.requestEstimateLimit;
     record({ event: 'compaction_request', estimated_input_tokens: estimate,
       context_tokens: p.tokensBefore ?? null, projected_input_tokens: expected, blocked });

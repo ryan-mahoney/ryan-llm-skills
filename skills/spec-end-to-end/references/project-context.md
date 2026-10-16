@@ -101,7 +101,12 @@ preserves acceptance, data and existing behavior. Record each such decision in t
 the operator can revisit them. Do not ask the operator to approve additional review or
 verification passes, documentation or provenance notes, packet splits, routing within the
 selected roles, or evidence wording that narrows a claim to what is proven while a stronger claim
-keeps a required owner gate.
+keeps a required owner gate. A reproduced defect within the run's scope gets a bounded repair and
+the review needed to close it as the orchestrator's decision, even past a planned review or fix
+count: such a count bounds routine cadence, and only accepting the defect instead needs the operator.
+A module that splits a declared file along the card's boundaries, in the same directory, is within
+the step's scope: say so in the dispatch, and declare the module in the step's writes once the owner
+reports it.
 
 Stop for the operator only when the decision needs authority the run lacks: publication, merge or
 deployment beyond granted authority; any action on shared or production systems; destructive or

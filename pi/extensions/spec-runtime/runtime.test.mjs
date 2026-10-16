@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { Runtime, launch, loadRun, summary, groupAlive, runEditor, runCommand, runVerification, runCompletion, runAdvice, activeGroups, spawnManaged, settleGroup, assertLease, assertIdleWriter, editorSlot, revoke, event, assertManagedModel, buildDependencyHandoff, waveSiblingMatches, waveSiblingConflict } from './runtime.mjs';
+import { Runtime, launch, loadRun, summary, groupAlive, runEditor, runEditorBatch, packetPaths, fencedPath, runCommand, runVerification, runCompletion, runAdvice, activeGroups, spawnManaged, settleGroup, assertLease, assertIdleWriter, editorSlot, revoke, event, assertManagedModel, buildDependencyHandoff, waveSiblingMatches, waveSiblingConflict } from './runtime.mjs';
 import { createVerificationRecorder, readVerificationIncidents } from './sentinel.mjs';
 import { makePackageFixture } from './package-fixture.mjs';
 import { createOwnership } from './ownership.mjs';
@@ -133,6 +133,72 @@ test('editor packet context attaches exact ranges and per-packet reasoning overr
   assert.equal(captured.record.editor_model, `${provider}/${model}:off`);
   assert.equal(loadRun(f.packagePath).editor_model, record.editor_model, 'the run record keeps the assignment selector');
   await runtime.cancel(f.packagePath, record.id);
+});
+
+// Run alone: node --test --test-name-pattern='parallel packets' pi/extensions/spec-runtime/runtime.test.mjs
+test('parallel packets run concurrently in the shared checkout, each fenced to its own files without shell or questions', async t => {
+  // Each fake editor marks itself started, then waits up to 3 s to see its sibling's mark.
+  const f = await fixture(t, `
+    if (process.env.SPEC_RUNTIME_ROLE === 'editor') {
+      const fs = require('fs'), path = require('path');
+      const marks = path.join(path.dirname(process.env.SPEC_RUNTIME_RECORD), 'marks');
+      fs.mkdirSync(marks, { recursive: true });
+      fs.writeFileSync(path.join(marks, process.env.PI_INTERCOM_STABLE_ID), '');
+      const begun = Date.now();
+      const wait = () => {
+        const both = fs.readdirSync(marks).length >= 2;
+        if (!both && Date.now() - begun < 3000) return setTimeout(wait, 20);
+        console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text: both ? 'saw sibling' : 'ran alone'}]}}));
+        console.log(JSON.stringify({type:'agent_settled',aborted:false}));
+      };
+      wait();
+    }
+    setInterval(() => {}, 1000);
+  `);
+  const launchProcess = f.options.launchProcess, editors = [];
+  f.options.launchProcess = (r, role, prompt, opts = {}) => {
+    if (role === 'editor') editors.push({ prompt, opts });
+    return launchProcess(r, role, prompt, { ...opts, shutdownGraceMs: 25 });
+  };
+  const runtime = new Runtime(f.options);
+  await runtime.start(f.input);
+  const record = loadRun(f.packagePath);
+  await assert.rejects(runEditorBatch(record, [{ assignment: 'A', paths: ['a.mjs'] }], undefined, f.options.launchProcess), /2 to 4 packets/);
+  const reply = await runEditorBatch(record, [{ assignment: 'Edit a', paths: ['a.mjs'] }, { assignment: 'Edit b', paths: ['./lib/b.mjs'] }], undefined, f.options.launchProcess);
+  assert.equal(reply.error, undefined);
+  assert.equal(reply.results.length, 2);
+  assert.deepEqual(reply.results.map(item => [item.error, item.paths]), [[undefined, ['a.mjs']], [undefined, ['lib/b.mjs']]]);
+  assert.equal(JSON.stringify(reply.results).match(/saw sibling/g)?.length, 2, 'both editors were alive at the same time');
+  assert.deepEqual(editors.map(e => e.opts.tools), ['read,grep,find,ls,edit,write', 'read,grep,find,ls,edit,write']);
+  assert.deepEqual(editors.map(e => JSON.parse(e.opts.env.SPEC_EDITOR_PATHS)), [['a.mjs'], ['lib/b.mjs']]);
+  assert.notEqual(editors[0].opts.env.PI_INTERCOM_STABLE_ID, editors[1].opts.env.PI_INTERCOM_STABLE_ID);
+  assert.match(editors[0].prompt, /PARALLEL PACKET: .*may edit or write only: a\.mjs\./);
+  // Each member keeps its own outcome receipt; the per-run receipt folds them.
+  const runs = join(f.packagePath, 'runtime/runs');
+  const memberReceipts = [1, 2].map(member => JSON.parse(readFileSync(join(runs, `${record.id}-editor-outcome-${member}.json`), 'utf8')));
+  assert.deepEqual(memberReceipts.map(item => [item.state, item.session]), reply.results.map(item => ['completed', item.editor_session]));
+  const folded = JSON.parse(readFileSync(join(runs, `${record.id}-editor-outcome.json`), 'utf8'));
+  assert.equal(folded.state, 'completed');
+  assert.deepEqual(folded.members.map(item => [item.member, item.state]), [[1, 'completed'], [2, 'completed']]);
+  assert.equal(existsSync(editorSlot(record)), false, 'the batch releases the writer slot');
+  await runtime.cancel(f.packagePath, record.id);
+});
+
+// Run alone: node --test --test-name-pattern='parallel packet paths' pi/extensions/spec-runtime/runtime.test.mjs
+test('parallel packet paths must be declared, inside the checkout and disjoint; the fence admits only them', () => {
+  const record = { checkout: '/repo' };
+  assert.deepEqual(packetPaths(record, [{ paths: ['src/a.mjs'] }, { paths: ['/repo/src/b.mjs', 'test/b.test.mjs'] }]), [['src/a.mjs'], ['src/b.mjs', 'test/b.test.mjs']]);
+  assert.throws(() => packetPaths(record, [{ paths: ['src/a.mjs'] }, { paths: ['src'] }]), /packets 1 and 2 overlap at src\/a\.mjs/);
+  assert.throws(() => packetPaths(record, [{ paths: ['a.mjs'] }, { paths: ['./a.mjs'] }]), /overlap at a\.mjs/);
+  assert.throws(() => packetPaths(record, [{ paths: ['a.mjs'] }, { paths: ['../other/a.mjs'] }]), /packet 2 path \.\.\/other\/a\.mjs is outside the checkout/);
+  assert.throws(() => packetPaths(record, [{ paths: ['a.mjs'] }, { paths: [] }]), /packet 2 needs paths/);
+  assert.equal(fencedPath('/repo', 'src/a.mjs', ['src/a.mjs']), true);
+  assert.equal(fencedPath('/repo', '/repo/src/a.mjs', ['src/a.mjs']), true);
+  assert.equal(fencedPath('/repo', 'src/a.mjs.bak', ['src/a.mjs']), false, 'a name prefix is not the file');
+  assert.equal(fencedPath('/repo', 'src/b.mjs', ['src/a.mjs']), false);
+  assert.equal(fencedPath('/repo', 'src/../../etc/passwd', ['src']), false);
+  assert.equal(fencedPath('/repo', 'src/deep/x.mjs', ['src']), true, 'a fenced directory covers its contents');
+  assert.equal(fencedPath('/repo', undefined, ['src']), false);
 });
 
 test('prepared startup routes hard work, returns retained progress, and never equates worker completion with acceptance', async t => {

@@ -254,7 +254,9 @@ do not add a mandatory agent, blanket test matrix, or unchanged full-journey rer
 
 Routine completion stays in this assignment: have the editor format affected files
 before the final focused gate, then execute every applicable required gate, including
-browser work that is ready to run. A gate that has not been attempted is remaining
+browser work that is ready to run. A gate that selects tests by name skips the rest of
+each file it runs, so also run every test file the step modified in full, once, at the
+final revision; in one run a name-filtered gate let a writer-lease regression through. A gate that has not been attempted is remaining
 work, not itself a reason to return a checkpoint. Return early for a concrete blocker,
 unresolved consequential decision, deadline, or owner transfer; record that reason.
 An interruption can also require a durable partial handoff. Supply `checkpoint_reason`

@@ -57,6 +57,30 @@ test('compaction preflight sizes the sent summary text and context, not raw mess
   assert.deepEqual(await compact({ ...owner, tokensBefore: 40000, turnPrefixMessages: [{ text: 'x'.repeat(300000) }] }),
     { cancelled: true, aborted: true }, 'a ~100k split-turn prefix request');
   assert.equal(entries.at(-1).context_tokens, 40000);
+  // Codex compacts its cached history in place, so only the reported context counts there.
+  const large = { messagesToSummarize: [{ text: 'x'.repeat(510000) }], turnPrefixMessages: [], tokensBefore: 72000 };
+  const codex = async preparation => handlers.session_before_compact({ preparation }, { abort() {}, model: { provider: 'openai-codex' } });
+  assert.equal((await codex(large))?.cancel, undefined, 'a 170k native-text estimate does not block Codex at 72k context');
+  assert.equal((await codex({ ...large, tokensBefore: 95000 }))?.cancel, true);
+  assert.deepEqual(await compact(large), { cancelled: true, aborted: true }, 'the same history blocks a native summarizer');
+});
+
+// Run alone: node --test --test-name-pattern='resumed session' pi/extensions/context-budget/policy.test.mjs
+test('a resumed session seeds calibration from its last recorded usage', async () => {
+  const start = async entries => {
+    const handlers = {};
+    const pi = { on: (name, fn) => { (handlers[name] ??= []).push(fn); }, appendEntry() {}, getThinkingLevel() {} };
+    installContextBudget(pi);
+    for (const fn of handlers.session_start) await fn({}, { sessionManager: { getEntries: () => entries } });
+    let aborted = false;
+    handlers.before_provider_request[0]({ payload: { messages: [{ content: 'x'.repeat(364000) }] } }, { abort: () => { aborted = true; } });
+    return aborted;
+  };
+  const usage = (input, estimate) => ({ type: 'custom', customType: 'context-budget', data: { event: 'usage', input_tokens: input, estimated_input_tokens: estimate } });
+  // ~121k estimate; a recorded 0.53 ratio puts real input near 65k.
+  assert.equal(await start([usage(53000, 100000)]), false);
+  assert.equal(await start([]), true, 'no recorded usage keeps the raw estimate');
+  assert.equal(await start([usage(53000, 100000), usage(0, 90000)]), false, 'an entry without usage is skipped');
 });
 
 // Run alone: node --test --test-name-pattern='reasoning-only' pi/extensions/context-budget/policy.test.mjs

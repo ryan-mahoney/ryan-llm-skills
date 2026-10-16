@@ -150,7 +150,19 @@ review-only card-critic subagent per such card with this question: "Could a stro
 execute this card with only the card and the context pack, without further discovery or
 questions? List every open decision, unlisted consumed contract, and test case that lacks
 an exact assertion." Correct the card from that list, or record why an item is deliberately
-left to dispatch. In one run, every editor question on a hard step traced back to an undecided
+left to dispatch. A card that adds a path to edit also adds it to that step's `writes` in
+`spec-steps.json`: dispatch enforces the index, so an owner stops at startup on any mismatch.
+When a target would pass about 1,000 lines, the card names the split modules and declares them too.
+A `hard` card that wires several production boundaries uses `test-first` with a walking skeleton:
+its first packet writes the case that crosses the most boundaries, with thin stubs, and the owner
+observes it fail; each later packet names the boundary it makes pass. In one run an
+`implementation-first` hard step spent an hour on about 15 successive integration failures
+because its parts first ran together at the end.
+The card critic also checks that each edit-sequence item names its symbols, signatures, branches,
+return values and error codes, so the owner can send it as a closed packet. In two hard steps of
+one run, 30-40% of packets went out open, each using 25-60k editor reasoning tokens and about
+twice the time per turn of a closed packet. Group edits to disjoint files so their packets can run
+in parallel. In one run, every editor question on a hard step traced back to an undecided
 choice or a missing contract, and editors re-read the target and prerequisite files more
 than 250 times.
 For an easy card, plan directly; delegation adds nothing. Deepen any card only when repository evidence exposes a missing target, new public or ownership boundary, ambiguous acceptance behavior, unavailable focused verifier, architecture conflict, concurrency or migration risk, destructive data change, security boundary, or uncertain external runtime contract.

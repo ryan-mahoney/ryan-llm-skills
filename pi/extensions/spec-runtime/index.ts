@@ -1,12 +1,12 @@
 import { createSentinelDashboard } from './sentinel-dashboard.mjs';
 import { Type } from '@earendil-works/pi-ai';
 import { isRetryableAssistantError } from '@earendil-works/pi-ai/compat';
-import { getAgentDir, compact, SettingsManager } from '@earendil-works/pi-coding-agent';
+import { getAgentDir, SettingsManager } from '@earendil-works/pi-coding-agent';
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { randomUUID, createHash } from 'node:crypto';
 import { join, resolve, realpathSync } from 'node:path';
 import { homedir } from 'node:os';
-import { Runtime, loadRun, summary, assertLease, assertManagedModel, ROLE_CONTRACT, waveSiblingConflict, runEditor, runCommand, runVerification, runAdvice, runCompletion, packageDirOf, assertIdleWriter, event as runtimeEvent } from './runtime.mjs';
+import { Runtime, loadRun, summary, assertLease, assertManagedModel, ROLE_CONTRACT, FENCED_EDITOR_TOOLS, waveSiblingConflict, runEditor, runEditorBatch, fencedPath, runCommand, runVerification, runAdvice, runCompletion, packageDirOf, assertIdleWriter, event as runtimeEvent } from './runtime.mjs';
 import { assertModelSelector } from './model-selector.mjs';
 import { submitStage, recordStageFingerprint, REVIEW_CATEGORIES } from './wave-review.mjs';
 import { createCommunication } from './communication.mjs';
@@ -20,7 +20,7 @@ import { registerRepositorySearch } from './search.mjs';
 import { createSentinelControl } from './sentinel-control.mjs';
 import { installProgressContext, recordCheckpoint, refreshProgress } from './completion.mjs';
 import { metrics, formatMetrics } from './metrics.mjs';
-import { installContextBudget } from '../context-budget/policy.mjs';
+import installContextBudget from '../context-budget/index.ts';
 import { createWorkflowContinuation } from './workflow-continuation.mjs';
 import { installProviderRecovery } from './provider-recovery.mjs';
 
@@ -103,9 +103,12 @@ function realpathStep(step: string): string {
   try { return realpathSync(step); } catch { return step; }
 }
 
+const contextRanges = Type.Array(Type.Object({ path: Type.String({ description: 'Checkout-relative or package path' }), start: Type.Number({ minimum: 1 }), end: Type.Number({ minimum: 1 }) }), { description: 'Exact current source ranges to attach to the editor packet, usually from the step context pack. The editor edits from them instead of searching.' });
+const reasoningLevel = Type.Union(['off', 'low', 'high', 'max'].map(value => Type.Literal(value)), { description: 'Editor reasoning for this packet. Use off for a closed packet (decision made, exact excerpts and changes given); high for an open one.' });
+
 export default function (pi: any) {
-  installContextBudget(pi, { compact,
-    retrySettings: () => SettingsManager.inMemory(pi.getSettings()).getRetrySettings() });
+  // One installer wins per session; both entry points must pass the same options.
+  installContextBudget(pi);
   const role = process.env.SPEC_RUNTIME_ROLE;
   if (role) {
     const record = JSON.parse(readFileSync(process.env.SPEC_RUNTIME_RECORD!, 'utf8'));
@@ -114,12 +117,15 @@ export default function (pi: any) {
     // Stage roles have no intercom communication channel; createCommunication
     // rejects them (Invalid communication role) before stage tools install.
     const communication = stageRole ? undefined : createCommunication(pi, record, role, { onEvent: (name: string, detail: any) => runtimeEvent(record, name, detail) });
-    if (role === 'editor') installDiscoveryBudget(pi, { report: (name: string, detail: any) => runtimeEvent(record, name, detail) });
-    // Known roles select their tool allowlist from the shared contract; an
+    // A parallel packet's editor may write only its declared files and has no shell or owner channel.
+    const fence: string[] | undefined = role === 'editor' && process.env.SPEC_EDITOR_PATHS ? JSON.parse(process.env.SPEC_EDITOR_PATHS) : undefined;
+    if (role === 'editor') installDiscoveryBudget(pi, { parallel: Boolean(fence), report: (name: string, detail: any) => runtimeEvent(record, name, detail) });
+    // Known roles select their tool allowlist from the shared contract; a fenced
+    // editor keeps the editor contract minus its shell and owner channel. An
     // unknown role keeps the historical editor list (the guard still runs).
     const contract = (ROLE_CONTRACT as any)[role];
-    const allowed: string[] = contract
-      ? [...contract.tools, ...contract.providerTools]
+    const allowed: string[] = fence ? [...FENCED_EDITOR_TOOLS]
+      : contract ? [...contract.tools, ...contract.providerTools]
       : ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'spec_question'];
     // Stage roles are the union of contract names and the names this Pi
     // actually exposes; the intersection is both the active set and the guard.
@@ -174,6 +180,8 @@ export default function (pi: any) {
         const list = stageRole ? stageAllowed : allowed;
         if (!list.includes(event.toolName)) return { block: true, reason: 'This tool is outside the managed worker role.' };
         const input = event.input || {};
+        if (fence && ['edit', 'write'].includes(event.toolName) && !fencedPath(record.checkout, input.path, fence))
+          return { block: true, reason: `This parallel packet may write only ${fence.join(', ')}. Return the needed change to the owner instead.` };
         if (['bash', 'spec_verify'].includes(event.toolName) && /\bgit\s+(?:-[^\s]+\s+)*reset\s+--hard\b/.test(input.command)) return { block: true, reason: 'Hard resets are not allowed in a managed step. Return the recovery decision to the coordinator.' };
         if (event.toolName === 'spec_verify' && /\bgit\s+(?:-[^\s]+\s+)*reset\s+--hard\b/.test(input.server?.command || '')) return { block: true, reason: 'Hard resets are not allowed in managed server commands.' };
       } catch (error: any) { return { block: true, reason: error.message }; }
@@ -223,11 +231,19 @@ export default function (pi: any) {
           catch (error: any) { return result({ error: error.message, receipt_id: error.receipt_id }, true); }
         } });
       pi.registerTool({ name: 'spec_editor', label: 'Spec editor', description: 'Start a fresh editor session for this packet; include current decisions, paths and preservation constraints without relying on prior editor chat. Apply a bounded transformation whose behavior and architectural approach the owner has chosen; let the editor choose local implementation details. Send a Change/Edits/Preserve/Return packet with named symbols and concrete operations. The owner reads/searches source directly; reserve facts-only requests for a blocking fact unavailable through those tools. Return a compact result and artifact paths. The editor does not run verification; the owner uses spec_verify after the return. Do not delegate whole-step design or open-ended repair. Assess the return before the next assignment; commit is separate. No polling.',
-        parameters: Type.Object({ assignment: Type.String(),
-          context: Type.Optional(Type.Array(Type.Object({ path: Type.String({ description: 'Checkout-relative or package path' }), start: Type.Number({ minimum: 1 }), end: Type.Number({ minimum: 1 }) }), { description: 'Exact current source ranges to attach to the editor packet, usually from the step context pack. The editor edits from them instead of searching.' })),
-          reasoning: Type.Optional(Type.Union(['off', 'low', 'high', 'max'].map(value => Type.Literal(value)), { description: 'Editor reasoning for this packet. Use off for a closed packet (decision made, exact excerpts and changes given); high for an open one.' })) }),
+        parameters: Type.Object({ assignment: Type.Optional(Type.String({ description: 'One packet. Omit when sending packets.' })),
+          context: Type.Optional(contextRanges),
+          reasoning: Type.Optional(reasoningLevel),
+          packets: Type.Optional(Type.Array(Type.Object({ assignment: Type.String(), paths: Type.Array(Type.String(), { minItems: 1, description: 'Checkout-relative files this packet alone may write' }),
+            context: Type.Optional(contextRanges), reasoning: Type.Optional(reasoningLevel) }),
+            { minItems: 2, maxItems: 4, description: 'Closed packets that write disjoint files, run concurrently. Each editor is fenced to its paths, has no shell and cannot ask questions. Settle every shared interface first; keep a shared test file in one packet.' })) }),
         async execute(_id: string, args: any, signal: AbortSignal) {
-          try { const reply = await communication!.beginEditor(() => runEditor(record, args.assignment, signal, undefined, { context: args.context, reasoning: args.reasoning }), signal); return result(reply, Boolean(reply.error)); }
+          try {
+            if (args.packets && args.assignment) throw new Error('send either assignment or packets, not both');
+            const reply = await communication!.beginEditor(() => args.packets
+              ? runEditorBatch(record, args.packets, signal)
+              : runEditor(record, args.assignment, signal, undefined, { context: args.context, reasoning: args.reasoning }), signal);
+            return result(reply, Boolean(reply.error)); }
           catch (error: any) { return result({ error: error.message, ...(signal?.aborted ? { requires_cancellation: true } : {}), next: 'resolve this failure; do not start an unmanaged replacement' }, true); }
         } });
       pi.registerTool({ name: 'spec_answer', label: 'Answer editor', description: 'Answer the retained editor\'s pending decision and await the same editor process. Do not start a replacement editor.',
