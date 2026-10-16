@@ -23,7 +23,7 @@ read-only discovery using the installed scout profile; direct reads remain the d
 No general subagent tool is exposed to the owner or editor.
 
 The profiles come from `pi/agents/`. The owner uses the assigned capable model; the
-editor defaults to `deepseek/deepseek-flash:max`. Preserve exact selectors and
+editor defaults to `deepseek/deepseek-flash:low`. Preserve exact selectors and
 explicit overrides. Diagnose actual launch failures on this route; do not silently
 substitute models or providers. Non-Pi harnesses retain the direct worker route.
 

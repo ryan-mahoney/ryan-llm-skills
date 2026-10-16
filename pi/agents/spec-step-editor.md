@@ -1,7 +1,7 @@
 ---
 name: spec-step-editor
 description: Implements bounded code changes for a spec step owner; verification belongs to the owner.
-model: deepseek/deepseek-flash:max
+model: deepseek/deepseek-flash:low
 systemPromptMode: append
 inheritProjectContext: true
 inheritSkills: false
