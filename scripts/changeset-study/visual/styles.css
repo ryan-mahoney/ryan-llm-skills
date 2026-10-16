@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root { color-scheme: light; }
+  html { scroll-behavior: smooth; scroll-padding-top: 5rem; }
+  body { background: #f7f6f0; color: #21332e; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; }
+  h1, h2, h3 { text-wrap: balance; }
+  p { text-wrap: pretty; }
+  a:focus-visible, button:focus-visible, summary:focus-visible { outline: 3px solid #b34c22; outline-offset: 5px; }
+  button { touch-action: manipulation; }
+}
+@layer components {
+  .wrap { @apply mx-auto max-w-6xl px-5 sm:px-8; }
+  .eyebrow { @apply text-xs font-bold uppercase tracking-widest; color: #52615b; }
+  .section-title { @apply text-3xl sm:text-4xl font-semibold tracking-tight; }
+  .body-copy { @apply text-base leading-7; color: #46574f; }
+  .rule { border-color: #cbd2c7; }
+  .green { color: #087760; }
+  .step { @apply flex min-h-14 items-center gap-3 border-b px-3 py-3 text-left text-sm; border-color: #cbd2c7; }
+  .step[aria-pressed='true'] { background: #21332e; color: #fff; }
+  .step:hover { background: #e2e9df; color: #21332e; }
+  .operation { @apply border px-4 py-4; border-color: #879c90; background: #fff; }
+  .operation[data-state='ready'] { border-color: #087760; background: #e2f0e9; }
+  .operation[data-state='done'] { border-color: #087760; background: #087760; color: #fff; }
+  .source-link { @apply underline underline-offset-4; }
+}
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+@media print {
+  header, #walk-controls, .screen-only { display: none !important; }
+  body { background: white; }
+  section { break-inside: avoid; }
+  .wrap { max-width: none; }
+}

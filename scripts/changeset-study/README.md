@@ -6,6 +6,35 @@ The earlier [executor findings](../changeset-research/FINDINGS.md) remain separa
 The completed [matched findings](FINDINGS.md) explain the measured result and its limits;
 [results.json](results.json) retains the compact campaign evidence.
 
+## Read the explanation
+
+- [Offline HTML visual](visual.html): interactive dependency walkthrough, performance
+  and acceptance charts, and the proposed integration path. Download/open the HTML
+  in a browser; GitHub's source view does not render it as a page.
+- [Process description](PROCESS.md): planning, scheduling, staged file state,
+  verification, repair and publication limits.
+- [Integration notes](INTEGRATION.md): runtime seams and an opt-in rollout into
+  `spec-end-to-end`. This integration is proposed, not implemented.
+
+The HTML includes compiled Tailwind CSS, JavaScript and Matplotlib SVG figures.
+It makes no network requests and needs no server. Its companion-document links work
+when the repository files remain alongside it. The figures are also available as
+standalone SVGs in [visual/](visual/).
+
+Rebuild the visual from the committed results (Node, npm, uv; the first build needs
+network access to fetch the pinned build tools):
+
+```sh
+node scripts/changeset-study/visual/build.mjs
+```
+
+Edit `visual/template.html` and `visual/styles.css`, then rebuild; do not hand-edit
+the generated `visual.html`. The builder uses Tailwind 3.4.17 and Matplotlib 3.11.2
+without adding project dependencies. The charts derive from `results.json`; the
+prose describes this frozen campaign and must be reviewed if the dataset changes.
+
+## Run the study
+
 Requirements: Node 22, the configured managed Pi SDK and authorized provider models,
 Linux bubblewrap, Python 3, and Git history containing the two historical fixtures.
 No dependencies or network access are available to model-generated commands.

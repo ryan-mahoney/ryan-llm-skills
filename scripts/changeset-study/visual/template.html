@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23087760'/%3E%3Cpath d='M8 9h16M8 16h10M8 23h16' stroke='white' stroke-width='3'/%3E%3C/svg%3E">
+  <meta name="description" content="How executable changesets reduce model round trips, what a 96-trial study found, and a proposed path into spec-end-to-end.">
+  <title>Executable changesets — process, evidence, integration</title>
+  <style>/* INLINE_STYLES */</style>
+</head>
+<body>
+<a href="#main" class="sr-only focus:not-sr-only focus:block focus:p-4">Skip to content</a>
+<header class="border-b rule bg-[#f7f6f0]">
+  <div class="wrap flex flex-wrap items-center justify-between gap-x-8 py-3">
+    <a href="#main" class="font-bold text-sm py-3">CHANGESET STUDY <span class="ml-2 font-normal text-[#52615b]">/ 2026.10</span></a>
+    <nav aria-label="Page sections" class="flex gap-5 text-sm">
+      <a class="py-3" href="#process">Process</a><a class="py-3" href="#evidence">Evidence</a><a class="py-3" href="#integration">Integration</a>
+    </nav>
+  </div>
+</header>
+<main id="main">
+  <section class="wrap py-14 sm:py-20">
+    <p class="eyebrow mb-6">An execution experiment for spec-driven development</p>
+    <div class="grid lg:grid-cols-[1.7fr_1fr] gap-10 lg:gap-16 items-end">
+      <div>
+        <h1 class="text-5xl sm:text-7xl font-semibold tracking-[-0.055em] leading-[1.03]">Plan the change.<br>Execute the batch.</h1>
+        <p class="body-copy mt-7 max-w-2xl text-lg">A capable model turns settled decisions into executable edits. A dependency-aware runtime applies them, then verification checks the integrated result.</p>
+      </div>
+      <div class="border-l-4 border-[#087760] pl-6">
+        <p class="text-6xl sm:text-7xl font-semibold tracking-tight green">24%<span class="block text-xl tracking-normal mt-2">less mean wall time</span></p>
+        <p class="body-copy mt-4">Sol 6.1, 16 trials per approach.<br>Both retained <strong>16/16 accepted outcomes</strong> after supplemental checks.</p>
+        <p class="text-sm leading-6 mt-3 text-[#52615b]">A measured result on a small corpus. Integration into the spec workflow is still proposed.</p>
+      </div>
+    </div>
+    <div class="mt-12 border-y rule grid grid-cols-2 md:grid-cols-4 gap-5 py-6 text-sm">
+      <p><strong class="block text-2xl mb-1">96 trials</strong>8 families × 3 models × 2 arms × 2 repeats</p>
+      <p><strong class="block text-2xl mb-1">Same model</strong>Every role within each compared arm</p>
+      <p><strong class="block text-2xl mb-1">Full elapsed time</strong>Planning through review and grading</p>
+      <p><strong class="block text-2xl mb-1">Frozen outputs</strong>Hidden checks never fed repairs</p>
+    </div>
+  </section>
+
+  <section id="process" class="wrap pb-16 sm:pb-24">
+    <p class="eyebrow mb-3">01 / The mechanism</p>
+    <h2 class="section-title">Reason at the decision boundaries.</h2>
+    <p class="body-copy mt-5 max-w-3xl">Read relevant source to settle the change. Compile exact operations where possible; use a single model request where local implementation is still needed. Keep updates in a staged workspace so later operations see current contents.</p>
+    <div class="grid lg:grid-cols-[1fr_2.1fr] gap-8 mt-9">
+      <div id="walk-controls" role="group" aria-label="Illustrative execution stages" class="flex flex-col">
+        <button type="button" class="step" data-stage="0" aria-pressed="true"><span class="font-mono">01</span> Read and settle the batch</button>
+        <button type="button" class="step" data-stage="1" aria-pressed="false"><span class="font-mono">02</span> Compile dependencies</button>
+        <button type="button" class="step" data-stage="2" aria-pressed="false"><span class="font-mono">03</span> Run independent operations</button>
+        <button type="button" class="step" data-stage="3" aria-pressed="false"><span class="font-mono">04</span> Apply dependent operations</button>
+        <button type="button" class="step" data-stage="4" aria-pressed="false"><span class="font-mono">05</span> Verify and review the batch</button>
+        <button type="button" class="step" data-stage="5" aria-pressed="false"><span class="font-mono">06</span> Repair or accept</button>
+      </div>
+      <div class="border rule p-5 sm:p-7 bg-[#edf0e8]">
+        <div class="flex flex-wrap gap-2 justify-between items-center mb-6"><h3 class="font-semibold">One staged workspace</h3><span class="text-xs uppercase tracking-wider text-[#52615b]">Illustration · not a timing trace</span></div>
+        <div class="grid sm:grid-cols-2 gap-4">
+          <div class="operation" id="op-a" data-state="waiting"><p class="text-xs uppercase tracking-wide mb-2">A · config.json</p><p class="font-semibold">Set timeout</p><p class="text-sm mt-1">Exact JSON update</p></div>
+          <div class="operation" id="op-b" data-state="waiting"><p class="text-xs uppercase tracking-wide mb-2">B · helper.mjs</p><p class="font-semibold">Rename helper</p><p class="text-sm mt-1">Exact replacement</p></div>
+          <div class="operation" id="op-c" data-state="waiting"><p class="text-xs uppercase tracking-wide mb-2">C · config.json · after A</p><p class="font-semibold">Add retry setting</p><p class="text-sm mt-1">Reads A’s updated contents</p></div>
+          <div class="operation" id="op-d" data-state="waiting"><p class="text-xs uppercase tracking-wide mb-2">D · caller.mjs · after B</p><p class="font-semibold">Update caller</p><p class="text-sm mt-1">Uses B’s settled interface</p></div>
+        </div>
+        <div class="mt-6 pt-5 border-t rule min-h-32" aria-live="polite" aria-atomic="true">
+          <p id="stage-title" class="font-semibold">The planner makes the decisions.</p>
+          <p id="stage-copy" class="text-sm leading-6 mt-2">It reads the specification and current source, then names edits, preservation constraints, read/write paths and dependencies.</p>
+          <p id="stage-state" class="font-mono text-xs mt-3">A waiting · B waiting · C waiting · D waiting</p>
+        </div>
+        <noscript><p class="mt-4 text-sm">Stage navigation needs JavaScript. The dependency diagram and all results remain available. A and B run independently; C follows A and D follows B, then the batch is checked and either repaired or accepted.</p></noscript>
+      </div>
+    </div>
+    <div class="grid md:grid-cols-3 gap-8 mt-10">
+      <div><h3 class="font-semibold mb-2">Exact operations first</h3><p class="body-copy text-sm">Create, replace, rename, delete or update JSON. The runtime checks anchors and ownership without another model conversation.</p></div>
+      <div><h3 class="font-semibold mb-2">Order shared-file changes</h3><p class="body-copy text-sm">Dependencies and overlapping reads/writes serialize conflicts. Later operations see staged updates; stale anchors fail explicitly.</p></div>
+      <div><h3 class="font-semibold mb-2">Repair at the batch boundary</h3><p class="body-copy text-sm">The prototype permits one repair by default. Failed operations block dependents; successful draft work can carry into repair.</p></div>
+    </div>
+    <p class="mt-7 text-sm leading-6 border-l-2 border-[#879c90] pl-4">Source reading and behavioral checks still matter. A syntax pass cannot establish the intended impact. Disk publication requires exclusive writer ownership; the prototype is not crash-atomic.</p>
+  </section>
+
+  <section id="evidence" class="border-y rule bg-white py-14 sm:py-20">
+    <div class="wrap">
+      <p class="eyebrow mb-3">02 / The measured result</p>
+      <h2 class="section-title">Fewer round trips. Less repeated context.</h2>
+      <p class="body-copy mt-5 max-w-3xl">Sol’s changeset arm used only <strong>one separate model-editor call</strong> across 16 trials. Most plans already contained the exact edits. That supports capable planning and deterministic application; this result does not establish a gain from cheaper editor routing.</p>
+      <div class="grid md:grid-cols-2 gap-x-12 gap-y-9 mt-10">
+        <figure><h3 class="font-semibold text-lg">Time to the complete outcome</h3><img class="w-full mt-3" src="FIGURE_time" alt="Sol mean wall time: native agent 20.45 seconds; changeset 15.60 seconds. Zero-based bars."><figcaption class="text-sm leading-6 text-[#52615b]">Includes startup, planning, discovery, execution, checks, review, repair and terminal grading.</figcaption></figure>
+        <figure><h3 class="font-semibold text-lg">Model calls</h3><img class="w-full mt-3" src="FIGURE_calls" alt="Sol total model calls across 16 trials: native agent 77; changeset 41. Zero-based bars."><figcaption class="text-sm leading-6 text-[#52615b]">47% fewer calls. The conventional agent could already batch edits and execute tools in parallel.</figcaption></figure>
+        <figure><h3 class="font-semibold text-lg">Reported tokens</h3><img class="w-full mt-3" src="FIGURE_tokens" alt="Sol reported tokens across 16 trials: native agent 180,424; changeset 78,622. Zero-based bars."><figcaption class="text-sm leading-6 text-[#52615b]">56% fewer reported tokens, counting input, output and cache categories in the recorded usage.</figcaption></figure>
+        <figure><h3 class="font-semibold text-lg">Equivalent cost</h3><img class="w-full mt-3" src="FIGURE_cost" alt="Sol equivalent cost across 16 trials: native agent 0.05869 dollars; changeset 0.03020 dollars. Zero-based bars."><figcaption class="text-sm leading-6 text-[#52615b]">49% lower under the requested Sol-at-DeepSeek-rates assumption. Estimates are not subscription charges or quota usage.</figcaption></figure>
+      </div>
+      <div class="mt-10 border-y rule py-6 flex flex-col sm:flex-row gap-5 sm:items-center">
+        <p class="text-4xl font-semibold green shrink-0">1.32×</p><p class="body-copy text-sm"><strong>Task-balanced speed ratio for Sol; 95% interval 1.17–1.52×.</strong><br>Bootstrap resamples eight workload families. This differs from the ratio of overall means. A small purposive corpus does not establish general production superiority.</p>
+      </div>
+      <div id="acceptance" class="grid lg:grid-cols-[1fr_1.15fr] gap-10 items-center mt-14">
+        <figure><h3 class="font-semibold text-lg">Quality determines whether speed helps.</h3><img class="w-full mt-5" src="FIGURE_acceptance" alt="Post-hoc accepted outcomes, native agent versus changeset, out of 16 each: Sol 16 versus 16; DeepSeek 16 versus 13; Mercury 12 versus 8."><figcaption class="text-sm leading-6 text-[#52615b]">Supplemental contract checks applied to all 96 frozen candidates. Original scores remain recorded separately.</figcaption></figure>
+        <div class="space-y-5">
+          <p class="body-copy"><strong>Sol retained acceptance.</strong> Both approaches passed 16/16 before and after the supplemental audit.</p>
+          <p class="body-copy"><strong>DeepSeek and Mercury regressed.</strong> Changesets passed 13/16 and 8/16 respectively after the audit. Faster successful runs do not establish an overall advantage.</p>
+          <p class="body-copy"><strong>The original grader missed a contract.</strong> Supplemental checks found six additional regressions. These checks were post-hoc; candidates were never repaired using those results.</p>
+        </div>
+      </div>
+      <details class="mt-10 border-y rule py-5">
+        <summary class="cursor-pointer font-semibold py-2">Read study design and limits</summary>
+        <div class="grid md:grid-cols-2 gap-8 mt-5 body-copy text-sm">
+          <div><p>Six synthetic tasks and two historical fixes in extracted modules; three models, two approaches, two repetitions. Each pair used the same model and reasoning selector for all roles. The baseline used native Pi read/bash/edit/write tools with ordinary batching and parallel execution.</p><p class="mt-4">Selectors: <code class="break-all">deepseek/deepseek-flash:off</code>, <code class="break-all">openai-codex/gpt-6.1-sol:low</code>, <code class="break-all">openrouter/inception/mercury-2.5:low</code>.</p></div>
+          <div><p>Code, prompts, workload and SDK were frozen. Pair order was balanced and randomized. Each cell had a 300-second / 32-call cap. Failures remain in results; failure-adjusted timing assigns the 300-second cap to unsuccessful cells.</p><p class="mt-4">This does not measure large feature delivery, full repository navigation, mixed-model routing, subscription quota, or the current managed owner/editor workflow. Provider load and caching can affect latency.</p></div>
+        </div>
+      </details>
+    </div>
+  </section>
+
+  <section id="integration" class="wrap py-14 sm:py-20">
+    <p class="eyebrow mb-3">03 / The proposed integration</p>
+    <h2 class="section-title">Give the existing owner an executable handoff.</h2>
+    <p class="body-copy mt-5 max-w-3xl">Add an opt-in changeset backend at <code>spec_editor</code>. The current owner already settles behavior and supplies source context. It can compile a coherent batch directly, without adding another planning model.</p>
+    <ol class="grid sm:grid-cols-2 lg:grid-cols-4 gap-0 mt-9 border rule bg-white">
+      <li class="p-5 border-b lg:border-b-0 lg:border-r rule"><span class="eyebrow">01 / Prepare</span><h3 class="font-semibold my-3">Step + current source</h3><p class="text-sm leading-6">Compile when the step runs, after prerequisites land. Preserve the prepared acceptance requirements.</p></li>
+      <li class="p-5 border-b lg:border-b-0 lg:border-r rule bg-[#e2f0e9]"><span class="eyebrow">02 / Extend</span><h3 class="font-semibold my-3">Changeset backend</h3><p class="text-sm leading-6">Use the managed writer lease, staged workspace and scheduler. Keep the ordinary editor available.</p></li>
+      <li class="p-5 border-b sm:border-b-0 lg:border-r rule"><span class="eyebrow">03 / Assess</span><h3 class="font-semibold my-3">Batch checks + repair</h3><p class="text-sm leading-6">Owner runs required focused gates. Test-first steps still observe the intended failure before implementation.</p></li>
+      <li class="p-5"><span class="eyebrow">04 / Complete</span><h3 class="font-semibold my-3">Commit + review</h3><p class="text-sm leading-6">Retain completion receipts, independent step review and coordinator acceptance.</p></li>
+    </ol>
+    <div class="grid md:grid-cols-2 gap-10 mt-10">
+      <div><h3 class="font-semibold text-xl mb-4">Engineering still required</h3><ul class="list-disc pl-5 space-y-3 body-copy text-sm"><li>Connect leases, path fences, cancellation and managed receipts.</li><li>Scope snapshots and preserve dirty files; route unsupported inputs to the existing editor.</li><li>Detect stale source and define interrupted-publication recovery.</li><li>Adapt batch review to existing responsibilities and make repair/fallback explicit.</li></ul></div>
+      <div><h3 class="font-semibold text-xl mb-4">The next comparison</h3><p class="body-copy">Measure real prepared steps against <strong>today’s managed owner/editor process</strong>, which already batches and parallelizes some work. Count time through verification and independent review repairs, acceptance, calls, tokens and fallback rate.</p><p class="body-copy mt-4">Start with capable planning and deterministic edits. Evaluate cheaper routing separately. The measured 24% reduction is not an estimate for the entire spec workflow.</p></div>
+    </div>
+  </section>
+</main>
+<footer class="border-t rule py-8">
+  <div class="wrap grid md:grid-cols-2 gap-6 text-sm leading-6">
+    <p><strong>Executable changesets / research prototype</strong><br>Study completed 16 October 2026. This page embeds its styles, scripts and figures and works offline. Stage controls illustrate execution; they do not run models or modify files.</p>
+    <div><p class="font-semibold mb-2">Supporting material in this repository</p><div class="flex flex-wrap gap-x-5 gap-y-3"><a class="source-link" href="PROCESS.md">Process description</a><a class="source-link" href="INTEGRATION.md">Integration notes</a><a class="source-link" href="FINDINGS.md">Findings</a><a class="source-link" href="results.md">Full results</a><a class="source-link" href="results.json">Data</a><a class="source-link" href="PROTOCOL.md">Protocol</a></div><p class="mt-3 text-[#52615b]">Document links require the companion repository files. All explanatory content and charts above travel with this HTML file.</p></div>
+  </div>
+</footer>
+<script>
+(() => {
+  const stages = [
+    ['The planner makes the decisions.', 'It reads the specification and current source, then names edits, preservation constraints, read/write paths and dependencies.', ['waiting','waiting','waiting','waiting']],
+    ['Dependencies determine the order.', 'A must precede C because both write config.json. D explicitly depends on B. A and B are independent and can start together.', ['ready','ready','waiting','waiting']],
+    ['Independent operations can run together.', 'A sets the timeout while B renames the helper. These exact operations need no model-editor call. Successful results enter the private draft.', ['done','done','waiting','waiting']],
+    ['Dependent operations use the updated draft.', 'C sees the timeout already set by A. D uses the interface chosen in B. Shared-file work is ordered; the runtime never asks two writers to merge stale copies.', ['done','done','done','done']],
+    ['Check the behavior of the integrated candidate.', 'Run the required behavioral checks and impact review. Syntax validation alone cannot establish acceptance. Hidden study graders were never available to this repair stage.', ['done','done','done','done']],
+    ['Accept the batch, or return a bounded repair.', 'If checks or review fail, preserve successful private draft work and issue a repair plan; the default permits one repair. Accept only when the required checks and review pass. Disk publication is a separate controlled step.', ['done','done','done','done']]
+  ];
+  const buttons = [...document.querySelectorAll('[data-stage]')];
+  buttons.forEach(button => button.addEventListener('click', () => {
+    const index = Number(button.dataset.stage), [title, copy, states] = stages[index];
+    buttons.forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+    document.getElementById('stage-title').textContent = title;
+    document.getElementById('stage-copy').textContent = copy;
+    document.getElementById('stage-state').textContent = states.map((state, i) => `${'ABCD'[i]} ${state}`).join(' · ');
+    states.forEach((state, i) => document.getElementById(`op-${'abcd'[i]}`).dataset.state = state);
+  }));
+})();
+</script>
+</body>
+</html>
