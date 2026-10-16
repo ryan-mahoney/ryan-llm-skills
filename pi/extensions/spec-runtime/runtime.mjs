@@ -1532,7 +1532,7 @@ export class Runtime {
       record.state = result.error ? 'failed' : 'completed'; record.error = result.error; record.result = result.result; record.stop_reason = result.stop_reason;
       // A wave checkout is an overlay tree: its completion receipt is checked
       // against the retained identity, not by running git outside the overlay.
-      record.handoff = completionStatus(record, { checkHead: !record.wave_bindings });
+      record.handoff = completionStatus(record, { checkHead: true });
       record.result_truncated = result.result_truncated; record.full_result_path = result.full_result_path; record.finished_at = timestamp();
       record.shutdown_cleanup = result.shutdown_cleanup === true;
     }

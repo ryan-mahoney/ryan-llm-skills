@@ -403,3 +403,32 @@ test('wave runtime: a drained overlay is checked via the same-run revision recei
   rmSync(receiptFile);
   assert.equal(completionStatus(a.r, { checkHead: true }).status, 'handoff_incomplete');
 });
+
+for (const proof of ['valid', 'missing', 'mismatched']) {
+  test(`wave runtime: Runtime finish and refresh reject invalid revision proof (${proof})`, async t => {
+    const { Runtime } = await import('./runtime.mjs');
+    const w = await waveRuns(t, [{ id: 'wave-a', attempt_id: 'attempt-a', started_at: '2026-01-01T00:00:00.000Z' }]);
+    const [a] = w.runs;
+    assert.equal(submitCompletion(a.r, a.input).status, 'recorded');
+    const receiptFile = join(w.pkg, 'runtime/runs', `${a.r.id}-revision.json`);
+    if (proof === 'missing') rmSync(receiptFile);
+    if (proof === 'mismatched') {
+      const receipt = JSON.parse(readFileSync(receiptFile, 'utf8'));
+      writeFileSync(receiptFile, JSON.stringify({ ...receipt, commit: '0'.repeat(40) }));
+    }
+    // No outside Git checkout remains after the contained service drains.
+    rmSync(a.checkout, { recursive: true, force: true });
+    const runtime = new Runtime();
+    runtime.drainContainedService = async () => {
+      a.r.phase_drain = { status: 'confirmed' };
+      return a.r.phase_drain;
+    };
+    await runtime.finish(a.r, { result: 'Done' });
+    const expected = proof === 'valid' ? 'recorded' : 'handoff_incomplete';
+    const saved = JSON.parse(readFileSync(join(w.pkg, 'runtime/runs', `${a.r.id}.json`), 'utf8'));
+    assert.equal(saved.handoff.status, expected);
+    const progress = await refreshProgress(w.pkg);
+    assert.equal(progress.runs.find(run => run.run_id === a.r.id).handoff.status, expected);
+    assert.equal(existsSync(join(w.pkg, 'learnings/step-001-learning.md')), proof === 'valid');
+  });
+}
