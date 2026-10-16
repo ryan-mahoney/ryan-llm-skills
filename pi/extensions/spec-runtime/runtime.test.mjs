@@ -208,6 +208,103 @@ test('repeated starts return the same run before and after completion; a second 
   await runtime.cancel(f.packagePath, replacement.run_id);
 });
 
+// Request-time admission must derive overlap from the request's own entry clock,
+// not the recorded (possibly backdated) dispatch timestamp. enteredAt is read from
+// the local Date at start() entry, so a fake Date clock pins it deterministically
+// without mocking scheduling or sleeping. The injected inspectClaims seam suspends
+// the pending start; the synthetic prior run.json and the entry-relative prior
+// timestamps are published while it waits, before record inspection.
+const serialAdmissionIntervalScenarios = [
+  { scenario: 'before/before(-10,-1,completed)', startOffset: -10, finishOffset: -1, state: 'completed', admit: true },
+  { scenario: 'before/during(-10,+20,completed)', startOffset: -10, finishOffset: 20, state: 'completed', admit: false },
+  { scenario: 'before/active(-10,null,running)', startOffset: -10, finishOffset: null, state: 'running', admit: false },
+  { scenario: 'during/during(+10,+20,completed)', startOffset: 10, finishOffset: 20, state: 'completed', admit: false },
+  { scenario: 'during/active(+10,null,running)', startOffset: 10, finishOffset: null, state: 'running', admit: false },
+  { scenario: 'equality(-10,0,completed)', startOffset: -10, finishOffset: 0, state: 'completed', admit: false },
+  { scenario: 'missing-finish(-10,omitted,completed)', startOffset: -10, finishOffset: 'omit', state: 'completed', admit: false },
+  { scenario: 'null-finish(-10,null,completed)', startOffset: -10, finishOffset: null, state: 'completed', admit: false },
+  { scenario: 'malformed-finish(-10,invalid,completed)', startOffset: -10, finishOffset: 'invalid', state: 'completed', admit: false },
+  { scenario: 'dead-active missing-finish(-10,omitted,running)', startOffset: -10, finishOffset: 'omit', state: 'running', admit: false, coordinatorPid: 0 },
+  { scenario: 'dead-active null-finish(-10,null,running)', startOffset: -10, finishOffset: null, state: 'running', admit: false, coordinatorPid: 0 }
+];
+for (const row of serialAdmissionIntervalScenarios) {
+  test(`serial admission interval: ${row.scenario}`, async t => {
+    const entry = Date.parse('2025-01-01T00:00:00.000Z');
+    const f = await fixture(t, 'setInterval(() => {}, 1000);');
+    const iso = ms => ms === null ? null : new Date(entry + ms).toISOString();
+    let releaseSeam;
+    const seamOpen = new Promise(resolve => { releaseSeam = resolve; });
+    let enteredSeam;
+    const seamEntered = new Promise(resolve => { enteredSeam = resolve; });
+    const realOwnership = createOwnership({ registryRoot: f.options.indexDir ? join(f.options.indexDir, 'ownership') : undefined });
+    const runtime = new Runtime({ ...f.options, ownership: { inspectClaims: async filter => {
+      enteredSeam();
+      await seamOpen;
+      return realOwnership.inspectClaims(filter);
+    } } });
+    f.runtimes.add(runtime);
+    t.mock.timers.enable({ apis: ['Date'], now: entry });
+    const pending = runtime.start({ ...f.input, assignment_id: `prior-${row.scenario}` });
+    await seamEntered;
+    const prior = { id: 'prior-run', assignment_id: 'prior-distinct', state: row.state,
+      coordinator_pid: row.coordinatorPid ?? process.pid, started_at: iso(row.startOffset) };
+    if (row.finishOffset !== 'omit') prior.finished_at = row.finishOffset === 'invalid' ? 'invalid' : iso(row.finishOffset);
+    mkdirSync(join(f.packagePath, 'runtime'), { recursive: true });
+    writeFileSync(join(f.packagePath, 'runtime/run.json'), JSON.stringify(prior));
+    t.mock.timers.setTime(entry + 30);
+    const before = readFileSync(join(f.packagePath, 'runtime/run.json'), 'utf8');
+    releaseSeam();
+    try {
+      if (row.admit) {
+        const started = await pending;
+        assert.equal(f.pids.length, 1, `${row.scenario}: an admitted start launched one process`);
+        await runtime.cancel(f.packagePath, started.run_id);
+      } else {
+        await assert.rejects(pending, error => error.code === 'run-active', `${row.scenario}: refusal code run-active`);
+        assert.equal(f.pids.length, 0, `${row.scenario}: a refused start launched no process`);
+        assert.equal(readFileSync(join(f.packagePath, 'runtime/run.json'), 'utf8'), before, `${row.scenario}: a refused start did not mutate the prior record`);
+      }
+    } finally {
+      releaseSeam();
+      t.mock.timers.reset();
+    }
+  });
+}
+
+test('serial admission interval: unknown-start refuses closed', async t => {
+  const entry = Date.parse('2025-01-01T00:00:00.000Z');
+  const f = await fixture(t, 'setInterval(() => {}, 1000);');
+  let releaseSeam;
+  const seamOpen = new Promise(resolve => { releaseSeam = resolve; });
+  let enteredSeam;
+  const seamEntered = new Promise(resolve => { enteredSeam = resolve; });
+  const realOwnership = createOwnership({ registryRoot: f.options.indexDir ? join(f.options.indexDir, 'ownership') : undefined });
+  const runtime = new Runtime({ ...f.options, ownership: { inspectClaims: async filter => {
+    enteredSeam();
+    await seamOpen;
+    return realOwnership.inspectClaims(filter);
+  } } });
+  f.runtimes.add(runtime);
+  t.mock.timers.enable({ apis: ['Date'], now: entry });
+  const pending = runtime.start({ ...f.input, assignment_id: 'prior-unknown-start' });
+  await seamEntered;
+  const prior = { id: 'prior-run', assignment_id: 'prior-distinct', state: 'completed',
+    coordinator_pid: process.pid, finished_at: new Date(entry + 20).toISOString() };
+  mkdirSync(join(f.packagePath, 'runtime'), { recursive: true });
+  writeFileSync(join(f.packagePath, 'runtime/run.json'), JSON.stringify(prior));
+  t.mock.timers.setTime(entry + 30);
+  const before = readFileSync(join(f.packagePath, 'runtime/run.json'), 'utf8');
+  releaseSeam();
+  try {
+    await assert.rejects(pending, error => error.code === 'run-active', 'unknown-start: refusal code run-active');
+    assert.equal(f.pids.length, 0, 'unknown-start: a refused start launched no process');
+    assert.equal(readFileSync(join(f.packagePath, 'runtime/run.json'), 'utf8'), before, 'unknown-start: a refused start did not mutate the prior record');
+  } finally {
+    releaseSeam();
+    t.mock.timers.reset();
+  }
+});
+
 test('a rejected cancellation preserves the lease and prevents replacement', async t => {
   const f = await fixture(t, 'setInterval(() => {}, 1000);');
   const runtime = new Runtime({ ...f.options, kill: () => { throw Object.assign(new Error('permission denied'), { code: 'EPERM' }); } });
@@ -884,19 +981,32 @@ test('CURRENT handoff carries bounded latest prerequisite facts and preserves ex
 });
 
 // Run alone: node --test --test-name-pattern='prompt construction failure' runtime.test.mjs
+// "Later" means strictly later milliseconds: an equality-refuses rule treats a request
+// entered at a prior run's finished_at millisecond as an overlap. A Date-only fake clock
+// pins each start's entry instant to the preceding run's finished_at + 1 so the ordering
+// is deterministic without sleeps; no scheduling or process behavior is mocked.
 test('prompt construction failure leaves a terminal receipt and permits a later dispatch', async t => {
   const f = await fixture(t, 'setInterval(()=>{},1000);'), runtime = new Runtime(f.options);
-  const prepared = await runtime.start({ ...f.input, assignment_id: 'prepare-checkout' });
-  await runtime.cancel(f.packagePath, prepared.run_id, 1000);
-  const unreadableCard = join(f.packagePath, 'step-002-subspec.md'); mkdirSync(unreadableCard);
-  await assert.rejects(() => runtime.start({ ...f.input, step: unreadableCard, assignment_id: 'bad-card' }), /EISDIR/);
-  const failed = loadRun(f.packagePath);
-  assert.equal(failed.state, 'failed');
-  assert.ok(failed.finished_at);
-  assert.equal(f.pids.length, 1);
-  const next = await runtime.start({ ...f.input, assignment_id: 'good-card' });
-  assert.equal(next.state, 'running');
-  await runtime.cancel(f.packagePath, next.run_id, 1000);
+  const fixedEpoch = Date.parse('2025-01-01T00:00:00.000Z');
+  t.mock.timers.enable({ apis: ['Date'], now: fixedEpoch });
+  t.after(() => t.mock.timers.reset());
+  try {
+    const prepared = await runtime.start({ ...f.input, assignment_id: 'prepare-checkout' });
+    await runtime.cancel(f.packagePath, prepared.run_id, 1000);
+    t.mock.timers.setTime(Date.parse(loadRun(f.packagePath).finished_at) + 1);
+    const unreadableCard = join(f.packagePath, 'step-002-subspec.md'); mkdirSync(unreadableCard);
+    await assert.rejects(() => runtime.start({ ...f.input, step: unreadableCard, assignment_id: 'bad-card' }), /EISDIR/);
+    const failed = loadRun(f.packagePath);
+    assert.equal(failed.state, 'failed');
+    assert.ok(failed.finished_at);
+    assert.equal(f.pids.length, 1);
+    t.mock.timers.setTime(Date.parse(failed.finished_at) + 1);
+    const next = await runtime.start({ ...f.input, assignment_id: 'good-card' });
+    assert.equal(next.state, 'running');
+    await runtime.cancel(f.packagePath, next.run_id, 1000);
+  } finally {
+    t.mock.timers.reset();
+  }
 });
 
 test('clarification redispatch reuses retained sessions and refuses the stale attempt ID', async t => {

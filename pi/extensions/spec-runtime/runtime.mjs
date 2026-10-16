@@ -908,32 +908,50 @@ export class Runtime {
     // Request-time admission: validation is async, so a prior run can reach a
     // terminal state while this request is being resolved. A terminal prior whose
     // lifetime overlaps this request's entry still occupied the package during
-    // admission and must refuse a different assignment. The recorded dispatch
-    // timestamp is not trusted for overlap; enteredAt is this request's own clock.
-    // Timestamp equality is not overlap: a prior run that finished in the same
-    // millisecond as this request entered can already be terminal beforehand, so
-    // overlap requires priorFinished strictly after enteredAt. ISO timestamps
-    // carry only millisecond precision, so equal values are treated
-    // conservatively as no overlap (false negative preferred to false positive).
+    // admission and must refuse a different assignment. Overlap is decided between
+    // two local intervals: the prior's [priorStarted, priorFinished] and this
+    // request's [enteredAt, inspectedAt]. inspectedAt is captured once, at the
+    // moment the prior record is inspected, and this request is treated as still
+    // running through it. Interval comparison table:
+    //   prior started    | prior finished    | outcome
+    //   before-entry     | before-entry      | admit
+    //   before-entry     | during-admission  | refuse
+    //   before-entry     | still-active      | refuse
+    //   during-admission | during-admission  | refuse
+    //   during-admission | still-active      | refuse
+    // Equality counts as overlap: a prior with priorFinished == enteredAt has a
+    // lifetime that reaches this request's entry, so it is treated as an overlap.
+    // Missing, null or unparseable prior timestamps are unknown, and an unknown
+    // terminal lifetime fails closed (refuse), since it cannot be shown to be
+    // disjoint from this request's interval.
+    const inspectedAt = timestamp();
     const latest = join(runtimeDir, 'run.json');
     if (!config.wave_bindings && existsSync(latest)) {
       const prior = read(latest);
       const active = ['running', 'cancelling', 'blocked'].includes(prior.state);
       const priorStarted = Number.isFinite(Date.parse(prior.started_at)) ? Date.parse(prior.started_at) : null;
       const priorFinished = Number.isFinite(Date.parse(prior.finished_at)) ? Date.parse(prior.finished_at) : null;
+      // Fail-closed for terminal/non-active records: an unknown start or finish, or
+      // a prior lifetime that reaches this request's entry, refuses the assignment.
+      const unknownLifetime = priorStarted === null || priorFinished === null;
       const overlappedThisRequest = priorStarted !== null && priorFinished !== null
-        && priorStarted <= Date.parse(enteredAt) && priorFinished > Date.parse(enteredAt);
+        && priorStarted <= Date.parse(inspectedAt) && priorFinished >= Date.parse(enteredAt);
       if (active) {
         const pid = prior.coordinator_pid ?? prior.pid;
         if (processAlive(pid)) throw refusalError({ code: 'run-active', message: `Run ${prior.id} is ${prior.state} and its coordinator (pid ${pid}) is alive.`,
           remedy: 'Await its completion or confirmed cancellation; start a new run only after it ends.' });
-        // Only an active run with a dead coordinator is marked stale; a run that
-        // completed during admission keeps its truthful terminal state.
+        // A dead coordinator is recoverable only when the active record carries a
+        // truthful known lifetime. An active-shaped record with an unknown start or
+        // finish cannot be safely cleared or admitted, so it stays fail-closed.
+        if (unknownLifetime) throw refusalError({ code: 'run-active', message: `Run ${prior.id} is ${prior.state} and its coordinator (pid ${pid}) is dead, but its lifetime is unknown.`,
+          remedy: 'Inspect the run record and clear it explicitly before starting a new run.' });
+        // Only an active run with a dead coordinator and a known lifetime is marked
+        // stale; a run that completed during admission keeps its truthful terminal state.
         prior.state = 'stale'; prior.finished_at = timestamp();
         save(prior); event(prior, 'run_stale', { coordinator_pid: pid });
       }
-      else if (overlappedThisRequest) {
-        throw refusalError({ code: 'run-active', message: `Run ${prior.id} ended at ${prior.finished_at} after this request entered the package.`,
+      else if (unknownLifetime || overlappedThisRequest) {
+        throw refusalError({ code: 'run-active', message: `Run ${prior.id} has an overlapping or unknown lifetime relative to this request's entry.`,
           remedy: 'Await its completion or confirmed cancellation; start a new run only after it ends.' });
       }
     }
