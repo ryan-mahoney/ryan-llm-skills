@@ -1,4 +1,16 @@
-# Matched Sol writer control (offline prototype)
+# Matched Sol writer control
+
+Measured status: controls 01 and 02 each completed application in all three cases,
+with valid frozen source-replay audits and no retries. Each passed delivery in two
+cases. Writing plus optimization took 102.32 and 108.18 seconds. See the
+[measured comparison](../../writer-control-results.md), [JSON evidence](../../writer-control-results.json)
+and [compact visual](../../writer-control-results.html). Provider output-limit and
+retry differences remain explicit; no full-workflow or global speed win is claimed.
+
+## Original prospective protocol
+
+The text below records the preparation design registered before live execution.
+Its original unmeasured status is historical; frozen copies remain unchanged.
 
 This separate control reuses terminal run-18 source, briefs, raw plans, dispatched
 plans and the exact frozen worker/backend. Only bounded writers use

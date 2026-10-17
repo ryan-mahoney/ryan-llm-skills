@@ -77,8 +77,7 @@
   const status = (kind,text) => `<span class="status ${kind}">${text}</span>`;
   let allocated = false;
   const runs = report.runs || [];
-  const preferred = runs.findIndex(r => r.run === '07-catalog-deterministic');
-  const initial = preferred >= 0 ? preferred : Math.max(0,runs.length-1);
+  const initial = Math.max(0,runs.length-1);
   runs.forEach((r,i) => { const o=document.createElement('option'); o.value=String(i); o.textContent=`${r.run} · ${r.optimization}/${r.query_mode}`; $('run-select').append(o); });
   $('run-select').value=String(initial);
   const usageFields=['calls','input','output','cacheRead','cacheWrite','totalTokens'];

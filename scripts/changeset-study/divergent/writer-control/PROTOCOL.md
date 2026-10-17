@@ -1,5 +1,17 @@
 # Fixed-plan Sol writer-boundary control
 
+Measured status: controls 01 and 02 each completed application in all three cases,
+with valid frozen source-replay audits and no retries. Each passed delivery in two
+cases. Writing plus optimization took 102.32 and 108.18 seconds. See the
+[measured comparison](../../writer-control-results.md), [JSON evidence](../../writer-control-results.json)
+and [compact visual](../../writer-control-results.html). Provider output-limit and
+retry differences remain explicit; no full-workflow or global speed win is claimed.
+
+## Original prospective protocol
+
+The text below records the preparation design registered before live execution.
+Its original unmeasured status is historical; frozen copies remain unchanged.
+
 This is an unmeasured, separate research control, not a new production route. Require
 terminal run 18 to complete application across the original calibration, handoff and
 extraction cases. Select no subset. The current research goal, models and shared $50 budget authorize the comparison.

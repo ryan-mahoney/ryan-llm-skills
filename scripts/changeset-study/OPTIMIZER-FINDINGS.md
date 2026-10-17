@@ -283,4 +283,25 @@ The writer comparison uses only application-complete configurations with identic
 
 Settled budget through 19: 422 entries, zero holds, $3.200381476 exposure against $50. Trial model receipts total $3.200122476; trial Jev adds $0.000169000 and another settled Jev entry $0.000090000. The prior archived ledger is excluded. Normalized model cost for 03–19 is $1.445934360, or $1.446103360 including trial Jev. Allocated charges are reused work, not additional campaign spend.
 
-The next comparison is a matched Sol writer control, currently in preparation; no live inference has run. The local application diagnostic at `22f1056` is implemented and checked offline but was absent from frozen 18/19. The study remains active and incomplete: repeated application completion is observed, while full delivery across all three and a quality-preserving Sol comparison remain unestablished. No further trial has started.
+The local application diagnostic at `22f1056` is implemented and checked offline but was absent from frozen 18/19. The following controls compare writers on that same earlier backend; they do not evaluate the diagnostic or full-workflow delivery.
+
+## Matched Sol writer controls
+
+The separate [writer-boundary results](writer-control-results.md), [JSON evidence](writer-control-results.json) and [compact visual](writer-control-results.html) compare DeepSeek 18/19 with Sol controls 01/02. Main DeepSeek run rows and their dated through-19 budget remain unchanged. The controls retain all three original cases, exact 18 plans/briefs/dispatched partitions, frozen `80cf4f1` execution code, source bounds, concurrency four and one local retry. Their `bb2b6dd` harness/full SDK/dependency/task/input inventories match. Source replay audits validate staged excerpts, edits, candidate/protected paths and request/receipt identities.
+
+| Writer observation | Writing + optimizer/routing s | Calls / retries | Application | Delivery | Normalized USD | Receipt USD |
+|---|---:|---:|---:|---:|---:|---:|
+| DeepSeek 18 | 73.550699 | 28 / 2 | 3/3 | 2/3 | 0.069418260 | 0.069418260 |
+| DeepSeek 19 | 124.219280 | 28 / 2 | 3/3 | 1/3 | 0.080248764 | 0.080248764 |
+| Sol 01 | 102.315176 | 26 / 0 | 3/3 | 2/3 | 0.043043700 | 0.314406000 |
+| Sol 02 | 108.180454 | 26 / 0 | 3/3 | 2/3 | 0.039677424 | 0.292922400 |
+
+Only writer execution, optimizer and routing enter these elapsed denominators; owner/query/check/startup time is excluded. Token/call/cost rows include only writers. DeepSeek’s two-observation mean is 98.884990 seconds versus Sol’s 105.247815; ranges are 73.55–124.22 and 102.32–108.18. These sequential, non-randomized pairs do not establish a speed winner or significance. Recovery, provider latency and cache usage vary. Sol required no retry, and its mean normalized writer cost was $0.041360562 versus DeepSeek’s $0.074833512; mean SDK receipt charges were $0.303664200 versus $0.074833512. Normalized tariffs are requested comparison estimates; receipts use the SDK catalog, while subscription invoices/quota are unmeasured.
+
+Application completed across all cases in both observations for each route. Handoff failed downstream in every observation. Extraction passed delivery for DeepSeek18 and both Sol controls, but failed for DeepSeek19. These checks remain outcomes rather than writer feedback or prerequisites for including completed application in timing.
+
+Requested task limits and execution code match, but effective provider policy is not identical: the pinned Sol adapter omits maxTokens, whereas DeepSeek sends max_tokens. No equal provider-enforced output ceiling is established. Sol’s same-selector retry could catch nonterminal transport/model errors; none occurred. DeepSeek’s configured off-to-low retry is restricted to local format/application/syntax rejection. No new owner/query/review/Jev call occurred in either Sol control; DeepSeek18’s earlier queries are excluded from this writer-only comparison. No independent semantic review or global optimum is claimed.
+
+The shared ledger now has 474 settled entries, zero holds and $3.807709876 exposure. The prior DeepSeek campaign snapshot remains $3.200381476 across 422 entries; the separate controls add $0.607328400 across 52 entries ($0.082721124 normalized). These charges are not attributed to DeepSeek runs, and inherited planning is not charged again.
+
+The next main step is the prespecified bounded-local-diagnostic pair 20–21, protocol `6a29f45`, not yet started. It tests recovery variability without predicting a win. The `22f1056` diagnostic is checked offline and was absent from all four matched observations. Configuration selection remains provisional; the goal is active and divergent live experiments remain queued.

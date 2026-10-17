@@ -1,0 +1,603 @@
+{
+  "schema_version": 1,
+  "comparison": "matched-sol-writer-boundary-control-v1",
+  "observed_at": "2026-10-17T01:52:17.251619+00:00",
+  "paths_relative_to": "runtime_root",
+  "runtime_root_label": "changeset-execution-poc/runtime",
+  "measurement_scope": "All three original cases at the writer/application boundary. Seconds include execution, optimizer and routing; exclude owner, query, checks, startup and inherited planning. Calls/tokens/cost include writers only.",
+  "cost_policy": {
+    "id": "sol-at-deepseek-rates",
+    "usd_per_million_tokens": {
+      "input": 0.3,
+      "output": 1.2,
+      "cacheRead": 0.006,
+      "cacheWrite": 0.3
+    },
+    "reported_cost": "SDK receipt catalog charges; subscription invoices and quota are unmeasured."
+  },
+  "matched_inputs": {
+    "source_run": "18-smaller-regions",
+    "execution_revision": "80cf4f16e9006b0ac5997673da30ec12882f0501",
+    "frozen_inventory_hash": "9df7cd5b63bf30f4f0ac5c10868ddbb2939878839c6244e85d13ce6057bbc0b4",
+    "frozen_inventory_hash_algorithm": "SHA256(JSON.stringify(run18.manifest.frozen_files))",
+    "control_harness_revision": "bb2b6dd7a07dccf205123432fe8767fb25aa4c1d",
+    "control_node_hash": "fde6a4bf8d0562f7751d1a2d6cb9b417c4cfe107bbcb0aa3e9a24e125e348f48",
+    "control_full_sdk_inventory_hash": "fa74885fd108ce0ba2577113288886ceb499c202124e875114d07adc22b0eabc",
+    "cases": [
+      {
+        "task": "hard-context-calibration",
+        "task_hash": "53a7b4559f4db02a586dda721ec592e6bf4a3e90f8f671b69a50f92621536b49",
+        "raw_plan_hash": "b3ab64d416d9749b312f2e20e959cc19ff2b3cc655ea4064d689e9ca1761028b",
+        "dispatch_plan_hash": "b3ab64d416d9749b312f2e20e959cc19ff2b3cc655ea4064d689e9ca1761028b",
+        "brief_hash": "09f086830115c40d14505e8885062af9a7ad875c40a29f7868229627ee3b5c7b"
+      },
+      {
+        "task": "hard-dependency-handoff",
+        "task_hash": "d979407d0e1fdf935a7c2b994c98c634b5f11a8e044d12a307ca468880b0fb30",
+        "raw_plan_hash": "f2d2503bb8befc95d25e2c85b8713d499314f1d81af854634a51cc13b671ac56",
+        "dispatch_plan_hash": "d50968917c7940d61878f5d3a43cf3673bbd73b8b8e03377d265931028c92720",
+        "brief_hash": "b61eb7a895f70a0d7dea6c10a6a7a0add410edde6af40b250846d92c450c0e78"
+      },
+      {
+        "task": "hard-lifecycle-extract",
+        "task_hash": "c6365120c768dec61e14fed5c2adc988444879b14063cb06ca72aafab59a71cb",
+        "raw_plan_hash": "23af3021f06a8517b57392acbc4a2c5ba9718ac91074a8651d89bfb2b6acca62",
+        "dispatch_plan_hash": "ccac27728aa566ccbb6c3e005246329bf480f1b331be6ca2c12b55aaf7c14321",
+        "brief_hash": "bb9ae3225735e2c8ed57ff0f272e57870aece98d1bf60953339b806784d7bd01"
+      }
+    ],
+    "all_control_inventories_identical": true,
+    "requested_task_limits": {
+      "cell_ms": 1200000,
+      "model_calls": 96,
+      "max_output_tokens": 32000,
+      "call_ms": 300000,
+      "command_ms": 180000,
+      "grade_ms": 300000,
+      "review_input": "diff"
+    },
+    "maximum_concurrency": 4,
+    "local_retry_limit": 1,
+    "diagnostic_22f1056_included": false
+  },
+  "provider_policy": {
+    "output_cap": {
+      "matched_requested_limits": true,
+      "matched_provider_enforcement": false,
+      "control_adapter": "pi-ai/dist/api/openai-codex-responses.js",
+      "control_adapter_hash": "4d90da82aaac68f9f0e1fd7daec39f1aa285c111bf04c7ddefa52e920b41b2cc",
+      "control_effective_output_cap": "requested maxTokens omitted from serialized provider payload; no equal enforced cap established",
+      "donor_effective_output_cap": "DeepSeek max_tokens from unchanged task output setting; control uses a different provider adapter",
+      "audit_basis": "Known pinned SDK1.2.0 Sol adapter hash; no provider calls during preparation. Unknown hashes remain explicitly unverified."
+    },
+    "retry_policy": {
+      "exact_backend": true,
+      "control": "legacy same-selector retry may also catch nonterminal transport/model errors",
+      "donor": "configured off-to-low recovery restricts retries to decoded-format/application/syntax rejection",
+      "selection_rule": "any observed control retry after transport/model failure invalidates comparison eligibility; incurred usage remains retained"
+    },
+    "control_observed_retries": 0,
+    "control_prohibited_transport_model_retries": 0
+  },
+  "limitations": [
+    "Two whole-suite observations per route, executed sequentially without randomization; no significance or stable-success-rate claim.",
+    "Provider latency and cache usage vary; dependent excerpts legitimately reflect each arm's own staged writes.",
+    "Requested task bounds and frozen execution code match, but Sol's known adapter omits maxTokens. Equal provider-enforced output ceilings are not established.",
+    "Sol same-selector retry could catch transport/model errors; none occurred. DeepSeek off-to-low retry is restricted to local format/application/syntax errors.",
+    "Application completion qualifies writing measurements independently of downstream delivery. No independent semantic review is claimed.",
+    "This is a fixed-plan writer-boundary comparison, not native-Sol full-workflow performance, production savings or a global optimum."
+  ],
+  "arms": [
+    {
+      "id": "ds18",
+      "label": "DeepSeek 18",
+      "run": "dispatch-deepseek/18-smaller-regions",
+      "writer_selector": "deepseek/deepseek-flash:off",
+      "writer_recovery_selector": "deepseek/deepseek-flash:low",
+      "integrity_valid": true,
+      "qualified_application": true,
+      "policy_note": "Off primary; low only for the one local format/application/syntax retry. Native max_tokens is sent.",
+      "source_replay_performed": false,
+      "audit_basis": "Retained task/plan/brief/candidate/provider/receipt hashes and operation-attempt provenance checks.",
+      "cells": [
+        {
+          "task": "hard-context-calibration",
+          "integrity_valid": true,
+          "application_complete": true,
+          "qualified_application": true,
+          "delivery_checks_pass": true,
+          "downstream": {
+            "visible": true,
+            "candidate_count": 1,
+            "candidate_failed": 0,
+            "external": true
+          },
+          "writing_seconds": 6.923953814999996,
+          "execution_seconds": 6.923631445999999,
+          "optimization_seconds": 0.00032236899999770683,
+          "routing_seconds": 0,
+          "calls": 4,
+          "retries": 1,
+          "tokens": {
+            "input": 15031,
+            "output": 2196,
+            "cacheRead": 384,
+            "cacheWrite": 0,
+            "totalTokens": 17611
+          },
+          "normalized_usd": 0.007146804,
+          "reported_usd": 0.007146804
+        },
+        {
+          "task": "hard-dependency-handoff",
+          "integrity_valid": true,
+          "application_complete": true,
+          "qualified_application": true,
+          "delivery_checks_pass": false,
+          "downstream": {
+            "visible": false,
+            "candidate_count": 1,
+            "candidate_failed": 1,
+            "external": false
+          },
+          "writing_seconds": 22.01694081700001,
+          "execution_seconds": 22.015788488000005,
+          "optimization_seconds": 0.0011523290000041017,
+          "routing_seconds": 0,
+          "calls": 19,
+          "retries": 0,
+          "tokens": {
+            "input": 70289,
+            "output": 15208,
+            "cacheRead": 4608,
+            "cacheWrite": 0,
+            "totalTokens": 90105
+          },
+          "normalized_usd": 0.039363947999999996,
+          "reported_usd": 0.039363947999999996
+        },
+        {
+          "task": "hard-lifecycle-extract",
+          "integrity_valid": true,
+          "application_complete": true,
+          "qualified_application": true,
+          "delivery_checks_pass": true,
+          "downstream": {
+            "visible": true,
+            "candidate_count": 0,
+            "candidate_failed": 0,
+            "external": true
+          },
+          "writing_seconds": 44.609804534,
+          "execution_seconds": 44.609484643,
+          "optimization_seconds": 0.00031989099999918836,
+          "routing_seconds": 0,
+          "calls": 5,
+          "retries": 1,
+          "tokens": {
+            "input": 19891,
+            "output": 14113,
+            "cacheRead": 768,
+            "cacheWrite": 0,
+            "totalTokens": 34772
+          },
+          "normalized_usd": 0.022907508,
+          "reported_usd": 0.022907508
+        }
+      ],
+      "totals": {
+        "writing_seconds": 73.550699166,
+        "calls": 28,
+        "retries": 2,
+        "normalized_usd": 0.06941826,
+        "reported_usd": 0.06941826,
+        "tokens": {
+          "input": 105211,
+          "output": 31517,
+          "cacheRead": 5760,
+          "cacheWrite": 0,
+          "totalTokens": 142488
+        },
+        "application_complete": 3,
+        "delivery_checks_pass": 2
+      }
+    },
+    {
+      "id": "ds19",
+      "label": "DeepSeek 19 repeat",
+      "run": "dispatch-deepseek/19-smaller-regions-repeat",
+      "writer_selector": "deepseek/deepseek-flash:off",
+      "writer_recovery_selector": "deepseek/deepseek-flash:low",
+      "integrity_valid": true,
+      "qualified_application": true,
+      "policy_note": "Off primary; low only for the one local format/application/syntax retry. Native max_tokens is sent.",
+      "source_replay_performed": false,
+      "audit_basis": "Retained task/plan/brief/candidate/provider/receipt hashes and operation-attempt provenance checks.",
+      "cells": [
+        {
+          "task": "hard-context-calibration",
+          "integrity_valid": true,
+          "application_complete": true,
+          "qualified_application": true,
+          "delivery_checks_pass": true,
+          "downstream": {
+            "visible": true,
+            "candidate_count": 1,
+            "candidate_failed": 0,
+            "external": true
+          },
+          "writing_seconds": 3.0189888469999997,
+          "execution_seconds": 3.018656744,
+          "optimization_seconds": 0.00033210299999998936,
+          "routing_seconds": 0,
+          "calls": 3,
+          "retries": 0,
+          "tokens": {
+            "input": 560,
+            "output": 1199,
+            "cacheRead": 10368,
+            "cacheWrite": 0,
+            "totalTokens": 12127
+          },
+          "normalized_usd": 0.0016690079999999998,
+          "reported_usd": 0.0016690079999999998
+        },
+        {
+          "task": "hard-dependency-handoff",
+          "integrity_valid": true,
+          "application_complete": true,
+          "qualified_application": true,
+          "delivery_checks_pass": false,
+          "downstream": {
+            "visible": false,
+            "candidate_count": 1,
+            "candidate_failed": 1,
+            "external": false
+          },
+          "writing_seconds": 108.464831693,
+          "execution_seconds": 108.46408956799999,
+          "optimization_seconds": 0.0007421249999999873,
+          "routing_seconds": 0,
+          "calls": 21,
+          "retries": 2,
+          "tokens": {
+            "input": 46523,
+            "output": 48434,
+            "cacheRead": 35968,
+            "cacheWrite": 0,
+            "totalTokens": 130925
+          },
+          "normalized_usd": 0.07229350799999999,
+          "reported_usd": 0.07229350799999999
+        },
+        {
+          "task": "hard-lifecycle-extract",
+          "integrity_valid": true,
+          "application_complete": true,
+          "qualified_application": true,
+          "delivery_checks_pass": false,
+          "downstream": {
+            "visible": false,
+            "candidate_count": 0,
+            "candidate_failed": 0,
+            "external": false
+          },
+          "writing_seconds": 12.735459463,
+          "execution_seconds": 12.734988137,
+          "optimization_seconds": 0.0004713260000000048,
+          "routing_seconds": 0,
+          "calls": 4,
+          "retries": 0,
+          "tokens": {
+            "input": 2438,
+            "output": 4574,
+            "cacheRead": 11008,
+            "cacheWrite": 0,
+            "totalTokens": 18020
+          },
+          "normalized_usd": 0.006286248,
+          "reported_usd": 0.006286248
+        }
+      ],
+      "totals": {
+        "writing_seconds": 124.219280003,
+        "calls": 28,
+        "retries": 2,
+        "normalized_usd": 0.08024876399999999,
+        "reported_usd": 0.08024876399999999,
+        "tokens": {
+          "input": 49521,
+          "output": 54207,
+          "cacheRead": 57344,
+          "cacheWrite": 0,
+          "totalTokens": 161072
+        },
+        "application_complete": 3,
+        "delivery_checks_pass": 1
+      }
+    },
+    {
+      "id": "sol01",
+      "label": "Sol control 1",
+      "run": "sol-writer-controls/01-run18",
+      "writer_selector": "openai-codex/gpt-6.1-sol:low",
+      "writer_recovery_selector": null,
+      "integrity_valid": true,
+      "qualified_application": true,
+      "policy_note": "Same-selector local retry; no retry occurred. Known adapter omits requested maxTokens from provider payload.",
+      "source_replay_performed": true,
+      "audit_basis": "Frozen auditor replays actual staged excerpts, model edits and retry diagnostics; validates candidate, protected paths, identities and downstream records.",
+      "cells": [
+        {
+          "task": "hard-context-calibration",
+          "integrity_valid": true,
+          "application_complete": true,
+          "qualified_application": true,
+          "delivery_checks_pass": true,
+          "downstream": {
+            "visible": true,
+            "candidate_count": 1,
+            "candidate_failed": 0,
+            "external": true
+          },
+          "writing_seconds": 10.008856821,
+          "execution_seconds": 10.008499297,
+          "optimization_seconds": 0.00035752399999998375,
+          "routing_seconds": 0,
+          "calls": 3,
+          "retries": 0,
+          "tokens": {
+            "input": 10325,
+            "output": 1137,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 11462
+          },
+          "normalized_usd": 0.0044618999999999995,
+          "reported_usd": 0.03202
+        },
+        {
+          "task": "hard-dependency-handoff",
+          "integrity_valid": true,
+          "application_complete": true,
+          "qualified_application": true,
+          "delivery_checks_pass": false,
+          "downstream": {
+            "visible": false,
+            "candidate_count": 1,
+            "candidate_failed": 1,
+            "external": false
+          },
+          "writing_seconds": 70.75766903899999,
+          "execution_seconds": 70.75692971099998,
+          "optimization_seconds": 0.0007393280000000005,
+          "routing_seconds": 0,
+          "calls": 19,
+          "retries": 0,
+          "tokens": {
+            "input": 65736,
+            "output": 11172,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 76908
+          },
+          "normalized_usd": 0.0331272,
+          "reported_usd": 0.24319200000000002
+        },
+        {
+          "task": "hard-lifecycle-extract",
+          "integrity_valid": true,
+          "application_complete": true,
+          "qualified_application": true,
+          "delivery_checks_pass": true,
+          "downstream": {
+            "visible": true,
+            "candidate_count": 0,
+            "candidate_failed": 0,
+            "external": true
+          },
+          "writing_seconds": 21.548649833,
+          "execution_seconds": 21.548199812,
+          "optimization_seconds": 0.00045002100000002086,
+          "routing_seconds": 0,
+          "calls": 4,
+          "retries": 0,
+          "tokens": {
+            "input": 12522,
+            "output": 1415,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 13937
+          },
+          "normalized_usd": 0.0054545999999999996,
+          "reported_usd": 0.03919399999999999
+        }
+      ],
+      "totals": {
+        "writing_seconds": 102.31517569299999,
+        "calls": 26,
+        "retries": 0,
+        "normalized_usd": 0.043043700000000004,
+        "reported_usd": 0.314406,
+        "tokens": {
+          "input": 88583,
+          "output": 13724,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "totalTokens": 102307
+        },
+        "application_complete": 3,
+        "delivery_checks_pass": 2
+      }
+    },
+    {
+      "id": "sol02",
+      "label": "Sol control 2",
+      "run": "sol-writer-controls/02-run18-repeat",
+      "writer_selector": "openai-codex/gpt-6.1-sol:low",
+      "writer_recovery_selector": null,
+      "integrity_valid": true,
+      "qualified_application": true,
+      "policy_note": "Same-selector local retry; no retry occurred. Known adapter omits requested maxTokens from provider payload.",
+      "source_replay_performed": true,
+      "audit_basis": "Frozen auditor replays actual staged excerpts, model edits and retry diagnostics; validates candidate, protected paths, identities and downstream records.",
+      "cells": [
+        {
+          "task": "hard-context-calibration",
+          "integrity_valid": true,
+          "application_complete": true,
+          "qualified_application": true,
+          "delivery_checks_pass": true,
+          "downstream": {
+            "visible": true,
+            "candidate_count": 1,
+            "candidate_failed": 0,
+            "external": true
+          },
+          "writing_seconds": 11.408166667,
+          "execution_seconds": 11.40780712,
+          "optimization_seconds": 0.0003595469999999921,
+          "routing_seconds": 0,
+          "calls": 3,
+          "retries": 0,
+          "tokens": {
+            "input": 10325,
+            "output": 1137,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 11462
+          },
+          "normalized_usd": 0.0044618999999999995,
+          "reported_usd": 0.03202
+        },
+        {
+          "task": "hard-dependency-handoff",
+          "integrity_valid": true,
+          "application_complete": true,
+          "qualified_application": true,
+          "delivery_checks_pass": false,
+          "downstream": {
+            "visible": false,
+            "candidate_count": 1,
+            "candidate_failed": 1,
+            "external": false
+          },
+          "writing_seconds": 74.688183209,
+          "execution_seconds": 74.68745060399999,
+          "optimization_seconds": 0.0007326050000000066,
+          "routing_seconds": 0,
+          "calls": 19,
+          "retries": 0,
+          "tokens": {
+            "input": 61853,
+            "output": 11426,
+            "cacheRead": 3840,
+            "cacheWrite": 0,
+            "totalTokens": 77119
+          },
+          "normalized_usd": 0.032290139999999995,
+          "reported_usd": 0.23835000000000003
+        },
+        {
+          "task": "hard-lifecycle-extract",
+          "integrity_valid": true,
+          "application_complete": true,
+          "qualified_application": true,
+          "delivery_checks_pass": true,
+          "downstream": {
+            "visible": true,
+            "candidate_count": 0,
+            "candidate_failed": 0,
+            "external": true
+          },
+          "writing_seconds": 22.084104157,
+          "execution_seconds": 22.083656816999998,
+          "optimization_seconds": 0.000447339999999997,
+          "routing_seconds": 0,
+          "calls": 4,
+          "retries": 0,
+          "tokens": {
+            "input": 4458,
+            "output": 1283,
+            "cacheRead": 8064,
+            "cacheWrite": 0,
+            "totalTokens": 13805
+          },
+          "normalized_usd": 0.0029253840000000005,
+          "reported_usd": 0.0225524
+        }
+      ],
+      "totals": {
+        "writing_seconds": 108.180454033,
+        "calls": 26,
+        "retries": 0,
+        "normalized_usd": 0.039677423999999996,
+        "reported_usd": 0.2929224,
+        "tokens": {
+          "input": 76636,
+          "output": 13846,
+          "cacheRead": 11904,
+          "cacheWrite": 0,
+          "totalTokens": 102386
+        },
+        "application_complete": 3,
+        "delivery_checks_pass": 2
+      }
+    }
+  ],
+  "summary": [
+    {
+      "route": "DeepSeek off to low",
+      "observations": 2,
+      "mean_writing_seconds": 98.8849895845,
+      "minimum_writing_seconds": 73.550699166,
+      "maximum_writing_seconds": 124.219280003,
+      "mean_normalized_usd": 0.07483351199999999,
+      "mean_reported_usd": 0.07483351199999999,
+      "mean_writer_calls": 28,
+      "application_complete": [
+        3,
+        3
+      ],
+      "delivery_checks_pass": [
+        2,
+        1
+      ]
+    },
+    {
+      "route": "Sol low",
+      "observations": 2,
+      "mean_writing_seconds": 105.247814863,
+      "minimum_writing_seconds": 102.31517569299999,
+      "maximum_writing_seconds": 108.180454033,
+      "mean_normalized_usd": 0.041360562000000003,
+      "mean_reported_usd": 0.30366420000000005,
+      "mean_writer_calls": 26,
+      "application_complete": [
+        3,
+        3
+      ],
+      "delivery_checks_pass": [
+        2,
+        2
+      ]
+    }
+  ],
+  "budget_snapshot": {
+    "scope": "Shared existing $50 campaign ledger after both controls; main DS03\u201319 artifacts retain their earlier dated balance.",
+    "limit_usd": 50,
+    "settled_entries": 474,
+    "holds_usd": 0,
+    "settled_usd": 3.807709876,
+    "prior_campaign_settled_entries": 422,
+    "prior_campaign_settled_usd": 3.200381476,
+    "control_settled_entries": 52,
+    "control_receipt_usd": 0.6073284,
+    "controls_normalized_usd": 0.082721124
+  },
+  "recommendation": {
+    "status": "inconclusive_speed",
+    "summary": "No clear writing-speed winner: DeepSeek whole-suite observations span 73.55\u2013124.22 seconds, Sol 102.32\u2013108.18. Sol used fewer normalized dollars and no retries in these observations, but actual receipt charges and provider policies differ. Keep configuration selection provisional.",
+    "next_step": "Prespecified bounded-local-diagnostic pair20\u201321, protocol6a29f45, not started. No expected improvement claimed; divergent live experiments remain queued."
+  }
+}

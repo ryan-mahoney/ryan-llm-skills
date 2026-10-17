@@ -26,15 +26,16 @@ Three configurations delivered 2/3, 1/3 and 0/3 tasks; none improved on the succ
 Sol-only runs. See the [results](owner-editor-results.md) and
 [owner/editor protocol](OWNER-EDITOR-PROTOCOL.md) for roles, settings and retained failures.
 
-The current [three-role optimizer study](OPTIMIZER-FINDINGS.md) separates a DeepSeek
-implementation owner, Sol query planner and DeepSeek writers. Smaller-region plans
-in run 18 and exact frozen repeat 19 completed application across all three cases.
-Full delivery fell from two cases to one; writing plus optimizer/routing time varied
-from 73.55 to 124.22 seconds. Behavioral reliability and a quality-preserving Sol win
-remain unestablished. A matched Sol writer control is in preparation, with no live
-inference run. See the [offline results visual](optimized-results.html),
-[measurements](optimized-results.md), [JSON evidence](optimized-results.json) and
-[comparison protocol](OPTIMIZER-PROTOCOL.md). The study remains active.
+The current [three-role optimizer study](OPTIMIZER-FINDINGS.md) completed application
+across all three cases in DeepSeek runs 18/19 and two matched Sol writer controls.
+Delivery still varies. The [writer-boundary comparison](writer-control-results.md)
+([visual](writer-control-results.html)) found no clear speed winner from two
+sequential observations per route: DeepSeek 73.55/124.22 seconds, Sol 102.32/108.18.
+Normalized cost, receipt charges and provider-policy limits remain separate. The
+prespecified bounded diagnostic pair is next; configuration selection is provisional.
+See the [three-role visual](optimized-results.html), [measurements](optimized-results.md),
+[JSON evidence](optimized-results.json) and [comparison protocol](OPTIMIZER-PROTOCOL.md).
+The study remains active.
 
 Four divergent approaches are prepared separately for later experiments:
 

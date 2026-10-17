@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <link rel="icon" href="data:,">
+  <title>Matched writer-control comparison</title>
+  <style>
+    :root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color:#17202a;background:#f4f6f8;font-synthesis:none;text-rendering:optimizeLegibility;--line:#d4dbe2;--muted:#526170;--blue:#21618c;--blue-pale:#d6eaf8;--gold:#9a6700;--gold-pale:#fff1c2;--green:#176b45;--green-pale:#dff3e8;--red:#a12b27;--red-pale:#fde8e7;--slate:#64748b}
+    *{box-sizing:border-box}body{margin:0;line-height:1.45}a:focus-visible{outline:3px solid #005fcc;outline-offset:2px}
+    .shell{max-width:1320px;margin:auto;padding:28px 24px 60px}.eyebrow{font-size:.76rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:750}.title{font-size:clamp(1.8rem,3vw,2.5rem);line-height:1.1;margin:.35rem 0 .6rem;letter-spacing:-.035em}.lede{max-width:900px;color:#334155;margin:0 0 18px}.notice{border-left:4px solid var(--gold);background:#fff9e8;padding:12px 15px;margin:18px 0 20px;color:#4f3c0b}.notice strong{color:#3c2d08}.meta{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0 20px}.chip{display:inline-block;border:1px solid var(--line);background:white;padding:4px 8px;font-size:.78rem;color:#334155}.section{margin-top:26px}.section-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:12px}.section h2{font-size:1.15rem;letter-spacing:-.015em;margin:0}.subtle{font-size:.82rem;color:var(--muted)}
+    .arm-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.arm{background:white;border:1px solid var(--line);padding:13px}.arm h3{font-size:.95rem;margin:0 0 3px}.arm .run{font-size:.75rem;color:var(--muted);overflow-wrap:anywhere}.arm .metrics{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}.metric{border-top:1px solid #e5e9ed;padding-top:7px}.metric b{display:block;font-size:1.06rem;font-variant-numeric:tabular-nums}.metric span{color:var(--muted);font-size:.72rem}.policy{font-size:.76rem;color:#465464;margin:10px 0 0}
+    .bars{border:1px solid var(--line);background:white;padding:14px 16px}.bar-row{display:grid;grid-template-columns:minmax(120px,210px) 1fr minmax(76px,90px);gap:10px;align-items:center;margin:10px 0;font-size:.82rem}.bar-label{color:#334155}.track{height:17px;background:#edf1f4;position:relative}.bar{height:100%;background:var(--blue);min-width:0}.bar.sol{background:#6b7890}.bar-value{text-align:right;font-variant-numeric:tabular-nums;font-weight:650}.legend{display:flex;gap:16px;flex-wrap:wrap;color:var(--muted);font-size:.77rem;margin-top:12px}
+    .status{display:inline-flex;align-items:center;gap:4px;font-size:.68rem;font-weight:750;padding:2px 6px;border-radius:2px;white-space:nowrap}.pass{background:var(--green-pale);color:#115538}.fail{background:var(--red-pale);color:#83221e}.partial{background:var(--gold-pale);color:#6f4b00}.neutral{background:#e8edf2;color:#334155}.table-wrap{max-width:100%;overflow:auto;overscroll-behavior-inline:contain;border:1px solid var(--line);background:white}table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;font-size:.79rem}th,td{text-align:left;padding:8px 9px;border-bottom:1px solid #e5e9ed;white-space:nowrap}th{font-size:.68rem;color:#465464;text-transform:uppercase;letter-spacing:.035em;background:#f7f9fa}td.num,th.num{text-align:right}tbody tr:last-child td{border-bottom:0}.task{font-weight:700}.mobile-hint{display:none;margin:0 0 8px}.limitations{border:1px solid var(--line);background:white;padding:12px 16px;color:#334155}.limitations ul{margin:5px 0 0;padding-left:20px}.limitations li{margin:5px 0}.empty{border:1px solid var(--line);background:white;padding:16px;color:var(--muted)}.foot{margin-top:28px;border-top:1px solid var(--line);padding-top:13px;color:var(--muted);font-size:.77rem}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.78em;overflow-wrap:anywhere}
+    @media(max-width:950px){.arm-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.mobile-hint{display:block}}@media(max-width:560px){.shell{padding:20px 14px 40px}.arm-grid{grid-template-columns:1fr}.bar-row{grid-template-columns:105px 1fr 74px;gap:7px}.bar-label{font-size:.74rem}}
+  </style>
+</head>
+<body>
+<main class="shell">
+  <header>
+    <div class="eyebrow">Frozen writer-boundary comparison · research only</div>
+    <h1 class="title">Matched writer-control comparison</h1>
+    <p class="lede">These arms reuse the same run-18 plans and frozen backend to compare DeepSeek and Sol at the writer/application boundary. Owner and query work are excluded from writing time. Application completion and downstream outcomes stay separate.</p>
+    <div class="notice"><strong>Read completion before elapsed time.</strong> This view compares four retained observations across the same three cases. It does not rank a winner or claim that one observed run is reliable.</div>
+  </header>
+  <div id="matched" class="meta" aria-label="Matched source details"></div>
+  <section class="section" aria-labelledby="arms-title">
+    <div class="section-head"><h2 id="arms-title">Arm totals</h2><span class="subtle">Writer and local application stages only; owner, query and checks excluded.</span></div>
+    <div id="arms" class="arm-grid"></div>
+  </section>
+  <section class="section" aria-labelledby="elapsed-title">
+    <div class="section-head"><h2 id="elapsed-title">Writing pipeline elapsed</h2><span class="subtle">Execution + optimizer + routing, when present.</span></div>
+    <div id="elapsed" class="bars" role="img" aria-label="Writing pipeline elapsed time by control arm"></div>
+  </section>
+  <section class="section" aria-labelledby="cases-title">
+    <div class="section-head"><h2 id="cases-title">Case outcomes and writer usage</h2><span class="subtle">Application integrity, visible tests, and external acceptance are distinct outcomes.</span></div>
+    <p class="mobile-hint subtle">Swipe or scroll within the table to see all comparison columns.</p>
+    <div class="table-wrap"><table><thead><tr><th>Case</th><th>Arm</th><th>Integrity</th><th>Application</th><th>Visible</th><th>Candidate tests</th><th>External</th><th class="num">Writer s</th><th class="num">Calls</th><th class="num">Input</th><th class="num">Output</th><th class="num">Cache read</th><th class="num">Cache write</th><th class="num">Total tokens</th><th class="num">Normalized USD</th><th class="num">Reported USD</th></tr></thead><tbody id="case-body"></tbody></table></div>
+  </section>
+  <section class="section" aria-labelledby="limits-title">
+    <div class="section-head"><h2 id="limits-title">Comparison limits</h2><span class="subtle">Provider and retry policy differences remain explicit.</span></div>
+    <div id="limitations" class="limitations"></div>
+  </section>
+  <footer class="foot">All displayed costs preserve reported receipt charges separately from normalized cost at DeepSeek rates. Normalized cost is an estimate; Sol subscription quota is not measured. Candidate checks and any outer acceptance result remain distinct from application completion. No external resources are loaded.</footer>
+</main>
+<!-- WRITER_CONTROL_DATA -->
+<script>
+(() => {
+  const report = JSON.parse(document.getElementById('report-data').textContent);
+  const $ = id => document.getElementById(id);
+  const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  const numeric = value => Number.isFinite(value) ? value : null;
+  const fmt = (value, digits=1) => Number.isFinite(value) ? value.toLocaleString(undefined,{minimumFractionDigits:digits,maximumFractionDigits:digits}) : 'unknown';
+  const integer = value => Number.isFinite(value) ? Math.round(value).toLocaleString() : 'unknown';
+  const money = value => Number.isFinite(value) ? `$${value.toFixed(4)}` : 'unknown';
+  const count = value => Number.isFinite(value) ? `${integer(value)}/3` : 'unknown';
+  const status = (kind,label) => `<span class="status ${kind}">${label}</span>`;
+  const state = value => value === true ? status('pass','PASS') : value === false ? status('fail','FAIL') : status('neutral','PENDING');
+  const statusCell = cell => cell?.qualified_application === true ? status('pass','QUALIFIED') : cell?.application_complete === true ? status('partial','APPLIED') : cell ? status('fail','INCOMPLETE') : status('neutral','PENDING');
+  const arms = Array.isArray(report.arms) ? report.arms : [];
+  $('matched').innerHTML = `<span class="chip">Comparison: ${esc(report.comparison)}</span><span class="chip">Source: ${esc(report.matched_inputs?.source_run)}</span><span class="chip">Execution freeze: <span class="mono">${esc(report.matched_inputs?.execution_revision)}</span></span><span class="chip">Same retained source, plans, briefs and backend</span>`;
+  if (!arms.length) {
+    $('arms').innerHTML = '<div class="empty">No writer-control arms are retained yet.</div>';
+    $('elapsed').innerHTML = '<div class="empty">Elapsed data is pending.</div>';
+    $('case-body').innerHTML = '<tr><td colspan="16">No case results are retained yet.</td></tr>';
+  } else {
+    $('arms').innerHTML = arms.map(arm => {
+      const totals=arm.totals||{}, tokens=totals.tokens||{};
+      return `<article class="arm"><h3>${esc(arm.label||arm.id)}</h3><div class="run">${esc(arm.run)} · ${esc(arm.writer_selector||'selector unknown')}</div><p class="policy">Integrity ${state(arm.integrity_valid)} · qualified application ${state(arm.qualified_application)}</p><div class="metrics"><div class="metric"><b>${count(totals.application_complete)}</b><span>application complete</span></div><div class="metric"><b>${count(totals.delivery_checks_pass)}</b><span>delivery checks pass</span></div><div class="metric"><b>${fmt(totals.writing_seconds)} s</b><span>writing pipeline</span></div><div class="metric"><b>${integer(totals.calls)}</b><span>writer calls · ${integer(totals.retries)} retries</span></div><div class="metric"><b>${money(totals.normalized_usd)}</b><span>normalized USD</span></div><div class="metric"><b>${money(totals.reported_usd)}</b><span>reported receipt USD</span></div></div><p class="policy">Input ${integer(tokens.input)} · output ${integer(tokens.output)} · cache read ${integer(tokens.cacheRead)} · cache write ${integer(tokens.cacheWrite)} · total ${integer(tokens.totalTokens)} tokens.</p>${arm.policy_note?`<p class="policy">${esc(arm.policy_note)}</p>`:''}</article>`;
+    }).join('');
+    const max=Math.max(1,...arms.map(arm=>numeric(arm.totals?.writing_seconds)??0));
+    $('elapsed').innerHTML=arms.map(arm=>{const seconds=numeric(arm.totals?.writing_seconds);const style=Number.isFinite(seconds)?`width:${Math.max(0,Math.min(100,seconds/max*100))}%`:'';return `<div class="bar-row"><span class="bar-label">${esc(arm.label||arm.id)}</span><div class="track" aria-hidden="true"><div class="bar ${arm.id?.startsWith('sol')?'sol':''}" style="${style}"></div></div><span class="bar-value">${fmt(seconds)} s</span></div>`;}).join('')+'<div class="legend">Bars compare only reported writing-pipeline seconds. Missing arms or cells remain pending.</div>';
+    const tasks = report.matched_inputs?.cases?.map(item=>item.task) || [...new Set(arms.flatMap(arm=>(arm.cells||[]).map(cell=>cell.task)))];
+    $('case-body').innerHTML=tasks.map(task=>arms.map(arm=>{
+      const cell=(arm.cells||[]).find(item=>item.task===task), down=cell?.downstream||{}, pass=Number.isFinite(down.candidate_count)&&Number.isFinite(down.candidate_failed)?`${integer(down.candidate_count-down.candidate_failed)}/${integer(down.candidate_count)}`:'unknown';
+      const tokens=cell?.tokens||{};
+      return `<tr><td class="task">${esc(task)}</td><td>${esc(arm.label||arm.id)}</td><td>${state(cell?.integrity_valid)}</td><td>${statusCell(cell)}</td><td>${state(down.visible)}</td><td>${pass}</td><td>${state(down.external)}</td><td class="num">${fmt(cell?.writing_seconds)}</td><td class="num">${integer(cell?.calls)}</td><td class="num">${integer(tokens.input)}</td><td class="num">${integer(tokens.output)}</td><td class="num">${integer(tokens.cacheRead)}</td><td class="num">${integer(tokens.cacheWrite)}</td><td class="num">${integer(tokens.totalTokens)}</td><td class="num">${money(cell?.normalized_usd)}</td><td class="num">${money(cell?.reported_usd)}</td></tr>`;
+    }).join('')).join('');
+  }
+  const limitations=Array.isArray(report.limitations)?report.limitations:[];
+  const policy=report.arms.flatMap(arm=>arm.policy_note?[arm.policy_note]:[]);
+  $('limitations').innerHTML=limitations.length||policy.length?`<ul>${[...limitations,...new Set(policy)].map(item=>`<li>${esc(item)}</li>`).join('')}</ul>`:'<p>No limitation notes were supplied by the report.</p>';
+})();
+</script>
+</body>
+</html>
