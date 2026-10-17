@@ -532,13 +532,23 @@ test('wave native: width five implements, reviews, repairs and promotes through 
     assert.ok(/context[-_ ]?budget/i.test(text), `${sessionPath} has a context-budget request entry`);
   }
 
-  // The step 2 reviewer's write call is refused by the tool guard.
+  // The step 2 reviewer's write call is refused by the tool guard. The OpenAI
+  // wire format carries no SDK error flag, so the canonical SDK toolResult
+  // captured from the child's context observer is the oracle; the wire body is
+  // only used to correlate the same tool call id.
   const step2Reviewer = provider.requests.filter(request => requestRoute(request).role === 'reviewer'
     && requestRoute(request).record?.step_number === 2);
-  const blockedWrite = step2Reviewer.some(request => (requestBody(request).messages ?? []).some(message =>
-    (message.role === 'tool' || message.role === 'tool_result')
-    && (message.is_error === true || message.isError === true)
-    && JSON.stringify(message.content ?? '').includes('write')));
+  const blockedWrite = step2Reviewer.some(request => {
+    const sdkResults = (request.sdkMessages ?? []).filter(message => message?.role === 'toolResult'
+      && message?.isError === true
+      && JSON.stringify(message.content ?? '').includes('write'));
+    return sdkResults.some(result => {
+      const callId = result.toolCallId ?? result.tool_call_id;
+      if (typeof callId !== 'string') return false;
+      return (requestBody(request).messages ?? []).some(message => (message.role === 'tool' || message.role === 'tool_result')
+        && (message.tool_call_id ?? message.toolCallId ?? message.call_id) === callId);
+    });
+  });
   assert.ok(blockedWrite, 'step 2 reviewer write call returns an error tool result');
 
   for (const dir of [fixture.repo, fixture.integrationCheckout, ...memberCheckouts(record)]) {
@@ -566,11 +576,20 @@ test('wave native: width five implements, reviews, repairs and promotes through 
   const coordinatorRequests = provider.requests.filter(request => requestRoute(request).role === 'coordinator');
   // Each outer tool event is retained; its structured reply is parsed separately
   // so the correlation id comes from the event, never from the reply's details.
+  // A successful startup is the actual admitted-running waves receipt
+  // (`waveReceipt`): execution 'waves', the record's state, which admission marks
+  // 'running' on launch, plus the durable identity/generation/width fields.
   const successfulStartupEvents = coordinatorToolEvents(coordinatorFromRun, 'spec_dispatch')
     .filter(event => {
+      if (event?.isError === true) return false;
       const result = toolResultObject(event);
       return result && typeof result === 'object'
-        && (result.state === 'started' || result.state === 'admitted' || result.state === 'opened')
+        && result.execution === 'waves'
+        && result.state === 'running'
+        && typeof result.wave_id === 'string' && result.wave_id.length > 0
+        && typeof result.record_path === 'string' && result.record_path.length > 0
+        && Number.isInteger(result.generation) && result.generation >= 1
+        && Number.isInteger(result.admitted_width) && result.admitted_width > 0
         && !result.error && !result.code;
     });
   const startupResultIds = new Set();
@@ -743,11 +762,20 @@ test('wave native: width nine overlaps and survives coordinator restart without 
     // The correlation id comes from each outer successful tool event, never from
     // the reply's `details`; a reply carrying an unrelated id cannot widen the
     // startup window.
+    // A successful startup is the actual admitted-running waves receipt
+    // (`waveReceipt`): execution 'waves', state 'running' as admission marks the
+    // launched record, plus the durable identity/generation/width fields.
     const successfulStartupEvents = coordinatorToolEvents(coordinator, 'spec_dispatch')
       .filter(event => {
+        if (event?.isError === true) return false;
         const result = toolResultObject(event);
         return result && typeof result === 'object'
-          && (result.state === 'started' || result.state === 'admitted' || result.state === 'opened')
+          && result.execution === 'waves'
+          && result.state === 'running'
+          && typeof result.wave_id === 'string' && result.wave_id.length > 0
+          && typeof result.record_path === 'string' && result.record_path.length > 0
+          && Number.isInteger(result.generation) && result.generation >= 1
+          && Number.isInteger(result.admitted_width) && result.admitted_width > 0
           && !result.error && !result.code;
       });
     const resultIds = new Set();

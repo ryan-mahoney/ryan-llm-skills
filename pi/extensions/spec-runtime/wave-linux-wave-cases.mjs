@@ -719,6 +719,42 @@ function responseToolCalls(request) {
   return request?.response?.tool_calls ?? request?.response?.choices?.[0]?.message?.tool_calls ?? [];
 }
 
+// Bounded startup/restart diagnostics: only composed when an assertion fails, and
+// capped so a wedged coordinator cannot flood the failure output. It reports the
+// facts needed to tell "wrong coordinator" from "wrong request window" apart.
+const DIAGNOSTIC_TAIL_CHARS = 4000;
+
+function stderrTail(coordinator) {
+  const raw = coordinator?.stderr ?? coordinator?.stderrText ?? '';
+  const text = typeof raw === 'string' ? raw : String(raw?.toString?.() ?? '');
+  return text.length > DIAGNOSTIC_TAIL_CHARS ? text.slice(-DIAGNOSTIC_TAIL_CHARS) : text;
+}
+
+function startupDiagnostics(coordinator, provider, label) {
+  const coordPid = coordinator?.pid ?? null;
+  const dispatch = toolResultEnds(coordinator, 'spec_dispatch').map(event => {
+    const result = toolResultObject(event);
+    return {
+      id: event?.toolCallId ?? event?.tool_call_id ?? null,
+      isError: event?.isError ?? event?.error != null,
+      state: result?.state ?? null,
+      error: result?.error ?? null,
+      code: result?.code ?? null,
+    };
+  });
+  const matched = (provider?.requests ?? []).filter(request => request?.route?.role === 'coordinator'
+    && request?.route?.pid === coordPid);
+  const wireToolIds = matched.map(request => (request.body?.messages ?? [])
+    .filter(message => message?.role === 'tool' || message?.role === 'tool_result')
+    .map(message => message.tool_call_id ?? message.toolCallId ?? message.call_id ?? null));
+  return [`${label} startup diagnostics:`,
+    `  coordinator.pid=${coordPid}`,
+    `  spec_dispatch events=${JSON.stringify(dispatch)}`,
+    `  matched request pids=[${[...new Set(matched.map(request => request?.route?.pid))].join(', ')}]`,
+    `  wire tool ids=${JSON.stringify(wireToolIds)}`,
+    `  coordinator stderr tail:\n${stderrTail(coordinator)}`].join('\n');
+}
+
 // A coordinator may issue a tool call only for its first startup dispatch;
 // every later model turn is a passive attention/report turn. The window opens
 // at the request that replays the successful startup tool result, correlated by
@@ -726,9 +762,17 @@ function responseToolCalls(request) {
 function assertNoCallsAfterStartup(coordinator, provider, label) {
   const resultIds = new Set();
   for (const event of toolResultEnds(coordinator, 'spec_dispatch')) {
+    if (event?.isError === true) continue;
     const result = toolResultObject(event);
     if (!result || typeof result !== 'object') continue;
-    if (result.state !== 'started' && result.state !== 'admitted' && result.state !== 'opened') continue;
+    // A successful startup is the actual admitted-running waves receipt
+    // (`waveReceipt`): execution 'waves' with the record's state, which admission
+    // marks 'running' on launch, plus durable identity/generation/width fields.
+    if (result.execution !== 'waves' || result.state !== 'running') continue;
+    if (typeof result.wave_id !== 'string' || result.wave_id.length === 0) continue;
+    if (typeof result.record_path !== 'string' || result.record_path.length === 0) continue;
+    if (!Number.isInteger(result.generation) || result.generation < 1) continue;
+    if (!Number.isInteger(result.admitted_width) || result.admitted_width <= 0) continue;
     if (result.error || result.code) continue;
     const id = event?.toolCallId ?? event?.tool_call_id;
     if (typeof id === 'string') resultIds.add(id);
@@ -740,9 +784,9 @@ function assertNoCallsAfterStartup(coordinator, provider, label) {
     const id = message.tool_call_id ?? message.toolCallId ?? message.call_id;
     return typeof id === 'string' && resultIds.has(id);
   }));
-  assert.ok(windowStart >= 0, `${label} coordinator request history carries its startup result`);
+  assert.ok(windowStart >= 0, `${label} coordinator request history carries its startup result\n${startupDiagnostics(coordinator, provider, label)}`);
   for (const request of requests.slice(windowStart)) {
-    assert.equal(responseToolCalls(request).length, 0, `${label} issues no coordinator tool call after startup`);
+    assert.equal(responseToolCalls(request).length, 0, `${label} issues no coordinator tool call after startup\n${startupDiagnostics(coordinator, provider, label)}`);
   }
 }
 

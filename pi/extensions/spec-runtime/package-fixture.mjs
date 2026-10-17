@@ -321,6 +321,10 @@ export async function makeWaveFixture(options = {}) {
     ['README', README_CONTENT],
     ['checks/fixture-check.mjs', CHECK_SCRIPT],
   ]);
+  // D-9: the deps setup commits fixture.lock into the base tree, so the fixture's
+  // own tree contract must list it; the exact integration-tree comparison reads
+  // this map and a missing entry surfaces later as an opaque tree diff.
+  if (useDeps) expected.set('fixture.lock', LOCK_CONTENT);
   for (const entry of steps) {
     const nn = String(entry.step).padStart(2, '0');
     expected.set(writePath(entry.step), entry.step === defectStep ? `step ${nn} fixed\n` : `step ${nn} implemented\n`);
