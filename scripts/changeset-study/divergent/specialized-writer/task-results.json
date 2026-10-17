@@ -670,7 +670,8 @@
     "Original04 infrastructure failure preceded every vendor request;05 reuses exact four owner calls and adds no owner retry.",
     "Actual campaign spends preparation once; each hypothetical complete route allocates that preparation once. Route costs must not be summed as actual spend.",
     "Infrastructure recovery/archive/development elapsed is outside estimated complete-route timings; no observed end-to-end wall-clock win is claimed.",
-    "Catalog receipt estimates, not invoice-exact charges; development and offline checks outside experimental ledger."
+    "Catalog receipt estimates, not invoice-exact charges; development and offline checks outside experimental ledger.",
+    "Posthoc official Morph and Relace format checks found missing unchanged-code preservation conventions in existing-file handoff updates; model-quality attribution is confounded by integration format."
   ],
   "failure_attribution": [
     {
@@ -685,13 +686,13 @@
     {
       "task": "hard-dependency-handoff",
       "selector": "openrouter/morph/morph-v3-fast",
-      "stage": "apply-unintended-helper-deletion",
+      "stage": "integration-format-confounded-helper-deletion",
       "helper": "promptRevision",
       "original_definitions": 1,
       "update_definitions": 0,
       "update_references": 1,
       "output_definitions": 0,
-      "evidence": "Settled instruction removes observedRuns, not promptRevision; original helper disappears while its call remains. Existing checks raise ReferenceError.",
+      "evidence": "Original helper disappears while its call remains. Supplied runtime snippet has no preservation markers; frozen owner prompt omitted the vendor-required marker convention. Missing markers plausibly explain deletion; no corrected-format run isolates cause.",
       "evidence_pointers": {
         "original": "tasks.json#/1/files/pi~1extensions~1spec-runtime~1runtime.mjs",
         "instruction": "preparations/hard-dependency-handoff/settled.json#/files/2/instruction",
@@ -702,7 +703,7 @@
     {
       "task": "hard-dependency-handoff",
       "selector": "openrouter/relace/relace-apply-3",
-      "stage": "apply-duplicate-function",
+      "stage": "integration-format-confounded-duplicate-function",
       "helper": "currentHandoff",
       "original_definitions": 1,
       "update_definitions": 1,
@@ -713,7 +714,8 @@
         "original": "tasks.json#/1/files/pi~1extensions~1spec-runtime~1runtime.mjs",
         "update": "preparations/hard-dependency-handoff/settled.json#/files/2/update",
         "rejected_output": "vendor-1/hard-dependency-handoff/responses.jsonl (record3, response.content text)"
-      }
+      },
+      "attribution_limit": "Relace documentation also prescribes precisely located unchanged-section comments absent from the supplied update. Observed duplicate output is not a controlled model-only failure."
     },
     {
       "task": "hard-lifecycle-extract",
@@ -721,5 +723,55 @@
       "evidence": "Initial prose/tool markup failed JSON parse; one format correction length-stopped at32000 output tokens. No vendor call."
     }
   ],
-  "failure_attribution_evidence_base": "Paths below are relative to run specialized-writer/05-original-three."
+  "failure_attribution_evidence_base": "Paths below are relative to run specialized-writer/05-original-three.",
+  "format_limitation": {
+    "observed_posthoc": true,
+    "source_url": "https://www.morphllm.com/fast-apply-model#the-edit-format",
+    "preservation_marker": "// ... existing code ...",
+    "documented_rule": "Morph requires markers for unchanged sections; missing markers indicate deletion.",
+    "owner_prompt_required_marker": false,
+    "handoff_update_marker_counts": {
+      "pi/extensions/spec-runtime/dependency-handoff.mjs": 0,
+      "pi/extensions/spec-runtime/completion.mjs": 0,
+      "pi/extensions/spec-runtime/runtime.mjs": 0,
+      "pi/extensions/spec-runtime/runtime.test.mjs": 0,
+      "pi/agents/spec-step-owner.md": 0,
+      "pi/agents/spec-step-editor.md": 0
+    },
+    "runtime_original_promptRevision_definitions": 1,
+    "runtime_update_promptRevision_definitions": 0,
+    "runtime_update_promptRevision_references": 1,
+    "runtime_output_promptRevision_definitions": 0,
+    "conclusion": "Frozen integration did not enforce either vendor's documented edit conventions. This confounds model-error attribution, without changing observed delivery, timing, usage or cost.",
+    "evidence_base": "specialized-writer/05-original-three",
+    "owner_prompt_pointer": "frozen/scripts/changeset-study/divergent/specialized-writer/experiment.mjs (ownerSystem)",
+    "runtime_update_pointer": "preparations/hard-dependency-handoff/settled.json#/files/2/update",
+    "corrected_format_trial_run": false,
+    "relace_source_urls": [
+      "https://docs.relace.ai/docs/instant-apply/agent",
+      "https://docs.relace.ai/docs/instant-apply/workflow"
+    ],
+    "relace_documented_rule": "Use precisely placed language-appropriate comments for omitted unchanged sections.",
+    "handoff_language_appropriate_preservation_comment_counts": {
+      "pi/extensions/spec-runtime/dependency-handoff.mjs": 0,
+      "pi/extensions/spec-runtime/completion.mjs": 0,
+      "pi/extensions/spec-runtime/runtime.mjs": 0,
+      "pi/extensions/spec-runtime/runtime.test.mjs": 0,
+      "pi/agents/spec-step-owner.md": 0,
+      "pi/agents/spec-step-editor.md": 0
+    },
+    "new_file_note": "The new dependency-handoff file has no unchanged original sections; preservation-marker absence is material to partial updates of existing files."
+  },
+  "guard_follow_up": {
+    "implemented": false,
+    "measured": false,
+    "source_url": "https://github.com/JRedeker/opencode-morph-fast-apply#safety-guards",
+    "documented_checks": [
+      "dropped-import identifiers",
+      "large truncation",
+      "preservation-marker leakage"
+    ],
+    "scope": "Detect and reject known damage before writing; no general deterministic repair or semantic guarantee.",
+    "relace_agent_diff_review": "Suggested in vendor docs, but outside this frozen no-model-review boundary."
+  }
 }

@@ -88,3 +88,14 @@ routing and accounting must match. Source reservation IDs must contain only thos
 owner requests. No owner is rerun, including a failed preparation. Reused charges
 remain part of each estimated complete route and the combined actual experiment
 once; `new_entries` separately counts only newly incurred vendor calls.
+
+A posthoc vendor-format check found a limitation of this frozen treatment: the owner
+prompt requests code anchors but does not require unchanged-section preservation
+markers, and every retained handoff update has zero such markers. [Morph's official
+edit-format guidance](https://www.morphllm.com/fast-apply-model#the-edit-format) assigns
+deletion meaning to missing preservation markers. [Relace’s agent](https://docs.relace.ai/docs/instant-apply/agent) and
+[workflow](https://docs.relace.ai/docs/instant-apply/workflow) instructions likewise
+prescribe precisely placed unchanged-section comments, which are absent. Thus the
+observed missing helper and duplicate function cannot be treated as controlled
+model-only failures. A new file has no unchanged sections to preserve. Runtime inputs and all measured
+outcomes remain unchanged; no corrected-format trial was run.
