@@ -45,6 +45,7 @@ Evidence: `stacked-optimization/round1` … `round11`, each with `results.md`.
 | e2e5 | Sol owner brief, Sol plan, lean writers | 1/3 | 18 / 298k | `2aaf7c3` |
 | e2e6–e2e8 | Single Sol discovery planner, lean writers | 1/3, 2/3, 1/3 | 10–11 / 155–205k | `2aaf7c3`, `e071543` |
 | e2e9, e2e10 | Single Sol planner plus one repair round | 1/3 each; handoff acceptance tests passed once | 14–19 / 320–395k | `25db95a`, `4de362c` |
-| e2e11 | Single DeepSeek planner (`deepseek-flash:max`), lean writers | see OPEN-QUESTIONS | | `cf0a531` |
+| e2e11 | Single DeepSeek planner (`deepseek-flash:max`), lean writers | 0/3; calibration lost to a fidelity-gate false positive (fixed in `a062542`), handoff and extraction to planner errors; planning 647 s, 39 planner calls, 141k planner output tokens | DeepSeek only | `cf0a531` |
+| e2e12 | Same, on the fixed gates | 1/3 (calibration); handoff's first packet failed syntax twice, extraction's plan declared a read of the new file without an excerpt; planning 774 s, 45 planner calls, 183k planner output tokens | DeepSeek only | `a062542`, `89a7941` |
 
-Evidence: `stacked-optimization/plan1-lean`, `e2e1-lean` … `e2e11-single-deepseek`.
+Evidence: `stacked-optimization/plan1-lean`, `e2e1-lean` … `e2e12-single-deepseek`.

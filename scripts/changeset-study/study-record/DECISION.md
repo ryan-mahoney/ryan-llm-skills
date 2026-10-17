@@ -26,4 +26,4 @@ The `owner-query-writer` strategy (brief then planner), the owner brief revision
 
 ## Open at the time of the decision
 
-Whether `owner_model` (DeepSeek) can plan the writes for non-hard steps. See [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md).
+Whether `owner_model` (DeepSeek) can plan the writes for non-hard steps. Two runs with DeepSeek planning the hard tasks delivered 0/3 and 1/3 at two to four times Sol's planning time, so the strong owner must plan hard steps; the medium and easy tiers remain unmeasured. See [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md).

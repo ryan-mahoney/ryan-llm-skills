@@ -18,7 +18,11 @@ node scripts/changeset-study/iterate.mjs --source "$reference" --output "$runtim
   --strong-owner-model deepseek/deepseek-flash:max --editor-model deepseek/deepseek-flash:off --parser "$parser"
 ```
 
-Pass criterion for the planner: the plan validates and every packet applies. Hidden grading is the secondary signal. `e2e11-single-deepseek` is the first such run; its result belongs here. A real answer needs an easy- or medium-class task set, which the harness does not have.
+Pass criterion for the planner: the plan validates and every packet applies. Hidden grading is the secondary signal.
+
+Result of two runs (`e2e11-single-deepseek`, `e2e12-single-deepseek`), DeepSeek only: on the hard tasks DeepSeek is not a viable planner. Planning took 647 and 774 s per three tasks against Sol's 180–330 s, with 39–45 planner calls and 141,000–183,000 planner output tokens (reasoning at `:max`), and the plans carried errors Sol's did not: a test packet anchored on a comment the planner meant to insert itself, a packet declaring a read of the new file without an excerpt, a first packet whose writer failed syntax twice. Calibration, the simplest task, delivered in the second run (90.6 s, 3 calls) once a fidelity-gate false positive from the first run was fixed. The DeepSeek plans also exposed two gate assumptions that Sol's plans had masked: a quoted removal target after an unrelated "append" cue, and reference excerpts seeded into a new file; both are fixed (`a062542`, `89a7941`).
+
+What this settles: `strong_owner_model` must plan hard steps. What it does not settle: whether `owner_model` can plan medium or easy steps, which still needs a task set of that class. The signal from calibration suggests it may, at a cost in planning time that this harness should measure before the policy is fixed.
 
 ## 2. Writer-attributable scoring beyond run18
 
