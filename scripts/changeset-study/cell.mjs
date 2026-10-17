@@ -141,7 +141,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
       if (queryMode.startsWith('catalog')) implementationBrief += '\n';
       // The planner may not invent an owner decision. When it reports one missing, the
       // owner that wrote the brief settles it in its own retained context and planning
-      // restarts from the revised brief. At most two revisions per cell; the planner
+      // restarts from the revised brief. At most three revisions per cell; the planner
       // still never sees test feedback and writers never see either role.
       reviseBrief = async blocked => {
         const revised = checkBrief(await stage('implementation-planning', () => ownerAgent.prompt(JSON.stringify({ previous_brief: implementationBrief,
@@ -326,7 +326,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
         return plan;
         };
         plan = await planOnce();
-        while (plan?.blocked && reviseBrief && (result.owner_revisions?.length ?? 0) < 2) {
+        while (plan?.blocked && reviseBrief && (result.owner_revisions?.length ?? 0) < 3) {
           implementationBrief = await reviseBrief(plan.blocked);
           input = { ...input, implementation_brief: implementationBrief, source_requests: undefined, source_lookup: undefined, instruction: undefined };
           queryCalls = 0; correctionUsed = false; queryLookup = null;
