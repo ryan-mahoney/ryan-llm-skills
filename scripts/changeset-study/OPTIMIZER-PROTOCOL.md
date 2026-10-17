@@ -642,3 +642,33 @@ The Sol controls retain the earlier exact backend and remain unchanged. A compar
 with this diagnostic treatment evaluates a changed writing configuration, not an
 isolated model substitution under identical code. These exposed-case measurements
 cannot establish production reliability or end-to-end savings in the managed workflow.
+
+## Protocol 22–23: keep local recovery on the fast writer setting
+
+After the diagnostic pair is complete, replay all three cases twice with native
+DeepSeek `:off` for both the initial writer and its single retry. Omit the explicit
+writer recovery selector. Keep the run-18 raw plans and inherited briefs, original
+source, diagnostic backend, optimization `none`, `catalog-lookup`, `smaller-regions`,
+concurrency and all task limits. No owner, query, review or routing inference occurs.
+The first run needs a new freeze because the existing replay guard correctly rejects
+changing recovery selectors under an earlier manifest. The second repeats that new
+freeze exactly. Verify that the reachable writer/backend code is unchanged from
+20–21 before inference; only the configured recovery route should differ.
+
+The fixed-selector backend has a material policy difference: it may retry certain
+nonterminal transport/model errors, while configured off-to-low recovery accepts
+only decoded-format, application and syntax failures. Preserve this difference in
+the report. Supplement the ordinary main-report provenance checks with a read-only
+replay audit of every operation, source packet, response, receipt and attempt. A
+transport-triggered retry makes the observation ineligible for a comparison of
+local recovery modes, even if application later succeeds. Keep its costs and outcome.
+The Sol-control entry point and its frozen audits remain strictly Sol-only.
+
+Retain both full-suite observations regardless of application or downstream success;
+stop only for an integrity or budget issue. Compare with both diagnostic off-to-low
+runs, reporting complete application first, then writing/optimizer/routing elapsed
+time, calls, local retries, diagnostic exposure, tokens and normalized cost. Retain
+outer checks independently. Do not select the fastest cells, feed behavioral results
+back to a writer, or infer reliability from two exposed-case observations. Requested
+provider limits for the native DeepSeek modes remain unchanged; the older Sol
+controls retain their separately documented provider and backend differences.
