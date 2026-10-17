@@ -35,7 +35,7 @@ async function fixture(t, { compaction = true, seed, toolTurn = false, toolInput
   const settings = sdk.SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: compaction } });
   const loader = new sdk.DefaultResourceLoader({ cwd: dir, agentDir: dir, settingsManager: settings,
     noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
-    systemPrompt: 'Keep all constraints and pending work.', extensionFactories: [pi => { pi.registerProvider(providerName, provider); installContextBudget(pi, { compact: sdk.compact, serialize: messages => sdk.serializeConversation(sdk.convertToLlm(messages)), retrySettings: () => settings.getRetrySettings() });
+    systemPrompt: 'Keep all constraints and pending work.', extensionFactories: [pi => { pi.registerProvider(providerName, provider); installContextBudget(pi, { role: 'editor', compact: sdk.compact, serialize: messages => sdk.serializeConversation(sdk.convertToLlm(messages)), retrySettings: () => settings.getRetrySettings() });
       if (toolTurn) pi.registerTool({ name: 'fixture_read', label: 'Fixture', description: 'Read fixture', parameters: { type: 'object', properties: {} },
         execute: async () => ({ content: [{ type: 'text', text: toolText }], details: {} }) });
     }, pi => installContextBudget(pi)] });

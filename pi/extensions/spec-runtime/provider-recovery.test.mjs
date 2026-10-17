@@ -80,7 +80,7 @@ async function fixture(t, { toolFirst = false, primaryFailures = Infinity, fallb
     noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
     systemPrompt: 'Preserve tool results and finish the assigned work.', extensionFactories: [pi => {
       for (const [name, config] of Object.entries(providers)) pi.registerProvider(name, config);
-      installContextBudget(pi);
+      installContextBudget(pi, { role: 'editor' });
       installProviderRecovery(pi, { requestedModel: selected, onEvent: event => events.push(event),
         nativeRetryable: compat.isRetryableAssistantError, retrySettings: () => settings.getRetrySettings(),
         wait: async (ms, signal) => { delays.push(ms); await wait?.(ms, signal); } });

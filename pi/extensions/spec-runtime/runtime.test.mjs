@@ -103,6 +103,9 @@ test('settled editor cleanup preserves its live owner and returns the retained r
 });
 
 // Run alone: node --test --test-name-pattern='editor packet context' pi/extensions/spec-runtime/runtime.test.mjs
+const editorStarts = packagePath => readFileSync(join(packagePath, 'runtime/events.jsonl'), 'utf8').trim().split('\n')
+  .map(line => JSON.parse(line)).filter(entry => entry.event === 'editor_started');
+
 test('editor packet context attaches exact ranges and per-packet reasoning overrides only the editor thinking', async t => {
   const f = await fixture(t, `
     if(process.env.SPEC_RUNTIME_ROLE === 'editor') {
@@ -132,6 +135,12 @@ test('editor packet context attaches exact ranges and per-packet reasoning overr
   const { provider, model } = splitModelSelector(record.editor_model);
   assert.equal(captured.record.editor_model, `${provider}/${model}:off`);
   assert.equal(loadRun(f.packagePath).editor_model, record.editor_model, 'the run record keeps the assignment selector');
+  const started = editorStarts(f.packagePath).at(-1);
+  assert.equal(started.selector, `${provider}/${model}:off`, 'the event records the selector the packet actually ran');
+  assert.equal(started.assignment_chars, 'Edit one function'.length);
+  assert.ok(started.excerpt_chars > 0);
+  assert.match(record.revisions.runtime.head, /^[0-9a-f]{40}$/, 'the run records the runtime code revision it ran');
+  assert.equal(typeof record.revisions.runtime.dirty, 'boolean');
   await runtime.cancel(f.packagePath, record.id);
 });
 
@@ -180,6 +189,7 @@ test('parallel packets run concurrently in the shared checkout, each fenced to i
   const folded = JSON.parse(readFileSync(join(runs, `${record.id}-editor-outcome.json`), 'utf8'));
   assert.equal(folded.state, 'completed');
   assert.deepEqual(folded.members.map(item => [item.member, item.state]), [[1, 'completed'], [2, 'completed']]);
+  assert.deepEqual(editorStarts(f.packagePath).map(e => e.paths).sort(), [['a.mjs'], ['lib/b.mjs']], 'each packet start records its fenced paths');
   assert.equal(existsSync(editorSlot(record)), false, 'the batch releases the writer slot');
   await runtime.cancel(f.packagePath, record.id);
 });
@@ -1045,7 +1055,19 @@ test('CURRENT handoff carries bounded latest prerequisite facts and preserves ex
   assert.ok(prompt.includes('use existing helper'));
   assert.ok(prompt.includes('Preserve explicit direction'));
   assert.ok(prompt.includes('do not establish acceptance'));
+  assert.deepEqual(current.steps_without_results, ['001'], 'a step with no run or learning is listed, not described');
+  assert.ok(!current.observations.some(item => item.step === '001'));
   await runtime.cancel(f.packagePath, receipt.run_id, 1000);
+  // The retained owner session already holds the earlier-step context; the next round
+  // sends only the current step's observation.
+  writeFileSync(JSON.parse(readFileSync(join(dir, `${receipt.run_id}.json`), 'utf8')).owner_session, '{"type":"session"}\n');
+  const again = await runtime.start({ ...f.input, assignment_id: 'round-2', instructions: 'Preserve explicit direction' });
+  const resumed = JSON.parse(prompt.match(/CURRENT: ([^\n]+)/)[1]);
+  assert.deepEqual(resumed.observations.map(item => [item.step, item.run_id]), [['001', receipt.run_id]], 'only the current step, from the prior round');
+  assert.match(resumed.earlier_steps, /sent earlier/);
+  assert.ok(!prompt.includes('use existing helper'));
+  assert.ok(prompt.includes('Preserve explicit direction'));
+  await runtime.cancel(f.packagePath, again.run_id, 1000);
 });
 
 // Run alone: node --test --test-name-pattern='prompt construction failure' runtime.test.mjs

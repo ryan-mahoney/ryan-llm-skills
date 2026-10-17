@@ -263,6 +263,13 @@ to re-record the same completion. A ready unattempted gate belongs in the curren
 assignment, not a routine checkpoint. Preserve useful partial receipts and genuine
 blockers, interruptions, deadlines and transfers without an automatic retry loop.
 
+Dispatch `instructions` must not narrow the owner's scope below its profile. Do not add "stop at any
+undeclared path": same-directory split modules and minimal, regression-tested repairs to an earlier
+step's file for a reproduced defect that blocks this step's gate are within scope. The owner lists
+them in its handoff and you declare them in `spec-steps.json`. In one run such a clause stopped a
+hard step four times for authority it already had. Fix and repair packets follow the same rule:
+files of the steps whose findings the packet fixes are in scope for minimal, regression-tested repairs.
+
 Normally select remaining assigned steps in ascending order. Before dispatch, use their prepared dependency boundaries and current producer evidence to determine which are executable. When a known outside dependency blocks the earliest step's implementation or required gate, preserve that step's ID, learning/checkpoint, acceptance obligations, and blocked/pending evidence; select only an already prepared independent step whose contracts and proof do not rely on the missing producer. Pass that exact canonical card to dispatch instead of relying on startup's first-unfinished selection. Do not renumber steps, infer dependencies beyond the prepared `requires` edges, overlap writers, or expand this package to build the outside producer.
 
 Record the missing contract/capability, authoritative producer, availability evidence needed, blocked gates, and next reconciliation action in the existing ledger/learning. An unchanged pending prerequisite remains blocked; neither elapsed time nor another worker's exit establishes it. Do not repeat a knowingly impossible gate or use a fabricated mock/adapter as proof of an unavailable real transport. Reconcile new authoritative producer evidence before returning to dependent work. When no prepared independent work remains, report the concrete blocker and required external evidence without claiming completion.
@@ -414,6 +421,10 @@ made since the previous review. The reviewer needs to read files, run `git`, and
 `~/.agents/skills/spec-branch-review/SKILL.md` and follow Step Scope with
 `scope=step step=<NNN> since=<pinned base sha> head=<pinned head sha>`. Pass the target checkout, `package_dir`, and the model assigned to step review. Don't wait for it: it reads fixed commits,
 so the next step worker can edit the checkout while it runs. Reviews may overlap.
+
+Every review that closes a fix (a delta or re-review of fix commits) is independent in the same
+way: launch a fresh reviewer with the review model, never a continuation of the owner or fixer session
+that wrote the commits. An authoring session correctly declines to review its own work.
 
 In the same turn, when undispatched steps remain, launch one background card refresher for the
 same pinned range with the review model, following [Card Refresh](references/card-refresh.md). It

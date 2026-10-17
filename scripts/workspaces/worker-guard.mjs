@@ -7,7 +7,9 @@ import {join,resolve,sep} from 'node:path';
 import {TERMINAL_WAVE_STATES,projectWaveRecord} from '../spec-observe/core.mjs';
 import {inspectProcess} from '../spec-observe/process-identity.mjs';
 import {createSystemdServiceAdapter} from '../../pi/extensions/spec-runtime/linux-resources.mjs';
-const LIMIT=2048;
+// Bounds inspection cost while staying fail-closed. A long spec run kept about 2,400
+// runtime/runs entries (logs, receipts, sessions), so 2,048 refused a legitimate relaunch.
+const LIMIT=16384;
 const WAVE_FILE=/^[A-Za-z0-9_-]{1,128}\.json$/;
 const refuse=(message,reason='worker-unknown',detail=null)=>Object.assign(new Error(message),{code:'run-active',reason,detail});
 export const subagentRoot=()=>join(process.env.PI_SUBAGENTS_TEMP_ROOT?.trim()

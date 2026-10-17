@@ -2,10 +2,20 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, basename } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-// Working limits, not provider capabilities or prices. Leave headroom below the
-// operator's 100k input ceiling for schemas, token-estimation error and tool bursts.
-export const POLICY = Object.freeze({ contextWindow: 88000,
-  requestEstimateLimit: 90000, toolTextChars: 12000 });
+// Working limits, not provider capabilities or prices. Each spec-runtime role starts at
+// its own window: owners hold a step's state across rounds, while editors start a fresh
+// session per packet. Sol compacts remotely and keeps up to 64k tokens of recent user
+// messages, so an 88k window left a Sol owner about 9k of room after each compaction and
+// it compacted every minute without editing on 2026-10-17. The operator raised the
+// windows that day: protect against very large contexts, not ordinary step state.
+export const POLICY = Object.freeze({
+  windows: Object.freeze({ owner: 200000, reviewer: 160000, fixer: 120000, editor: 88000, default: 120000 }),
+  // A compaction that returns with less working room than this grows the session's
+  // window. The ceiling stays below Sol's 272k long-context price tier.
+  minWorkingRoom: 32000, maxWindow: 240000,
+  // Native compaction starts at the window minus Pi's reserve. The request guard sits
+  // just above the window, so it stops only a request that compaction could not prevent.
+  reserveTokens: 16384, requestMargin: 2000, toolTextChars: 12000 });
 const installed = new WeakSet();
 // Native update summaries otherwise accumulate completed history on every pass.
 // Keep obligations intact, but make their durable artifacts carry the detail.
@@ -23,11 +33,23 @@ recovery pointer, not every prior detail. Use only a few lines for completed ste
 omit tool-call inventories, resolved errors, repeated paths and receipt-by-receipt
 history. Do not copy credentials or launch/lease tokens; reference their owning record.`;
 
-export function budgetModel(model) {
+export function roleWindow(role) {
+  return Object.hasOwn(POLICY.windows, role ?? '') ? POLICY.windows[role] : POLICY.windows.default;
+}
+
+export function budgetModel(model, window = POLICY.windows.default) {
   if (!model || !Number.isFinite(model.contextWindow) || model.contextWindow <= 0) return model;
   // Output and thinking budgets have different semantics across providers. This
   // policy controls retained input; preserve the selected model's output limit.
-  return { ...model, contextWindow: Math.min(model.contextWindow, POLICY.contextWindow) };
+  return { ...model, contextWindow: Math.min(model.contextWindow, window) };
+}
+
+// The window after a compaction that left `retained` tokens: unchanged when the
+// remaining room before the next compaction is enough, otherwise large enough to
+// restore it, up to the ceiling.
+export function grownWindow(window, retained, reserve = POLICY.reserveTokens) {
+  if (window - reserve - retained >= POLICY.minWorkingRoom) return window;
+  return Math.min(POLICY.maxWindow, Math.max(window, retained + POLICY.minWorkingRoom + reserve));
 }
 
 // Full provider payload: system prompt, cached conversation, tools and reasoning
@@ -69,7 +91,7 @@ export function boundedToolContent(content, artifact) {
     ...content.filter(block => block.type !== 'text')];
 }
 
-export function installContextBudget(pi, { compact, serialize, retrySettings } = {}) {
+export function installContextBudget(pi, { compact, serialize, retrySettings, role = process.env.SPEC_RUNTIME_ROLE } = {}) {
   if (installed.has(pi)) return;
   installed.add(pi);
   // Pi gives each extension a different API object. Elect one installer on its
@@ -80,6 +102,11 @@ export function installContextBudget(pi, { compact, serialize, retrySettings } =
   pi.events?.on('context-budget:claim', claim => claim());
   let applying = false;
   let lastEstimate = 0;
+  // The configured window can grow after a compaction; `effective` is that window
+  // capped by the selected model's own limit, which the guard and growth measure against.
+  let window = roleWindow(role), effective = window, measureRetained = false, exhausted = false;
+  const requestLimit = () => effective + POLICY.requestMargin;
+  const reserve = () => pi.getSettings?.()?.compaction?.reserveTokens ?? POLICY.reserveTokens;
   // Native compaction triggers on provider-reported input; the guard sees only the
   // byte estimate, which ran 1.3x (DeepSeek) to 1.6x (Codex) high. Uncalibrated, the
   // guard fired at ~57k real input, before compaction could start at ~59.6k. Scale by
@@ -89,7 +116,10 @@ export function installContextBudget(pi, { compact, serialize, retrySettings } =
   const record = data => pi.appendEntry('context-budget', { version: 1, ...data });
   const apply = async (_event, ctx) => {
     if (applying || !ctx.model) return;
-    const model = budgetModel(ctx.model);
+    // After the first apply the session holds the capped copy; growth needs the registry limit.
+    const native = ctx.modelRegistry?.find?.(ctx.model.provider, ctx.model.id)?.contextWindow;
+    const model = budgetModel(Number.isFinite(native) && native > 0 ? { ...ctx.model, contextWindow: native } : ctx.model, window);
+    if (Number.isFinite(model?.contextWindow) && model.contextWindow > 0) effective = model.contextWindow;
     if (model === ctx.model || (model.contextWindow === ctx.model.contextWindow && model.maxTokens === ctx.model.maxTokens)) return;
     applying = true;
     const thinking = pi.getThinkingLevel();
@@ -98,7 +128,7 @@ export function installContextBudget(pi, { compact, serialize, retrySettings } =
       // global defaults, credentials, rates, or selected thinking effort.
       if (await pi.setModel(model) === false) throw new Error('Cannot apply context working budget');
       pi.setThinkingLevel(thinking);
-      record({ event: 'policy', context_window: model.contextWindow, max_output_tokens: model.maxTokens });
+      record({ event: 'policy', role: role ?? null, context_window: model.contextWindow, max_output_tokens: model.maxTokens });
     } finally { applying = false; }
   };
   pi.on('session_start', apply);
@@ -133,9 +163,19 @@ export function installContextBudget(pi, { compact, serialize, retrySettings } =
           summary: p.previousSummary, instructions: event.customInstructions });
     const context = Number.isFinite(p.tokensBefore) ? p.tokensBefore : 0;
     const expected = !serialize ? projected(estimate) : inPlace ? context : Math.max(estimate, context);
-    const blocked = expected >= POLICY.requestEstimateLimit;
+    const blocked = expected >= requestLimit();
     record({ event: 'compaction_request', estimated_input_tokens: estimate,
       context_tokens: p.tokensBefore ?? null, projected_input_tokens: expected, blocked });
+    if (exhausted) {
+      // Growth reached its ceiling and compaction still returns nearly full: another
+      // compaction would repeat the same loop without room to work.
+      record({ event: 'compaction_loop', context_window: effective, blocked: true });
+      const message = `Context budget stopped repeated compaction: compactions return with less than ${POLICY.minWorkingRoom} tokens of working room at the ${effective}-token window. Resume in a fresh session from canonical artifacts and a bounded handoff; preserve the original transcript.`;
+      ctx.ui?.notify(message, 'error');
+      process.stderr.write(`${message}\n`);
+      ctx.abort();
+      return { cancel: true };
+    }
     if (blocked) {
       const message = 'Context budget refused an oversized compaction request. Resume in a fresh session from canonical artifacts and a bounded handoff; preserve the original transcript.';
       ctx.ui?.notify(message, 'error');
@@ -155,8 +195,8 @@ export function installContextBudget(pi, { compact, serialize, retrySettings } =
           const estimate = estimatePayload(payload);
           record({ event: 'summary_request', provider: model.provider, model: model.id,
             estimated_input_tokens: estimate, projected_input_tokens: projected(estimate),
-            blocked: projected(estimate) >= POLICY.requestEstimateLimit });
-          if (projected(estimate) >= POLICY.requestEstimateLimit) guard.abort();
+            blocked: projected(estimate) >= requestLimit() });
+          if (projected(estimate) >= requestLimit()) guard.abort();
         } });
       const response = await stream.result();
       record({ event: 'summary_usage', provider: response.provider, model: response.model,
@@ -189,9 +229,9 @@ export function installContextBudget(pi, { compact, serialize, retrySettings } =
   pi.on('before_provider_request', (event, ctx) => {
     lastEstimate = estimatePayload(event.payload);
     const expected = projected(lastEstimate);
-    const blocked = expected >= POLICY.requestEstimateLimit;
+    const blocked = expected >= requestLimit();
     record({ event: 'request', estimated_input_tokens: lastEstimate, projected_input_tokens: expected,
-      calibration: Number(calibration.toFixed(3)), limit: POLICY.requestEstimateLimit, blocked });
+      calibration: Number(calibration.toFixed(3)), limit: requestLimit(), blocked });
     if (blocked) {
       // Pi reports hook exceptions but continues sending: throwing alone is NOT
       // a guard. Abort the native request signal before the provider transport.
@@ -220,7 +260,7 @@ export function installContextBudget(pi, { compact, serialize, retrySettings } =
       content: 'Your previous response contained only reasoning, with no answer or tool call, so the run would end without a result. Continue the assigned task: make the next tool call, or give the final answer if the task is complete.' }],
       continue: true };
   });
-  pi.on('message_end', (event) => {
+  pi.on('message_end', async (event, ctx) => {
     if (event.message?.role !== 'assistant') return;
     lastAssistant = event.message;
     if (!reasoningOnly(event.message)) emptyStreak = 0;
@@ -232,10 +272,24 @@ export function installContextBudget(pi, { compact, serialize, retrySettings } =
       cache_read_tokens: usage?.cacheRead ?? null, reasoning_tokens: usage?.reasoning ?? null,
       estimated_input_tokens: lastEstimate, stop_reason: event.message.stopReason,
       usage_available: inputTokens(usage) > 0 });
+    // The first reported input after a compaction is what the compaction retained.
+    if (!measureRetained || inputTokens(usage) <= 0) return;
+    measureRetained = false;
+    const retained = inputTokens(usage), room = effective - reserve() - retained;
+    const next = grownWindow(Math.max(window, effective), retained, reserve());
+    record({ event: 'compaction_retained', input_tokens: retained, context_window: effective, working_room: room });
+    if (room >= POLICY.minWorkingRoom) { exhausted = false; return; }
+    const before = effective;
+    if (next > before) {
+      window = next;
+      await apply(event, ctx);
+      if (effective > before) record({ event: 'window_grown', from: before, context_window: effective });
+    }
+    exhausted = effective - reserve() - retained < POLICY.minWorkingRoom;
   });
-  pi.on('session_compact', event => record({ event: 'compaction',
+  pi.on('session_compact', event => { measureRetained = true; record({ event: 'compaction',
     input_tokens: inputTokens(event.compactionEntry?.usage),
-    output_tokens: event.compactionEntry?.usage?.output ?? null }));
+    output_tokens: event.compactionEntry?.usage?.output ?? null }); });
   pi.on('session_compact_failed', event => record({ event: 'compaction_failed',
     trigger: event.reason, aborted: event.aborted, from_extension: event.fromExtension,
     reason: /token cap|incomplete/.test(event.errorMessage || '') ? 'length' : 'error' }));

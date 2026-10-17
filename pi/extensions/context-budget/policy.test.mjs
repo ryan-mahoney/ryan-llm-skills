@@ -3,17 +3,18 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { POLICY, budgetModel, estimatePayload, inputTokens, installContextBudget } from './policy.mjs';
+import { POLICY, budgetModel, estimatePayload, grownWindow, inputTokens, installContextBudget, roleWindow } from './policy.mjs';
 
 test('working cap preserves provider identity and smaller native limits; cached input counts toward budget', () => {
   const original = { id: 'model', provider: 'provider', contextWindow: 1048576, maxTokens: 65536, cost: { input: 1 } };
-  assert.deepEqual(budgetModel(original), { ...original, contextWindow: 88000 });
+  assert.deepEqual(budgetModel(original, 88000), { ...original, contextWindow: 88000 });
+  assert.equal(budgetModel(original).contextWindow, POLICY.windows.default);
   assert.equal(original.contextWindow, 1048576);
   assert.equal(budgetModel(original).maxTokens, 65536);
   assert.equal(budgetModel({ ...original, maxTokens: 0 }).maxTokens, 0);
   assert.equal(budgetModel({ ...original, contextWindow: 32000, maxTokens: 4096 }).contextWindow, 32000);
   assert.equal(inputTokens({ input: 1000, cacheRead: 98000, cacheWrite: 2000, output: 999 }), 101000);
-  assert.ok(estimatePayload({ messages: [{ content: '界'.repeat(90000) }] }) > POLICY.requestEstimateLimit);
+  assert.ok(estimatePayload({ messages: [{ content: '界'.repeat(90000) }] }) > 90000, 'the estimate counts UTF-8 bytes');
   assert.ok(estimatePayload({ messages: [{ content: [{ type: 'image_url', image_url: { url: 'x'.repeat(1000000) } }] }] }) < 10000);
 });
 
@@ -21,7 +22,7 @@ test('working cap preserves provider identity and smaller native limits; cached 
 test('request guard calibrates to reported input so it cannot fire before native compaction', () => {
   const handlers = {}, entries = [];
   const pi = { on: (name, fn) => handlers[name] = fn, appendEntry: (_kind, data) => entries.push(data) };
-  installContextBudget(pi);
+  installContextBudget(pi, { role: 'editor' });
   const send = chars => {
     let aborted = false;
     handlers.before_provider_request({ payload: { messages: [{ content: 'x'.repeat(chars) }] } }, { abort: () => { aborted = true; } });
@@ -44,7 +45,7 @@ test('compaction preflight sizes the sent summary text and context, not raw mess
   const handlers = {}, entries = [];
   const pi = { on: (name, fn) => handlers[name] = fn, appendEntry: (_kind, data) => entries.push(data) };
   // Summarizers send text without thinking blocks; the fake keeps only visible text.
-  installContextBudget(pi, { serialize: messages => messages.map(m => m.text ?? '').join('\n') });
+  installContextBudget(pi, { role: 'editor', serialize: messages => messages.map(m => m.text ?? '').join('\n') });
   const compact = async (preparation) => {
     let aborted = false;
     const result = await handlers.session_before_compact({ preparation }, { abort: () => { aborted = true; } });
@@ -70,7 +71,7 @@ test('a resumed session seeds calibration from its last recorded usage', async (
   const start = async entries => {
     const handlers = {};
     const pi = { on: (name, fn) => { (handlers[name] ??= []).push(fn); }, appendEntry() {}, getThinkingLevel() {} };
-    installContextBudget(pi);
+    installContextBudget(pi, { role: 'editor' });
     for (const fn of handlers.session_start) await fn({}, { sessionManager: { getEntries: () => entries } });
     let aborted = false;
     handlers.before_provider_request[0]({ payload: { messages: [{ content: 'x'.repeat(364000) }] } }, { abort: () => { aborted = true; } });
@@ -124,4 +125,66 @@ test('large tool output remains exactly recoverable, retains error tail, and tel
   assert.equal(aborted, true);
   assert.equal(entries[0].blocked, true);
   assert.ok(!JSON.stringify(entries).includes('private source'));
+});
+
+// A session double that keeps the selected model and every handler per event.
+function budgetSession({ role, nativeWindow }) {
+  const handlers = {}, entries = [], selected = [];
+  const native = { id: 'gpt-6.1-sol', provider: 'openai-codex', contextWindow: nativeWindow, maxTokens: 128000 };
+  const ctx = { model: native, modelRegistry: { find: () => native }, abort() { ctx.aborted = true; }, aborted: false };
+  const pi = { on: (name, fn) => (handlers[name] ??= []).push(fn), appendEntry: (_kind, data) => entries.push(data),
+    getThinkingLevel: () => 'medium', setThinkingLevel() {},
+    setModel: async model => { selected.push(model.contextWindow); ctx.model = model; return true; } };
+  installContextBudget(pi, { role });
+  const emit = async (name, event = {}) => { let result; for (const fn of handlers[name] ?? []) result = await fn(event, ctx) ?? result; return result; };
+  const compactWith = async retained => {
+    await emit('session_compact', { compactionEntry: {} });
+    await emit('message_end', { message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }], usage: { input: 2000, cacheRead: retained - 2000, output: 50 } } });
+  };
+  return { ctx, entries, selected, emit, compactWith };
+}
+
+// Run alone: node --test --test-name-pattern='role window' pi/extensions/context-budget/policy.test.mjs
+test('each role starts at its own window and an unknown role uses the default', async () => {
+  for (const [role, expected] of [['owner', 200000], ['reviewer', 160000], ['fixer', 120000], ['editor', 88000], [undefined, 120000], ['scout', 120000]]) {
+    assert.equal(roleWindow(role), expected, String(role));
+    const s = budgetSession({ role, nativeWindow: 272000 });
+    await s.emit('session_start');
+    assert.equal(s.ctx.model.contextWindow, expected, `${role} session window`);
+  }
+  const small = budgetSession({ role: 'owner', nativeWindow: 128000 });
+  await small.emit('session_start');
+  assert.equal(small.ctx.model.contextWindow, 128000, 'a smaller native limit stays smaller');
+});
+
+// Run alone: node --test --test-name-pattern='grows the window' pi/extensions/context-budget/policy.test.mjs
+test('a compaction that leaves too little working room grows the window and the request guard', async () => {
+  // Observed 2026-10-17: a Sol session at an 88k window returned from each compaction at
+  // about 62k, 9k below the 71.6k trigger, and compacted again within a minute.
+  const s = budgetSession({ role: 'editor', nativeWindow: 272000 });
+  await s.emit('session_start');
+  const blocked = async chars => { s.ctx.aborted = false; await s.emit('before_provider_request', { payload: { messages: [{ content: 'x'.repeat(chars) }] } }); return s.ctx.aborted; };
+  assert.equal(await blocked(300000), true, 'a ~101k estimate exceeds the 88k window guard');
+  await s.compactWith(62339);
+  assert.equal(s.ctx.model.contextWindow, 62339 + 32000 + 16384);
+  assert.deepEqual(s.entries.filter(e => e.event === 'window_grown').map(e => [e.from, e.context_window]), [[88000, 110723]]);
+  assert.equal(await blocked(300000), false, 'the guard follows the grown window');
+  await s.compactWith(62000);
+  assert.equal(s.ctx.model.contextWindow, 110723, 'enough room after the next compaction leaves the window unchanged');
+  assert.equal((await s.emit('session_before_compact', { preparation: { tokensBefore: 90000 } }))?.cancel, undefined);
+  // Pure rule: growth restores the working room and stops at the ceiling.
+  assert.equal(grownWindow(200000, 62000), 200000);
+  assert.equal(grownWindow(200000, 230000), POLICY.maxWindow);
+});
+
+// Run alone: node --test --test-name-pattern='cannot grow' pi/extensions/context-budget/policy.test.mjs
+test('when the window cannot grow enough, the next compaction stops instead of looping', async () => {
+  const s = budgetSession({ role: 'editor', nativeWindow: 100000 });
+  await s.emit('session_start');
+  await s.compactWith(62000);
+  assert.equal(s.ctx.model.contextWindow, 100000, 'growth is capped by the native limit');
+  const result = await s.emit('session_before_compact', { preparation: { tokensBefore: 85000 } });
+  assert.equal(result?.cancel, true);
+  assert.equal(s.ctx.aborted, true);
+  assert.equal(s.entries.at(-1).event, 'compaction_loop');
 });
