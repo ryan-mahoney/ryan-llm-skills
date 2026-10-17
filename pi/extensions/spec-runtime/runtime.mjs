@@ -111,6 +111,12 @@ function atomic(file, value) {
 function git(cwd, ...args) {
   return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
+// The commit a checkout is at and whether it has uncommitted changes, so a run records
+// which runtime and target code it actually ran. Null when the path is not a Git checkout.
+function revisionOf(cwd, scope = '.') {
+  try { return { head: git(cwd, 'rev-parse', 'HEAD'), dirty: git(cwd, 'status', '--porcelain', '--', scope) !== '' }; }
+  catch { return null; }
+}
 function inside(parent, child) {
   const rel = relative(parent, child);
   return rel && !rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) && rel !== '..' && !isAbsolute(rel);
@@ -448,6 +454,7 @@ export class Runtime {
       dispatch_requested_at: requestedAt, routing_reason: config.routing_reason,
       attempt_kind: config.attempt_kind ?? null, session_scope: scope,
       environment: environmentFacts(config.checkout, config.primary),
+      revisions: { runtime: revisionOf(here), checkout: revisionOf(config.checkout) },
       child_extensions: config.child_extensions || [], owner_session: join(sessionDir, 'owner.jsonl'), editor_session: join(sessionDir, 'editor.jsonl'),
       parent_session: parentSession, coordinator_pid: process.pid, state: 'running', started_at: timestamp(), timeout_ms: input.timeout_ms || 7200000 };
     save(record);
@@ -585,7 +592,8 @@ export async function runEditor(record, assignment, signal, launchProcess = laun
     const fence = member ? `PARALLEL PACKET: other editors are writing other files now. You may edit or write only: ${paths.join(', ')}. You have no shell and cannot ask the owner; if a decision or anchor is missing, stop and return the exact question, the paths you checked and the facts found.\n` : '';
     task = launchProcess({ ...record, editor_session: session, editor_model: editorModel }, 'editor', `PACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${targetFacts(record)}FRESH EDITOR: This packet is your complete assignment, not a continuation of prior editor chat. Preserve existing working-tree changes. ${orientation} Do not repeat prior work or verification.\n${fence}${assignment}\n${excerpts}`,
       member ? { parallel: true, tools: 'read,grep,find,ls,edit,write', env: { SPEC_EDITOR_PATHS: JSON.stringify(paths), PI_INTERCOM_STABLE_ID: `spec-editor-${record.id}-${member}` } } : undefined);
-    event(record, 'editor_started', { pid: task.child.pid, editor_session: session, ...(reasoning ? { reasoning } : {}), ...(context?.length ? { context_ranges: context.length } : {}) });
+    event(record, 'editor_started', { pid: task.child.pid, editor_session: session, selector: editorModel, assignment_chars: assignment.length, excerpt_chars: excerpts.length,
+      ...(reasoning ? { reasoning } : {}), ...(context?.length ? { context_ranges: context.length } : {}), ...(member ? { member, paths } : {}) });
     let stopping;
     let reportUnconfirmed;
     const unconfirmed = new Promise(resolveFailure => { reportUnconfirmed = resolveFailure; });

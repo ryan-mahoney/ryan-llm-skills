@@ -89,6 +89,9 @@ test('settled editor cleanup preserves its live owner and returns the retained r
 });
 
 // Run alone: node --test --test-name-pattern='editor packet context' pi/extensions/spec-runtime/runtime.test.mjs
+const editorStarts = packagePath => readFileSync(join(packagePath, 'runtime/events.jsonl'), 'utf8').trim().split('\n')
+  .map(line => JSON.parse(line)).filter(entry => entry.event === 'editor_started');
+
 test('editor packet context attaches exact ranges and per-packet reasoning overrides only the editor thinking', async t => {
   const f = await fixture(t, `
     if(process.env.SPEC_RUNTIME_ROLE === 'editor') {
@@ -118,6 +121,12 @@ test('editor packet context attaches exact ranges and per-packet reasoning overr
   const { provider, model } = splitModelSelector(record.editor_model);
   assert.equal(captured.record.editor_model, `${provider}/${model}:off`);
   assert.equal(loadRun(f.packagePath).editor_model, record.editor_model, 'the run record keeps the assignment selector');
+  const started = editorStarts(f.packagePath).at(-1);
+  assert.equal(started.selector, `${provider}/${model}:off`, 'the event records the selector the packet actually ran');
+  assert.equal(started.assignment_chars, 'Edit one function'.length);
+  assert.ok(started.excerpt_chars > 0);
+  assert.match(record.revisions.runtime.head, /^[0-9a-f]{40}$/, 'the run records the runtime code revision it ran');
+  assert.equal(typeof record.revisions.runtime.dirty, 'boolean');
   await runtime.cancel(f.packagePath, record.id);
 });
 
@@ -159,6 +168,7 @@ test('parallel packets run concurrently in the shared checkout, each fenced to i
   assert.deepEqual(editors.map(e => JSON.parse(e.opts.env.SPEC_EDITOR_PATHS)), [['a.mjs'], ['lib/b.mjs']]);
   assert.notEqual(editors[0].opts.env.PI_INTERCOM_STABLE_ID, editors[1].opts.env.PI_INTERCOM_STABLE_ID);
   assert.match(editors[0].prompt, /PARALLEL PACKET: .*may edit or write only: a\.mjs\./);
+  assert.deepEqual(editorStarts(f.packagePath).map(e => e.paths).sort(), [['a.mjs'], ['lib/b.mjs']], 'each packet start records its fenced paths');
   assert.equal(existsSync(editorSlot(record)), false, 'the batch releases the writer slot');
   await runtime.cancel(f.packagePath, record.id);
 });
