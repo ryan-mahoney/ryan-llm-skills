@@ -3,6 +3,11 @@
 **Status:** design for a bounded research comparison. This branch does not implement
 this path in the managed runtime or change production routing.
 
+The [combined research profile](COMBINED-DISPATCH.md) now connects deterministic
+preprocessing, Jev advice and DeepSeek V4A writing with one local JSON fallback in
+the research executor. The managed leases, publication and owner-tool integration
+described here remain future work.
+
 The [configuration assessment](CONFIGURATION.md) selects the provisional writing
 candidate from the completed tuning sequence: small assignments, bounded catalog
 lookup, four concurrent DeepSeek writers, and no optional grouping or Jev routing.

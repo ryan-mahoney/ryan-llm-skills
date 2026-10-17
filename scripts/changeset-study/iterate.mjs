@@ -12,24 +12,29 @@ import { strategyNames, usesCandidateChecks, usesEditor, deliveredResult } from 
 import { modelRuntime, parseSelector } from '../changeset/models.mjs';
 import { buildRunRoles } from './run-roles.mjs';
 import { resolveQueryGranularity } from './roles.mjs';
+import { resolveDispatchProfile } from './dispatch-profile.mjs';
 
 const args = process.argv.slice(2);
 const option = name => { const i = args.indexOf(name); if (i < 0 || !args[i + 1]) throw new Error(`${name} required`); return args[i + 1]; };
 const repo = fileURLToPath(new URL('../..', import.meta.url));
 const source = resolve(option('--source')), run = resolve(option('--output')), ledger = resolve(option('--ledger'));
 const strategy = option('--strategy'), selector = option('--model');
-const optimization = args.includes('--optimization') ? option('--optimization') : 'none';
-if (!['none', 'deterministic', 'contextual'].includes(optimization)) throw new Error('Unknown optimization');
+let optimization = args.includes('--optimization') ? option('--optimization') : null;
 const plansFrom = args.includes('--plans-from') ? resolve(option('--plans-from')) : null;
 const briefsFrom = args.includes('--briefs-from') ? resolve(option('--briefs-from')) : null;
-const queryMode = args.includes('--query-mode') ? option('--query-mode') : 'discovery';
-if (!['discovery', 'catalog', 'catalog-lookup'].includes(queryMode)) throw new Error('Unknown query mode');
+let queryMode = args.includes('--query-mode') ? option('--query-mode') : null;
 if (plansFrom && briefsFrom) throw new Error('--plans-from and --briefs-from are mutually exclusive');
-if ((queryMode.startsWith('catalog') || briefsFrom) && strategy !== 'owner-query-writer') throw new Error('Catalog queries and shared briefs require owner-query-writer');
-const requestedQueryGranularity = args.includes('--query-granularity') ? option('--query-granularity') : null;
+let requestedQueryGranularity = args.includes('--query-granularity') ? option('--query-granularity') : null;
 const editorSelector = args.includes('--editor-model') ? option('--editor-model') : null;
 if (usesEditor(strategy) !== Boolean(editorSelector)) throw new Error('Use --editor-model only and always with an owner-editor strategy');
 const writerRecoverySelector = args.includes('--writer-recovery-model') ? option('--writer-recovery-model') : null;
+const dispatchProfile = args.includes('--dispatch-profile') ? option('--dispatch-profile') : null;
+const dispatch = resolveDispatchProfile({ dispatchProfile, strategy, selector, editorSelector, writerRecoverySelector,
+  optimization, queryMode, queryGranularity: requestedQueryGranularity });
+({ optimization, queryMode, queryGranularity: requestedQueryGranularity } = dispatch);
+if (!['none', 'deterministic', 'contextual'].includes(optimization)) throw new Error('Unknown optimization');
+if (!['discovery', 'catalog', 'catalog-lookup'].includes(queryMode)) throw new Error('Unknown query mode');
+if ((queryMode.startsWith('catalog') || briefsFrom) && strategy !== 'owner-query-writer') throw new Error('Catalog queries and shared briefs require owner-query-writer');
 if (writerRecoverySelector) {
   const primary = parseSelector(editorSelector ?? ''), recovery = parseSelector(writerRecoverySelector);
   if (strategy !== 'owner-query-writer' || primary.provider !== 'deepseek' || primary.reasoning !== 'off' ||
@@ -62,7 +67,8 @@ if (hash(readFileSync(join(source, 'tasks.json'))) !== original.tasks_file_hash)
 const replayManifest = replay ? read(join(replay, 'manifest.json')) : null;
 const donorManifest = plansFrom || briefsFrom ? read(join(plansFrom ?? briefsFrom, 'manifest.json')) : null;
 const queryGranularity = resolveQueryGranularity({ requested: requestedQueryGranularity,
-  inherited: plansFrom ? donorManifest.query_granularity ?? 'default' : null, strategy, queryMode, optimization });
+  inherited: plansFrom ? donorManifest.query_granularity ?? 'default' : null, strategy, queryMode, optimization, dispatchProfile });
+if (replayManifest && ((replayManifest.dispatch_profile ?? null) !== dispatchProfile || replayManifest.optimization !== optimization)) throw new Error('Replay dispatch profile or optimization differs');
 if (replayManifest && (replayManifest.strategy !== strategy || replayManifest.selector !== selector || (replayManifest.editor_selector ?? null) !== editorSelector || (replayManifest.writer_recovery_selector ?? null) !== writerRecoverySelector || (replayManifest.query_mode ?? 'discovery') !== queryMode || (replayManifest.query_granularity ?? 'default') !== queryGranularity || !equal(files(codeRoot), replayManifest.frozen_files))) throw new Error('Replay strategy, selectors or frozen bytes differ');
 const runRoles = buildRunRoles({ strategy, selector, editorSelector, donorManifest });
 if (original.comparison !== 'sol-native-vs-sol-nemotron-workflow' || original.models[0] !== selector) throw new Error('Use previous workflow run and identical Sol selector');
@@ -126,6 +132,7 @@ write(join(run, 'tasks.json'), selected.map(id => tasks.find(t => t.id === id)))
 write(join(run, 'references.json'), references);
 const manifest = { schema_version: 1, comparison: strategy === 'owner-query-writer' ? 'deepseek-owner-sol-query-deepseek-writer' : editorSelector ? 'sol-owner-deepseek-editor' : 'adaptive-sol-only-development', exploratory: true, strategy, selector,
   editor_selector: editorSelector, writer_recovery_selector: writerRecoverySelector, models, optimization, query_mode: queryMode, query_granularity: queryGranularity,
+  ...(dispatchProfile ? { dispatch_profile: dispatchProfile, writer_format: dispatch.writerFormat } : {}),
   plans_from: plansFrom ? basename(plansFrom) : null, briefs_from: briefsFrom ? basename(briefsFrom) : null,
   ...(runRoles ? { roles: runRoles } : {}),
   replay_of: replay ? basename(replay) : null,
@@ -142,7 +149,7 @@ for (const id of selected) {
   const directory = join(run, `${String(index++).padStart(3, '0')}-${id}`); mkdirSync(directory);
   const task = structuredClone(tasks.find(t => t.id === id)); delete task.gold;
   const { preparedPlan = null, preparedBrief = null, planningSource = null, briefSource = null } = inherited.get(id) ?? {};
-  const job = { task, optimization, queryMode, queryGranularity, preparedPlan, preparedBrief, planningSource, briefSource, arm: 'changeset', strategy, selector, editorSelector, writerRecoverySelector, ledger, directory, mounts: original.mounts,
+  const job = { task, optimization, queryMode, queryGranularity, dispatchProfile, preparedPlan, preparedBrief, planningSource, briefSource, arm: 'changeset', strategy, selector, editorSelector, writerRecoverySelector, ledger, directory, mounts: original.mounts,
     plannerPrompt: readFileSync(join(run, 'frozen/skills/spec-changeset-plan/SKILL.md'), 'utf8') };
   write(join(directory, 'job.json'), job);
   const began = performance.now(), cap = task.limits.cell_ms + task.limits.grade_ms;

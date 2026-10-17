@@ -130,24 +130,26 @@ export function catalogPlannerRole({ lookup = false } = {}) {
 }
 
 // Optional planning treatment; the default role text above remains unchanged.
-export function resolveQueryGranularity({ requested = null, inherited = null, strategy, queryMode = 'discovery', optimization = 'none' }) {
+export function resolveQueryGranularity({ requested = null, inherited = null, strategy, queryMode = 'discovery', optimization = 'none', dispatchProfile = null }) {
   const allowed = ['default', 'smaller-regions'];
   if ((requested !== null && !allowed.includes(requested)) || (inherited !== null && !allowed.includes(inherited)))
     throw new Error('Unknown query granularity');
   if (inherited !== null && requested !== null && requested !== inherited)
     throw new Error('Query granularity differs from the inherited plan');
   const value = requested ?? inherited ?? 'default';
-  if (value === 'smaller-regions' && (strategy !== 'owner-query-writer' || queryMode !== 'catalog-lookup' || optimization !== 'none'))
+  const combined = dispatchProfile === 'optimized-v4a' && optimization === 'contextual';
+  if (value === 'smaller-regions' && (strategy !== 'owner-query-writer' || queryMode !== 'catalog-lookup' || (optimization !== 'none' && !combined)))
     throw new Error('smaller-regions requires owner-query-writer, catalog-lookup and optimization none');
   return value;
 }
 
-export function queryAssignmentBudget({ maxCalls, callsUsed, queryCallsReserved }) {
+export function queryAssignmentBudget({ maxCalls, callsUsed, queryCallsReserved, routingCallsReserved = 0 }) {
   if (!Number.isInteger(maxCalls) || maxCalls < 1 || !Number.isInteger(callsUsed) || callsUsed < 0 || callsUsed > maxCalls ||
-      ![0, 3].includes(queryCallsReserved)) throw new Error('Invalid query assignment budget');
-  const maxOperations = Math.min(200, Math.floor((maxCalls - callsUsed - queryCallsReserved) / 2));
+      ![0, 3].includes(queryCallsReserved) || ![0, 1].includes(routingCallsReserved)) throw new Error('Invalid query assignment budget');
+  const maxOperations = Math.min(200, Math.floor((maxCalls - callsUsed - queryCallsReserved - routingCallsReserved) / 2));
   if (maxOperations < 1) throw new Error('Insufficient remaining model calls for a bounded writer assignment');
   return { max_calls: maxCalls, calls_used: callsUsed, query_calls_reserved: queryCallsReserved,
+    ...(routingCallsReserved ? { routing_calls_reserved: routingCallsReserved } : {}),
     writer_attempts_per_operation: 2, max_operations: maxOperations };
 }
 

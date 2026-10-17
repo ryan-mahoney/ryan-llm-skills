@@ -1,5 +1,10 @@
 # Provisional configuration evidence
 
+The new opt-in [`optimized-v4a` research profile](COMBINED-DISPATCH.md) combines
+deterministic grouping, Jev advice and V4A writing with a bounded manual fallback.
+It is a separate experimental configuration; the historical selection and measurements
+below remain unchanged until a matched comparison establishes a different result.
+
 **Status:** Research-only. The provisional best observed writer configuration
 within the requested DeepSeek-owner / Sol-query / DeepSeek-writer architecture
 uses `catalog-lookup`, `smaller-regions`, no grouping, no Jev advice by default,

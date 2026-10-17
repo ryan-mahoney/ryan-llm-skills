@@ -1,0 +1,55 @@
+# Combined changeset dispatch
+
+The opt-in `optimized-v4a` research profile connects the existing DeepSeek implementation owner and Sol query planner to deterministic changeset preprocessing, Jev advice, and DeepSeek V4A writers. It does not change the managed `spec-end-to-end` runtime or the historical default configuration.
+
+```text
+DeepSeek settles the implementation brief
+  → Sol binds source and creates small writer packets
+  → local validation and deterministic merge candidates
+  → one batched Jev decision about grouping and context
+  → deterministic optimization and dependency scheduling
+  → up to four DeepSeek V4A writers on current staged source
+      → guarded local application and syntax check
+      → on a local failure: one same-model JSON edit fallback
+  → existing outer verification and independent review
+```
+
+Sol finishes before any writer starts. It does not inspect writer results or plan repairs. Jev cannot change implementation requirements, authorize a dependency conflict, or waive verification. An unavailable or uncertain Jev answer leaves deterministic policy in charge. High-confidence advice can keep an eligible pair separate or request complete context for a bounded, independently owned small file. Unasked pairs are not described as Jev-approved.
+
+## Preprocessing and execution
+
+[`preprocessChangeset`](preprocess-changeset.mjs) is a callable preprocessing boundary for the owner integration. It accepts Sol's plan and the current source map, rejects invalid ownership or bindings, requests advice once, and returns the optimized plan, source/plan identities and transformation metrics. It does not execute writers or publish files. The research cell invokes it on behalf of the owner; a managed owner tool remains future integration work.
+
+The optimizer combines at most two compatible assignments to the same file, including pairs separated by independent work. It deduplicates context and rewires dependencies. Consumers of an intermediate file state prevent merging. Instructions and requirements remain in the combined packet, and packet-size limits still apply. Binding checks for source changed by predecessors are deferred until the writer receives the actual staged state.
+
+The existing executor runs independent operations concurrently and serializes read/write conflicts. Every writer owns one destination and receives bounded current excerpts, not the complete step. V4A application uses the guarded adapter from the capability pilot: ambiguous matches are rejected, paths are fenced, and existing line endings and EOF-newline presence are preserved.
+
+A local format, path, application or syntax failure leaves the staged files unchanged. DeepSeek then gets the same assignment, bounded source excerpts, a bounded rejected-patch excerpt and an application diagnostic. It has one attempt to return the existing executable JSON edit vocabulary. That fallback supports source-range composition, so an unchanged source body can be copied without regeneration. It does not add a second V4A attempt or a general editing-agent loop. Transport, provider, output-length, cancellation and budget failures do not trigger this fallback.
+
+Behavioral test failures are reported by the outer workflow after file modification. They never feed this fallback. Application success remains distinct from delivered correctness.
+
+## Use and retained evidence
+
+Add `--dispatch-profile optimized-v4a` to the existing `iterate.mjs` owner/query/writer invocation. Keep the selectors explicit:
+
+```sh
+node scripts/changeset-study/iterate.mjs \
+  --source "$REFERENCE_WORKFLOW_RUN" --output "$NEW_RESEARCH_RUN" \
+  --ledger "$EXISTING_CAMPAIGN_LEDGER" \
+  --strategy owner-query-writer --dispatch-profile optimized-v4a \
+  --model openai-codex/gpt-6.1-sol:low \
+  --editor-model deepseek/deepseek-flash:off \
+  --parser "$ACORN_MODULE"
+```
+
+The profile requires `catalog-lookup`, `smaller-regions` and contextual optimization. Contradictory overrides and alternate recovery selectors are rejected. Without the profile, the existing defaults remain unchanged. Replaying plans preserves their original planning-granularity identity; a historical plan is not relabeled to fit the new profile.
+
+Each cell retains the raw and dispatched plans, preprocessing metrics, Jev request/answer/receipt evidence, writer requests/responses, and per-attempt format, local failure category, application status and elapsed time. Jev request counts distinguish reservations from transport starts. Its input-token cost estimate remains separate from provider receipt costs, and an unknown remote charge retains its reservation. The shared call budget reserves room for advice and two writer attempts per assignment.
+
+Library entry/package hashes and actual returned Jev model identity are recorded. Generic `iterate.mjs` runs load the configured Jev installation at runtime; their replay checks do not pin that installation. Use the dedicated [comparison runner](divergent/combined-dispatch/runner.mjs) for the matched experiment: it snapshots and verifies the Jev dependency tree alongside the model SDK, source and parser before execution.
+
+## Evidence and remaining evaluation
+
+Focused controlled-transport checks exercise the complete research cell: one Sol planning response, one Jev batch, deterministic grouping, parallel writers, a rejected V4A patch, one successful manual fallback, unchanged protected source and separate outer grading. Historical query-granularity checks still pass. Writer checks separately cover path fencing, atomic rejection, syntax diagnostics, source-range fallback and terminal request failures.
+
+These checks establish wiring and failure behavior, not a performance gain. The matched comparison uses retained Sol plans and identical starting files for both the current JSON writer and this combined profile. Planning is reused, so the comparison measures the writing stage, including optimization and advice; it cannot establish fresh end-to-end workflow speed. Keep application completion, fallback rates, downstream acceptance, token counts and costs separate.

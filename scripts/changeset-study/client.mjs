@@ -68,6 +68,18 @@ export class Client {
     return { finish, options: { maxTokens: this.maxTokens, reasoning: this.reasoning === 'off' ? undefined : this.reasoning,
       maxRetries: 0, timeoutMs: this.callMs, signal } };
   }
+  async text(systemPrompt, prompt, stage, metadata = null) {
+    const context = { systemPrompt, messages: [{ role: 'user', content: typeof prompt === 'string' ? prompt : JSON.stringify(prompt), timestamp: Date.now() }] };
+    const { finish, options } = this.begin(context, null, stage, metadata);
+    let response;
+    try {
+      response = await this.runtime.completeSimple(this.model, context, options);
+      if (options.signal.aborted) throw new Error('Cell deadline exceeded');
+      if (response.stopReason !== 'stop') throw new Error(`Model stopped: ${response.stopReason}: ${response.errorMessage ?? ''}`);
+      const text = response.content.filter(c => c.type === 'text').map(c => c.text).join('');
+      finish(response); return text;
+    } catch (error) { finish(response, error); throw error; }
+  }
   async json(systemPrompt, prompt, stage, metadata = null) {
     const context = { systemPrompt, messages: [{ role: 'user', content: typeof prompt === 'string' ? prompt : JSON.stringify(prompt), timestamp: Date.now() }] };
     const { finish, options } = this.begin(context, null, stage, metadata);
