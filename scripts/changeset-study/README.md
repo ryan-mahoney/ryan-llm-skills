@@ -38,7 +38,7 @@ replays in 13/14 each completed one case; mechanical failures remain. See the [o
 [measurements](optimized-results.md), [JSON evidence](optimized-results.json) and
 [comparison protocol](OPTIMIZER-PROTOCOL.md). This research is still in progress.
 
-Two divergent approaches are prepared separately for later experiments:
+Three divergent approaches are prepared separately for later experiments:
 
 - [DeepSeek-only executable changesets](divergent/deepseek-direct/PROTOCOL.md)
   remove the Sol query and delegated-writer stages, retaining a separate DeepSeek
@@ -48,6 +48,12 @@ Two divergent approaches are prepared separately for later experiments:
   output from an injected transport and verifies unchanged source outside one
   explicitly assigned range. It has passed offline contract tests; no apply provider
   is configured or measured.
+
+- [Provenance compiler prototype](divergent/provenance-compiler/README.md) turns
+  eligible assignments into deterministic edits using hash-bound source slices and
+  verbatim fenced code from the owner brief. It leaves other assignments with their
+  writers. The initial prototype supports independent operations only and has passed
+  offline contract checks; it is not connected to a live planner or dispatcher.
 
 These prototypes do not alter the active three-role treatment or establish a
 performance result. Their live comparisons remain queued behind the current goal.
