@@ -477,3 +477,24 @@ recovery comparison must reuse the same three raw plans and owner briefs, record
 new freeze, and preserve the existing source, optimizer, prompts and checks. Report
 all failed attempts, borrowed planning allocation and actual new charges separately.
 No live recovery result is claimed by the offline implementation or its focused tests.
+
+## Protocol 16: measure failure-triggered low reasoning
+
+Run 15 completed calibration and all handoff assignments. Extraction created its new
+module, but the dependent runtime rewire required its local retry; that retry stopped
+at the unchanged 32,000-token output bound. It consumed 31,999 reported output tokens,
+all reported as reasoning, and returned no complete edit response. This local failure
+means the all-low treatment does not qualify for a successful repeat. Downstream
+check results do not determine this next treatment.
+
+Run the three original cases once with the optional recovery policy described above:
+initial native DeepSeek writers use `:off`, and only a rejected local attempt switches
+to `:low`. Reuse run 12 raw plans and owner briefs, deterministic grouping and original
+source/checks. Freeze the reviewed implementation at a new revision. Keep all existing
+context, output, call and cell bounds; no new owner, Sol query or Jev call is needed.
+Retain failed attempts and any length stops. Report actual writer time, tokens and
+charges separately from inherited planning allocation. Compare application completion
+and downstream delivery separately against the fixed-off and fixed-low treatments.
+If this completes application across all three cases, repeat its exact freeze before
+selection. Otherwise investigate smaller assignments as a distinct query-planning
+treatment; do not keep escalating output limits or add unbounded retries.
