@@ -4,7 +4,7 @@ import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hash, safePath } from '../changeset/workspace.mjs';
-import { parseJson } from '../changeset/models.mjs';
+import { parseJson, parseSelector } from '../changeset/models.mjs';
 import { equivalentCost, costPolicy } from '../changeset-research/cost.mjs';
 
 const read = p => JSON.parse(readFileSync(p, 'utf8'));
@@ -55,6 +55,56 @@ function requestInput(request) {
     const content = typeof message?.content === 'string' ? message.content : message?.content?.map(part => part.text ?? '').join('');
     return parseJson(content ?? '');
   } catch { return null; }
+}
+function writerRecoveryEvidence({ manifest, result, job, plan, requests, receipts, verify }) {
+  const selector = manifest.writer_recovery_selector ?? null;
+  const checks = [], check = (ok, name) => { checks.push(Boolean(ok)); verify(ok, name); };
+  check((result.writer_recovery_selector ?? null) === selector && (job.writerRecoverySelector ?? null) === selector,
+    'writer recovery selector matches manifest, job and result');
+  if (selector === null) return { selector: null, valid: checks.every(Boolean), attempts: null };
+  let policy = false;
+  try {
+    const primary = parseSelector(manifest.editor_selector), recovery = parseSelector(selector);
+    policy = manifest.strategy === 'owner-query-writer' && primary.provider === 'deepseek' && primary.reasoning === 'off' &&
+      recovery.provider === primary.provider && recovery.id === primary.id && recovery.reasoning === 'low';
+  } catch {}
+  check(policy, 'writer recovery uses the same DeepSeek model off to low');
+  check([manifest.editor_selector, selector].every(selected => {
+    const metadata = manifest.models?.filter(entry => entry.selector === selected);
+    if (metadata?.length !== 1) return false;
+    try { const parsed = parseSelector(selected); return metadata[0].model?.provider === parsed.provider && metadata[0].model?.id === parsed.id; }
+    catch { return false; }
+  }), 'primary and recovery model metadata retained');
+  const operations = plan?.operations ?? [];
+  const ids = new Set(operations.map(operation => operation.id));
+  check(Array.isArray(plan?.operations) && ids.size === operations.length && operations.every(operation => typeof operation.id === 'string' && operation.id.length > 0),
+    'writer recovery dispatched operation identities');
+  const seen = new Map(), attempts = [];
+  for (const request of requests.filter(request => phase(request.stage) === 'writing')) {
+    const previous = seen.get(request.operation_id) ?? [];
+    const input = requestInput(request);
+    const retry = request.writer_attempt === 1;
+    const operation = operations.find(operation => operation.id === request.operation_id);
+    check(operation && input && ['objective', 'instruction', 'requirements', 'writes'].every(field =>
+      Object.hasOwn(operation, field) && sameData(input[field], operation[field])), 'writer packet matches the dispatched operation assignment');
+    if (retry) {
+      const basePacket = value => value && Object.fromEntries(Object.entries(value).filter(([field]) =>
+        !['application_failure', 'rejected_edit_summary', 'rejected_response_excerpt'].includes(field)));
+      check(previous.length === 1 && sameData(basePacket(input), basePacket(requestInput(previous[0]))) &&
+        request.context?.systemPrompt === previous[0].context?.systemPrompt, 'writer recovery retains the initial operation packet and system prompt');
+    }
+    check(request.stage === 'editor' && ids.has(request.operation_id) && Number.isInteger(request.writer_attempt) &&
+      request.writer_attempt >= 0 && request.writer_attempt <= 1 && request.writer_attempt === previous.length && previous.length < 2 &&
+      request.selector === (retry ? selector : manifest.editor_selector), 'writer attempt routing and operation ownership');
+    check(input !== null && (retry ? typeof input.application_failure === 'string' && input.application_failure.trim().length > 0 :
+      !Object.hasOwn(input, 'application_failure')), 'writer recovery follows a matching initial attempt and application failure');
+    const matching = receipts.filter(receipt => receipt.reservation === request.reservation);
+    check(matching.length === 1 && matching[0].operation_id === request.operation_id && matching[0].writer_attempt === request.writer_attempt,
+      'writer request and receipt attempt metadata match');
+    previous.push(request); seen.set(request.operation_id, previous);
+    attempts.push({ operation_id: request.operation_id ?? null, writer_attempt: request.writer_attempt ?? null, selector: request.selector, reservation: request.reservation });
+  }
+  return { selector, valid: checks.every(Boolean), attempts };
 }
 function modelValue(response) {
   try { return parseJson(response.response.content.filter(part => part.type === 'text').map(part => part.text).join('\n')); }
@@ -161,12 +211,14 @@ export function buildReport(runRoot) {
     const requestIds = new Set(requests.map(x => x.reservation));
     verify(requestIds.size === requests.length && new Set(receipts.map(x => x.reservation)).size === receipts.length && receipts.every(x => requestIds.has(x.reservation)), 'request and receipt identities');
     verify(receipts.every(x => { const q = requests.find(q => q.reservation === x.reservation); return q?.stage === x.stage && q?.selector === x.selector; }), 'receipt routing matches requests');
+    const job = existsSync(join(directory, 'job.json')) ? read(join(directory, 'job.json')) : {};
+    const writerRecovery = writerRecoveryEvidence({ manifest: m, result: r, job, plan, requests, receipts, verify });
     const sol = /^(openai|openai-codex)\/gpt-6\.1-sol(?::|$)/;
     const firstWriter = requests.findIndex(x => x.stage === 'editor');
     const firstQuery = requests.findIndex(x => phase(x.stage) === 'query');
-    const providerValid = sol.test(m.selector) && /^deepseek\//.test(m.editor_selector) && /^deepseek\//.test(ownerSelector) &&
+    const providerValid = writerRecovery.valid && sol.test(m.selector) && /^deepseek\//.test(m.editor_selector) && /^deepseek\//.test(ownerSelector) &&
       requests.every((x, i) => ['owner', 'query', 'writing'].includes(phase(x.stage)) &&
-        x.selector === (phase(x.stage) === 'query' ? m.selector : phase(x.stage) === 'owner' ? ownerSelector : m.editor_selector) &&
+        x.selector === (phase(x.stage) === 'query' ? m.selector : phase(x.stage) === 'owner' ? ownerSelector : writerRecovery.selector && x.writer_attempt === 1 ? writerRecovery.selector : m.editor_selector) &&
         (phase(x.stage) === 'writing' || firstWriter < 0 || i < firstWriter) &&
         (phase(x.stage) !== 'owner' || firstQuery < 0 || i < firstQuery)) &&
       (r.reviews ?? []).length === 0 && (r.repairs ?? 0) === 0 &&
@@ -174,7 +226,6 @@ export function buildReport(runRoot) {
     verify(providerValid, 'DeepSeek owner, Sol query, DeepSeek writers; no planning after writers');
     const byStage = Object.fromEntries(phases.map(p => [p, usage(requests.filter(x => phase(x.stage) === p), receipts.filter(x => phase(x.stage) === p))]));
     const seconds = Object.fromEntries(phases.map(p => [p, sum((r.stages ?? []).filter(x => phase(x.name) === p).map(x => x.elapsed_ms)) / 1000]));
-    const job = existsSync(join(directory, 'job.json')) ? read(join(directory, 'job.json')) : {};
     const evidence = queryEvidence({ directory, result: r, job, requests, responses: () => rows(join(directory, 'responses.jsonl')), verify, artifactHash, queryMode: m.query_mode });
     const source = r.planning_source ?? job.planningSource ?? null;
     const briefSource = r.brief_source ?? job.briefSource ?? null;
@@ -242,7 +293,7 @@ export function buildReport(runRoot) {
     const visible = (r.checks ?? []).at(-1)?.visible;
     const candidateTests = visible?.candidate_tests ?? [];
     const applicationComplete = r.executions?.at(-1)?.ok === true;
-    const output = { ...evidence, task: r.task ?? cellName.replace(/^\d+-/, ''), cell: key, optimization: m.optimization ?? 'none', query_mode: m.query_mode ?? 'discovery', editor_selector: m.editor_selector, owner_selector: ownerSelector, task_hash: r.task_hash,
+    const output = { ...evidence, task: r.task ?? cellName.replace(/^\d+-/, ''), cell: key, optimization: m.optimization ?? 'none', query_mode: m.query_mode ?? 'discovery', editor_selector: m.editor_selector, writer_recovery_selector: writerRecovery.selector, writer_recovery_evidence: writerRecovery, owner_selector: ownerSelector, task_hash: r.task_hash,
       application_complete: applicationComplete, visible_accepted: r.visible_accepted ?? visible?.ok ?? null,
       candidate_tests: { count: candidateTests.length, failed: candidateTests.filter(t => t.ok !== true).length },
       base_visible_accepted: visible?.base_ok ?? visible?.visible_check_ok ?? null,
@@ -277,7 +328,7 @@ export function buildReport(runRoot) {
     }
     const totalUsage = cells.reduce((a, c) => plus(a, c.incurred.model_usage), emptyUsage());
     const allocatedUsage = cells.every(c => c.allocated.model_usage) ? cells.reduce((a, c) => plus(a, c.allocated.model_usage), emptyUsage()) : null;
-    return { run: name, optimization: m.optimization ?? 'none', query_mode: m.query_mode ?? 'discovery', plans_from: m.plans_from ?? null, briefs_from: m.briefs_from ?? null,
+    return { run: name, editor_selector: m.editor_selector, writer_recovery_selector: m.writer_recovery_selector ?? null, optimization: m.optimization ?? 'none', query_mode: m.query_mode ?? 'discovery', plans_from: m.plans_from ?? null, briefs_from: m.briefs_from ?? null,
       manifest_hash: hash(readFileSync(join(root, name, 'manifest.json'))), expected: m.schedule.length, pending,
       application_complete: cells.filter(c => c.application_complete).length, integrity_valid: cells.every(c => c.integrity_valid),
       incurred_seconds: sum(cells.map(c => c.incurred.seconds)), allocated_seconds: exactSum(cells.map(c => c.allocated.seconds)),

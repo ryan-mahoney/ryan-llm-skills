@@ -8,7 +8,7 @@ import { nativeAgent } from './agent.mjs';
 import { sandbox, grade } from './sandbox.mjs';
 import { execute, compile } from '../changeset/engine.mjs';
 import { Workspace, hash } from '../changeset/workspace.mjs';
-import { parseJson } from '../changeset/models.mjs';
+import { parseJson, parseSelector } from '../changeset/models.mjs';
 import { equivalentCost } from '../changeset-research/cost.mjs';
 import { strategyPlanner, strategyReviewer, usesCandidateChecks, usesBoundaryReview, usesEditor, validateStrategyPlan, patchEditor, dispatchOnly } from './strategies.mjs';
 import { changedTestCommands } from './candidate-checks.mjs';
@@ -44,9 +44,16 @@ function diffs(before, after, limit = 200000) {
 const tail = (visible, chars) => visible?.output?.length > chars ? { ...visible, output: '[earlier output omitted]\n' + visible.output.slice(-chars) } : visible;
 function materialize(files, root) { rmSync(root, { recursive: true, force: true }); mkdirSync(root, { recursive: true }); new Workspace(files).materialize(root); }
 
-export async function runCell({ task, arm, selector, ledger, directory, plannerPrompt, timeoutMs, mounts = [], simpleSelector = null, editorSelector = null, strategy = null, optimization = 'none', preparedPlan = null, preparedBrief = null, planningSource = null, queryMode = 'discovery', briefSource = null }) {
+export async function runCell({ task, arm, selector, ledger, directory, plannerPrompt, timeoutMs, mounts = [], simpleSelector = null, editorSelector = null, writerRecoverySelector = null, strategy = null, optimization = 'none', preparedPlan = null, preparedBrief = null, planningSource = null, queryMode = 'discovery', briefSource = null }) {
   if (!['discovery', 'catalog', 'catalog-lookup'].includes(queryMode)) throw new Error('Unknown query mode');
   if (queryMode.startsWith('catalog') && strategy !== 'owner-query-writer') throw new Error('Catalog query requires owner-query-writer');
+  if (writerRecoverySelector !== null) {
+    if (strategy !== 'owner-query-writer' || !editorSelector) throw new Error('Writer recovery requires owner-query-writer and an editor selector');
+    const primary = parseSelector(editorSelector), recovery = parseSelector(writerRecoverySelector);
+    if (primary.provider !== 'deepseek' || recovery.provider !== primary.provider || recovery.id !== primary.id || primary.reasoning !== 'off' || recovery.reasoning !== 'low') {
+      throw new Error('Writer recovery requires the same DeepSeek model with :off primary and :low recovery selectors');
+    }
+  }
   if (briefSource && (preparedBrief === null || hash(preparedBrief) !== briefSource.brief_hash)) throw new Error('Shared brief changed');
   if (strategy) plannerPrompt = strategyPlanner(strategy, plannerPrompt);
   // Phase limits travel with the task (hard phase); dev/eval keep the original values.
@@ -62,11 +69,12 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
     arm, selector, task_hash: hash(JSON.stringify(task)), outcome: 'failed', accepted: false, repairs: 0,
     ...(simpleSelector ? { simple_selector: simpleSelector, exploratory: true } : {}), limits,
     ...(editorSelector ? { editor_selector: editorSelector } : {}),
+    writer_recovery_selector: writerRecoverySelector,
     ...(strategy ? { strategy, exploratory: true } : {}),
     optimization, planning_source: planningSource, query_mode: queryMode, brief_source: briefSource,
     ...(dispatchOnly(strategy) ? { review_mode: 'executable-checks-only', checks: [] } : {}),
   };
-  let client, agent, simpleClient, contextParse;
+  let client, agent, simpleClient, recoveryClient, contextParse;
   const stage = async (name, fn) => { const start = performance.now(); try { return await fn(); } finally { stages.push({ name, elapsed_ms: performance.now() - start }); } };
   const check = async () => {
     const files = Workspace.load(root).snapshot();
@@ -99,6 +107,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
       if (!editorSelector) throw new Error('Owner-editor requires an explicit editor selector');
       client.shared = { calls: 0 };
       simpleClient = await stage('initialize', () => Client.create({ selector: editorSelector, ...clientOptions, shared: client.shared }));
+      if (writerRecoverySelector) recoveryClient = await stage('initialize', () => Client.create({ selector: writerRecoverySelector, ...clientOptions, shared: client.shared }));
     } else if (arm === 'changeset-mixed') {
       if (!simpleSelector) throw new Error('changeset-mixed requires a simple-leaf selector');
       client.shared = { calls: 0 };
@@ -316,10 +325,10 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
       }
       writeFileSync(join(directory, `plan-${executions.length}.json`), JSON.stringify(plan, null, 2));
       validateStrategyPlan(strategy, plan);
-      const editor = (model, stageName) => ({ operation, files }) => strategy
-        ? patchEditor(model, stageName, task.spec, { operation, files }, { ranges: usesEditor(strategy), focused: dispatchOnly(strategy), contextParse })
+      const editor = (model, stageName, recoveryModel = null) => ({ operation, files }) => strategy
+        ? patchEditor(model, stageName, task.spec, { operation, files }, { ranges: usesEditor(strategy), focused: dispatchOnly(strategy), contextParse, recoveryModel })
         : model.json(editorPrompt, { task_contract: task.spec, instruction: operation.instruction, writes: operation.writes, files }, stageName);
-      const adapters = usesEditor(strategy) ? { simple: editor(simpleClient, 'editor'), involved: editor(simpleClient, 'editor') }
+      const adapters = usesEditor(strategy) ? { simple: editor(simpleClient, 'editor', recoveryClient), involved: editor(simpleClient, 'editor', recoveryClient) }
         : simpleClient ? { simple: editor(simpleClient, 'simple-editor'), involved: editor(client, 'editor') }
         : { simple: editor(client, 'editor'), involved: editor(client, 'editor') };
       let draft;
@@ -386,7 +395,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
   const cap = timeoutMs + (limits.grade_ms ?? 0);
   result.capped_time_to_success_ms = result.accepted ? Math.min(cap, result.total_ms) : cap;
   result.stages = stages; result.reviews = reviews; result.executions = executions; result.tool_calls = toolCalls;
-  const receipts = [...(client?.receipts ?? []), ...(simpleClient?.receipts ?? [])];
+  const receipts = [...(client?.receipts ?? []), ...(simpleClient?.receipts ?? []), ...(recoveryClient?.receipts ?? [])];
   result.model_calls = receipts.length; result.equivalent_usd = equivalentCost(receipts);
   result.catalog_usd = receipts.length && receipts.every(r => r.usage?.cost?.total > 0) ? receipts.reduce((n, r) => n + r.usage.cost.total, 0) : null;
   result.tokens = Object.fromEntries(['input', 'output', 'cacheRead', 'cacheWrite', 'totalTokens'].map(key => [key, receipts.reduce((n, r) => n + (r.usage?.[key] ?? 0), 0)]));

@@ -344,3 +344,67 @@ test('lookup provenance verifies frozen source, rejected lookups and planner cal
     assert.equal(valid.validation.find(check => check.check === 'catalog-lookup planning call cap and stages').ok, false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+// Run alone: node --test --test-name-pattern='writer recovery audits' scripts/changeset-study/optimized-report.test.mjs
+test('writer recovery audits bounded off to low attempts against dispatched operation identities', () => {
+  const root = mkdtempSync(join(tmpdir(), 'optimized-report-recovery-'));
+  const sol = 'openai-codex/gpt-6.1-sol:low', off = 'deepseek/deepseek-flash:off', low = 'deepseek/deepseek-flash:low';
+  const run = join(root, 'recovery'), directory = join(run, '000-case');
+  mkdirSync(directory, { recursive: true });
+  const assignment = { objective: 'Update one helper.', instruction: 'Owner assignment', requirements: ['Preserve the interface.'], writes: ['helper.mjs'] };
+  const plan = { operations: [{ id: 'edit-one', executor: 'simple', ...assignment }] }, brief = 'Preserve the resolved owner implementation.\n';
+  const packet = value => ({ messages: [{ role: 'user', content: JSON.stringify(value) }] });
+  const manifest = { strategy: 'owner-query-writer', selector: sol, editor_selector: off, writer_recovery_selector: low,
+    schedule: ['case'], models: [off, low].map(selector => ({ selector, model: { provider: 'deepseek', id: 'deepseek-flash' } })) };
+  const requests = [
+    { reservation: 'owner', stage: 'implementation-planning', selector: off },
+    { reservation: 'query', stage: 'discovery-planning', selector: sol },
+    { reservation: 'initial', stage: 'editor', selector: off, operation_id: 'edit-one', writer_attempt: 0, context: packet(assignment) },
+    { reservation: 'retry', stage: 'editor', selector: low, operation_id: 'edit-one', writer_attempt: 1, context: packet({ ...assignment, application_failure: 'Replacement anchor was not unique' }) },
+  ];
+  const receipts = requests.map(request => ({ ...request, elapsed_ms: 1,
+    usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { total: 0.001 } } }));
+  const result = { selector: sol, editor_selector: off, writer_recovery_selector: low, task: 'case', task_hash: 'task',
+    process_elapsed_ms: 100, implementation_brief_hash: hash(brief), candidate_hash: hash('{}'), accepted: true,
+    executions: [{ ok: true, plan_sha256: hash(JSON.stringify(plan)), operations: [{ id: 'edit-one', executor: 'simple', status: 'passed' }] }] };
+  const fixture = { manifest, requests, receipts, result, job: { writerRecoverySelector: low } };
+  const write = (path, value) => writeFileSync(path, typeof value === 'string' ? value : JSON.stringify(value));
+  function audit(mutate = () => {}) {
+    const data = structuredClone(fixture); mutate(data);
+    write(join(run, 'manifest.json'), data.manifest);
+    for (const [name, value] of Object.entries({ 'raw-plan.json': plan, 'plan-0.json': plan, 'implementation-brief.md': brief,
+      'candidate.json': '{}', 'result.json': data.result, 'job.json': data.job })) write(join(directory, name), value);
+    write(join(directory, 'requests.jsonl'), data.requests.map(JSON.stringify).join('\n'));
+    write(join(directory, 'receipts.jsonl'), data.receipts.map(JSON.stringify).join('\n'));
+    return buildReport(root).runs[0].cells[0];
+  }
+  try {
+    const valid = audit();
+    assert.equal(valid.integrity_valid, true); assert.equal(valid.provider_routing_valid, true);
+    assert.equal(valid.writer_recovery_evidence.attempts.length, 2);
+    const violations = [
+      ['recovery without matching initial', d => { d.requests.splice(2, 1); d.receipts.splice(2, 1); }],
+      ['recovery without application failure', d => { d.requests[3].context = packet(assignment); }],
+      ['initial request using recovery model', d => { d.requests[2].selector = low; d.receipts[2].selector = low; }],
+      ['unknown operation id in both request and receipt', d => { d.requests[3].operation_id = d.receipts[3].operation_id = 'unplanned'; }],
+      ['metadata cannot disguise a different retry assignment', d => { d.requests[3].context = packet({ ...assignment, instruction: 'A different operation', application_failure: 'Syntax error' }); }],
+      ['matching initial and retry packets cannot override the dispatched assignment', d => {
+        d.requests[2].context = packet({ ...assignment, writes: ['other.mjs'] });
+        d.requests[3].context = packet({ ...assignment, writes: ['other.mjs'], application_failure: 'Syntax error' });
+      }],
+      ['recovery cannot add downstream feedback to the initial packet', d => {
+        d.requests[3].context = packet({ ...assignment, application_failure: 'Syntax error', visible_check_output: 'Downstream feedback' });
+      }],
+      ['receipt attempt mismatch', d => { d.receipts[3].writer_attempt = 0; }],
+      ['missing attempt metadata', d => { delete d.requests[2].writer_attempt; delete d.receipts[2].writer_attempt; }],
+      ['third operation attempt', d => { d.requests.push({ ...d.requests[3], reservation: 'third' }); d.receipts.push({ ...d.receipts[3], reservation: 'third' }); }],
+      ['job recovery selector mismatch', d => { d.job.writerRecoverySelector = off; }],
+      ['result recovery selector mismatch', d => { d.result.writer_recovery_selector = off; }],
+      ['missing recovery model metadata', d => { d.manifest.models.pop(); }],
+      ['unauthorized recovery effort', d => { d.manifest.writer_recovery_selector = d.result.writer_recovery_selector = d.job.writerRecoverySelector = 'deepseek/deepseek-flash:high'; }],
+      ['Sol query after writer', d => { d.requests.push({ ...d.requests[1], reservation: 'late-query' }); d.receipts.push({ ...d.receipts[1], reservation: 'late-query' }); }],
+      ['unconfigured recovery does not relax fixed selector routing', d => { delete d.manifest.writer_recovery_selector; delete d.result.writer_recovery_selector; delete d.job.writerRecoverySelector; }],
+    ];
+    for (const [name, mutate] of violations) assert.equal(audit(mutate).integrity_valid, false, name);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

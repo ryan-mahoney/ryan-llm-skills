@@ -27,6 +27,14 @@ if (plansFrom && briefsFrom) throw new Error('--plans-from and --briefs-from are
 if ((queryMode.startsWith('catalog') || briefsFrom) && strategy !== 'owner-query-writer') throw new Error('Catalog queries and shared briefs require owner-query-writer');
 const editorSelector = args.includes('--editor-model') ? option('--editor-model') : null;
 if (usesEditor(strategy) !== Boolean(editorSelector)) throw new Error('Use --editor-model only and always with an owner-editor strategy');
+const writerRecoverySelector = args.includes('--writer-recovery-model') ? option('--writer-recovery-model') : null;
+if (writerRecoverySelector) {
+  const primary = parseSelector(editorSelector ?? ''), recovery = parseSelector(writerRecoverySelector);
+  if (strategy !== 'owner-query-writer' || primary.provider !== 'deepseek' || primary.reasoning !== 'off' ||
+      recovery.provider !== primary.provider || recovery.id !== primary.id || recovery.reasoning !== 'low') {
+    throw new Error('--writer-recovery-model requires owner-query-writer with the same DeepSeek model :off -> :low');
+  }
+}
 const replay = args.includes('--freeze-from') ? resolve(option('--freeze-from')) : null;
 const codeRoot = replay ? join(replay, 'frozen') : repo;
 if (!strategyNames.includes(strategy)) throw new Error('Unknown strategy');
@@ -50,7 +58,7 @@ const sdkFiles = () => Object.fromEntries(['pi-agent-core', 'pi-coding-agent', '
 const original = read(join(source, 'manifest.json'));
 if (hash(readFileSync(join(source, 'tasks.json'))) !== original.tasks_file_hash) throw new Error('Reference task bytes changed');
 const replayManifest = replay ? read(join(replay, 'manifest.json')) : null;
-if (replayManifest && (replayManifest.strategy !== strategy || replayManifest.selector !== selector || (replayManifest.editor_selector ?? null) !== editorSelector || (replayManifest.query_mode ?? 'discovery') !== queryMode || !equal(files(codeRoot), replayManifest.frozen_files))) throw new Error('Replay strategy, selectors or frozen bytes differ');
+if (replayManifest && (replayManifest.strategy !== strategy || replayManifest.selector !== selector || (replayManifest.editor_selector ?? null) !== editorSelector || (replayManifest.writer_recovery_selector ?? null) !== writerRecoverySelector || (replayManifest.query_mode ?? 'discovery') !== queryMode || !equal(files(codeRoot), replayManifest.frozen_files))) throw new Error('Replay strategy, selectors or frozen bytes differ');
 const donorManifest = plansFrom || briefsFrom ? read(join(plansFrom ?? briefsFrom, 'manifest.json')) : null;
 const runRoles = buildRunRoles({ strategy, selector, editorSelector, donorManifest });
 if (original.comparison !== 'sol-native-vs-sol-nemotron-workflow' || original.models[0] !== selector) throw new Error('Use previous workflow run and identical Sol selector');
@@ -92,7 +100,7 @@ if (plansFrom || briefsFrom) {
 }
 if (!equal(sdkFiles(), original.sdk_files) || !equal(files(original.mounts[0][0]), original.dependency_files)) throw new Error('SDK or dependencies differ from reference');
 const runtime = await modelRuntime();
-const models = [selector, editorSelector].filter(Boolean).map(selected => {
+const models = [...new Set([selector, editorSelector, writerRecoverySelector].filter(Boolean))].map(selected => {
   const { provider, id } = parseSelector(selected), model = runtime.getModel(provider, id);
   if (!model || !runtime.hasConfiguredAuth(provider)) throw new Error(`Unavailable model: ${selected}`);
   return { selector: selected, model };
@@ -112,7 +120,7 @@ if (replayManifest && !equal(frozen, replayManifest.frozen_files)) throw new Err
 write(join(run, 'tasks.json'), selected.map(id => tasks.find(t => t.id === id)));
 write(join(run, 'references.json'), references);
 const manifest = { schema_version: 1, comparison: strategy === 'owner-query-writer' ? 'deepseek-owner-sol-query-deepseek-writer' : editorSelector ? 'sol-owner-deepseek-editor' : 'adaptive-sol-only-development', exploratory: true, strategy, selector,
-  editor_selector: editorSelector, models, optimization, query_mode: queryMode,
+  editor_selector: editorSelector, writer_recovery_selector: writerRecoverySelector, models, optimization, query_mode: queryMode,
   plans_from: plansFrom ? basename(plansFrom) : null, briefs_from: briefsFrom ? basename(briefsFrom) : null,
   ...(runRoles ? { roles: runRoles } : {}),
   replay_of: replay ? basename(replay) : null,
@@ -129,7 +137,7 @@ for (const id of selected) {
   const directory = join(run, `${String(index++).padStart(3, '0')}-${id}`); mkdirSync(directory);
   const task = structuredClone(tasks.find(t => t.id === id)); delete task.gold;
   const { preparedPlan = null, preparedBrief = null, planningSource = null, briefSource = null } = inherited.get(id) ?? {};
-  const job = { task, optimization, queryMode, preparedPlan, preparedBrief, planningSource, briefSource, arm: 'changeset', strategy, selector, editorSelector, ledger, directory, mounts: original.mounts,
+  const job = { task, optimization, queryMode, preparedPlan, preparedBrief, planningSource, briefSource, arm: 'changeset', strategy, selector, editorSelector, writerRecoverySelector, ledger, directory, mounts: original.mounts,
     plannerPrompt: readFileSync(join(run, 'frozen/skills/spec-changeset-plan/SKILL.md'), 'utf8') };
   write(join(directory, 'job.json'), job);
   const began = performance.now(), cap = task.limits.cell_ms + task.limits.grade_ms;

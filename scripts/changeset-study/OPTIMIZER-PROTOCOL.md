@@ -431,8 +431,10 @@ The pinned SDK provider-boundary audit confirms previous `deepseek/deepseek-flas
 requests explicitly sent `thinking:{type:'disabled'}`; the selector did not silently
 inherit DeepSeek's default. A synthetic key and intercepted transport verified that
 `:low` sends `thinking:{type:'enabled'}` plus `reasoning_effort:'low'`, retaining the
-same native provider, model ID and 16,000-token output setting. No inference occurred
-in this audit. These controls agree with the
+same native provider and model ID. The offline audit fixture used a 16,000-token
+output setting; the live hard-case jobs retain their original 32,000-token output
+limit, 300-second call deadline and 1,200-second implementation deadline. No inference
+occurred in this audit. These controls agree with the
 [official thinking-mode documentation](https://api-docs.deepseek.com/guides/thinking_mode/).
 
 Run all three original cases once, reusing the exact run 12 raw plans and owner
@@ -452,3 +454,26 @@ completes all assignments, repeat the unchanged treatment before selecting it. O
 after a reliable treatment exists should a cheaper contextual policy selectively use
 thinking; do not add a model to reason about each routing choice. The divergent
 prototypes remain offline and separate from this writing-only comparison.
+
+## Optional recovery treatment: off first, low on local rejection
+
+The runner now accepts `--writer-recovery-model deepseek/deepseek-flash:low`
+with `--editor-model deepseek/deepseek-flash:off` in `owner-query-writer` mode.
+This is an available treatment, not a measured result. A successful initial write
+incurs no recovery call. A rejected JSON response, edit application, or syntax check
+uses the existing single retry with low reasoning on the same native model. Budget,
+deadline, cancellation and transport failures do not trigger escalation. Both clients
+share the call limit and ledger, and every attempt contributes usage and elapsed time.
+
+The retry retains the initial assignment and source excerpts, plus the existing
+bounded local diagnostic. Trusted operation IDs and attempt numbers are recorded
+outside the model prompt and joined to receipts. The reporter checks model routing,
+operation ownership and retry limits. Behavioral checks remain outside writing, with
+no Sol call after dispatch and no additional repair round.
+
+Before measuring this treatment, retain the completed low-reasoning result and repeat
+it unchanged if it completes application across all three original cases. Any later
+recovery comparison must reuse the same three raw plans and owner briefs, record a
+new freeze, and preserve the existing source, optimizer, prompts and checks. Report
+all failed attempts, borrowed planning allocation and actual new charges separately.
+No live recovery result is claimed by the offline implementation or its focused tests.

@@ -40,8 +40,11 @@ export class Client {
       ? Math.max(maxTokens, this.model.maxTokens ?? 0, this.model.contextWindow ?? 0) : maxTokens;
     this.budget = new Budget(ledger, 50); this.receipts = []; this.calls = 0;
   }
-  begin(context, externalSignal, stage) {
+  begin(context, externalSignal, stage, metadata = null) {
     if (this.signal?.aborted || externalSignal?.aborted) throw new Error('Cell deadline exceeded');
+    if (metadata !== null && (typeof metadata.operation_id !== 'string' || !metadata.operation_id || ![0, 1].includes(metadata.writer_attempt))) {
+      throw new Error('Invalid writer-attempt audit metadata');
+    }
     const counter = this.shared ?? this;
     if (counter.calls >= this.maxCalls) throw new Error('Cell model-call limit exceeded');
     const rates = [this.model.cost, ...(this.model.cost?.tiers ?? [])];
@@ -50,13 +53,14 @@ export class Client {
     const bytes = Buffer.byteLength(JSON.stringify(context)) + 8192;
     const reservation = this.budget.reserve(this.selector, (bytes * inputRate + this.reservationOutputTokens * outputRate) / 1e6 * 1.25);
     counter.calls++; if (counter !== this) this.calls++;
-    appendFileSync(this.receiptPath.replace(/receipts\.jsonl$/, 'requests.jsonl'), JSON.stringify({ reservation, selector: this.selector, stage, context }) + '\n');
+    const audit = metadata ? { operation_id: metadata.operation_id, writer_attempt: metadata.writer_attempt } : {};
+    appendFileSync(this.receiptPath.replace(/receipts\.jsonl$/, 'requests.jsonl'), JSON.stringify({ reservation, selector: this.selector, stage, ...audit, context }) + '\n');
     const signal = AbortSignal.any([AbortSignal.timeout(this.callMs), ...[this.signal, externalSignal].filter(Boolean)]);
     const started = Date.now(); let settled = false;
     const finish = (response, error) => {
       if (settled) return; settled = true;
       this.budget.settle(reservation, response?.usage);
-      const receipt = { selector: this.selector, stage, elapsed_ms: Date.now() - started, usage: response?.usage ?? null,
+      const receipt = { selector: this.selector, stage, ...audit, elapsed_ms: Date.now() - started, usage: response?.usage ?? null,
         stop_reason: response?.stopReason ?? 'exception', error: error?.message ?? response?.errorMessage ?? null, reservation };
       this.receipts.push(receipt); appendFileSync(this.receiptPath, JSON.stringify(receipt) + '\n');
       appendFileSync(this.receiptPath.replace(/receipts\.jsonl$/, 'responses.jsonl'), JSON.stringify({ reservation, stage, response: response ?? null, error: error?.message ?? null }) + '\n');
@@ -64,9 +68,9 @@ export class Client {
     return { finish, options: { maxTokens: this.maxTokens, reasoning: this.reasoning === 'off' ? undefined : this.reasoning,
       maxRetries: 0, timeoutMs: this.callMs, signal } };
   }
-  async json(systemPrompt, prompt, stage) {
+  async json(systemPrompt, prompt, stage, metadata = null) {
     const context = { systemPrompt, messages: [{ role: 'user', content: typeof prompt === 'string' ? prompt : JSON.stringify(prompt), timestamp: Date.now() }] };
-    const { finish, options } = this.begin(context, null, stage);
+    const { finish, options } = this.begin(context, null, stage, metadata);
     let response;
     try {
       response = await this.runtime.completeSimple(this.model, context, options); finish(response);

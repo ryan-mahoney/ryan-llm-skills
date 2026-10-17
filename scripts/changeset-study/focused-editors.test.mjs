@@ -3,6 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { focusedInput, preflightFocusedPlan } from './focused-editors.mjs';
 import { patchEditor, validateStrategyPlan } from './strategies.mjs';
+import { ModelJsonParseError } from './client.mjs';
 
 const operation = () => ({ id: 'answer', executor: 'simple', reads: [], writes: ['answer.mjs'], depends_on: [],
   objective: 'Change the answer', instruction: 'Set answer to 2.', requirements: ['Keep unrelated exports.'],
@@ -25,6 +26,67 @@ test('focused editor sees only selected current source and retries rejected edit
   assert.equal(result.files['answer.mjs'], 'export const answer = 2;\n// unrelated\nexport const untouched = 3;\n');
   assert.equal(files['answer.mjs'], 'export const answer = 1;\n// unrelated\nexport const untouched = 3;\n');
   assert.equal(focusedInput(op, result.files).excerpts[0].text, 'export const answer = 2;');
+});
+
+test('writer recovery escalates one rejected off attempt to low with identical source and trusted attempt metadata', async () => {
+  const operationValue = operation(), original = { ...files }, initial = [], recovery = [];
+  const off = { json: async (system, input, stage, metadata) => {
+    initial.push({ system, input, stage, metadata });
+    return { edits: [{ kind: 'replace', path: 'answer.mjs', search: 'missing anchor', text: 'answer = 2' }] };
+  } };
+  const low = { json: async (system, input, stage, metadata) => {
+    recovery.push({ system, input, stage, metadata });
+    return { edits: [{ kind: 'replace', path: 'answer.mjs', search: 'answer = 1', text: 'answer = 2' }] };
+  } };
+
+  const result = await patchEditor(off, 'editor', 'contract', { operation: operationValue, files }, { focused: true, recoveryModel: low });
+  assert.equal(initial.length, 1);
+  assert.equal(recovery.length, 1);
+  assert.equal(initial[0].stage, 'editor');
+  assert.equal(recovery[0].stage, 'editor');
+  assert.deepEqual(initial[0].metadata, { operation_id: 'answer', writer_attempt: 0 });
+  assert.deepEqual(recovery[0].metadata, { operation_id: 'answer', writer_attempt: 1 });
+  assert.equal(recovery[0].system, initial[0].system);
+  assert.deepEqual(recovery[0].input.excerpts, initial[0].input.excerpts);
+  assert.match(recovery[0].input.application_failure, /count mismatch/);
+  assert.equal(result.files['answer.mjs'], 'export const answer = 2;\n// unrelated\nexport const untouched = 3;\n');
+  assert.deepEqual(files, original, 'both attempts leave staged input immutable');
+});
+
+test('successful initial writer attempt never initializes a recovery request', async () => {
+  let recoveryCalls = 0;
+  const result = await patchEditor({ json: async () => ({ edits: [{ kind: 'replace', path: 'answer.mjs', search: 'answer = 1', text: 'answer = 2' }] }) },
+    'editor', 'contract', { operation: operation(), files }, { focused: true, recoveryModel: { json: async () => { recoveryCalls++; } } });
+  assert.equal(recoveryCalls, 0);
+  assert.equal(result.files['answer.mjs'], 'export const answer = 2;\n// unrelated\nexport const untouched = 3;\n');
+});
+
+test('only client JSON parse errors trigger low recovery while fixed-mode retry remains unchanged', async () => {
+  let lowCalls = 0;
+  const parseFailure = new ModelJsonParseError(new SyntaxError('invalid JSON'), '{');
+  const recovered = await patchEditor({ json: async () => { throw parseFailure; } }, 'editor', 'contract',
+    { operation: operation(), files }, { focused: true, recoveryModel: { json: async () => {
+      lowCalls++;
+      return { edits: [{ kind: 'replace', path: 'answer.mjs', search: 'answer = 1', text: 'answer = 2' }] };
+    } } });
+  assert.equal(lowCalls, 1);
+  assert.equal(recovered.files['answer.mjs'], 'export const answer = 2;\n// unrelated\nexport const untouched = 3;\n');
+
+  const transportSyntaxError = new SyntaxError('provider response stream failed to parse');
+  let prohibitedRecoveryCalls = 0;
+  await assert.rejects(patchEditor({ json: async () => { throw transportSyntaxError; } }, 'editor', 'contract',
+    { operation: operation(), files }, { focused: true, recoveryModel: { json: async () => { prohibitedRecoveryCalls++; } } }),
+  error => error === transportSyntaxError);
+  assert.equal(prohibitedRecoveryCalls, 0);
+
+  let fixedModeCalls = 0;
+  const fixed = await patchEditor({ json: async () => {
+    fixedModeCalls++;
+    if (fixedModeCalls === 1) throw transportSyntaxError;
+    return { edits: [{ kind: 'replace', path: 'answer.mjs', search: 'answer = 1', text: 'answer = 2' }] };
+  } }, 'editor', 'contract', { operation: operation(), files }, { focused: true });
+  assert.equal(fixedModeCalls, 2, 'fixed-mode retries preserve their prior same-model policy');
+  assert.equal(fixed.files['answer.mjs'], 'export const answer = 2;\n// unrelated\nexport const untouched = 3;\n');
 });
 
 test('focused packets refuse oversized context, stale anchors and multiple writable files before inference', () => {
@@ -97,9 +159,13 @@ test('compose syntax retry does not guess a location when the parser supplies no
     return { edits: [{ kind: 'compose', path: 'combined.json', parts: [{ text: '{' }] }] };
   } };
 
-  await assert.rejects(patchEditor(model, 'editor', 'contract', { operation, files }, { focused: true }), error => error instanceof SyntaxError);
+  let finalError;
+  await assert.rejects(patchEditor(model, 'editor', 'contract', { operation, files }, { focused: true }), error => {
+    finalError = error;
+    return error instanceof SyntaxError;
+  });
   assert.equal(seen.length, 2);
-  assert.match(seen[1].application_failure, /Expected property name/);
+  assert.equal(seen[1].application_failure, finalError.message, 'forward the exact parser diagnostic without inventing a source location');
   assert.ok(!seen[1].application_failure.includes('Composed output excerpt'));
   assert.ok(!seen[1].application_failure.includes('Intersecting compose parts'));
   assert.deepEqual({ ...files }, { 'source.mjs': 'export const source = 1;\n', 'combined.json': null });
@@ -164,9 +230,12 @@ test('request budget, deadline and cancellation failures stop without a second m
     new DOMException('The operation was aborted', 'AbortError'), new DOMException('The operation timed out', 'TimeoutError'),
     new Error('Model stopped: aborted: request cancelled')];
   for (const failure of failures) {
-    let calls = 0;
+    let calls = 0, recoveries = 0;
     const model = { json: async () => { calls++; throw failure; } };
-    await assert.rejects(patchEditor(model, 'editor', 'contract', { operation: operation(), files }, { focused: true }), error => error === failure);
+    await assert.rejects(patchEditor(model, 'editor', 'contract', { operation: operation(), files }, {
+      focused: true, recoveryModel: { json: async () => { recoveries++; } },
+    }), error => error === failure);
     assert.equal(calls, 1, failure.message);
+    assert.equal(recoveries, 0, failure.message);
   }
 });
