@@ -40,7 +40,7 @@ Run 16 is testing off-to-low application recovery; its results are pending. See 
 [measurements](optimized-results.md), [JSON evidence](optimized-results.json) and
 [comparison protocol](OPTIMIZER-PROTOCOL.md). This research is still in progress.
 
-Three divergent approaches are prepared separately for later experiments:
+Four divergent approaches are prepared separately for later experiments:
 
 - [DeepSeek-only executable changesets](divergent/deepseek-direct/PROTOCOL.md)
   remove the Sol query and delegated-writer stages, retaining a separate DeepSeek
@@ -56,6 +56,10 @@ Three divergent approaches are prepared separately for later experiments:
   verbatim fenced code from the owner brief. It leaves other assignments with their
   writers. The initial prototype supports independent operations only and has passed
   offline contract checks; it is not connected to a live planner or dispatcher.
+- [Source-splice prototype](divergent/source-splice/README.md) inserts exact copied
+  source ranges into an existing staged file. It checks snapshot hashes, ownership,
+  unique anchors and candidate syntax before returning a private preview. Offline
+  contract checks passed; live planning and execution remain unmodified.
 
 These prototypes do not alter the active three-role treatment or establish a
 performance result. Their live comparisons remain queued behind the current goal.
