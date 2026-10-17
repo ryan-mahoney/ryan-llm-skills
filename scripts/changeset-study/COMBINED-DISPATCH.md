@@ -32,7 +32,7 @@ Behavioral test failures are reported by the outer workflow after file modificat
 
 ## Dispatch options and the lean profile
 
-Both optimized profiles accept `dispatchOptions` (validated in [`dispatch-profile.mjs`](dispatch-profile.mjs)). `optimized-v4a` keeps the historical defaults; `optimized-lean` is the route the replay rounds under [`divergent/stacked-optimization/`](divergent/stacked-optimization/) recommend, and explicit options still override its fields.
+Both optimized profiles accept `dispatchOptions` (validated in [`dispatch-profile.mjs`](dispatch-profile.mjs)). `optimized-v4a` keeps the historical defaults; `optimized-lean` is the route the replay rounds under [`divergent/stacked-optimization/`](divergent/stacked-optimization/) recommend, and explicit options still override its fields. In the final side-by-side replay (three alternating repeats each on the retained run18 plans) the lean route delivered 10 of 18 cells against the reference's 4 of 9, wrote a three-task pass in 55 s against 86 s and emitted 23,900 output tokens against 34,800; single observations per cell, exposed development cases.
 
 | Option | Values | Effect |
 | --- | --- | --- |
