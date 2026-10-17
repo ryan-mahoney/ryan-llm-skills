@@ -48,8 +48,10 @@ Each cell retains the raw and dispatched plans, preprocessing metrics, Jev reque
 
 Library entry/package hashes and actual returned Jev model identity are recorded. Generic `iterate.mjs` runs load the configured Jev installation at runtime; their replay checks do not pin that installation. Use the dedicated [comparison runner](divergent/combined-dispatch/runner.mjs) for the matched experiment: it snapshots and verifies the Jev dependency tree alongside the model SDK, source and parser before execution.
 
-## Evidence and remaining evaluation
+## Evidence and comparison
 
 Focused controlled-transport checks exercise the complete research cell: one Sol planning response, one Jev batch, deterministic grouping, parallel writers, a rejected V4A patch, one successful manual fallback, unchanged protected source and separate outer grading. Historical query-granularity checks still pass. Writer checks separately cover path fencing, atomic rejection, syntax diagnostics, source-range fallback and terminal request failures.
 
-These checks establish wiring and failure behavior, not a performance gain. The matched comparison uses retained Sol plans and identical starting files for both the current JSON writer and this combined profile. Planning is reused, so the comparison measures the writing stage, including optimization and advice; it cannot establish fresh end-to-end workflow speed. Keep application completion, fallback rates, downstream acceptance, token counts and costs separate.
+The [six-trial matched comparison](divergent/combined-dispatch/results.md) delivered one of three tasks in each arm. Application completion fell from three of three with the JSON baseline to two of three with the combined profile. Grouping reduced 26 planned assignments to 17, but seven of 15 dispatched V4A attempts required fallback. Jev ran successfully without changing the deterministic default choices. The combined configuration remains experimental; these observations do not justify replacing the baseline.
+
+Both arms used retained Sol plans and identical starting files. Planning was reused, so the comparison measures the writing stage, including optimization and advice; it cannot establish fresh end-to-end workflow speed. The combined extraction case stopped early, so its lower time and call count are not completed-work savings. Application completion, fallback rates, downstream acceptance, token counts and costs remain separate in the report.
