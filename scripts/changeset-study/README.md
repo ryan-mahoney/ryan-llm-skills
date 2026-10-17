@@ -28,13 +28,13 @@ Sol-only runs. See the [results](owner-editor-results.md) and
 
 The current [three-role optimizer study](OPTIMIZER-FINDINGS.md) separates a DeepSeek
 implementation owner, Sol query planner and DeepSeek writers. Smaller-region plans
-in run 18 completed application across all three cases once; two passed full delivery.
-Handoff still failed downstream checks, and no reliable suite-wide configuration or
-quality-preserving win over Sol controls is established. Run 19 repeats the exact
-freeze/plans without new planning; results are pending. See the
-[offline results visual](optimized-results.html), [measurements](optimized-results.md),
-[JSON evidence](optimized-results.json) and [comparison protocol](OPTIMIZER-PROTOCOL.md).
-This research is still in progress.
+in run 18 and exact frozen repeat 19 completed application across all three cases.
+Full delivery fell from two cases to one; writing plus optimizer/routing time varied
+from 73.55 to 124.22 seconds. Behavioral reliability and a quality-preserving Sol win
+remain unestablished. A matched Sol writer control is in preparation, with no live
+inference run. See the [offline results visual](optimized-results.html),
+[measurements](optimized-results.md), [JSON evidence](optimized-results.json) and
+[comparison protocol](OPTIMIZER-PROTOCOL.md). The study remains active.
 
 Four divergent approaches are prepared separately for later experiments:
 
