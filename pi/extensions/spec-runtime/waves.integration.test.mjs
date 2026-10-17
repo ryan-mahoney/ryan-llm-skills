@@ -17,6 +17,7 @@ import {
   collectShimStateDiagnostics,
   installPortableHostShims,
   makeWaveFixture,
+  registerNativeTeardown,
   resolveInstalledPi,
   setShimMode,
   startCoordinator,
@@ -25,6 +26,8 @@ import {
   writeSandboxHome,
   memberCheckouts,
   memberWorkspace,
+  elapsedWaveMs,
+  elapsedWaveSetMs,
 } from './package-fixture.mjs';
 import { HOST_REMEDIES } from './linux-resources.mjs';
 
@@ -290,6 +293,12 @@ async function bootWaveFixture(t, options = {}) {
 
   // D-9 fixture build: this is the first red boundary of the walking skeleton.
   const fixture = await makeWaveFixture(options);
+  // Cleanup is registered before any further operation so a later failure in
+  // the sandbox/shim/setup phases cannot leak the fixture. Ordering lives in
+  // wave-native-lifecycle.mjs; remaining boot fields are filled in later.
+  const boot = { fixture, coordinators: [], providers: [], diagnostics: [] };
+  registerNativeTeardown(t, boot);
+
   const extensionPath = join(fixture.dir, 'wave-loopback-extension.mjs');
   const sandbox = writeSandboxHome(fixture.dir, { extensionPath });
   assert.ok(sandbox.home && sandbox.agentDir && sandbox.configHome && sandbox.dataHome,
@@ -314,33 +323,7 @@ async function bootWaveFixture(t, options = {}) {
   const setup = JSON.parse(setupRun.stdout);
   assert.ok(setup.check?.admission?.admittedWidth >= 9, `host policy admits at least nine: ${JSON.stringify(setup)}`);
 
-  const boot = { pi, fixture, extensionPath, sandbox, binDir, shimStateDir, env, setup, coordinators: [], providers: [], diagnostics: [] };
-  // One ordered teardown: run every registered diagnostic over the still-live
-  // fixture, stop every coordinator (real session_shutdown), close every
-  // provider, then remove the fixture. The diagnostic callback runs first so a
-  // late-registered hook cannot observe a deleted fixture. A failure in any
-  // step still runs the later ones and surfaces the first error.
-  t.after(async () => {
-    let failure = null;
-    try {
-      for (const diagnostic of boot.diagnostics) {
-        try { await diagnostic(); } catch (error) {
-          console.error(`[wave-diag] boot diagnostic failed: ${error?.message ?? String(error)}`);
-        }
-      }
-      for (const coordinator of boot.coordinators) {
-        if (typeof coordinator?.shutdown === 'function') await coordinator.shutdown();
-      }
-      for (const provider of boot.providers) {
-        if (typeof provider?.close === 'function') await provider.close();
-      }
-    } catch (error) {
-      failure = error;
-    } finally {
-      try { await fixture.cleanup(); } catch (error) { if (!failure) failure = error; }
-    }
-    if (failure) throw failure;
-  });
+  Object.assign(boot, { pi, extensionPath, sandbox, binDir, shimStateDir, env, setup });
   return boot;
 }
 
@@ -487,6 +470,12 @@ test('wave native: width five implements, reviews, repairs and promotes through 
   assert.equal(git(fixture.integrationCheckout, 'status', '--porcelain'), '', 'integration checkout is clean');
 
   // D-3: worktree fallback everywhere, never a userns launch. Shapes are read
+  // step-013-subspec.md:38 contract reconciliation: the card names the fallback
+  // reason `fallback_reason` with value `userns-denied`, while the as-built
+  // durable record carries it as `workspace.backendReason`. The value is
+  // identical, so the assertions below keep `userns-denied` verbatim and read
+  // the field name the record actually writes; no bwrap or production change is
+  // implied by this reconciliation.
   // from the as-built durable record: each member carries its provisioned
   // workspace (step-workspaces.mjs) and the candidate workspace lives at
   // record.target.integration.workspace (runtime.mjs / wave-candidate-binding).
@@ -665,7 +654,11 @@ test('wave native: width nine overlaps and survives coordinator restart without 
   for (const pid of orphanPids) assert.ok(pidAlive(pid), `reviewing pid ${pid} is alive at the barrier`);
 
   const generation = readWaveRecord(fixture).generation;
-  await first.kill();
+  // Intentional crash, not teardown: kill only the coordinator leader and leave
+  // its process group alone. Draining the group here would also kill the
+  // observer clients of the orphaned reviewer units, so those units would never
+  // observe their own orphan exit (observed as stale active reviewer units).
+  await first.crash();
   assert.equal(readWaveRecord(fixture).generation, generation, 'wave generation is unchanged while no coordinator lives');
   provider.release('reviewing');
 
@@ -809,7 +802,9 @@ test('wave native: blocked members preserve work and repeated entry launches not
   const member3Path = memberWorkspace(member3, member3Run);
   const member4Path = memberWorkspace(member4, member4Run);
   assert.equal(member3.blocking_reason, 'length-stop', 'step 3 blocks on the length stop');
-  assert.equal(git(member3Path, 'status', '--porcelain').trimEnd(), '?? src/step-03.txt',
+  // `--untracked-files=all` keeps Git from collapsing the untracked directory
+  // so the assertion names the actual file the implementing run left behind.
+  assert.equal(git(member3Path, 'status', '--porcelain', '--untracked-files=all').trimEnd(), '?? src/step-03.txt',
     'step 3 preserves the uncommitted implementation file');
   assert.equal(member4.blocking_reason, 'review-transport-failed', 'step 4 blocks on the review transport');
   assert.equal(member4.sealed_head, null, 'step 4 has no sealed head');
@@ -1035,18 +1030,15 @@ test('wave native: chain and flat waves report elapsed time with identical trees
     assert.equal(wave.peak_observed_overlap, 1, `chain wave ${wave.wave_id} peak overlap is 1`);
   }
 
-  const elapsedMs = record => {
-    const opened = Date.parse(record.opened_at);
-    const integrated = (record.transitions ?? []).find(transition => transition.state === 'integrated');
-    return Number.isFinite(opened) && integrated ? Date.parse(integrated.at) - opened : null;
-  };
-  const flatMs = elapsedMs(readWaveRecord(flat));
-  const chainOpen = Math.min(...chainRecords.map(record => Date.parse(record.opened_at)).filter(Number.isFinite));
-  const chainIntegrated = Math.max(...chainRecords.map(record => {
-    const transition = (record.transitions ?? []).find(entry => entry.state === 'integrated');
-    return transition ? Date.parse(transition.at) : NaN;
-  }).filter(Number.isFinite));
-  const chainMs = Number.isFinite(chainOpen) && Number.isFinite(chainIntegrated) ? chainIntegrated - chainOpen : null;
+  // Elapsed time comes from the durable open/integrated transitions through the
+  // wave-native timing helper; a real record must yield a finite, non-negative
+  // duration instead of a null diagnostic.
+  const flatMs = elapsedWaveMs(readWaveRecord(flat));
+  const chainMs = elapsedWaveSetMs(chainRecords);
+  assert.ok(Number.isFinite(flatMs), 'flat wave elapsed milliseconds are finite');
+  assert.ok(flatMs >= 0, 'flat wave elapsed milliseconds are non-negative');
+  assert.ok(Number.isFinite(chainMs), 'chain wave elapsed milliseconds are finite');
+  assert.ok(chainMs >= 0, 'chain wave elapsed milliseconds are non-negative');
   const integrationMs = [...flatMetrics.waves, ...chainMetrics.waves]
     .reduce((sum, wave) => sum + (Number(wave.integration_seconds) || 0) * 1000, 0);
   t.diagnostic(`flat_ms=${flatMs} chain_ms=${chainMs} integration_ms=${Math.round(integrationMs)}`);

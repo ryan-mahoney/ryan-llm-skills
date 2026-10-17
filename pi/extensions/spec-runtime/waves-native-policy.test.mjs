@@ -8,7 +8,7 @@
 // fabricated 3 GiB policy instead of the saved 2 GiB policy is red here.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { runtimeHostCommand } from './linux-resources.mjs';
@@ -252,4 +252,42 @@ test('wave native F13-2b-4: a missing saved policy refuses the launch policy cal
   const resolved = resolveRuntimeHostPolicyOptions({ ...options, readyMembers: 9 });
   assert.equal(resolved.ok, true, `resolving without a saved policy failed: ${resolved.reason ?? ''}`);
   assert.equal(resolved.savedPolicyStatus, 'absent', 'the resolver reports the saved policy as absent');
+});
+
+test('wave native F13-2b-4: an explicit both-flag check diagnoses an absent policy without installing it', async t => {
+  const { options } = await isolatedHost(t);
+  const policyPath = join(options.env.XDG_CONFIG_HOME, 'spec-runtime', 'host-policy.json');
+  assert.equal(existsSync(policyPath), false, 'the diagnostic case starts with no saved policy');
+
+  // An explicit diagnostic supplies BOTH lifecycle limits. That is the one
+  // narrow exception to the fail-closed rule: the real check runs so the
+  // operator can diagnose their stated policy, but it is annotated as a
+  // diagnostic and never becomes launchable evidence.
+  const diagnostic = await runtimeHostCommand('check', { ...SAVED }, { ...options, readyMembers: 9 });
+  assert.equal(diagnostic.result.savedPolicyStatus, 'absent', 'the diagnostic still reports the saved policy as absent');
+  assert.equal(diagnostic.result.policySource, 'explicit-diagnostic', 'the diagnostic names its policy source');
+  assert.equal(diagnostic.result.nativeLaunchable, false, 'a diagnostic policy is never launchable');
+  assert.equal(diagnostic.result.ok, true, `the real check ran: ${diagnostic.result.reason ?? ''}`);
+  assert.equal(diagnostic.result.policy.lifecycleMemoryMib, 2048, 'the diagnostic reports the explicit memory limit');
+  assert.equal(diagnostic.result.policy.lifecycleTasks, 384, 'the diagnostic reports the explicit task limit');
+  assert.equal(existsSync(policyPath), false, 'a diagnostic check never installs a saved policy');
+
+  // The launch path stays fail-closed on the same absent policy: the annotation
+  // is a diagnostic, not a substitute for an installed policy.
+  const { calculateWaveResourcePolicy } = await import('./wave-resource-policy.mjs');
+  assert.throws(
+    () => calculateWaveResourcePolicy({ ...options, readyMembers: 9 }),
+    error => error.code === 'host-policy-missing',
+    'the launch policy calculation still refuses the absent saved policy',
+  );
+  assert.equal(existsSync(policyPath), false, 'no launch path installed a policy either');
+
+  // A partial explicit policy (only one of the two lifecycle limits) is still a
+  // refusal: the exception is bound to both limits being supplied together.
+  const partial = await runtimeHostCommand('check', { lifecycleMemoryMib: 2048 }, { ...options, readyMembers: 9 });
+  assert.equal(partial.exitCode, 1, 'a partially explicit check still exits nonzero');
+  assert.equal(partial.result.reason, 'host-policy-missing', 'a partial policy names the missing saved policy');
+  assert.equal(partial.result.status, 'refused', 'a partial policy never reports ready');
+  assert.equal(partial.result.policySource, undefined, 'a refusal carries no diagnostic provenance');
+  assert.equal(existsSync(policyPath), false, 'a refused check installs nothing');
 });

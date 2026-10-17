@@ -21,8 +21,9 @@ import * as integrationModule from './wave-integration.mjs';
 import { recordCheckpoint, readCheckpointRecord, reconcileRuntimeReturn } from './sentinel.mjs';
 import { validateStepIndex } from '../../../scripts/spec-observe/steps.mjs';
 import { inspectProcess } from '../../../scripts/spec-observe/process-identity.mjs';
-import { calculateResourcePolicy, DEFAULT_LIFECYCLE_MEMORY_MIB, DEFAULT_LIFECYCLE_TASKS, MIB } from './linux-resources.mjs';
+import { calculateResourcePolicy, DEFAULT_LIFECYCLE_MEMORY_MIB, DEFAULT_LIFECYCLE_TASKS, MIB, setupRuntimeHost } from './linux-resources.mjs';
 import { createProcessRegistry } from './waves-fixture-processes.mjs';
+import { hostFixture as isolatedHostFixture, hostOptions as isolatedHostOptions, hostTransport as isolatedHostTransport } from './linux-resources-fix-fixture.mjs';
 import * as waves from './waves.mjs';
 
 export const CASE4_TIMEOUT_MS = 120000;
@@ -455,13 +456,42 @@ export async function makeCase4Fixture(t, opts = {}) {
   previousEnv = {
     PATH: process.env.PATH,
     HOME: process.env.HOME,
+    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
     PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
     SPEC_RUNTIME_FIXTURE_SCENARIO: process.env.SPEC_RUNTIME_FIXTURE_SCENARIO
   };
+  const fixtureConfigHome = join(agentDir, '.config');
   process.env.PATH = `${binDir}:${previousEnv.PATH ?? ''}`;
   process.env.HOME = agentDir;
+  // The saved policy lives under the fixture agentDir config home; export it so
+  // every nested worker reads the same actual policy instead of the live one.
+  process.env.XDG_CONFIG_HOME = fixtureConfigHome;
   process.env.PI_CODING_AGENT_DIR = agentDir;
   process.env.SPEC_RUNTIME_FIXTURE_SCENARIO = scenarioFile;
+
+  // Fixture-owned saved host policy. The native host check now fails closed
+  // without a saved policy, so this fixture installs a real one with the
+  // production setup action into its own agentDir/.config. Nothing outside the
+  // fixture directory is read or written: the config home is fixture-owned and
+  // is exported as XDG_CONFIG_HOME below so nested workers observe the same
+  // actual policy. The isolated synthetic transport reports kernelProof false,
+  // so the fixture never claims a host-level proof it did not perform.
+  mkdirSync(fixtureConfigHome, { recursive: true });
+  const fixtureHost = await isolatedHostFixture(t, { bwrap: false });
+  const { run: fixtureRun } = isolatedHostTransport(fixtureHost, { bwrapAvailable: false });
+  const savedPolicy = await setupRuntimeHost({
+    // Resource-policy calculation must see the same synthetic 30 GiB / 8 CPU
+    // topology the synthetic slice verification uses, not the real host
+    // topology. Env and home still belong to this fixture.
+    ...isolatedHostOptions(fixtureHost, fixtureRun),
+    env: { XDG_CONFIG_HOME: fixtureConfigHome },
+    home: agentDir,
+    run: fixtureRun,
+    ownership: { inspectClaims: async () => ({ claims: [] }) },
+    lifecycleMemoryMib: DEFAULT_LIFECYCLE_MEMORY_MIB,
+    lifecycleTasks: DEFAULT_LIFECYCLE_TASKS
+  });
+  assert.equal(savedPolicy.ok, true, `fixture saved host policy must install: ${savedPolicy.reason ?? ''} ${savedPolicy.detail ?? ''}`);
 
   const events = new EventEmitter();
   const launches = [];
@@ -500,6 +530,7 @@ export async function makeCase4Fixture(t, opts = {}) {
       // Isolate any agent-config writes away from the real user home so the test
       // can assert the launcher-limit configuration never touches settings files.
       env.HOME = agentDir;
+      env.XDG_CONFIG_HOME = fixtureConfigHome;
       env.PI_CODING_AGENT_DIR = agentDir;
       const sandbox = {
         unit: `wave-skeleton-${launches.length + 1}.service`,

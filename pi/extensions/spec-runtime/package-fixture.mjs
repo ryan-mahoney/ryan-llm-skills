@@ -326,14 +326,18 @@ export async function makeWaveFixture(options = {}) {
     expected.set(writePath(entry.step), entry.step === defectStep ? `step ${nn} fixed\n` : `step ${nn} implemented\n`);
   }
 
-  // Teardown responsibility is registered before any future operation. A drain
-  // failure leaves the backing in place: no deletion while writers may live.
+  // Teardown responsibility is registered before any future operation. Shim and
+  // registry cleanup are attempted independently so one failure cannot skip the
+  // other; the sandbox is only removed when both succeed, and the first error
+  // surfaces to the caller.
   const processRegistry = createProcessRegistry();
   let cleaned = false;
   const cleanup = async () => {
     if (cleaned) return;
-    await cleanupPortableHostShims(join(base.dir, 'shim-state'));
-    await processRegistry.cleanup();
+    let failure = null;
+    try { await cleanupPortableHostShims(join(base.dir, 'shim-state')); } catch (error) { failure = error; }
+    try { await processRegistry.cleanup(); } catch (error) { if (!failure) failure = error; }
+    if (failure) throw failure;
     rmSync(base.dir, { recursive: true, force: true });
     cleaned = true;
   };
@@ -389,6 +393,11 @@ export { buildOverlayArgv } from './overlay.mjs';
 export { importSealedHead } from './step-workspaces.mjs';
 // EV-13 native wave case helpers read the durable member workspace shape.
 export { memberCheckouts, memberWorkspace } from './wave-native-workspaces.mjs';
+// EV-13 native wave elapsed timing reads durable open/integrated transitions.
+export { elapsedWaveMs, elapsedWaveSetMs } from './wave-native-timing.mjs';
 // EV-14 native Linux wave fixture: sandbox HOME, real environment and the
 // actual loopback provider/coordinator pair, with no host modification.
 export { bootLinuxWave } from './wave-linux-native-fixture.mjs';
+// The ordered native boot teardown lives in wave-native-lifecycle.mjs; the wave
+// cases keep a single static import surface through this fixture entry point.
+export { registerNativeTeardown } from './wave-native-lifecycle.mjs';

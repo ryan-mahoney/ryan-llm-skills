@@ -1778,7 +1778,29 @@ export async function runtimeHostCommand(action, flags = {}, options = {}) {
   // A native check never invents advanced values: without a saved policy the
   // calculator defaults would silently differ from the launched unit limits.
   if (resolved.savedPolicyStatus === 'absent') {
-    return { exitCode: 1, result: runtimeHostCheckRefusal(resolved.paths, 'host-policy-missing', resolved.paths.policyPath) };
+    // Diagnostic exception, and only for an explicitly supplied *both* lifecycle
+    // limits: such a check diagnoses the operator's stated policy without
+    // installing it. Anything else (a flagless check, a partially specified
+    // policy, or the native launch/preflight calculator) stays fail-closed, so no
+    // launch ever reserves fabricated capacity. The result is annotated so a
+    // diagnostic is never mistaken for an installed, launchable policy.
+    const explicitLifecycle = Number.isSafeInteger(flags.lifecycleMemoryMib)
+      && flags.lifecycleMemoryMib > 0
+      && Number.isSafeInteger(flags.lifecycleTasks)
+      && flags.lifecycleTasks > 0;
+    if (!explicitLifecycle) {
+      return { exitCode: 1, result: runtimeHostCheckRefusal(resolved.paths, 'host-policy-missing', resolved.paths.policyPath) };
+    }
+    const diagnosticOptions = resolved.options;
+    if (flags.probe === true) diagnosticOptions.probe = true;
+    const diagnostic = await checkRuntimeHost(diagnosticOptions);
+    const annotated = {
+      ...diagnostic,
+      savedPolicyStatus: 'absent',
+      policySource: 'explicit-diagnostic',
+      nativeLaunchable: false,
+    };
+    return { exitCode: annotated.ok ? 0 : 1, result: annotated };
   }
   const checkOptions = resolved.options;
   if (flags.probe === true) checkOptions.probe = true;

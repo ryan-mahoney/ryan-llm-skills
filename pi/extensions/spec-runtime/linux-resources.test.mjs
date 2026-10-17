@@ -848,6 +848,14 @@ test('wave resources: a malformed claims envelope refuses every policy change wi
 test('wave resources: runtimeHostCommand composes validated flags into the host check', { timeout: CASE_TIMEOUT_MS }, async t => {
   const fixture = await hostFixture(t);
   const idle = hostTransport(fixture);
+  // A positive check reads the policy it installed, so install a real owned
+  // policy first with the production setup action on the same isolated config
+  // home. The install uses default lifecycle limits (not 2048/384) so a wrong
+  // memory-to-tasks mapping stays observable instead of being masked by the
+  // requested values.
+  const installTransport = hostTransport(fixture, { bwrapAvailable: false });
+  const installed = await setupRuntimeHost(setupOptions(fixture, installTransport.run));
+  assert.equal(installed.ok, true, `setup failed: ${installed.reason} ${installed.detail ?? ''}`);
   const handled = await runtimeHostCommand('check', { lifecycleMemoryMib: 2048 }, hostOptions(fixture, idle.run));
   assert.equal(handled.exitCode, 0);
   assert.equal(handled.result.mode, 'check');
@@ -869,6 +877,15 @@ test('wave resources: runtimeHostCommand composes validated flags into the host 
 
 test('wave resources: runtime-host CLI composes positive flags and real setup effects', { timeout: CASE_TIMEOUT_MS }, async t => {
   const fixture = await hostFixture(t);
+  // Both positive CLI checks below re-read the policy installed by the setup
+  // launch further down, so install one through the production setup action
+  // before the first check. Default lifecycle limits (not 2048/384) keep a
+  // wrong memory-to-tasks mapping observable rather than masked.
+  {
+    const { run } = hostTransport(fixture, { bwrapAvailable: false });
+    const installed = await setupRuntimeHost(setupOptions(fixture, run));
+    assert.equal(installed.ok, true, `setup failed: ${installed.reason} ${installed.detail ?? ''}`);
+  }
   const checkArgs = ['check',
     '--lifecycle-memory-mib', '2048', '--lifecycle-tasks', '384', '--probe'];
   const assertCheck = checked => {
@@ -893,7 +910,8 @@ test('wave resources: runtime-host CLI composes positive flags and real setup ef
     assert.equal(changed.status, 0, changed.stdout + changed.stderr);
     assert.throws(() => assertCheck(changed), { code: 'ERR_ASSERTION' });
   }
-  const setup = hostCli(fixture, ['setup',
+  const setupFixture = await hostFixture(t);
+  const setup = hostCli(setupFixture, ['setup',
     '--lifecycle-memory-mib', '2048', '--lifecycle-tasks', '384']);
   assert.equal(setup.status, 0, setup.stdout + setup.stderr);
   const installed = JSON.parse(setup.stdout);
@@ -914,9 +932,9 @@ test('wave resources: runtime-host CLI composes positive flags and real setup ef
     assert.ok(result.paths.policyPath.startsWith(`${target.configHome}/`));
     assert.ok(result.paths.slicePath.startsWith(`${target.configHome}/`));
   };
-  assertInstalled(installed, fixture);
+  assertInstalled(installed, setupFixture);
   // Flagless production dispatch must read back what setup really installed.
-  const saved = hostCli(fixture, ['check']);
+  const saved = hostCli(setupFixture, ['check']);
   assert.equal(saved.status, 0, saved.stdout + saved.stderr);
   const savedResult = JSON.parse(saved.stdout);
   assert.equal(savedResult.policy.lifecycleMemoryMib, 2048);
@@ -924,8 +942,12 @@ test('wave resources: runtime-host CLI composes positive flags and real setup ef
   assert.notEqual(savedResult.properties.source, 'probe');
 
   // A successful but disconnected setup dispatch is not installation evidence.
+  // Both lifecycle limits are supplied explicitly so the disconnected diagnostic
+  // still returns a real check result without any saved policy; installation is
+  // still absent, so the setup oracle stays red.
   const disconnectedFixture = await hostFixture(t);
-  const disconnected = hostCli(disconnectedFixture, ['setup'], {
+  const disconnected = hostCli(disconnectedFixture, ['setup',
+    '--lifecycle-memory-mib', '2048', '--lifecycle-tasks', '384'], {
     mutation: ['runtimeHostCommand(action, flags)', "runtimeHostCommand('check', flags)"],
   });
   assert.equal(disconnected.status, 0, disconnected.stdout + disconnected.stderr);

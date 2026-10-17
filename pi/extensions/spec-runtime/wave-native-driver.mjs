@@ -87,6 +87,12 @@ export function startCoordinator({ sandbox, env, script, tag } = {}) {
   const exitedPromise = new Promise(resolve => {
     child.once('close', (code, signal) => { exited = true; resolve({ code, signal }); });
   });
+  // Leader exit alone, independent of the group-draining 'close' promise above.
+  // 'exit' fires once the leader process is gone even while descendants still
+  // hold the inherited stdout/stderr pipes open.
+  const childExitPromise = new Promise(resolve => {
+    child.once('exit', (code, signal) => resolve({ code, signal }));
+  });
   const readyTimer = setTimeout(() => {
     if (readySettled) return;
     readySettled = true;
@@ -133,27 +139,42 @@ export function startCoordinator({ sandbox, env, script, tag } = {}) {
     if (!readySettled) failReady(`exited before ready (code=${code}, signal=${signal}); stderr=${stderr.trim()}`);
   });
 
-  // SIGKILL the real child and positively confirm it left the process group.
+  // SIGKILL the real child, then drain the owned group before awaiting close.
+  // A descendant that inherited the leader's stdout/stderr pipes keeps 'close'
+  // pending until it is gone, so draining first is what makes kill terminate.
   async function kill() {
     if (child.exitCode === null && child.signalCode === null) {
       try { process.kill(child.pid, 'SIGKILL'); } catch { /* already gone */ }
     }
+    const drained = sandbox.processRegistry.drainGroup(child.pid);
+    await drained;
     await exitedPromise;
-    await sandbox.processRegistry.drainGroup(child.pid);
+  }
+
+  // Intentional crash: SIGKILL only the leader and await its own exit. The
+  // owned group is deliberately NOT drained so surviving descendants (for
+  // example systemd shim clients) observe the orphan exit on their own.
+  async function crash() {
+    if (child.exitCode === null && child.signalCode === null) {
+      try { process.kill(child.pid, 'SIGKILL'); } catch { /* already gone */ }
+    }
+    await childExitPromise;
   }
 
   // SIGTERM first so the child runs the real session_shutdown lifecycle, then
-  // SIGKILL after 10s and drain the owned group before returning.
+  // SIGKILL after 10s, drain the owned group and only then await close. The
+  // leader may exit on its own while a descendant still holds the pipes, so the
+  // group drain happens on both the graceful and the forced path.
   async function shutdown() {
     if (!exited) {
       try { child.kill('SIGTERM'); } catch { /* already gone */ }
       const graceful = await Promise.race([exitedPromise.then(() => true), sleep(SHUTDOWN_TIMEOUT_MS).then(() => false)]);
       if (!graceful) {
         try { child.kill('SIGKILL'); } catch { /* already gone */ }
-        await exitedPromise;
       }
     }
     await sandbox.processRegistry.drainGroup(child.pid);
+    await exitedPromise;
   }
 
   return {
@@ -163,6 +184,7 @@ export function startCoordinator({ sandbox, env, script, tag } = {}) {
     exited: exitedPromise,
     shutdown,
     kill,
+    crash,
     drainGroup: () => sandbox.processRegistry.drainGroup(child.pid),
     get stdout() { return stdout; },
     get stderr() { return stderr; },

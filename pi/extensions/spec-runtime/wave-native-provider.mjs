@@ -198,6 +198,7 @@ function editorReply({ turn, record, script }) {
 function reviewerReply({ turn, body, record, script }) {
   const step = stepNumber(record);
   if (record?.phase === 'confirming') {
+    if (turn > 0) return textReply('Confirmed.');
     const path = /CONFIRM:[^\n]*fixed decision in (\S+)/.exec(promptText(body))?.[1] ?? null;
     return toolReply('spec_stage_complete', {
       verdict: 'pass', findings: [],
@@ -218,6 +219,7 @@ function reviewerReply({ turn, body, record, script }) {
     }
     return textReply('Waiting.');
   }
+  if (turn > 0) return textReply('Review complete.');
   return toolReply('spec_stage_complete', { verdict: 'pass', findings: [], fix_verdicts: [], limitations: [] });
 }
 
@@ -527,8 +529,12 @@ export async function startLoopbackProvider(options = {}) {
       for (const waiter of state.waiters.splice(0)) waiter.reject(new Error('wave-loopback provider closed'));
     }
     while (depWaiters.length) depWaiters.shift()();
-    await new Promise(resolve => server.close(resolve));
+    // Initiate the close before dropping live sockets: server.close() waits for
+    // every open connection, so closeAllConnections must run without awaiting
+    // the close first or a hung socket blocks teardown. Await completion after.
+    const closed = new Promise(resolve => server.close(resolve));
     server.closeAllConnections?.();
+    await closed;
   };
 
   return { port, requests, violations, script, armBarrier, barrierReached, release, close };

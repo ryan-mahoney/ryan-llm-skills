@@ -267,9 +267,111 @@ function collectGateDirDiagnostics(gateDir) {
   }
 }
 
+// Seal receipts for the given steps of one wave: runtime/waves/<wave_id>/step-NNN-seal.json.
+// Read-only and non-recursive; a missing or unreadable receipt is recorded as an
+// explicit error so an absent file is never reported as a clean seal.
+function collectSealReceiptDiagnostics(waveDirPath, waveId, steps) {
+  const waveDir = join(waveDirPath, String(waveId));
+  const receipts = [];
+  const errors = [];
+  let remaining = DIAG_GROUP_LIMIT;
+  for (const step of steps) {
+    if (remaining <= 0) { errors.push({ path: waveDir, error: `<truncated further seal receipts>` }); break; }
+    remaining -= 1;
+    const name = `step-${String(step).padStart(3, '0')}-seal.json`;
+    const full = join(waveDir, name);
+    if (!existsSync(full)) { errors.push({ file: name, error: 'missing seal receipt' }); continue; }
+    let receipt;
+    try { receipt = JSON.parse(readFileSync(full, 'utf8')); } catch (error) {
+      errors.push({ file: name, error: error?.message ?? String(error) });
+      continue;
+    }
+    const reasons = Array.isArray(receipt?.reasons) ? receipt.reasons : [];
+    receipts.push({
+      file: name,
+      step: Number(receipt?.step ?? step),
+      state: receipt?.state ?? null,
+      reasons: reasons.slice(0, DIAG_GROUP_LIMIT).map(reason => (reason && typeof reason === 'object'
+        ? { code: reason.code ?? null, detail: reason.detail ?? null }
+        : { code: null, detail: reason ?? null })),
+      head: receipt?.head ?? null,
+      sealed_head: receipt?.sealed_head ?? null,
+    });
+  }
+  return receipts.length > 0 || errors.length > 0 ? { dir: waveDir, receipts, errors } : null;
+}
+
+// Bounded summaries of the durable wave records under <package>/runtime/waves.
+// Diagnostic only: records are read, never written, and only scalar identity,
+// state, blocking and promotion fields are copied. Explicit read/parse errors
+// stay visible instead of vanishing with the directory.
+function collectWaveSummaryDiagnostics(packagePath) {
+  const dir = join(packagePath, 'runtime', 'waves');
+  const waves = [];
+  const errors = [];
+  if (!existsSync(dir)) return { dir, waves, errors };
+  let names = [];
+  try { names = readdirSync(dir).sort(); } catch (error) {
+    return { dir, waves, errors: [{ path: dir, error: error?.message ?? String(error) }] };
+  }
+  const recordNames = names.filter(name => name.endsWith('.json'));
+  for (const name of recordNames.slice(0, DIAG_GROUP_LIMIT)) {
+    const full = join(dir, name);
+    let record;
+    try { record = JSON.parse(readFileSync(full, 'utf8')); } catch (error) {
+      errors.push({ file: name, error: error?.message ?? String(error) });
+      continue;
+    }
+    const integration = record?.target?.integration ?? null;
+    const promotion = record?.target?.promotion ?? null;
+    const members = record?.members && typeof record.members === 'object'
+      ? Object.values(record.members)
+      : [];
+    const transitions = Array.isArray(record?.transitions) ? record.transitions : [];
+    const summary = {
+      file: name,
+      wave_id: record?.wave_id ?? null,
+      state: record?.state ?? null,
+      reason: record?.reason ?? null,
+      transitions: transitions.slice(-DIAG_GROUP_LIMIT).map(transition => ({
+        state: transition?.state ?? null,
+        at: transition?.at ?? null,
+        reason: transition?.reason ?? null,
+      })),
+      coordinator: record?.coordinator?.session ?? null,
+      members: members.slice(0, DIAG_GROUP_LIMIT).map(member => ({
+        step: member?.step ?? null,
+        phase: member?.phase ?? null,
+        blocking_reason: member?.blocking_reason ?? null,
+        blocking_detail: member?.blocking_detail ?? null,
+        run_id: member?.run_id ?? null,
+        implementation_run_id: member?.implementation_run_id ?? null,
+      })),
+      integration: integration ? {
+        status: integration.status ?? null,
+        blocked_reason: integration.blocked_reason ?? null,
+      } : null,
+      promotion: promotion ? {
+        state: promotion.state ?? null,
+      } : null,
+    };
+    // Known seal receipts for the summarized numeric steps of this wave only.
+    const sealSteps = [...new Set(members
+      .map(member => Number(member?.step))
+      .filter(step => Number.isSafeInteger(step) && step > 0))];
+    if (sealSteps.length > 0) summary.seal_receipts = collectSealReceiptDiagnostics(dir, record?.wave_id ?? name.replace(/\.json$/, ''), sealSteps);
+    waves.push(JSON.parse(JSON.stringify(
+      summary,
+      (key, value) => (typeof value === 'string' ? boundedText(value, 1000) : value),
+    )));
+  }
+  if (recordNames.length > DIAG_GROUP_LIMIT) errors.push({ path: dir, error: `<truncated ${recordNames.length - DIAG_GROUP_LIMIT} later entries>` });
+  return { dir, waves, errors };
+}
+
 function collectRuntimeRunDiagnostics(fixture) {
   const dir = join(fixture.packagePath, 'runtime', 'runs');
-  if (!existsSync(dir)) return { dir, runs: [], files: [] };
+  if (!existsSync(dir)) return { dir, runs: [], files: [], waves: collectWaveSummaryDiagnostics(fixture.packagePath) };
   const runs = [];
   const files = [];
   const names = readdirSync(dir).sort();
@@ -298,11 +400,17 @@ function collectRuntimeRunDiagnostics(fixture) {
           // The owner/reviewer launch request the child recorded at the top level.
           // Only argv/args/command/extensions are copied; env and tokens never appear.
           launch_request: name.endsWith('-owner-request.json') ? collectServiceRequestDiagnostic(record) : null,
+          // Seal-boundary proof: the phase purpose/backend/wave/subject the child
+          // recorded, so a failed seal can be attributed without guessing.
+          command_phase: collectCommandPhaseDiagnostic(record.command_phase),
           // First-launch proof: the child's actual /proc state, not guessed
           // field names. Narrowly scoped to the recorded service pids.
           service_process: collectServiceProcessDiagnostics(record.service),
           command_service_process: collectServiceProcessDiagnostics(record.command_service),
           gate: collectGateDirDiagnostics(record.service?.gate_dir ?? record.gate_dir ?? null),
+          // The run's own command log holds the actual git-status bytes the seal
+          // observed before cleanup. Bounded read of at most DIAG_GROUP_LIMIT logs.
+          command_logs: collectCommandLogDiagnostics(dir, record.id, name),
         });
       } catch (error) {
         files.push({ file: name, error: error?.message ?? String(error) });
@@ -315,7 +423,49 @@ function collectRuntimeRunDiagnostics(fixture) {
       files.push({ file: name, contents });
     }
   }
-  return { dir, runs, files };
+  // Durable wave summaries are collected last and only read, so a stuck child's
+  // run evidence above is never displaced by wave-record inspection.
+  return { dir, runs, files, waves: collectWaveSummaryDiagnostics(fixture.packagePath) };
+}
+
+// Only the fields that attribute a failure to a phase are copied; layers,
+// claim tokens and other credentials never leave the record through diagnostics.
+function collectCommandPhaseDiagnostic(phase) {
+  if (phase === null || typeof phase !== 'object') return null;
+  const subject = phase.subject;
+  return {
+    purpose: typeof phase.purpose === 'string' ? boundedText(phase.purpose, 200) : null,
+    backend: typeof phase.backend === 'string' ? boundedText(phase.backend, 200) : null,
+    wave_id: typeof phase.wave_id === 'string' ? boundedText(phase.wave_id, 200) : null,
+    subject: subject && typeof subject === 'object' ? {
+      kind: typeof subject.kind === 'string' ? boundedText(subject.kind, 200) : null,
+      step: subject.step ?? null,
+      attempt: subject.attempt ?? null,
+    } : null,
+  };
+}
+
+// Command logs are named <run-id>-command-<uuid>.log in the same runs dir. They
+// are read as evidence only while the run record is being summarised, so the
+// bytes the seal saw survive the later boot cleanup.
+function collectCommandLogDiagnostics(dir, runId, recordName) {
+  if (typeof runId !== 'string' || runId === '') return [];
+  const prefix = `${runId}-command-`;
+  const ownerRecord = runId === recordName || recordName.startsWith(`${runId}.`);
+  if (!ownerRecord) return [];
+  let names;
+  try {
+    names = readdirSync(dir).filter(name => name.startsWith(prefix) && name.endsWith('.log')).sort();
+  } catch (error) {
+    return [{ error: error?.message ?? String(error) }];
+  }
+  return names.slice(0, DIAG_GROUP_LIMIT).map(name => {
+    let contents = null;
+    try { contents = boundedText(readFileSync(join(dir, name), 'utf8'), DIAG_TEXT_LIMIT); } catch (error) {
+      contents = `<unreadable: ${error?.message ?? String(error)}>`;
+    }
+    return { file: name, contents };
+  });
 }
 
 function collectShimStateDiagnostics(shimStateDir) {
