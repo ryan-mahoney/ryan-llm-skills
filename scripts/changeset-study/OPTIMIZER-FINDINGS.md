@@ -1,4 +1,4 @@
-# Optimizer findings: runs 03–14
+# Optimizer findings: runs 03–15
 
 Deterministic grouping produced the best fully passing DeepSeek calibration observation. No three-role configuration completed all three cases, and none established a quality-preserving win over the retained Sol controls. These exposed development cases and historical controls do not establish reliability or a global optimum.
 
@@ -22,6 +22,7 @@ Runs 04–06 share one corrected backend freeze: exact retry classification, a 4
 | 12 root-aware catalog | 2/3 | 2/3 | 1/2 selected cells | 1/3 | 1/3 |
 | 13 syntax context | 1/3 | 2/3 | 1/2 selected cells | 1/3 | 1/3 |
 | 14 unoptimized | 1/3 | 3/3 | 1/2 selected cells | 1/3 | 1/3 |
+| 15 low writers | 2/3 | 3/3 | 1/2 selected cells | 1/3 | 1/3 |
 
 Zero selected candidate checks means no candidate check ran; it is not a pass. Base visible checks can pass on an unchanged or partial candidate. Application completion is the primary outcome.
 
@@ -37,7 +38,7 @@ On matched calibration, deterministic grouping reduced assignments from six to t
 
 Jev made two successful routing calls in 06: 4,294 tokens and $0.000169 estimated spend. It selected no vetoes or context changes. Every dispatched plan was byte-identical to 05, so these measurements show no benefit from Jev. Contextual calibration failed visible/candidate checks despite passing external grading. Its shorter handoff checks included no selected candidate tests, which prevents a quality-preserving speed claim.
 
-Actual model usage counts newly incurred requests. Allocated usage adds the original owner/query work for 04–06 and only original owner work for 07–10 and 12; 11 incurs fresh owners; 13–14 allocate inherited 11 owners and 12 query/context work. It excludes donor writing and checks. Reused planning is an allocation, not a new charge. Cache-write tokens are zero in all rows. Jev usage is separate from the Sol/DeepSeek columns.
+Actual model usage counts newly incurred requests. Allocated usage adds the original owner/query work for 04–06 and only original owner work for 07–10 and 12; 11 incurs fresh owners; 13–15 allocate inherited 11 owners and 12 query/context work. It excludes donor writing and checks. Reused planning is an allocation, not a new charge. Cache-write tokens are zero in all rows. Jev usage is separate from the Sol/DeepSeek columns.
 
 | Actual run | Calls | Input | Output | Cache read | Total tokens | Normalized USD |
 |---|---:|---:|---:|---:|---:|---:|
@@ -53,6 +54,7 @@ Actual model usage counts newly incurred requests. Allocated usage adds the orig
 | 12 root-aware catalog | 22 | 130,130 | 31,023 | 21,504 | 182,657 | 0.076395624 |
 | 13 syntax context | 15 | 56,029 | 18,820 | 18,816 | 93,665 | 0.039505596 |
 | 14 unoptimized | 21 | 50,916 | 18,569 | 36,608 | 106,093 | 0.037777248 |
+| 15 low writers | 16 | 63,588 | 219,680 | 7,936 | 291,204 | 0.282740016 |
 
 | Allocated run | Calls | Input | Output | Cache read | Total tokens | Normalized USD |
 |---|---:|---:|---:|---:|---:|---:|
@@ -68,6 +70,7 @@ Actual model usage counts newly incurred requests. Allocated usage adds the orig
 | 12 root-aware catalog | 88 | 270,016 | 106,882 | 3,106,688 | 3,483,586 | 0.227903328 |
 | 13 syntax context | 85 | 274,124 | 102,843 | 3,104,000 | 3,480,967 | 0.224272800 |
 | 14 unoptimized | 91 | 269,011 | 102,592 | 3,121,792 | 3,493,395 | 0.222544452 |
+| 15 low writers | 86 | 281,683 | 303,703 | 3,093,120 | 3,678,506 | 0.467507220 |
 
 Phase totals below are actual seconds. Query includes deterministic catalog generation. Phase sums exclude initialization and process overhead; elapsed totals use process wall time.
 
@@ -85,6 +88,7 @@ Phase totals below are actual seconds. Query includes deterministic catalog gene
 | 12 root-aware catalog | 0.000 | 99.741 | 0.000 | 0.006 | 50.885 | 95.044 | 246.396 | 657.783 |
 | 13 syntax context | 0.000 | 0.000 | 0.000 | 0.003 | 40.485 | 29.112 | 70.315 | 581.443 |
 | 14 unoptimized | 0.000 | 0.000 | 0.000 | 0.001 | 43.286 | 95.100 | 139.101 | 650.229 |
+| 15 low writers | 0.000 | 0.000 | 0.000 | 0.003 | 724.695 | 100.682 | 826.099 | 1337.227 |
 
 04–06 each allocate 612.420656s of original owner/query planning. Run 07 allocates 299.548442s of original owner work and incurs 79.310576s of fresh query/context work, including 0.128773s of catalog generation. Its allocated planning is 378.859018s; allocated elapsed is 419.725242s. No later Sol review or repair occurred after writers started.
 
@@ -190,6 +194,22 @@ Application completion and full delivery were each 1/3 in both runs. Handoff's d
 
 Actual model cost equals receipt charges for these native DeepSeek-only replays: $0.039505596 in 13 and $0.037777248 in 14. Run 13 used input/output/cache-read tokens 56,029/18,820/18,816, totaling 93,665 across 15 calls. Run 14 used 50,916/18,569/36,608, totaling 106,093 across 21 calls. Cache-write tokens are zero. Allocated totals add original 11 owner plus 12 query/context planning once, excluding donor writing/checks: 581.443141 seconds, 85 calls, 3,480,967 tokens and $0.224272800 normalized for 13; 650.229192 seconds, 91 calls, 3,493,395 tokens and $0.222544452 for 14. The roughly 64-second external handoff failures in 12 and 14 remain fully included; neither timed out.
 
-Budget snapshot at 2026-10-17T00:45:22.715999+00:00: 306 settled entries, zero holds, $2.281066896 settled exposure against $50. Trial model receipts total $2.280807896; trial Jev routing adds $0.000169000 and another settled Jev entry $0.000090000. The archived prior ledger is excluded. Normalized model cost for 03–14 is $0.771931680, or $0.772100680 including trial Jev. Normalized tariffs and settled exposure remain distinct; allocated donor charges must not be summed as new campaign spend.
+Run 15 froze `7ff598e` and replayed exact 12 raw plans, briefs and deterministic dispatched plans with native DeepSeek writer reasoning `low`. The execution modules and writer prompt/engine matched 13; replay orchestration/reporting changed to retain the inherited `off` owner selector independently of the current writer. A local provider-boundary capture verified that `low` enables thinking with low reasoning effort and `off` disables it. Synthetic capture bounds are not trial limits: every actual task retained 32,000 output tokens, 300 seconds per call, 1,200 seconds per cell, 96 total calls and 300 seconds for grading.
 
-The next work is offline mechanical replacement/compose diagnosis, preserving frozen plans, source, briefs, candidates and all observed failures. No additional trial or repeat has been run. A later exact-freeze/input repeat would measure variability, not establish downstream correctness by itself. The study remains incomplete: no measured configuration completed application across all three cases or delivered all three, and no quality-preserving win over the historical Sol controls is established.
+15 calibration applied 2/2 operations and passed all checks, but writing took 27.275 seconds versus 3.518 in 13. Handoff applied 11/11 operations on exactly 11 writer calls, with no retry, length stop or transport error. Writing took 329.886 seconds. Base visible checks passed; generated-candidate and external checks failed. The first candidate failure was `wave handoff: step 13 owner prompt lists accepted step 1 despite eleven newer unrelated runs`: the generated fixture's steps 1–3 omitted `requires`/`writes`, causing `dependency-graph-invalid`. External checks failed after 64.209 seconds without timeout. This is completed application, not delivery.
+
+Extraction created `wave-lifecycle.mjs`, then the runtime rewire's first attempt failed `Range anchor must be unique: pi/extensions/spec-runtime/runtime.mjs`. Its one application retry ended `Model stopped: length: ` after 179.899 seconds with 31,999 output tokens, all marked as reasoning tokens by receipt metadata. No fourth call ran. Module creation remains applied; rewire did not. Existing-runtime visible checks passed, no candidate test was selected, and external acceptance failed because runtime.mjs still exceeded 1,550 lines. No observed behavioral assertion was fed to any writer.
+
+| Run 15 case | Applied operations | Writer calls | Writing s | Checks s | Output tokens | Reasoning subset | Length stops | Full delivery |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| hard-context-calibration | 2/2 | 2 | 27.275 | 0.255 | 10,400 | 9,202 | 0 | pass |
+| hard-dependency-handoff | 11/11 | 11 | 329.886 | 71.747 | 140,644 | 125,478 | 0 | fail |
+| hard-lifecycle-extract | 1/2 | 3 | 367.534 | 28.681 | 68,636 | 67,142 | 1 | fail |
+
+15 application completion was 2/3 and full delivery 1/3. Actual elapsed was 826.098944 seconds, with 16 native low-reasoning writer calls, 291,204 tokens and $0.282740016 normalized/receipt cost. Input/output/cache-read tokens were 63,588/219,680/7,936; cache writes were zero. Reasoning metadata reports 201,822 tokens as a subset of output; it is never added again to tokens or cost. Allocation adds only inherited owner/query/context work: 1,337.226675 seconds, 86 calls, 3,678,506 tokens and $0.467507220 normalized. No new owner, Sol query or Jev call occurred. All request/receipt identities, roles, frozen plan/brief hashes and source provenance passed. Rebuilding 03–14 preserved all prior application/outcome/accounting/phase measurements.
+
+Low reasoning completed handoff application in this observation, while calibration became slower and extraction still failed. These outcomes do not establish a reliable suite-wide configuration, a grouping winner, or a quality-preserving win over historical Sol controls. No measured configuration completed application or delivery across all three cases.
+
+Budget checkpoint after 15 and before 16: 322 settled entries, zero holds, $2.563806912 settled exposure against $50. Trial model receipts total $2.563547912; trial Jev adds $0.000169000 and another settled Jev entry $0.000090000. The prior archived ledger is excluded. Normalized model cost for 03–15 is $1.054671696, or $1.054840696 with trial Jev. This checkpoint excludes the currently running 16; allocated donor charges are not new campaign spend.
+
+Run 16 is running separately under freeze `1f7e427`: primary writers use `off`, and only the existing single application retry may use `low`. It reuses the same 12 plans/briefs, adds no owner/query/Jev call and supplies no behavioral feedback. Its results are pending and excluded from these published measurements. No additional trial or automatic repeat has started. The study remains incomplete.

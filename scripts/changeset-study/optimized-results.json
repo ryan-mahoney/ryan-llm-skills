@@ -46,6 +46,8 @@
   "runs": [
     {
       "run": "03-owner-query-writer",
+      "editor_selector": "deepseek/deepseek-flash:off",
+      "writer_recovery_selector": null,
       "optimization": "none",
       "query_mode": "discovery",
       "plans_from": null,
@@ -127,6 +129,13 @@
           "optimization": "none",
           "query_mode": "discovery",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "53a7b4559f4db02a586dda721ec592e6bf4a3e90f8f671b69a50f92621536b49",
           "application_complete": false,
           "visible_accepted": false,
@@ -179,6 +188,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -585,6 +598,13 @@
           "optimization": "none",
           "query_mode": "discovery",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "d979407d0e1fdf935a7c2b994c98c634b5f11a8e044d12a307ca468880b0fb30",
           "application_complete": false,
           "visible_accepted": true,
@@ -637,6 +657,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -1031,6 +1055,13 @@
           "optimization": "none",
           "query_mode": "discovery",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "c6365120c768dec61e14fed5c2adc988444879b14063cb06ca72aafab59a71cb",
           "application_complete": false,
           "visible_accepted": true,
@@ -1083,6 +1114,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -1465,6 +1500,8 @@
     },
     {
       "run": "04-corrected-unoptimized",
+      "editor_selector": "deepseek/deepseek-flash:off",
+      "writer_recovery_selector": null,
       "optimization": "none",
       "query_mode": "discovery",
       "plans_from": "03-owner-query-writer",
@@ -1546,6 +1583,13 @@
           "optimization": "none",
           "query_mode": "discovery",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "53a7b4559f4db02a586dda721ec592e6bf4a3e90f8f671b69a50f92621536b49",
           "application_complete": true,
           "visible_accepted": false,
@@ -1598,6 +1642,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -2039,6 +2087,13 @@
           "optimization": "none",
           "query_mode": "discovery",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "d979407d0e1fdf935a7c2b994c98c634b5f11a8e044d12a307ca468880b0fb30",
           "application_complete": false,
           "visible_accepted": false,
@@ -2091,6 +2146,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -2532,6 +2591,13 @@
           "optimization": "none",
           "query_mode": "discovery",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "c6365120c768dec61e14fed5c2adc988444879b14063cb06ca72aafab59a71cb",
           "application_complete": false,
           "visible_accepted": true,
@@ -2584,6 +2650,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -3013,6 +3083,8 @@
     },
     {
       "run": "05-deterministic",
+      "editor_selector": "deepseek/deepseek-flash:off",
+      "writer_recovery_selector": null,
       "optimization": "deterministic",
       "query_mode": "discovery",
       "plans_from": "03-owner-query-writer",
@@ -3094,6 +3166,13 @@
           "optimization": "deterministic",
           "query_mode": "discovery",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "53a7b4559f4db02a586dda721ec592e6bf4a3e90f8f671b69a50f92621536b49",
           "application_complete": true,
           "visible_accepted": true,
@@ -3146,6 +3225,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -3651,6 +3734,13 @@
           "optimization": "deterministic",
           "query_mode": "discovery",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "d979407d0e1fdf935a7c2b994c98c634b5f11a8e044d12a307ca468880b0fb30",
           "application_complete": false,
           "visible_accepted": false,
@@ -3703,6 +3793,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -4200,6 +4294,13 @@
           "optimization": "deterministic",
           "query_mode": "discovery",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "c6365120c768dec61e14fed5c2adc988444879b14063cb06ca72aafab59a71cb",
           "application_complete": false,
           "visible_accepted": true,
@@ -4252,6 +4353,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -4720,6 +4825,8 @@
     },
     {
       "run": "06-contextual",
+      "editor_selector": "deepseek/deepseek-flash:off",
+      "writer_recovery_selector": null,
       "optimization": "contextual",
       "query_mode": "discovery",
       "plans_from": "03-owner-query-writer",
@@ -4801,6 +4908,13 @@
           "optimization": "contextual",
           "query_mode": "discovery",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "53a7b4559f4db02a586dda721ec592e6bf4a3e90f8f671b69a50f92621536b49",
           "application_complete": true,
           "visible_accepted": false,
@@ -4853,6 +4967,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -5361,6 +5479,13 @@
           "optimization": "contextual",
           "query_mode": "discovery",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "d979407d0e1fdf935a7c2b994c98c634b5f11a8e044d12a307ca468880b0fb30",
           "application_complete": false,
           "visible_accepted": true,
@@ -5413,6 +5538,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -5913,6 +6042,13 @@
           "optimization": "contextual",
           "query_mode": "discovery",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "c6365120c768dec61e14fed5c2adc988444879b14063cb06ca72aafab59a71cb",
           "application_complete": false,
           "visible_accepted": true,
@@ -5965,6 +6101,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -6433,6 +6573,8 @@
     },
     {
       "run": "07-catalog-deterministic",
+      "editor_selector": "deepseek/deepseek-flash:off",
+      "writer_recovery_selector": null,
       "optimization": "deterministic",
       "query_mode": "catalog",
       "plans_from": null,
@@ -6517,6 +6659,13 @@
           "optimization": "deterministic",
           "query_mode": "catalog",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "53a7b4559f4db02a586dda721ec592e6bf4a3e90f8f671b69a50f92621536b49",
           "application_complete": true,
           "visible_accepted": false,
@@ -6569,6 +6718,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -7059,6 +7212,13 @@
           "optimization": "deterministic",
           "query_mode": "catalog",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "d979407d0e1fdf935a7c2b994c98c634b5f11a8e044d12a307ca468880b0fb30",
           "application_complete": false,
           "visible_accepted": true,
@@ -7111,6 +7271,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -7554,6 +7718,13 @@
           "optimization": "deterministic",
           "query_mode": "catalog",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "c6365120c768dec61e14fed5c2adc988444879b14063cb06ca72aafab59a71cb",
           "application_complete": false,
           "visible_accepted": true,
@@ -7606,6 +7777,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -8034,6 +8209,8 @@
     },
     {
       "run": "08-richer-catalog-deterministic",
+      "editor_selector": "deepseek/deepseek-flash:off",
+      "writer_recovery_selector": null,
       "optimization": "deterministic",
       "query_mode": "catalog",
       "plans_from": null,
@@ -8118,6 +8295,13 @@
           "optimization": "deterministic",
           "query_mode": "catalog",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "53a7b4559f4db02a586dda721ec592e6bf4a3e90f8f671b69a50f92621536b49",
           "application_complete": true,
           "visible_accepted": false,
@@ -8170,6 +8354,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -8655,6 +8843,13 @@
           "optimization": "deterministic",
           "query_mode": "catalog",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "d979407d0e1fdf935a7c2b994c98c634b5f11a8e044d12a307ca468880b0fb30",
           "application_complete": false,
           "visible_accepted": true,
@@ -8707,6 +8902,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -9150,6 +9349,13 @@
           "optimization": "deterministic",
           "query_mode": "catalog",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "c6365120c768dec61e14fed5c2adc988444879b14063cb06ca72aafab59a71cb",
           "application_complete": false,
           "visible_accepted": true,
@@ -9202,6 +9408,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -9630,6 +9840,8 @@
     },
     {
       "run": "09-catalog-lookup-deterministic",
+      "editor_selector": "deepseek/deepseek-flash:off",
+      "writer_recovery_selector": null,
       "optimization": "deterministic",
       "query_mode": "catalog-lookup",
       "plans_from": null,
@@ -9714,6 +9926,13 @@
           "optimization": "deterministic",
           "query_mode": "catalog-lookup",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "53a7b4559f4db02a586dda721ec592e6bf4a3e90f8f671b69a50f92621536b49",
           "application_complete": false,
           "visible_accepted": true,
@@ -9766,6 +9985,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -10297,6 +10520,13 @@
           "optimization": "deterministic",
           "query_mode": "catalog-lookup",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "d979407d0e1fdf935a7c2b994c98c634b5f11a8e044d12a307ca468880b0fb30",
           "application_complete": true,
           "visible_accepted": false,
@@ -10349,6 +10579,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -11011,6 +11245,13 @@
           "optimization": "deterministic",
           "query_mode": "catalog-lookup",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "c6365120c768dec61e14fed5c2adc988444879b14063cb06ca72aafab59a71cb",
           "application_complete": true,
           "visible_accepted": false,
@@ -11063,6 +11304,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -11546,6 +11791,8 @@
     },
     {
       "run": "10-bounded-query-recovery",
+      "editor_selector": "deepseek/deepseek-flash:off",
+      "writer_recovery_selector": null,
       "optimization": "deterministic",
       "query_mode": "catalog-lookup",
       "plans_from": null,
@@ -11662,6 +11909,13 @@
           "optimization": "deterministic",
           "query_mode": "catalog-lookup",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "53a7b4559f4db02a586dda721ec592e6bf4a3e90f8f671b69a50f92621536b49",
           "application_complete": true,
           "visible_accepted": true,
@@ -11714,6 +11968,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -12359,6 +12617,13 @@
           "optimization": "deterministic",
           "query_mode": "catalog-lookup",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "d979407d0e1fdf935a7c2b994c98c634b5f11a8e044d12a307ca468880b0fb30",
           "application_complete": false,
           "visible_accepted": true,
@@ -12411,6 +12676,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -13018,6 +13287,13 @@
           "optimization": "deterministic",
           "query_mode": "catalog-lookup",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "c6365120c768dec61e14fed5c2adc988444879b14063cb06ca72aafab59a71cb",
           "application_complete": true,
           "visible_accepted": false,
@@ -13070,6 +13346,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -13523,6 +13803,8 @@
     },
     {
       "run": "11-fresh-owner-briefs",
+      "editor_selector": "deepseek/deepseek-flash:off",
+      "writer_recovery_selector": null,
       "optimization": "deterministic",
       "query_mode": "catalog-lookup",
       "plans_from": null,
@@ -13639,6 +13921,13 @@
           "optimization": "deterministic",
           "query_mode": "catalog-lookup",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "53a7b4559f4db02a586dda721ec592e6bf4a3e90f8f671b69a50f92621536b49",
           "application_complete": true,
           "visible_accepted": true,
@@ -13691,6 +13980,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -14186,6 +14479,13 @@
           "optimization": "deterministic",
           "query_mode": "catalog-lookup",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "d979407d0e1fdf935a7c2b994c98c634b5f11a8e044d12a307ca468880b0fb30",
           "application_complete": false,
           "visible_accepted": true,
@@ -14238,6 +14538,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -14623,6 +14927,13 @@
           "optimization": "deterministic",
           "query_mode": "catalog-lookup",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "c6365120c768dec61e14fed5c2adc988444879b14063cb06ca72aafab59a71cb",
           "application_complete": false,
           "visible_accepted": true,
@@ -14675,6 +14986,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -15048,6 +15363,8 @@
     },
     {
       "run": "12-root-aware-catalog",
+      "editor_selector": "deepseek/deepseek-flash:off",
+      "writer_recovery_selector": null,
       "optimization": "deterministic",
       "query_mode": "catalog-lookup",
       "plans_from": null,
@@ -15132,6 +15449,13 @@
           "optimization": "deterministic",
           "query_mode": "catalog-lookup",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "53a7b4559f4db02a586dda721ec592e6bf4a3e90f8f671b69a50f92621536b49",
           "application_complete": true,
           "visible_accepted": true,
@@ -15184,6 +15508,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -15723,6 +16051,13 @@
           "optimization": "deterministic",
           "query_mode": "catalog-lookup",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "d979407d0e1fdf935a7c2b994c98c634b5f11a8e044d12a307ca468880b0fb30",
           "application_complete": true,
           "visible_accepted": false,
@@ -15775,6 +16110,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -16384,6 +16723,13 @@
           "optimization": "deterministic",
           "query_mode": "catalog-lookup",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "c6365120c768dec61e14fed5c2adc988444879b14063cb06ca72aafab59a71cb",
           "application_complete": false,
           "visible_accepted": true,
@@ -16436,6 +16782,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -16889,6 +17239,8 @@
     },
     {
       "run": "13-syntax-context",
+      "editor_selector": "deepseek/deepseek-flash:off",
+      "writer_recovery_selector": null,
       "optimization": "deterministic",
       "query_mode": "catalog-lookup",
       "plans_from": "12-root-aware-catalog",
@@ -16970,6 +17322,13 @@
           "optimization": "deterministic",
           "query_mode": "catalog-lookup",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "53a7b4559f4db02a586dda721ec592e6bf4a3e90f8f671b69a50f92621536b49",
           "application_complete": true,
           "visible_accepted": true,
@@ -17022,6 +17381,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -17523,6 +17886,13 @@
           "optimization": "deterministic",
           "query_mode": "catalog-lookup",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "d979407d0e1fdf935a7c2b994c98c634b5f11a8e044d12a307ca468880b0fb30",
           "application_complete": false,
           "visible_accepted": false,
@@ -17575,6 +17945,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -18100,6 +18474,13 @@
           "optimization": "deterministic",
           "query_mode": "catalog-lookup",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "c6365120c768dec61e14fed5c2adc988444879b14063cb06ca72aafab59a71cb",
           "application_complete": false,
           "visible_accepted": true,
@@ -18152,6 +18533,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -18632,6 +19017,8 @@
     },
     {
       "run": "14-unoptimized-syntax-context",
+      "editor_selector": "deepseek/deepseek-flash:off",
+      "writer_recovery_selector": null,
       "optimization": "none",
       "query_mode": "catalog-lookup",
       "plans_from": "12-root-aware-catalog",
@@ -18713,6 +19100,13 @@
           "optimization": "none",
           "query_mode": "catalog-lookup",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "53a7b4559f4db02a586dda721ec592e6bf4a3e90f8f671b69a50f92621536b49",
           "application_complete": true,
           "visible_accepted": true,
@@ -18765,6 +19159,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -19257,6 +19655,13 @@
           "optimization": "none",
           "query_mode": "catalog-lookup",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "d979407d0e1fdf935a7c2b994c98c634b5f11a8e044d12a307ca468880b0fb30",
           "application_complete": false,
           "visible_accepted": false,
@@ -19309,6 +19714,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -19801,6 +20210,13 @@
           "optimization": "none",
           "query_mode": "catalog-lookup",
           "editor_selector": "deepseek/deepseek-flash:off",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
           "task_hash": "c6365120c768dec61e14fed5c2adc988444879b14063cb06ca72aafab59a71cb",
           "application_complete": false,
           "visible_accepted": true,
@@ -19853,6 +20269,10 @@
             },
             {
               "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
               "ok": true
             },
             {
@@ -20330,6 +20750,1784 @@
           }
         }
       ]
+    },
+    {
+      "run": "15-writer-low",
+      "editor_selector": "deepseek/deepseek-flash:low",
+      "writer_recovery_selector": null,
+      "optimization": "deterministic",
+      "query_mode": "catalog-lookup",
+      "plans_from": "12-root-aware-catalog",
+      "briefs_from": null,
+      "manifest_hash": "3955ee9984b42be1897aa466e7cdac17f83d5342b5677b2048c2a5a5908c0021",
+      "expected": 3,
+      "pending": [],
+      "application_complete": 2,
+      "integrity_valid": true,
+      "incurred_seconds": 826.0989437779999,
+      "allocated_seconds": 1337.226675397,
+      "writing_seconds": 724.6953178,
+      "writing_pipeline_seconds": 724.698410207,
+      "model_usage": {
+        "calls": 16,
+        "receipts": 16,
+        "accounting_complete": true,
+        "tokens": {
+          "input": 63588,
+          "output": 219680,
+          "cacheRead": 7936,
+          "cacheWrite": 0,
+          "totalTokens": 291204
+        },
+        "known_tokens": {
+          "input": 63588,
+          "output": 219680,
+          "cacheRead": 7936,
+          "cacheWrite": 0,
+          "totalTokens": 291204
+        },
+        "equivalent_usd": 0.282740016,
+        "reported_usd": 0.282740016,
+        "request_seconds": 1081.195
+      },
+      "allocated_model_usage": {
+        "calls": 86,
+        "receipts": 86,
+        "accounting_complete": true,
+        "tokens": {
+          "input": 281683,
+          "output": 303703,
+          "cacheRead": 3093120,
+          "cacheWrite": 0,
+          "totalTokens": 3678506
+        },
+        "known_tokens": {
+          "input": 281683,
+          "output": 303703,
+          "cacheRead": 3093120,
+          "cacheWrite": 0,
+          "totalTokens": 3678506
+        },
+        "equivalent_usd": 0.46750721999999995,
+        "reported_usd": 0.67230572,
+        "request_seconds": 1590.972
+      },
+      "incurred_equivalent_plus_jev_estimated_usd": 0.282740016,
+      "allocated_equivalent_plus_jev_estimated_usd": 0.46750721999999995,
+      "jev": {
+        "calls": 0,
+        "tokens": 0,
+        "estimated_usd": 0
+      },
+      "cells": [
+        {
+          "catalog_hash": null,
+          "catalog_evidence": null,
+          "source_requests_hash": null,
+          "source_lookup_hash": null,
+          "source_lookup_characters": null,
+          "source_lookup_evidence": null,
+          "query_format_recoveries": [],
+          "query_format_recovery_count": 0,
+          "query_call_count": 0,
+          "query_call_cap": 3,
+          "task": "hard-context-calibration",
+          "cell": "15-writer-low/000-hard-context-calibration",
+          "optimization": "deterministic",
+          "query_mode": "catalog-lookup",
+          "editor_selector": "deepseek/deepseek-flash:low",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
+          "task_hash": "53a7b4559f4db02a586dda721ec592e6bf4a3e90f8f671b69a50f92621536b49",
+          "application_complete": true,
+          "visible_accepted": true,
+          "candidate_tests": {
+            "count": 1,
+            "failed": 0
+          },
+          "base_visible_accepted": true,
+          "external_accepted": true,
+          "hidden_pass": true,
+          "error": null,
+          "downstream_failures": {
+            "visible": false,
+            "candidate": false,
+            "external": false
+          },
+          "integrity_valid": true,
+          "validation": [
+            {
+              "check": "candidate hash",
+              "ok": true
+            },
+            {
+              "check": "result roles match manifest",
+              "ok": true
+            },
+            {
+              "check": "result optimization matches manifest",
+              "ok": true
+            },
+            {
+              "check": "result query mode matches manifest",
+              "ok": true
+            },
+            {
+              "check": "implementation brief hash",
+              "ok": true
+            },
+            {
+              "check": "raw and dispatched plans retained",
+              "ok": true
+            },
+            {
+              "check": "dispatched plan hash",
+              "ok": true
+            },
+            {
+              "check": "request and receipt identities",
+              "ok": true
+            },
+            {
+              "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
+              "ok": true
+            },
+            {
+              "check": "DeepSeek owner, Sol query, DeepSeek writers; no planning after writers",
+              "ok": true
+            },
+            {
+              "check": "catalog-lookup planning call cap and stages",
+              "ok": true
+            },
+            {
+              "check": "catalog-lookup bounded format recovery metadata",
+              "ok": true
+            },
+            {
+              "check": "manifest planning source matches cell",
+              "ok": true
+            },
+            {
+              "check": "job and result planning source match",
+              "ok": true
+            },
+            {
+              "check": "recorded model calls match requests",
+              "ok": true
+            },
+            {
+              "check": "safe planning source artifact name",
+              "ok": true
+            },
+            {
+              "check": "planning source completed",
+              "ok": true
+            },
+            {
+              "check": "shared selected planning artifact hash",
+              "ok": true
+            },
+            {
+              "check": "planning source result hash",
+              "ok": true
+            },
+            {
+              "check": "planning source provider routing",
+              "ok": true
+            },
+            {
+              "check": "planning source allocated planning available",
+              "ok": true
+            },
+            {
+              "check": "shared task and frozen brief",
+              "ok": true
+            },
+            {
+              "check": "replay incurs no owner/query calls",
+              "ok": true
+            },
+            {
+              "check": "manifest brief source matches cell",
+              "ok": true
+            },
+            {
+              "check": "job and result brief source match",
+              "ok": true
+            },
+            {
+              "check": "brief source completed",
+              "ok": true
+            },
+            {
+              "check": "brief source result hash",
+              "ok": true
+            },
+            {
+              "check": "shared brief bytes and recorded hashes",
+              "ok": true
+            },
+            {
+              "check": "brief source task hash",
+              "ok": true
+            },
+            {
+              "check": "brief source DeepSeek owner role",
+              "ok": true
+            },
+            {
+              "check": "shared brief incurs no owner calls",
+              "ok": true
+            },
+            {
+              "check": "plan and brief source agree",
+              "ok": true
+            }
+          ],
+          "provider_routing_valid": true,
+          "result_hash": "bb9a37b7f09eda88799860af0982ed05556d2e989d2f3134aea0972c7c457b0a",
+          "raw_plan_hash": "3967db25f7c90bfdb0ebf7118cf40f1df07a6af65a1af062b9100390adf96e34",
+          "plan_hash": "5255170149318024bedaba6617bc32d01a871ed5c0a9296d944c41a482d001f7",
+          "candidate_hash": "8a58a9525be664cf9b35d4f32fe2d08d8fae261e8b79b71d0a6f20db4967ad86",
+          "implementation_brief_hash": "09f086830115c40d14505e8885062af9a7ad875c40a29f7868229627ee3b5c7b",
+          "implementation_brief_valid": true,
+          "planning_artifacts": [
+            {
+              "name": "raw-plan.json",
+              "hash": "3967db25f7c90bfdb0ebf7118cf40f1df07a6af65a1af062b9100390adf96e34",
+              "kind": "raw-plan"
+            }
+          ],
+          "planning_origin": {
+            "kind": "reused-raw-plan",
+            "run": "12-root-aware-catalog",
+            "cell": "000-hard-context-calibration",
+            "artifact": "raw-plan.json",
+            "hash": "3967db25f7c90bfdb0ebf7118cf40f1df07a6af65a1af062b9100390adf96e34",
+            "donor_integrity_valid": true,
+            "donor_application_complete": true
+          },
+          "planning_source": {
+            "run": "12-root-aware-catalog",
+            "cell": "000-hard-context-calibration",
+            "plan_hash": "3967db25f7c90bfdb0ebf7118cf40f1df07a6af65a1af062b9100390adf96e34",
+            "plan_artifact": "raw-plan.json",
+            "result_hash": "514c105092aff541c74c5fae1e274c5ce6dd1960467108a415af3b7a5f2643e7"
+          },
+          "planning_source_valid": true,
+          "brief_source": {
+            "run": "12-root-aware-catalog",
+            "cell": "000-hard-context-calibration",
+            "brief_hash": "09f086830115c40d14505e8885062af9a7ad875c40a29f7868229627ee3b5c7b",
+            "result_hash": "514c105092aff541c74c5fae1e274c5ce6dd1960467108a415af3b7a5f2643e7"
+          },
+          "brief_source_valid": true,
+          "brief_origin": {
+            "kind": "reused-owner-brief",
+            "run": "12-root-aware-catalog",
+            "cell": "000-hard-context-calibration",
+            "hash": "09f086830115c40d14505e8885062af9a7ad875c40a29f7868229627ee3b5c7b",
+            "result_hash": "514c105092aff541c74c5fae1e274c5ce6dd1960467108a415af3b7a5f2643e7"
+          },
+          "reused_planning": true,
+          "borrowed_planning_scope": "owner-and-query",
+          "borrowed_planning": {
+            "seconds": 67.86733088300001,
+            "owner_seconds": 54.364332517,
+            "query_seconds": 13.502998366000002,
+            "query_context_seconds": 0.017961971000000007,
+            "usage": {
+              "calls": 9,
+              "receipts": 9,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 21079,
+                "output": 11038,
+                "cacheRead": 104320,
+                "cacheWrite": 0,
+                "totalTokens": 136437
+              },
+              "known_tokens": {
+                "input": 21079,
+                "output": 11038,
+                "cacheRead": 104320,
+                "cacheWrite": 0,
+                "totalTokens": 136437
+              },
+              "equivalent_usd": 0.020195219999999996,
+              "reported_usd": 0.038696919999999996,
+              "request_seconds": 67.474
+            }
+          },
+          "allocated_planning": {
+            "seconds": 67.86733088300001,
+            "owner_seconds": 54.364332517,
+            "query_seconds": 13.502998366000002,
+            "query_context_seconds": 0.017961971000000007,
+            "usage": {
+              "calls": 9,
+              "receipts": 9,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 21079,
+                "output": 11038,
+                "cacheRead": 104320,
+                "cacheWrite": 0,
+                "totalTokens": 136437
+              },
+              "known_tokens": {
+                "input": 21079,
+                "output": 11038,
+                "cacheRead": 104320,
+                "cacheWrite": 0,
+                "totalTokens": 136437
+              },
+              "equivalent_usd": 0.020195219999999996,
+              "reported_usd": 0.038696919999999996,
+              "request_seconds": 67.474
+            }
+          },
+          "allocated_owner": {
+            "seconds": 54.364332517,
+            "usage": {
+              "calls": 8,
+              "receipts": 8,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 15486,
+                "output": 10016,
+                "cacheRead": 104320,
+                "cacheWrite": 0,
+                "totalTokens": 129822
+              },
+              "known_tokens": {
+                "input": 15486,
+                "output": 10016,
+                "cacheRead": 104320,
+                "cacheWrite": 0,
+                "totalTokens": 129822
+              },
+              "equivalent_usd": 0.017290919999999998,
+              "reported_usd": 0.017290919999999998,
+              "request_seconds": 53.991
+            }
+          },
+          "owner_role_valid": true,
+          "incurred": {
+            "seconds": 27.724286653,
+            "model_usage": {
+              "calls": 2,
+              "receipts": 2,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 7474,
+                "output": 10400,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 17874
+              },
+              "known_tokens": {
+                "input": 7474,
+                "output": 10400,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 17874
+              },
+              "equivalent_usd": 0.014722199999999998,
+              "reported_usd": 0.014722199999999998,
+              "request_seconds": 48.427
+            },
+            "jev": {
+              "calls": 0,
+              "usage": null,
+              "input_tokens": null,
+              "output_tokens": null,
+              "tokens": 0,
+              "estimated_usd": 0,
+              "fallback": null,
+              "answer_ok": null
+            },
+            "equivalent_plus_jev_estimated_usd": 0.014722199999999998
+          },
+          "allocated": {
+            "seconds": 95.591617536,
+            "model_usage": {
+              "calls": 11,
+              "receipts": 11,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 28553,
+                "output": 21438,
+                "cacheRead": 104320,
+                "cacheWrite": 0,
+                "totalTokens": 154311
+              },
+              "known_tokens": {
+                "input": 28553,
+                "output": 21438,
+                "cacheRead": 104320,
+                "cacheWrite": 0,
+                "totalTokens": 154311
+              },
+              "equivalent_usd": 0.03491741999999999,
+              "reported_usd": 0.053419119999999994,
+              "request_seconds": 115.90100000000001
+            },
+            "equivalent_plus_jev_estimated_usd": 0.03491741999999999
+          },
+          "phase_seconds": {
+            "owner": 0,
+            "query": 0,
+            "routing": 0,
+            "optimization": 0.0005100520000000017,
+            "writing": 27.274700542999998,
+            "checks": 0.25466102299999693,
+            "other": 0.147874567
+          },
+          "query_context_seconds": 0,
+          "writing_pipeline_seconds": 27.275210594999997,
+          "model_usage_by_stage": {
+            "owner": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "query": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "routing": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "optimization": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "writing": {
+              "calls": 2,
+              "receipts": 2,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 7474,
+                "output": 10400,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 17874
+              },
+              "known_tokens": {
+                "input": 7474,
+                "output": 10400,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 17874
+              },
+              "equivalent_usd": 0.014722199999999998,
+              "reported_usd": 0.014722199999999998,
+              "request_seconds": 48.427
+            },
+            "checks": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "other": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            }
+          },
+          "allocated_phase_seconds": {
+            "owner": 54.364332517,
+            "query": 13.502998366000002,
+            "routing": 0,
+            "optimization": 0.0005100520000000017,
+            "writing": 27.274700542999998,
+            "checks": 0.25466102299999693,
+            "other": 0.147874567
+          },
+          "optimization_metrics": {
+            "before": {
+              "assignments": 3,
+              "dependency_depth": 2,
+              "context_selections": 3
+            },
+            "after": {
+              "assignments": 2,
+              "dependency_depth": 1,
+              "context_selections": 2
+            },
+            "changes": [
+              {
+                "kind": "merge",
+                "members": [
+                  "factor-calibration",
+                  "seed-session-calibration"
+                ],
+                "into": "factor-calibration"
+              }
+            ]
+          }
+        },
+        {
+          "catalog_hash": null,
+          "catalog_evidence": null,
+          "source_requests_hash": null,
+          "source_lookup_hash": null,
+          "source_lookup_characters": null,
+          "source_lookup_evidence": null,
+          "query_format_recoveries": [],
+          "query_format_recovery_count": 0,
+          "query_call_count": 0,
+          "query_call_cap": 3,
+          "task": "hard-dependency-handoff",
+          "cell": "15-writer-low/001-hard-dependency-handoff",
+          "optimization": "deterministic",
+          "query_mode": "catalog-lookup",
+          "editor_selector": "deepseek/deepseek-flash:low",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
+          "task_hash": "d979407d0e1fdf935a7c2b994c98c634b5f11a8e044d12a307ca468880b0fb30",
+          "application_complete": true,
+          "visible_accepted": false,
+          "candidate_tests": {
+            "count": 1,
+            "failed": 1
+          },
+          "base_visible_accepted": true,
+          "external_accepted": false,
+          "hidden_pass": false,
+          "error": null,
+          "downstream_failures": {
+            "visible": false,
+            "candidate": true,
+            "external": true
+          },
+          "integrity_valid": true,
+          "validation": [
+            {
+              "check": "candidate hash",
+              "ok": true
+            },
+            {
+              "check": "result roles match manifest",
+              "ok": true
+            },
+            {
+              "check": "result optimization matches manifest",
+              "ok": true
+            },
+            {
+              "check": "result query mode matches manifest",
+              "ok": true
+            },
+            {
+              "check": "implementation brief hash",
+              "ok": true
+            },
+            {
+              "check": "raw and dispatched plans retained",
+              "ok": true
+            },
+            {
+              "check": "dispatched plan hash",
+              "ok": true
+            },
+            {
+              "check": "request and receipt identities",
+              "ok": true
+            },
+            {
+              "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
+              "ok": true
+            },
+            {
+              "check": "DeepSeek owner, Sol query, DeepSeek writers; no planning after writers",
+              "ok": true
+            },
+            {
+              "check": "catalog-lookup planning call cap and stages",
+              "ok": true
+            },
+            {
+              "check": "catalog-lookup bounded format recovery metadata",
+              "ok": true
+            },
+            {
+              "check": "manifest planning source matches cell",
+              "ok": true
+            },
+            {
+              "check": "job and result planning source match",
+              "ok": true
+            },
+            {
+              "check": "recorded model calls match requests",
+              "ok": true
+            },
+            {
+              "check": "safe planning source artifact name",
+              "ok": true
+            },
+            {
+              "check": "planning source completed",
+              "ok": true
+            },
+            {
+              "check": "shared selected planning artifact hash",
+              "ok": true
+            },
+            {
+              "check": "planning source result hash",
+              "ok": true
+            },
+            {
+              "check": "planning source provider routing",
+              "ok": true
+            },
+            {
+              "check": "planning source allocated planning available",
+              "ok": true
+            },
+            {
+              "check": "shared task and frozen brief",
+              "ok": true
+            },
+            {
+              "check": "replay incurs no owner/query calls",
+              "ok": true
+            },
+            {
+              "check": "manifest brief source matches cell",
+              "ok": true
+            },
+            {
+              "check": "job and result brief source match",
+              "ok": true
+            },
+            {
+              "check": "brief source completed",
+              "ok": true
+            },
+            {
+              "check": "brief source result hash",
+              "ok": true
+            },
+            {
+              "check": "shared brief bytes and recorded hashes",
+              "ok": true
+            },
+            {
+              "check": "brief source task hash",
+              "ok": true
+            },
+            {
+              "check": "brief source DeepSeek owner role",
+              "ok": true
+            },
+            {
+              "check": "shared brief incurs no owner calls",
+              "ok": true
+            },
+            {
+              "check": "plan and brief source agree",
+              "ok": true
+            }
+          ],
+          "provider_routing_valid": true,
+          "result_hash": "443c1b8ddbb517acbf031e00d9a0baf4f297b833bc1799e039d4b1f66e6486ed",
+          "raw_plan_hash": "ba9ca32f452b763781d63207510982fc19d9e30996c6e6f3634746bfc1dd881c",
+          "plan_hash": "751b886783a794fc7797172dc78a17f55fd1fe829ad31c6476100d9dcfacdbd8",
+          "candidate_hash": "d9b31557ceb836f4f366ddbacc95b63255bd8537c2619b32bebe3d8055070433",
+          "implementation_brief_hash": "b61eb7a895f70a0d7dea6c10a6a7a0add410edde6af40b250846d92c450c0e78",
+          "implementation_brief_valid": true,
+          "planning_artifacts": [
+            {
+              "name": "raw-plan.json",
+              "hash": "ba9ca32f452b763781d63207510982fc19d9e30996c6e6f3634746bfc1dd881c",
+              "kind": "raw-plan"
+            }
+          ],
+          "planning_origin": {
+            "kind": "reused-raw-plan",
+            "run": "12-root-aware-catalog",
+            "cell": "001-hard-dependency-handoff",
+            "artifact": "raw-plan.json",
+            "hash": "ba9ca32f452b763781d63207510982fc19d9e30996c6e6f3634746bfc1dd881c",
+            "donor_integrity_valid": true,
+            "donor_application_complete": true
+          },
+          "planning_source": {
+            "run": "12-root-aware-catalog",
+            "cell": "001-hard-dependency-handoff",
+            "plan_hash": "ba9ca32f452b763781d63207510982fc19d9e30996c6e6f3634746bfc1dd881c",
+            "plan_artifact": "raw-plan.json",
+            "result_hash": "d7fdcdb040a7f5020f089e132a25736b5683093de3a4cb52df8c947589203951"
+          },
+          "planning_source_valid": true,
+          "brief_source": {
+            "run": "12-root-aware-catalog",
+            "cell": "001-hard-dependency-handoff",
+            "brief_hash": "b61eb7a895f70a0d7dea6c10a6a7a0add410edde6af40b250846d92c450c0e78",
+            "result_hash": "d7fdcdb040a7f5020f089e132a25736b5683093de3a4cb52df8c947589203951"
+          },
+          "brief_source_valid": true,
+          "brief_origin": {
+            "kind": "reused-owner-brief",
+            "run": "12-root-aware-catalog",
+            "cell": "001-hard-dependency-handoff",
+            "hash": "b61eb7a895f70a0d7dea6c10a6a7a0add410edde6af40b250846d92c450c0e78",
+            "result_hash": "d7fdcdb040a7f5020f089e132a25736b5683093de3a4cb52df8c947589203951"
+          },
+          "reused_planning": true,
+          "borrowed_planning_scope": "owner-and-query",
+          "borrowed_planning": {
+            "seconds": 268.302099158,
+            "owner_seconds": 205.218983733,
+            "query_seconds": 63.083115425,
+            "query_context_seconds": 0.10101538199999968,
+            "usage": {
+              "calls": 31,
+              "receipts": 31,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 121682,
+                "output": 44824,
+                "cacheRead": 1493632,
+                "cacheWrite": 0,
+                "totalTokens": 1660138
+              },
+              "known_tokens": {
+                "input": 121682,
+                "output": 44824,
+                "cacheRead": 1493632,
+                "cacheWrite": 0,
+                "totalTokens": 1660138
+              },
+              "equivalent_usd": 0.09925519199999999,
+              "reported_usd": 0.242093592,
+              "request_seconds": 267.832
+            }
+          },
+          "allocated_planning": {
+            "seconds": 268.302099158,
+            "owner_seconds": 205.218983733,
+            "query_seconds": 63.083115425,
+            "query_context_seconds": 0.10101538199999968,
+            "usage": {
+              "calls": 31,
+              "receipts": 31,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 121682,
+                "output": 44824,
+                "cacheRead": 1493632,
+                "cacheWrite": 0,
+                "totalTokens": 1660138
+              },
+              "known_tokens": {
+                "input": 121682,
+                "output": 44824,
+                "cacheRead": 1493632,
+                "cacheWrite": 0,
+                "totalTokens": 1660138
+              },
+              "equivalent_usd": 0.09925519199999999,
+              "reported_usd": 0.242093592,
+              "request_seconds": 267.832
+            }
+          },
+          "allocated_owner": {
+            "seconds": 205.218983733,
+            "usage": {
+              "calls": 29,
+              "receipts": 29,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 67010,
+                "output": 39154,
+                "cacheRead": 1493632,
+                "cacheWrite": 0,
+                "totalTokens": 1599796
+              },
+              "known_tokens": {
+                "input": 67010,
+                "output": 39154,
+                "cacheRead": 1493632,
+                "cacheWrite": 0,
+                "totalTokens": 1599796
+              },
+              "equivalent_usd": 0.076049592,
+              "reported_usd": 0.076049592,
+              "request_seconds": 204.855
+            }
+          },
+          "owner_role_valid": true,
+          "incurred": {
+            "seconds": 401.876527067,
+            "model_usage": {
+              "calls": 11,
+              "receipts": 11,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 42809,
+                "output": 140644,
+                "cacheRead": 1536,
+                "cacheWrite": 0,
+                "totalTokens": 184989
+              },
+              "known_tokens": {
+                "input": 42809,
+                "output": 140644,
+                "cacheRead": 1536,
+                "cacheWrite": 0,
+                "totalTokens": 184989
+              },
+              "equivalent_usd": 0.181624716,
+              "reported_usd": 0.181624716,
+              "request_seconds": 665.333
+            },
+            "jev": {
+              "calls": 0,
+              "usage": null,
+              "input_tokens": null,
+              "output_tokens": null,
+              "tokens": 0,
+              "estimated_usd": 0,
+              "fallback": null,
+              "answer_ok": null
+            },
+            "equivalent_plus_jev_estimated_usd": 0.181624716
+          },
+          "allocated": {
+            "seconds": 670.178626225,
+            "model_usage": {
+              "calls": 42,
+              "receipts": 42,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 164491,
+                "output": 185468,
+                "cacheRead": 1495168,
+                "cacheWrite": 0,
+                "totalTokens": 1845127
+              },
+              "known_tokens": {
+                "input": 164491,
+                "output": 185468,
+                "cacheRead": 1495168,
+                "cacheWrite": 0,
+                "totalTokens": 1845127
+              },
+              "equivalent_usd": 0.28087990799999996,
+              "reported_usd": 0.423718308,
+              "request_seconds": 933.165
+            },
+            "equivalent_plus_jev_estimated_usd": 0.28087990799999996
+          },
+          "phase_seconds": {
+            "owner": 0,
+            "query": 0,
+            "routing": 0,
+            "optimization": 0.002026395999999977,
+            "writing": 329.886308525,
+            "checks": 71.74650771200005,
+            "other": 0.138768033
+          },
+          "query_context_seconds": 0,
+          "writing_pipeline_seconds": 329.888334921,
+          "model_usage_by_stage": {
+            "owner": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "query": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "routing": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "optimization": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "writing": {
+              "calls": 11,
+              "receipts": 11,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 42809,
+                "output": 140644,
+                "cacheRead": 1536,
+                "cacheWrite": 0,
+                "totalTokens": 184989
+              },
+              "known_tokens": {
+                "input": 42809,
+                "output": 140644,
+                "cacheRead": 1536,
+                "cacheWrite": 0,
+                "totalTokens": 184989
+              },
+              "equivalent_usd": 0.181624716,
+              "reported_usd": 0.181624716,
+              "request_seconds": 665.333
+            },
+            "checks": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "other": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            }
+          },
+          "allocated_phase_seconds": {
+            "owner": 205.218983733,
+            "query": 63.083115425,
+            "routing": 0,
+            "optimization": 0.002026395999999977,
+            "writing": 329.886308525,
+            "checks": 71.74650771200005,
+            "other": 0.138768033
+          },
+          "optimization_metrics": {
+            "before": {
+              "assignments": 15,
+              "dependency_depth": 6,
+              "context_selections": 26
+            },
+            "after": {
+              "assignments": 11,
+              "dependency_depth": 5,
+              "context_selections": 20
+            },
+            "changes": [
+              {
+                "kind": "merge",
+                "members": [
+                  "wire-dependencies",
+                  "editor-outcomes"
+                ],
+                "into": "wire-dependencies"
+              },
+              {
+                "kind": "merge",
+                "members": [
+                  "test-helpers",
+                  "test-owner-handoff"
+                ],
+                "into": "test-helpers"
+              },
+              {
+                "kind": "merge",
+                "members": [
+                  "test-detail-budget",
+                  "test-incomplete-editor"
+                ],
+                "into": "test-detail-budget"
+              },
+              {
+                "kind": "merge",
+                "members": [
+                  "test-wave-authority",
+                  "test-profile-guidance"
+                ],
+                "into": "test-wave-authority"
+              }
+            ]
+          }
+        },
+        {
+          "catalog_hash": null,
+          "catalog_evidence": null,
+          "source_requests_hash": null,
+          "source_lookup_hash": null,
+          "source_lookup_characters": null,
+          "source_lookup_evidence": null,
+          "query_format_recoveries": [],
+          "query_format_recovery_count": 0,
+          "query_call_count": 0,
+          "query_call_cap": 3,
+          "task": "hard-lifecycle-extract",
+          "cell": "15-writer-low/002-hard-lifecycle-extract",
+          "optimization": "deterministic",
+          "query_mode": "catalog-lookup",
+          "editor_selector": "deepseek/deepseek-flash:low",
+          "writer_recovery_selector": null,
+          "writer_recovery_evidence": {
+            "selector": null,
+            "valid": true,
+            "attempts": null
+          },
+          "owner_selector": "deepseek/deepseek-flash:off",
+          "task_hash": "c6365120c768dec61e14fed5c2adc988444879b14063cb06ca72aafab59a71cb",
+          "application_complete": false,
+          "visible_accepted": true,
+          "candidate_tests": {
+            "count": 0,
+            "failed": 0
+          },
+          "base_visible_accepted": true,
+          "external_accepted": false,
+          "hidden_pass": false,
+          "error": null,
+          "downstream_failures": {
+            "visible": false,
+            "candidate": false,
+            "external": true
+          },
+          "integrity_valid": true,
+          "validation": [
+            {
+              "check": "candidate hash",
+              "ok": true
+            },
+            {
+              "check": "result roles match manifest",
+              "ok": true
+            },
+            {
+              "check": "result optimization matches manifest",
+              "ok": true
+            },
+            {
+              "check": "result query mode matches manifest",
+              "ok": true
+            },
+            {
+              "check": "implementation brief hash",
+              "ok": true
+            },
+            {
+              "check": "raw and dispatched plans retained",
+              "ok": true
+            },
+            {
+              "check": "dispatched plan hash",
+              "ok": true
+            },
+            {
+              "check": "request and receipt identities",
+              "ok": true
+            },
+            {
+              "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "writer recovery selector matches manifest, job and result",
+              "ok": true
+            },
+            {
+              "check": "DeepSeek owner, Sol query, DeepSeek writers; no planning after writers",
+              "ok": true
+            },
+            {
+              "check": "catalog-lookup planning call cap and stages",
+              "ok": true
+            },
+            {
+              "check": "catalog-lookup bounded format recovery metadata",
+              "ok": true
+            },
+            {
+              "check": "manifest planning source matches cell",
+              "ok": true
+            },
+            {
+              "check": "job and result planning source match",
+              "ok": true
+            },
+            {
+              "check": "recorded model calls match requests",
+              "ok": true
+            },
+            {
+              "check": "safe planning source artifact name",
+              "ok": true
+            },
+            {
+              "check": "planning source completed",
+              "ok": true
+            },
+            {
+              "check": "shared selected planning artifact hash",
+              "ok": true
+            },
+            {
+              "check": "planning source result hash",
+              "ok": true
+            },
+            {
+              "check": "planning source provider routing",
+              "ok": true
+            },
+            {
+              "check": "planning source allocated planning available",
+              "ok": true
+            },
+            {
+              "check": "shared task and frozen brief",
+              "ok": true
+            },
+            {
+              "check": "replay incurs no owner/query calls",
+              "ok": true
+            },
+            {
+              "check": "manifest brief source matches cell",
+              "ok": true
+            },
+            {
+              "check": "job and result brief source match",
+              "ok": true
+            },
+            {
+              "check": "brief source completed",
+              "ok": true
+            },
+            {
+              "check": "brief source result hash",
+              "ok": true
+            },
+            {
+              "check": "shared brief bytes and recorded hashes",
+              "ok": true
+            },
+            {
+              "check": "brief source task hash",
+              "ok": true
+            },
+            {
+              "check": "brief source DeepSeek owner role",
+              "ok": true
+            },
+            {
+              "check": "shared brief incurs no owner calls",
+              "ok": true
+            },
+            {
+              "check": "plan and brief source agree",
+              "ok": true
+            }
+          ],
+          "provider_routing_valid": true,
+          "result_hash": "314cab97e259d6b34887d5f714ebf27dae2831f81f0e8e1a273537089d1d35c3",
+          "raw_plan_hash": "9fc4c77f53498bf5c285826ecb10a4de52ba39441a7789472b6023003b6e4096",
+          "plan_hash": "9fc4c77f53498bf5c285826ecb10a4de52ba39441a7789472b6023003b6e4096",
+          "candidate_hash": "5c4a7f0d9016596a11a48a241f812104d3afbd5baec096112ae9d68fcf364a6c",
+          "implementation_brief_hash": "bb9ae3225735e2c8ed57ff0f272e57870aece98d1bf60953339b806784d7bd01",
+          "implementation_brief_valid": true,
+          "planning_artifacts": [
+            {
+              "name": "raw-plan.json",
+              "hash": "9fc4c77f53498bf5c285826ecb10a4de52ba39441a7789472b6023003b6e4096",
+              "kind": "raw-plan"
+            }
+          ],
+          "planning_origin": {
+            "kind": "reused-raw-plan",
+            "run": "12-root-aware-catalog",
+            "cell": "002-hard-lifecycle-extract",
+            "artifact": "raw-plan.json",
+            "hash": "9fc4c77f53498bf5c285826ecb10a4de52ba39441a7789472b6023003b6e4096",
+            "donor_integrity_valid": true,
+            "donor_application_complete": false
+          },
+          "planning_source": {
+            "run": "12-root-aware-catalog",
+            "cell": "002-hard-lifecycle-extract",
+            "plan_hash": "9fc4c77f53498bf5c285826ecb10a4de52ba39441a7789472b6023003b6e4096",
+            "plan_artifact": "raw-plan.json",
+            "result_hash": "fdc6cb9c67da9a293de017ca2383b2d646d2dca2f9e7658010d711483de5c2af"
+          },
+          "planning_source_valid": true,
+          "brief_source": {
+            "run": "12-root-aware-catalog",
+            "cell": "002-hard-lifecycle-extract",
+            "brief_hash": "bb9ae3225735e2c8ed57ff0f272e57870aece98d1bf60953339b806784d7bd01",
+            "result_hash": "fdc6cb9c67da9a293de017ca2383b2d646d2dca2f9e7658010d711483de5c2af"
+          },
+          "brief_source_valid": true,
+          "brief_origin": {
+            "kind": "reused-owner-brief",
+            "run": "12-root-aware-catalog",
+            "cell": "002-hard-lifecycle-extract",
+            "hash": "bb9ae3225735e2c8ed57ff0f272e57870aece98d1bf60953339b806784d7bd01",
+            "result_hash": "fdc6cb9c67da9a293de017ca2383b2d646d2dca2f9e7658010d711483de5c2af"
+          },
+          "reused_planning": true,
+          "borrowed_planning_scope": "owner-and-query",
+          "borrowed_planning": {
+            "seconds": 174.958301578,
+            "owner_seconds": 151.803633409,
+            "query_seconds": 23.154668169,
+            "query_context_seconds": 0.10955753800000002,
+            "usage": {
+              "calls": 30,
+              "receipts": 30,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 75334,
+                "output": 28161,
+                "cacheRead": 1487232,
+                "cacheWrite": 0,
+                "totalTokens": 1590727
+              },
+              "known_tokens": {
+                "input": 75334,
+                "output": 28161,
+                "cacheRead": 1487232,
+                "cacheWrite": 0,
+                "totalTokens": 1590727
+              },
+              "equivalent_usd": 0.06531679200000001,
+              "reported_usd": 0.108775192,
+              "request_seconds": 174.471
+            }
+          },
+          "allocated_planning": {
+            "seconds": 174.958301578,
+            "owner_seconds": 151.803633409,
+            "query_seconds": 23.154668169,
+            "query_context_seconds": 0.10955753800000002,
+            "usage": {
+              "calls": 30,
+              "receipts": 30,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 75334,
+                "output": 28161,
+                "cacheRead": 1487232,
+                "cacheWrite": 0,
+                "totalTokens": 1590727
+              },
+              "known_tokens": {
+                "input": 75334,
+                "output": 28161,
+                "cacheRead": 1487232,
+                "cacheWrite": 0,
+                "totalTokens": 1590727
+              },
+              "equivalent_usd": 0.06531679200000001,
+              "reported_usd": 0.108775192,
+              "request_seconds": 174.471
+            }
+          },
+          "allocated_owner": {
+            "seconds": 151.803633409,
+            "usage": {
+              "calls": 29,
+              "receipts": 29,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 57390,
+                "output": 26689,
+                "cacheRead": 1487232,
+                "cacheWrite": 0,
+                "totalTokens": 1571311
+              },
+              "known_tokens": {
+                "input": 57390,
+                "output": 26689,
+                "cacheRead": 1487232,
+                "cacheWrite": 0,
+                "totalTokens": 1571311
+              },
+              "equivalent_usd": 0.058167192000000006,
+              "reported_usd": 0.058167192000000006,
+              "request_seconds": 151.428
+            }
+          },
+          "owner_role_valid": true,
+          "incurred": {
+            "seconds": 396.49813005799996,
+            "model_usage": {
+              "calls": 3,
+              "receipts": 3,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 13305,
+                "output": 68636,
+                "cacheRead": 6400,
+                "cacheWrite": 0,
+                "totalTokens": 88341
+              },
+              "known_tokens": {
+                "input": 13305,
+                "output": 68636,
+                "cacheRead": 6400,
+                "cacheWrite": 0,
+                "totalTokens": 88341
+              },
+              "equivalent_usd": 0.0863931,
+              "reported_usd": 0.0863931,
+              "request_seconds": 367.435
+            },
+            "jev": {
+              "calls": 0,
+              "usage": null,
+              "input_tokens": null,
+              "output_tokens": null,
+              "tokens": 0,
+              "estimated_usd": 0,
+              "fallback": null,
+              "answer_ok": null
+            },
+            "equivalent_plus_jev_estimated_usd": 0.0863931
+          },
+          "allocated": {
+            "seconds": 571.4564316359999,
+            "model_usage": {
+              "calls": 33,
+              "receipts": 33,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 88639,
+                "output": 96797,
+                "cacheRead": 1493632,
+                "cacheWrite": 0,
+                "totalTokens": 1679068
+              },
+              "known_tokens": {
+                "input": 88639,
+                "output": 96797,
+                "cacheRead": 1493632,
+                "cacheWrite": 0,
+                "totalTokens": 1679068
+              },
+              "equivalent_usd": 0.151709892,
+              "reported_usd": 0.19516829200000002,
+              "request_seconds": 541.906
+            },
+            "equivalent_plus_jev_estimated_usd": 0.151709892
+          },
+          "phase_seconds": {
+            "owner": 0,
+            "query": 0,
+            "routing": 0,
+            "optimization": 0.0005559590000000014,
+            "writing": 367.534308732,
+            "checks": 28.681010149000038,
+            "other": 0.14034406399999996
+          },
+          "query_context_seconds": 0,
+          "writing_pipeline_seconds": 367.534864691,
+          "model_usage_by_stage": {
+            "owner": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "query": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "routing": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "optimization": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "writing": {
+              "calls": 3,
+              "receipts": 3,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 13305,
+                "output": 68636,
+                "cacheRead": 6400,
+                "cacheWrite": 0,
+                "totalTokens": 88341
+              },
+              "known_tokens": {
+                "input": 13305,
+                "output": 68636,
+                "cacheRead": 6400,
+                "cacheWrite": 0,
+                "totalTokens": 88341
+              },
+              "equivalent_usd": 0.0863931,
+              "reported_usd": 0.0863931,
+              "request_seconds": 367.435
+            },
+            "checks": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "other": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            }
+          },
+          "allocated_phase_seconds": {
+            "owner": 151.803633409,
+            "query": 23.154668169,
+            "routing": 0,
+            "optimization": 0.0005559590000000014,
+            "writing": 367.534308732,
+            "checks": 28.681010149000038,
+            "other": 0.14034406399999996
+          },
+          "optimization_metrics": {
+            "before": {
+              "assignments": 2,
+              "dependency_depth": 2,
+              "context_selections": 7
+            },
+            "after": {
+              "assignments": 2,
+              "dependency_depth": 2,
+              "context_selections": 7
+            },
+            "changes": []
+          }
+        }
+      ]
     }
   ],
   "ablations": [
@@ -20687,6 +22885,20 @@
             "candidate": false,
             "external": false
           }
+        },
+        {
+          "cell": "15-writer-low/000-hard-context-calibration",
+          "optimization": "deterministic",
+          "application_complete": true,
+          "writing_seconds": 27.274700542999998,
+          "writing_pipeline_seconds": 27.275210594999997,
+          "writer_calls": 2,
+          "writer_tokens": 17874,
+          "downstream_failures": {
+            "visible": false,
+            "candidate": false,
+            "external": false
+          }
         }
       ]
     },
@@ -20731,6 +22943,20 @@
           "writing_pipeline_seconds": 33.340397475,
           "writer_calls": 16,
           "writer_tokens": 80307,
+          "downstream_failures": {
+            "visible": false,
+            "candidate": true,
+            "external": true
+          }
+        },
+        {
+          "cell": "15-writer-low/001-hard-dependency-handoff",
+          "optimization": "deterministic",
+          "application_complete": true,
+          "writing_seconds": 329.886308525,
+          "writing_pipeline_seconds": 329.888334921,
+          "writer_calls": 11,
+          "writer_tokens": 184989,
           "downstream_failures": {
             "visible": false,
             "candidate": true,
@@ -20785,6 +23011,20 @@
             "candidate": false,
             "external": true
           }
+        },
+        {
+          "cell": "15-writer-low/002-hard-lifecycle-extract",
+          "optimization": "deterministic",
+          "application_complete": false,
+          "writing_seconds": 367.534308732,
+          "writing_pipeline_seconds": 367.534864691,
+          "writer_calls": 3,
+          "writer_tokens": 88341,
+          "downstream_failures": {
+            "visible": false,
+            "candidate": false,
+            "external": true
+          }
         }
       ]
     }
@@ -20795,7 +23035,7 @@
     "status": "pending matched application-complete configurations"
   },
   "publication_evidence": {
-    "observed_at": "2026-10-17T00:45:22.715999+00:00",
+    "observed_at": "2026-10-17T01:08:27.847882+00:00",
     "run_root_label": "dispatch-deepseek",
     "matched_runs": [
       "04-corrected-unoptimized",
@@ -20808,16 +23048,17 @@
     "deterministic_and_contextual_dispatched_plans_identical": true,
     "budget_snapshot": {
       "limit_usd": 50,
-      "settled_entries": 306,
+      "settled_entries": 322,
       "unsettled_entries": 0,
-      "settled_usd": 2.281066896,
-      "retained_exposure_usd": 2.281066896,
-      "reported_trial_model_usd": 2.280807896,
+      "settled_usd": 2.563806912,
+      "retained_exposure_usd": 2.563806912,
+      "reported_trial_model_usd": 2.563547912,
       "trial_jev_estimated_usd": 0.000169,
       "other_settled_usd": 9e-05,
-      "normalized_trial_model_usd": 0.77193168,
-      "normalized_plus_trial_jev_usd": 0.77210068,
-      "note": "Current reset ledger only. Settled exposure uses retained reservation charges; normalized Sol/DeepSeek costs use the report comparison tariff. Allocated planning is reused work and is not charged again."
+      "normalized_trial_model_usd": 1.054671696,
+      "normalized_plus_trial_jev_usd": 1.054840696,
+      "note": "Current reset ledger only. Settled exposure uses retained reservation charges; normalized Sol/DeepSeek costs use the report comparison tariff. Allocated planning is reused work and is not charged again.",
+      "scope": "Settled checkpoint after15, before16; excludes currently running16."
     },
     "catalog_08_correction": {
       "plan_artifact": "08-richer-catalog-deterministic/002-hard-lifecycle-extract/planning-attempt-0.json",
@@ -20831,7 +23072,12 @@
       "correction_request_transported": false
     },
     "unmeasured_followup": {
-      "state": "offline mechanical application diagnosis; no additional trial or repeat measured or authorized"
+      "run": "16-writer-recovery",
+      "state": "running; results excluded from publication",
+      "freeze": "1f7e427f74fc583bdd4ada89ed611aaf1a447496",
+      "writer_selector": "deepseek/deepseek-flash:off",
+      "writer_recovery_selector": "deepseek/deepseek-flash:low",
+      "scope": "Only the existing single application retry may change reasoning; no new owner/query/Jev or behavioral feedback."
     },
     "measured_lookup_bounds": {
       "runs": [
@@ -20908,6 +23154,27 @@
         1
       ],
       "limitations": "One observed pair with generation variability; no suite-wide grouping winner or delivery-quality win."
+    },
+    "writer_low_15": {
+      "freeze": "7ff598ecf7a076e9dc426f6527d5eef4880c7e82",
+      "plans_from": "12-root-aware-catalog",
+      "owner_selector": "deepseek/deepseek-flash:off",
+      "writer_selector": "deepseek/deepseek-flash:low",
+      "execution_modules_identical_to_13": true,
+      "application_complete": 2,
+      "delivered": 1,
+      "reasoning_tokens_subset_of_output": 201822,
+      "output_tokens": 219680,
+      "reasoning_double_counted": false,
+      "length_stops": 1,
+      "task_limits": {
+        "cell_ms": 1200000,
+        "model_calls": 96,
+        "max_output_tokens": 32000,
+        "call_ms": 300000,
+        "grade_ms": 300000
+      },
+      "legacy_03_14_measurements_unchanged": true
     }
   }
 }
