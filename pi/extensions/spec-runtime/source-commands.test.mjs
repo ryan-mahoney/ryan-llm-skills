@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { sourceCommand } from './source-commands.mjs';
@@ -20,6 +20,7 @@ test('Linux command boundary refuses source writes but allows declared build out
   try { assert.throws(() => execFileSync(denied.command, denied.args, { stdio: 'pipe', timeout: 10000 })); }
   finally { denied.cleanup(); }
   assert.equal(readFileSync(join(checkout, 'source.mjs'), 'utf8'), 'export const value = 1;\n');
+  assert.equal(existsSync(join(checkout, 'build')), false, 'Validate the ignored output before it exists');
   const allowed = sourceCommand(record, 'printf artifact > build/result.txt', { outputs: ['build'] });
   try { execFileSync(allowed.command, allowed.args, { stdio: 'pipe', timeout: 10000 }); }
   finally { allowed.cleanup(); }

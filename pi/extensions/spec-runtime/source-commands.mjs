@@ -45,6 +45,8 @@ export function sourceCommand(record, command, { outputs = [], gitWrite = false,
 }
 
 function gitIgnored(record, path) {
-  try { git(record, 'check-ignore', '--no-index', '--', path); return true; }
+  // Outputs are directories; a trailing slash also matches directory-only rules
+  // before mkdir creates the declared output (for example, `build/`).
+  try { git(record, 'check-ignore', '--no-index', '--', `${path}/`); return true; }
   catch (error) { if (error.status === 1) return false; throw error; }
 }
