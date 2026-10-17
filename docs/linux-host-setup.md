@@ -178,6 +178,141 @@ curl -fsS http://127.0.0.1:4319/api/request/speech   # expect state: ready
 If Sentinel already runs, restart it after setup with `systemctl --user restart spec-sentinel`.
 Reload the dashboard to refresh its speech availability.
 
+## Native resources and bubblewrap support
+
+Contained Linux waves need cgroup v2 controllers delegated to the user systemd
+manager and the unit properties this repository's systemd adapter uses. The runtime
+host command checks both, installs the owned policy and slice, and reports the
+admitted width:
+
+```bash
+node ~/.agents/scripts/spec-observe/cli.mjs runtime-host check
+node ~/.agents/scripts/spec-observe/cli.mjs runtime-host setup
+```
+
+`check` is read-only unless `--probe` is passed, and it exits nonzero on refusal.
+`setup` always runs the isolated user-service probe, verifies the user manager and
+refuses when a property is unsupported; re-running it with unchanged inputs
+rewrites nothing. The advanced policy inputs (`--lifecycle-memory-mib`,
+`--member-memory-max-mib`, `--lifecycle-tasks`, `--aggregate-tasks`) are optional.
+`--lifecycle-memory-mib` is the memory each member reserves for admission;
+`--member-memory-max-mib` (default 8192) is each member's `MemoryMax` crash guard and
+does not change the admitted width. The aggregate slice caps all members at the pool.
+Defaults, the automatic pool and the sizing examples are in
+[agent-resource-limits.md](agent-resource-limits.md).
+
+### Bubblewrap and overlay isolation
+
+Waves use an unprivileged bubblewrap overlay instead of writing to the project
+checkout directly. The host needs:
+
+- bubblewrap 0.11 or newer from the distribution package, built without setuid.
+  Earlier releases lack the overlay options, and a setuid binary changes the
+  privilege model.
+- Kernel OverlayFS usable from an unprivileged user namespace, with the retained
+  upper and work directories on one local filesystem.
+- On distributions that restrict user namespaces (for example Ubuntu 24.04 with
+  its AppArmor profile), the OS-provided unprivileged user-namespace profile. Do
+  not copy a binary from another machine, install a custom privileged helper, or
+  disable the global restriction; the remedy belongs to the distribution package
+  or profile.
+
+The probe runs on `setup` and on `check --probe`: it launches the fixed
+namespace-local overlay twice (copy-up and whiteout through the merged view, then a
+remount proving both survived phase exit) and reports the observed bubblewrap
+version and options, backing filesystem and kernel result. `check` without
+`--probe` stays read-only and leaves the capability explicitly unverified.
+
+Overlay mounts are namespace-local: the host mount table is unchanged and the
+merged view exists only inside the launch. A rename that crosses mounts can fail
+with EXDEV when lower and upper layers live on different mounts, so layers belong
+on one local filesystem. Builds and native tests that introspect the mount table,
+probe for writable layers or rename across mounts are capability-sensitive, and no
+universal support is claimed for them.
+
+A resource-policy refusal never falls back: the launch refuses. The only fallback
+is the explicitly reported bounded worktree route, and only when the isolated
+probe observes an enumerated overlay capability failure (absent bubblewrap, absent
+overlay options, denied user namespace, denied mount, failed kernel semantics,
+unsupported layer filesystem). Corruption, exhaustion, unknown kernel effects and
+indeterminate probe execution stay blocked.
+
+### Required native rehearsal before activation
+
+Before activation, the operator runs the real native rehearsal on the target host.
+It is required and is not evidence already passed. This guide does not run it, and
+nothing written here claims a rehearsal has passed. The procedure is exact; the
+observations it produces are the only evidence.
+
+Prerequisites for the rehearsal, all satisfied before the first command:
+
+- Intended host writers are quiesced. No other wave, spec run or owner/editor
+  process writes to the checkout or the runtime directory while the rehearsal
+  runs.
+- The checkout is at the current revision, its dependencies are materialized, and
+  Node >= 22.19 is first on `PATH` together with the intended `pi` executable.
+- The lifecycle resource limit is known and recorded before it is changed.
+
+Operator-authorized setup: with the host quiesced, run the lifecycle-memory
+command from the checkout root. It is an authorized host-setup step, not a probe,
+and this guide does not execute it:
+
+```
+node scripts/spec-observe/cli.mjs runtime-host setup --lifecycle-memory-mib 2048 --lifecycle-tasks 448
+```
+
+Record the `runtime-host check` output for the setup command and require its
+admission count to be at least 9 before continuing. A smaller admission count is a
+blocked rehearsal, not a pass.
+
+Then run the rehearsal from `~/.agents`:
+
+```
+SPEC_WAVES_LINUX_REHEARSAL=1 PI_WARDEN_ENABLED=1 node --test --test-name-pattern='^wave linux:' pi/extensions/spec-runtime/waves.linux.test.mjs
+```
+
+The rehearsal records actual observations:
+
+1. Run `runtime-host setup` and record its check output: user manager version,
+   utilities, delegated controllers, required unit properties, bubblewrap
+   version/options and the isolated probe result.
+2. Launch a real wave service and record the cgroup evidence: the unit's
+   `ControlGroup` and `InvocationID`, the memory, task, CPU and `RuntimeMaxSec`
+   properties it inherits from `spec-runtime.slice`, and the separate systemd-run
+   launcher versus `MainPID`.
+3. Prove the registration gate: the worker starts only after the unit and
+   `InvocationID` are registered, and a launch without registration cannot
+   proceed.
+4. Cancel a populated unit and show the cgroup drains; trigger an OOM kill and a
+   deadline timeout, and show each result is retained with its distinct reason
+   until a positive drain is observed.
+5. Clean up the rehearsal's units, gates and transient files, and record the
+   observed revision with the evidence artifact.
+
+What the rehearsal may do without further approval: install the live resource
+policy and reload the user daemon, as the explicit, bounded authority the operator
+granted for this collection. It may touch only its own units and its own
+`spec-runtime.slice` subtree, and it may seek a 256 MiB OOM only on those units.
+Its test timeouts are finite; the namespace mounts it exercises are its own.
+Retained backing state is kept when the outcome is unknown rather than being
+discarded. It does not use `sudo`, change security policy, install packages,
+reboot, publish anything or perform a real activation.
+
+The evidence artifact must open with a header recording the exact command run,
+the observed commit, whether the worktree was clean, and the observed Node, `pi`
+and host identity. Its TAP summary must read 9 pass, 0 fail, 0 skip, 0 todo with
+exit status 0.
+
+A fixture peak label is a fixture measurement: it is not representative of
+production memory use and must not be reported as production RAM. Synthetic
+kernel evidence carries `kernel_proof=false` and is not kernel proof. A pending
+result means the rehearsal has not met the deploy acceptance condition, and stays
+pending until the observation is made.
+
+After the last gate, restore the prior limit with
+`--lifecycle-memory-mib 3072 --lifecycle-tasks 512`, run `runtime-host check`
+again, and retain that receipt even if the rehearsal gate failed.
+
 ## 5. Repositories
 
 **[Host]** Clone each repository a workspace kit lists into `~/Documents/<repository>`. Kits

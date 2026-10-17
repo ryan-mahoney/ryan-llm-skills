@@ -9,7 +9,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFile, fork, spawnSync } from "node:child_process";
+import { execFile, fork, spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createConnection } from "node:net";
 import {
@@ -40,8 +40,10 @@ import {
 import { newPackage } from "../spec-location/index.mjs";
 import { collectAssignments } from "../spec-observe/assignments.mjs";
 import { createDashboardServer } from "../spec-observe/dashboard.mjs";
+import { processIdentity } from "../spec-observe/process-identity.mjs";
 import { writeFileAtomic } from "./store.mjs";
 import { windowSize } from "./tmux.mjs";
+import { assertNoAssignmentWorkers } from "./worker-guard.mjs";
 
 const FIXTURE_PI = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "launch-fixture-pi.mjs");
 const LAUNCH_WORKER = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "launch-worker.mjs");
@@ -1809,4 +1811,793 @@ test("terminal view streams: real tmux/asciinema/dashboard/player composition", 
   assert.equal(drained.state, "live", "Pi identity must remain alive after the dashboard drain");
   assert.deepEqual(drained.pi_identity, record.pi_identity);
   assert.deepEqual(await readFile(inputLogPath), inputBaseline, "input log changed after the dashboard drain");
+});
+
+// Relaunch-guard fixtures ----------------------------------------------------
+
+// Reads one `Key=Value` property from `systemctl --user show` output.
+function showProperty(stdout, name) {
+  for (const line of stdout.split("\n")) {
+    const index = line.indexOf("=");
+    if (index > 0 && line.slice(0, index).trim() === name) return line.slice(index + 1).trim();
+  }
+  return "";
+}
+
+function systemctlUser(args, options = {}) {
+  return spawnSync("systemctl", ["--user", ...args], {
+    timeout: 10000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024, encoding: "utf8",
+    ...options,
+  });
+}
+
+// Starts a real user service under the caller's own unit, captures its
+// production-shaped systemd record and registers cleanup for only that unit.
+// A missing user bus fails the case with systemd-run's stderr; it never skips.
+async function startSpecUnit(t) {
+  const unit = `spec-runtime-test-${randomUUID()}.service`;
+  const started = spawnSync(
+    "systemd-run",
+    ["--user", `--unit=${unit}`, "--collect", "--property=Type=exec", "/bin/sleep", "300"],
+    { timeout: 10000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024, encoding: "utf8" },
+  );
+  assert.equal(started.status, 0, `systemd-run failed: ${started.stderr || started.error?.message || ""}`);
+  const clientPid = started.pid ?? null;
+  t.after(() => {
+    systemctlUser(["stop", unit]);
+  });
+  let snapshot = null;
+  await waitFor(() => {
+    const shown = systemctlUser(["show", unit]);
+    if (shown.status !== 0) return null;
+    const invocation = showProperty(shown.stdout, "InvocationID");
+    const controlGroup = showProperty(shown.stdout, "ControlGroup");
+    const mainPid = Number.parseInt(showProperty(shown.stdout, "MainPID"), 10);
+    if (invocation === "" || controlGroup === "" || !Number.isSafeInteger(mainPid) || mainPid <= 0) return null;
+    snapshot = { invocation, controlGroup, mainPid };
+    return true;
+  }, `systemd unit ${unit} identity`);
+  const hostId = (await readFile("/etc/machine-id", "utf8")).trim();
+  const bootId = (await readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim();
+  const uid = process.geteuid();
+  const record = {
+    kind: "systemd-service",
+    unit,
+    invocation_id: snapshot.invocation,
+    control_group: snapshot.controlGroup,
+    main_pid: snapshot.mainPid,
+    launcher: { pid: clientPid, transport: "systemd-run" },
+    host_id: hostId,
+    boot_id: bootId,
+    uid,
+    started_at: Date.now(),
+  };
+  return { unit, record };
+}
+
+// Writes runtime/run.json and runtime/waves/w1.json plus a member run record.
+async function writeWaveRuntime(packageDirectory, { wave, runs }) {
+  await mkdir(join(packageDirectory, "runtime", "waves"), { recursive: true });
+  await mkdir(join(packageDirectory, "runtime", "runs"), { recursive: true });
+  await writeFile(
+    join(packageDirectory, "runtime", "run.json"),
+    JSON.stringify({ id: "r-latest", state: "completed" }),
+  );
+  await writeFile(join(packageDirectory, "runtime", "waves", "w1.json"), JSON.stringify(wave));
+  for (const [id, record] of Object.entries(runs)) {
+    await writeFile(join(packageDirectory, "runtime", "runs", `${id}.json`), JSON.stringify(record));
+  }
+}
+
+test("wave observation: relaunch guard refuses a live wave unit after coordinator death and admits after confirmed drain", { timeout: 120000 }, async (t) => {
+  const { storageRoot, home, piPath, logPath, socket, workspaces } = await launchScenario(t, 1);
+  const workspace = workspaces[0];
+  const created = await newPackage({
+    workspace: "workspace-0", slug: "guard", targets: [{ id: "app" }], root: storageRoot,
+  });
+  assert.equal(created.ok, true);
+  const packageDirectory = created.locations.package_dir;
+  await prepareAssignmentSpecTarget({
+    storageRoot,
+    workspace_id: "workspace-0",
+    target: "app",
+    specPackage: packageDirectory,
+  });
+
+  const { unit, record: service } = await startSpecUnit(t);
+  const unitStatus = systemctlUser(["is-active", unit]);
+  assert.equal(unitStatus.stdout.trim(), "active", "fixture unit must be active");
+
+  // The coordinator identity belongs to an exited child: spawn a short-lived
+  // node process, capture its identity while it runs, then await its exit.
+  const exitedIdentity = await (async () => {
+    const { spawn } = await import("node:child_process");
+    const proc = spawn(process.execPath, ["-e", "setTimeout(() => process.exit(0), 150)"], { stdio: "ignore" });
+    const identity = processIdentity(proc.pid);
+    await new Promise((resolvePromise) => proc.once("exit", resolvePromise));
+    return identity;
+  })();
+  assert.ok(exitedIdentity && Number.isSafeInteger(exitedIdentity.pid), "exited coordinator identity must be captured");
+  assert.equal(processIdentity(exitedIdentity.pid), null, "coordinator process must be confirmed exited");
+
+  const wave = {
+    version: 1,
+    wave_id: "w1",
+    generation: 1,
+    state: "running",
+    started_at: new Date().toISOString(),
+    transitions: [],
+    coordinator: { session: "guard-fixture", epoch: "guard-epoch", process_identity: exitedIdentity },
+    members: { "2": { step: 2, phase: "implementing", run_id: "r2" } },
+  };
+  const runs = {
+    r2: {
+      id: "r2",
+      step: 2,
+      wave_bindings: { wave_id: "w1", step_number: 2, phase: "implementing" },
+      service,
+    },
+  };
+  await writeWaveRuntime(packageDirectory, { wave, runs });
+  const wavePath = join(packageDirectory, "runtime", "waves", "w1.json");
+  const waveBytes = await readFile(wavePath);
+
+  // A retained ended assignment for the same package whose record omits thread_id.
+  const retainedInput = launchInput({
+    workspaceId: "workspace-0", storageRoot, home, piPath, specPackage: packageDirectory,
+  });
+  const retainedRecord = { ...(await resolveAssignment(retainedInput)).record, state: "ended" };
+  delete retainedRecord.thread_id;
+  const assignmentsDir = join(workspace, "assignments");
+  await mkdir(assignmentsDir, { recursive: true });
+  await writeFile(
+    join(assignmentsDir, `${retainedInput.assignment_id}.json`),
+    JSON.stringify(retainedRecord),
+  );
+  await listAssignments(storageRoot);
+
+  // Action 1: the live unit refuses the relaunch and changes nothing.
+  const threadId = randomUUID();
+  const input = { ...launchInput({ workspaceId: "workspace-0", storageRoot, home, piPath, specPackage: packageDirectory }), thread_id: threadId };
+  const digest = (await resolveAssignment(input)).contractDigest;
+  await assert.rejects(
+    launchAssignment(input, { expectedDigest: digest }),
+    (error) => {
+      assert.equal(error.code, "run-active");
+      assert.equal(error.reason, "worker-live");
+      assert.ok(error.message.includes(unit), "refusal must name the unit");
+      return true;
+    },
+  );
+  assert.equal(await exists(join(assignmentsDir, `${input.assignment_id}.json`)), false);
+  assert.equal(
+    (await fixtureEntries(logPath)).some((entry) => argvSessionId(entry) === input.assignment_id),
+    false,
+    "no fixture log entry for a refused launch",
+  );
+  assert.equal(systemctlUser(["is-active", unit]).stdout.trim(), "active", "unit must stay active after refusal");
+
+  // Action 2: stop and wait for confirmed drain, then the launch is admitted.
+  systemctlUser(["stop", unit]);
+  await waitFor(() => {
+    const shown = systemctlUser(["show", unit]);
+    return showProperty(shown.stdout, "LoadState") === "not-found";
+  }, `unit ${unit} drained`, 10000);
+  const admitted = await launchAssignment(input, { expectedDigest: digest });
+  assert.equal(admitted.state, "live");
+  const entry = await waitForFixtureLog(logPath, socket, input.assignment_id);
+  assert.equal(entry.cwd, admitted.execution_dir, "admitted execution dir must be the spec package");
+  const hostPaths = await tmuxExec(socket, ["show-environment", "-t", `=${admitted.tmux_session}`, "PI_WARDEN_HOST_PATHS"]);
+  assert.equal(hostPaths.ok, true, "host-paths environment must be readable");
+  assert.equal(hostPaths.stdout.trim(), `PI_WARDEN_HOST_PATHS=${packageDirectory}`);
+  assert.equal((await findAssignment(storageRoot, input.assignment_id)).thread_id, threadId);
+  assert.deepEqual(await readFile(wavePath), waveBytes, "wave bytes must be unchanged");
+});
+
+test("wave observation: relaunch guard classifies coordinator, unit and record facts fail-closed", { timeout: 120000 }, async (t) => {
+  const { storageRoot, home, piPath, logPath, workspaces } = await launchScenario(t, 1);
+  const workspace = workspaces[0];
+  const created = await newPackage({
+    workspace: "workspace-0", slug: "guard-classify", targets: [{ id: "app" }], root: storageRoot,
+  });
+  assert.equal(created.ok, true);
+  const packageDirectory = created.locations.package_dir;
+  await prepareAssignmentSpecTarget({
+    storageRoot,
+    workspace_id: "workspace-0",
+    target: "app",
+    specPackage: packageDirectory,
+  });
+  const assignmentsDir = join(workspace, "assignments");
+  await mkdir(assignmentsDir, { recursive: true });
+
+  const { unit, record: service } = await startSpecUnit(t);
+  assert.equal(systemctlUser(["is-active", unit]).stdout.trim(), "active");
+
+  // The default coordinator identity belongs to an exited child so that unit
+  // assertions (not coordinator-unknown) drive the row classification.
+  const exitedIdentity = await (async () => {
+    const { spawn } = await import("node:child_process");
+    const proc = spawn(process.execPath, ["-e", "setTimeout(() => process.exit(0), 150)"], { stdio: "ignore" });
+    const identity = processIdentity(proc.pid);
+    await new Promise((resolvePromise) => proc.once("exit", resolvePromise));
+    return identity;
+  })();
+  assert.ok(exitedIdentity && Number.isSafeInteger(exitedIdentity.pid), "exited coordinator identity must be captured");
+  assert.equal(processIdentity(exitedIdentity.pid), null, "coordinator process must be confirmed exited");
+
+  const baseWave = () => ({
+    version: 1,
+    wave_id: "w1",
+    generation: 1,
+    state: "running",
+    started_at: new Date().toISOString(),
+    transitions: [],
+    coordinator: { session: "guard-fixture", epoch: "guard-epoch", process_identity: exitedIdentity },
+    members: { "2": { step: 2, phase: "implementing", run_id: "r2" } },
+  });
+  const baseRun = () => ({
+    id: "r2",
+    step: 2,
+    wave_bindings: { wave_id: "w1", step_number: 2, phase: "implementing" },
+    service: { ...service },
+  });
+
+  const rows = [
+    {
+      name: "changed-invocation",
+      reason: "worker-unknown",
+      detail: "changed-invocation",
+      prepare: async () => {
+        await writeWaveRuntime(packageDirectory, {
+          wave: baseWave(),
+          runs: { r2: { ...baseRun(), service: { ...service, invocation_id: "a".repeat(32) } } },
+        });
+      },
+    },
+    {
+      name: "identity-unestablished",
+      reason: "worker-unknown",
+      detail: "identity-unestablished",
+      prepare: async () => {
+        const stripped = { ...service };
+        delete stripped.invocation_id;
+        await writeWaveRuntime(packageDirectory, { wave: baseWave(), runs: { r2: { ...baseRun(), service: stripped } } });
+      },
+    },
+    {
+      name: "coordinator-live",
+      reason: "coordinator-live",
+      detail: null,
+      prepare: async () => {
+        const wave = baseWave();
+        wave.coordinator = { process_identity: processIdentity(process.pid) };
+        await writeWaveRuntime(packageDirectory, { wave, runs: { r2: baseRun() } });
+      },
+    },
+    {
+      name: "coordinator-unknown",
+      reason: "coordinator-unknown",
+      detail: null,
+      prepare: async () => {
+        const wave = baseWave();
+        wave.coordinator = { process_identity: { pid: process.pid, started_at: "mismatch" } };
+        await writeWaveRuntime(packageDirectory, { wave, runs: { r2: baseRun() } });
+      },
+    },
+    {
+      name: "record-invalid",
+      reason: "record-invalid",
+      detail: "unknown-state",
+      prepare: async () => {
+        const wave = baseWave();
+        wave.state = "paused";
+        await writeWaveRuntime(packageDirectory, { wave, runs: { r2: baseRun() } });
+      },
+    },
+    {
+      name: "worker-live-orphan",
+      reason: "worker-live",
+      detail: unit,
+      prepare: async () => {
+        await writeWaveRuntime(packageDirectory, {
+          wave: baseWave(),
+          runs: {
+            r2: { id: "r2", step: 2, wave_bindings: { wave_id: "w1", step_number: 2, phase: "implementing" } },
+            r9: { id: "r9", command_phase: { wave_id: "w1" }, service: { ...service } },
+          },
+        });
+      },
+    },
+    {
+      name: "worker-live-orphan-command",
+      reason: "worker-live",
+      detail: unit,
+      prepare: async () => {
+        await writeWaveRuntime(packageDirectory, {
+          wave: baseWave(),
+          runs: {
+            r2: { id: "r2", step: 2, wave_bindings: { wave_id: "w1", step_number: 2, phase: "implementing" } },
+            r9: { id: "r9", command_phase: { wave_id: "w1" }, command_service: { ...service } },
+          },
+        });
+      },
+    },
+  ];
+
+  for (const row of rows) {
+    await row.prepare();
+    const input = { ...launchInput({ workspaceId: "workspace-0", storageRoot, home, piPath, specPackage: packageDirectory }) };
+    const digest = (await resolveAssignment(input)).contractDigest;
+    await assert.rejects(
+      launchAssignment(input, { expectedDigest: digest }),
+      (error) => {
+        assert.equal(error.code, "run-active", `${row.name}: code`);
+        assert.equal(error.reason, row.reason, `${row.name}: reason`);
+        if (row.detail !== null) assert.equal(error.detail, row.detail, `${row.name}: detail`);
+        return true;
+      },
+    );
+    assert.equal(
+      await exists(join(assignmentsDir, `${input.assignment_id}.json`)),
+      false,
+      `${row.name}: no record`,
+    );
+    assert.equal(
+      (await fixtureEntries(logPath)).some((entry) => argvSessionId(entry) === input.assignment_id),
+      false,
+      `${row.name}: no fixture log entry`,
+    );
+  }
+
+  assert.equal(systemctlUser(["is-active", unit]).stdout.trim(), "active", "unit must stay active after all rows");
+});
+
+test("wave observation: relaunch guard covers record and legacy process outcomes", { timeout: 120000 }, async (t) => {
+  const root = await tempRoot(t);
+  const packageDirectory = join(root, "pkg");
+  const runsDir = join(packageDirectory, "runtime", "runs");
+  const wavesDir = join(packageDirectory, "runtime", "waves");
+  const asyncRoot = join(root, "async-subagent-runs");
+  const runtimeDir = join(packageDirectory, "runtime");
+  await mkdir(runsDir, { recursive: true });
+  await mkdir(wavesDir, { recursive: true });
+  await mkdir(asyncRoot, { recursive: true });
+
+  const terminalWave = (overrides = {}) => ({
+    version: 1,
+    wave_id: "w1",
+    generation: 1,
+    state: "integrated",
+    started_at: new Date().toISOString(),
+    transitions: [],
+    coordinator: { process_identity: { pid: 2, started_at: new Date().toISOString() } },
+    members: {},
+    ...overrides,
+  });
+  const record = (specPackage) => ({ spec_package: specPackage, subagent_async_root: asyncRoot });
+
+  // Fresh runtime/runs/waves each row; raw waves are projectable but otherwise
+  // inert so the coordinator/unit rows are not confounded by a prior wave.
+  const reset = async () => {
+    await rm(runsDir, { recursive: true, force: true });
+    await rm(wavesDir, { recursive: true, force: true });
+    await mkdir(runsDir, { recursive: true });
+    await mkdir(wavesDir, { recursive: true });
+    await writeFile(
+      join(runtimeDir, "run.json"),
+      JSON.stringify({ id: "r-latest", state: "completed" }),
+    );
+    await writeFile(join(wavesDir, "w1.json"), JSON.stringify(terminalWave()));
+  };
+
+  // Rows that must resolve: no blocking artifact survives inspection.
+  await reset();
+  await rm(wavesDir, { recursive: true, force: true });
+  await assert.doesNotReject(assertNoAssignmentWorkers(record(packageDirectory)));
+
+  await reset();
+  await writeFile(join(wavesDir, ".w1.json.tmp"), JSON.stringify({ nonsense: true }));
+  await assert.doesNotReject(assertNoAssignmentWorkers(record(packageDirectory)));
+
+  await reset();
+  await writeFile(join(wavesDir, "w1.json"), JSON.stringify(terminalWave({
+    coordinator: { process_identity: processIdentity(process.pid) },
+  })));
+  await assert.doesNotReject(assertNoAssignmentWorkers(record(packageDirectory)));
+
+  const rejectRow = async (name, expect, prepare) => {
+    await reset();
+    await prepare();
+    let rejected = false;
+    await assert.rejects(
+      assertNoAssignmentWorkers(record(packageDirectory)),
+      (error) => {
+        rejected = true;
+        assert.equal(error.code, "run-active", `${name}: code`);
+        assert.equal(error.reason, expect.reason, `${name}: reason`);
+        if (expect.detail !== undefined) assert.equal(error.detail, expect.detail, `${name}: detail`);
+        return true;
+      },
+    );
+    assert.equal(rejected, true, `${name}: should reject`);
+  };
+
+  await rejectRow("malformed-json", { reason: "record-invalid", detail: "invalid-json" }, async () => {
+    await writeFile(join(wavesDir, "w1.json"), "{");
+  });
+  await rejectRow("unsupported-version", { reason: "record-invalid", detail: "unsupported-version" }, async () => {
+    await writeFile(join(wavesDir, "w1.json"), JSON.stringify(terminalWave({ version: 99 })));
+  });
+  await rejectRow("unknown-phase", { reason: "record-invalid", detail: "unknown-phase" }, async () => {
+    await writeFile(join(wavesDir, "w1.json"), JSON.stringify(terminalWave({
+      state: "running",
+      members: { "1": { step: 1, phase: "bogus", run_id: "r1" } },
+    })));
+  });
+  await rejectRow("json-directory", { reason: "record-invalid" }, async () => {
+    await rm(join(wavesDir, "w1.json"), { recursive: true, force: true });
+    await mkdir(join(wavesDir, "w1.json"), { recursive: true });
+  });
+  await rejectRow("symlink-record", { reason: "record-invalid" }, async () => {
+    await rm(join(wavesDir, "w1.json"), { force: true });
+    await writeFile(join(wavesDir, "target.json"), JSON.stringify(terminalWave()));
+    await symlink(join(wavesDir, "target.json"), join(wavesDir, "w1.json"));
+  });
+  await rejectRow("oversized-record", { reason: "record-invalid" }, async () => {
+    await writeFile(join(wavesDir, "w1.json"), "x".repeat(1024 * 1024 + 1));
+  });
+  await rejectRow("waves-path-regular-file", { reason: "record-invalid" }, async () => {
+    await rm(wavesDir, { recursive: true, force: true });
+    await writeFile(wavesDir, "not a directory");
+  });
+
+  const runningWave = (coordinator) => terminalWave({ state: "running", coordinator });
+  await rejectRow("coordinator-missing", { reason: "coordinator-unknown" }, async () => {
+    await writeFile(join(wavesDir, "w1.json"), JSON.stringify(runningWave(undefined)));
+  });
+  await rejectRow("coordinator-invalid-pid", { reason: "coordinator-unknown" }, async () => {
+    await writeFile(join(wavesDir, "w1.json"), JSON.stringify(runningWave({ process_identity: { pid: "nope", started_at: new Date().toISOString() } })));
+  });
+
+  // Legacy process leases: inactive and known-dead groups resolve; a live owned
+  // group and an invalid pid refuse.
+  const lease = (name, value) => async () => {
+    await mkdir(join(runsDir, name), { recursive: true });
+    await writeFile(join(runsDir, name, "lease.json"), JSON.stringify(value));
+  };
+  await reset();
+  await lease("r1-processes", { active: false, pid: process.pid })();
+  await assert.doesNotReject(assertNoAssignmentWorkers(record(packageDirectory)));
+
+  const exitedPid = await (async () => {
+    const { spawn } = await import("node:child_process");
+    const proc = spawn(process.execPath, ["-e", "process.exit(0)"], { stdio: "ignore" });
+    const pid = proc.pid;
+    await new Promise((resolvePromise) => proc.once("exit", resolvePromise));
+    return pid;
+  })();
+  assert.equal(processIdentity(exitedPid), null, "dead group lease must reference an exited process");
+  await reset();
+  await lease("r1-processes", { active: true, pid: exitedPid })();
+  await assert.doesNotReject(assertNoAssignmentWorkers(record(packageDirectory)));
+
+  const liveGroup = spawn("/bin/sleep", ["300"], { detached: true, stdio: "ignore" });
+  await new Promise((resolvePromise) => liveGroup.once("spawn", resolvePromise));
+  t.after(async () => {
+    if (liveGroup.exitCode === null && liveGroup.signalCode === null) {
+      const exited = new Promise((resolvePromise) => liveGroup.once("exit", resolvePromise));
+      liveGroup.kill("SIGKILL");
+      await exited;
+    }
+  });
+  await reset();
+  await lease("r1-processes", { active: true, pid: liveGroup.pid })();
+  await assert.rejects(
+    assertNoAssignmentWorkers(record(packageDirectory)),
+    (error) => {
+      assert.equal(error.code, "run-active");
+      assert.equal(error.reason, "worker-live");
+      return true;
+    },
+  );
+
+  await reset();
+  await lease("r1-processes", { active: true, pid: "nope" })();
+  await assert.rejects(
+    assertNoAssignmentWorkers(record(packageDirectory)),
+    (error) => {
+      assert.equal(error.code, "run-active");
+      assert.equal(error.reason, "worker-unknown");
+      return true;
+    },
+  );
+
+  // Real live unit service with phase_drain confirmed resolves; a foreign unit
+  // prefix cannot establish ownership and reports identity-unestablished.
+  const { unit, record: service } = await startSpecUnit(t);
+  await reset();
+  await writeFile(join(runsDir, "r1.json"), JSON.stringify({
+    id: "r1",
+    step: 1,
+    wave_bindings: { wave_id: "w1", step_number: 1, phase: "implementing" },
+    phase_drain: { status: "confirmed" },
+    service: { ...service },
+  }));
+  await assert.doesNotReject(assertNoAssignmentWorkers(record(packageDirectory)));
+
+  await reset();
+  await writeFile(join(runsDir, "r1.json"), JSON.stringify({
+    id: "r1",
+    step: 1,
+    wave_bindings: { wave_id: "w1", step_number: 1, phase: "implementing" },
+    service: { ...service, unit: "foreign-00000000.service" },
+  }));
+  await assert.rejects(
+    assertNoAssignmentWorkers(record(packageDirectory)),
+    (error) => {
+      assert.equal(error.code, "run-active");
+      assert.equal(error.reason, "worker-unknown");
+      assert.equal(error.detail, "identity-unestablished");
+      return true;
+    },
+  );
+});
+
+// Supplemental launch.integration coverage for the call-local lazy service
+// adapter and the named legacy refusals that the relaunch guard already
+// implements. Artifacts are isolated under one tempRoot: an own subagent root,
+// an own runtime/run.json parent and only this row's worker files. Nothing here
+// mutates an existing case or its assertions.
+test("wave observation: relaunch guard resolves observed proof and names each legacy refusal", { timeout: 120000 }, async (t) => {
+  const root = await tempRoot(t);
+  const packageDirectory = join(root, "pkg");
+  const runtimeDir = join(packageDirectory, "runtime");
+  const runsDir = join(runtimeDir, "runs");
+  const wavesDir = join(runtimeDir, "waves");
+  const asyncRoot = join(root, "async-subagent-runs");
+  await mkdir(runsDir, { recursive: true });
+  await mkdir(wavesDir, { recursive: true });
+  await mkdir(asyncRoot, { recursive: true });
+
+  // The terminal index is keyed by the exact parent session that run.json
+  // records, so this package sees only the worker directories written below.
+  const parentSession = join(root, "sessions", "parent.jsonl");
+  await mkdir(join(root, "sessions"), { recursive: true });
+  await writeFile(parentSession, "");
+  await writeFile(
+    join(runtimeDir, "run.json"),
+    JSON.stringify({ id: "r-own", state: "completed", parent_session: parentSession }),
+  );
+
+  const parentKey = `~sha256-${createHash("sha256").update(parentSession).digest("hex")}`;
+  const terminalIndexDir = join(asyncRoot, ".terminal-runs", parentKey);
+  const runId = "run-own";
+  const workerDir = join(asyncRoot, runId);
+  await mkdir(terminalIndexDir, { recursive: true });
+  await mkdir(workerDir, { recursive: true });
+  await writeFile(
+    join(terminalIndexDir, "index.json"),
+    JSON.stringify({ sessionId: parentSession, runId }),
+  );
+  const record = { spec_package: packageDirectory, subagent_async_root: asyncRoot };
+
+  // A genuinely exited child gives a dead PID without reusing this process.
+  const exitedPid = await (async () => {
+    const proc = spawn(process.execPath, ["-e", "process.exit(0)"], { stdio: "ignore" });
+    const pid = proc.pid;
+    await new Promise((resolvePromise) => proc.once("exit", resolvePromise));
+    return pid;
+  })();
+  assert.equal(processIdentity(exitedPid), null, "dead-runner PID must reference an exited process");
+  const ownNamespace = process.platform === "linux"
+    ? await (await import("node:fs/promises")).readlink("/proc/self/ns/pid").catch(() => null)
+    : null;
+  if (process.platform === "linux") assert.ok(ownNamespace, "Linux must expose the caller PID namespace");
+
+  // A runner instance that the status record actually references.
+  const runnerInstance = "runner-own";
+  const sessionScope = ownNamespace ?? "in-namespace";
+  const observedWriter = {
+    kind: "pi-writer",
+    processInstanceId: "writer-own",
+    processTree: { state: "observed", mechanism: "posix-process-group", processGroupId: exitedPid },
+  };
+  const statusRecord = (overrides = {}) => ({
+    runId,
+    sessionId: parentSession,
+    pid: exitedPid,
+    pidNamespaceScope: sessionScope,
+    processTerminal: { runnerProcessInstanceId: runnerInstance },
+    ...overrides,
+  });
+  const candidate = (overrides = {}) => ({
+    version: 1,
+    runId,
+    runnerProcessInstanceId: runnerInstance,
+    writers: { "0": [observedWriter] },
+    expectedWriters: { "0": 1 },
+    ...overrides,
+  });
+  const observedProof = () => ({
+    state: "observed",
+    version: 1,
+    runId,
+    runnerProcessInstanceId: runnerInstance,
+    instances: [
+      { kind: "runner", processInstanceId: runnerInstance },
+      observedWriter,
+    ],
+  });
+
+  const reset = async ({ status, proof, candidate: candidateValue }) => {
+    await rm(workerDir, { recursive: true, force: true });
+    await mkdir(workerDir, { recursive: true });
+    await writeFile(join(workerDir, "status.json"), JSON.stringify(status));
+    if (proof) await writeFile(join(workerDir, "process-terminal.json"), JSON.stringify(proof));
+    if (candidateValue) {
+      await writeFile(join(workerDir, "process-terminal-candidate.json"), JSON.stringify(candidateValue));
+    }
+  };
+
+  const rejectRow = async (name, expect, prepare) => {
+    await prepare();
+    const input = record;
+    let rejected = false;
+    await assert.rejects(
+      assertNoAssignmentWorkers(input),
+      (error) => {
+        rejected = true;
+        assert.equal(error.code, "run-active", `${name}: code`);
+        assert.equal(error.reason, expect.reason, `${name}: reason`);
+        if (expect.detail !== undefined) assert.equal(error.detail, expect.detail, `${name}: detail`);
+        return true;
+      },
+    );
+    assert.equal(rejected, true, `${name}: should reject`);
+  };
+
+  // No process-terminal proof plus a mismatched PID namespace is refused before
+  // any PID inspection.
+  await rejectRow("namespace-mismatch", { reason: "worker-unknown" }, async () => {
+    await reset({
+      status: statusRecord({ pidNamespaceScope: sessionScope === "in-namespace" ? "other" : `${sessionScope}-other` }),
+      candidate: candidate(),
+    });
+  });
+
+  // A dead runner with no candidate file is incomplete child-process evidence.
+  await rejectRow("missing-candidate", { reason: "worker-unknown" }, async () => {
+    await reset({ status: statusRecord() });
+  });
+
+  // A wrong expected writer count is incomplete child-process evidence.
+  await rejectRow("expected-writer-count", { reason: "worker-unknown" }, async () => {
+    await reset({ status: statusRecord(), candidate: candidate({ expectedWriters: { "0": 3 } }) });
+  });
+
+  // An unobserved writer tree is not a confirmed stopped process group.
+  await rejectRow("writer-tree-unobserved", { reason: "worker-unknown" }, async () => {
+    await reset({
+      status: statusRecord(),
+      candidate: candidate({
+        writers: { "0": [{ kind: "pi-writer", processInstanceId: "writer-own", processTree: { state: "unknown" } }] },
+      }),
+    });
+  });
+
+  // A terminal index whose session does not own the directory is a record
+  // ownership conflict, not a worker status.
+  await rejectRow("terminal-index-mismatch", { reason: "record-invalid" }, async () => {
+    await writeFile(
+      join(terminalIndexDir, "index.json"),
+      JSON.stringify({ sessionId: join(root, "sessions", "other.jsonl"), runId }),
+    );
+    await reset({ status: statusRecord(), candidate: candidate() });
+  });
+
+  // A matching version-1 observed process-terminal proof resolves: no PID is
+  // inspected once the proof is complete and the runner instance agrees.
+  await writeFile(
+    join(terminalIndexDir, "index.json"),
+    JSON.stringify({ sessionId: parentSession, runId }),
+  );
+  await reset({ status: statusRecord(), proof: observedProof(), candidate: candidate() });
+  await assert.doesNotReject(assertNoAssignmentWorkers(record));
+
+  // A live runner in this namespace with no terminal proof reports worker-live.
+  await rejectRow("live-runner", { reason: "worker-live" }, async () => {
+    await reset({ status: statusRecord({ pid: process.pid }), candidate: candidate() });
+  });
+});
+
+test("wave observation: F11-1 symlinked wave directory refuses launch", { timeout: 120000 }, async (t) => {
+  const { storageRoot, home, piPath, logPath, socket } = await launchScenario(t, 1);
+  const created = await newPackage({
+    workspace: "workspace-0", slug: "symlink", targets: [{ id: "app" }], root: storageRoot,
+  });
+  assert.equal(created.ok, true);
+  const packageDirectory = created.locations.package_dir;
+  await prepareAssignmentSpecTarget({
+    storageRoot,
+    workspace_id: "workspace-0",
+    target: "app",
+    specPackage: packageDirectory,
+  });
+
+  const runtimeDir = join(packageDirectory, "runtime");
+  await mkdir(runtimeDir, { recursive: true });
+  const emptyTarget = join(runtimeDir, "waves-target");
+  await mkdir(emptyTarget, { recursive: true });
+  await symlink(emptyTarget, join(runtimeDir, "waves"));
+  assert.equal((await lstat(join(runtimeDir, "waves"))).isSymbolicLink(), true);
+
+  const assignmentsDir = join(storageRoot, "projects", "workspace-0", "assignments");
+  const input = launchInput({
+    workspaceId: "workspace-0", storageRoot, home, piPath, specPackage: packageDirectory,
+  });
+  const digest = (await resolveAssignment(input)).contractDigest;
+  await assert.rejects(
+    launchAssignment(input, { expectedDigest: digest }),
+    (error) => {
+      assert.equal(error.code, "run-active");
+      assert.equal(error.reason, "record-invalid");
+      return true;
+    },
+  );
+  assert.equal(await exists(join(assignmentsDir, `${input.assignment_id}.json`)), false);
+  assert.equal(
+    (await fixtureEntries(logPath)).some((entry) => argvSessionId(entry) === input.assignment_id),
+    false,
+    "no fixture log entry for a refused launch",
+  );
+  assert.equal(
+    (await sessionNames(socket)).some((name) => name.includes(input.assignment_id)),
+    false,
+    "no fixture session for a refused assignment",
+  );
+});
+
+test("wave observation: C11-1 confirmed phase drain survives reboot", { timeout: 120000 }, async (t) => {
+  const root = await tempRoot(t);
+  const packageDirectory = join(root, "pkg");
+  const runsDir = join(packageDirectory, "runtime", "runs");
+  const wavesDir = join(packageDirectory, "runtime", "waves");
+  const asyncRoot = join(root, "async-subagent-runs");
+  const runtimeDir = join(packageDirectory, "runtime");
+  await mkdir(runsDir, { recursive: true });
+  await mkdir(wavesDir, { recursive: true });
+  await mkdir(asyncRoot, { recursive: true });
+
+  await writeFile(
+    join(runtimeDir, "run.json"),
+    JSON.stringify({ id: "r-latest", state: "completed" }),
+  );
+  await writeFile(join(wavesDir, "w1.json"), JSON.stringify({
+    version: 1,
+    wave_id: "w1",
+    generation: 1,
+    state: "integrated",
+    started_at: new Date().toISOString(),
+    transitions: [],
+    coordinator: { process_identity: { pid: 2, started_at: new Date().toISOString() } },
+    members: {},
+  }));
+
+  const { record: service } = await startSpecUnit(t);
+  await writeFile(join(runsDir, "r1.json"), JSON.stringify({
+    id: "r1",
+    step: 1,
+    wave_bindings: { wave_id: "w1", step_number: 1, phase: "implementing" },
+    phase_drain: { status: "confirmed" },
+    service: { ...service, boot_id: `${service.boot_id}-stale` },
+  }));
+  await writeFile(
+    join(runsDir, "r1-phase-drain.json"),
+    JSON.stringify({ status: "confirmed", service: { ...service, boot_id: `${service.boot_id}-stale` } }),
+  );
+
+  await assert.doesNotReject(
+    assertNoAssignmentWorkers({ spec_package: packageDirectory, subagent_async_root: asyncRoot }),
+  );
 });

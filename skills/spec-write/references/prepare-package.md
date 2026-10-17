@@ -81,13 +81,17 @@ Reuse the production-composition gate when it already covers ordinary entry.
 
 #### Establish dependency readiness at the owning boundary
 
-From the named targets and immediate integration seam already read, identify prerequisites that belong to another package, library, process, or service. In the affected card's `Setup and Hazards` and existing preparation blocker row, name the required contract/capability, authoritative producer, actual availability evidence, and the step-owned gates it blocks. Distinguish producer intent, an installed version, a mock, and a real supported transport or runtime contract. Reuse existing evidence; do not add a dependency manifest, speculative DAG, classifier, or capability-probe pass.
+From the named targets and immediate integration seam already read, identify prerequisites that belong to another package, library, process, or service. In the affected card's `Setup and Hazards` and existing preparation blocker row, name the required contract/capability, authoritative producer, actual availability evidence, and the step-owned gates it blocks. Distinguish producer intent, an installed version, a mock, and a real supported transport or runtime contract. Reuse existing evidence; do not add a separate external-dependency manifest, classifier, or capability-probe pass. In-package step dependencies belong only in `requires`, `writes` and `resources` (section 3).
 
 A required merge gate whose producer contract/evidence is unavailable remains blocked and makes the owning card non-ready. Do not repeat a known-impossible verifier to reconfirm that absence, substitute a fabricated internal adapter/mock as proof, or expand this package to implement an outside producer. If a contract appears after preparation, reconcile its actual evidence before resuming the dependent work. A prepared later-phase procedure may remain pending under its existing authority and handoff rules. Keep already independent prepared work and stable IDs available for scheduling; a partial package still cannot be declared prepared.
 
 ### 3. Reconcile the step index
 
 `spec.md` is canonical. Rewrite `spec-steps.json` to contain exactly one entry per final implementation step, in ascending order, using the current strict step-index schema. Each entry's number, name, description, difficulty, visual-design flag, and evidence array must match the Markdown step. The top-level `spec` path must be the package-relative `spec.md`. With several targets, every entry carries `repository`, the id of the target (`locations.targets[].id`) whose worktree the step changes.
+
+#### Emit the wave contract
+
+Copy each step's `Requires:`, `Writes:` and `Resources:` into the index. Derive waves with `steps lint`, never by hand. Give each nonempty wave exactly one `wave_checks` row whose gates are the owner's required merge EVs that can run on both the member result and the combined candidate; place a combined proof in a later integration step that requires them. Regenerate every `wave_checks` row after any `requires` edit. Write each `wave_checks` gate command relative to the target checkout. Declare `setup` per target as `"none"` or `{command, lockfiles, environment}`; confirm each named lockfile exists at the base, and choose `none` only when the repository needs no dependency preparation, never from a package-manager guess. Write package-local evidence commands so they resolve the package directory at run time through `spec-location check`, and never embed an author-machine absolute path.
 
 Reconcile `evidence-plan.json` against the corrected spec. Preserve stable identifiers where their meaning survives. Correct posture, context path, claim/hypothesis/gate mappings, phase, required flag, command,
 artifact, environment, effects, authority, independence and owner-step fields. Recalibrate in either
@@ -142,6 +146,7 @@ A medium or hard card is `ready` only when it meets this bar:
   observable assertion. One-sentence behavior summaries are not enough.
 - **Outcome tables.** Copy rows from Architecture for any classifying component the step owns.
 - **Signal.** Link shared hazards and environment boilerplate rather than repeating them.
+- **Wave ownership.** `Targets` names the step's `Writes:` paths and, for a wave-check owner, the wave's candidate gates.
 
 For every `hard` card, and every `medium` card that consumes another step's contract, ground the
 card in a fresh subagent running `spec-subspec-write` for that one step. Run independent
@@ -309,6 +314,7 @@ After the last write to `context.md`, `spec.md`, or any `step-<NNN>-subspec.md`,
 
 After the stamp, reread every final artifact. Confirm:
 
+- `steps lint` reports `ok: true`; a single-target package also reports `concurrency_ready: true`, and a multi-target package reports reason `multiple-targets`.
 - Step numbers are exactly the ascending `spec-steps.json` numbers.
 - There is exactly one canonical subspec per indexed step and no unexpected canonical step number.
 - Every planning verdict is `ready`. Ignore obsolete `planning.spec_sha256` fields on retained cards; they do not require re-preparation.
@@ -341,6 +347,7 @@ Atomically write `spec-prepare.md` on every run. Include:
 - Evidence posture and traceability counts; EV items with owning steps, rejected failure hypotheses, commands, artifacts, and the pre-mortem disposition summary.
 - One row per step with difficulty, visual-reference summary, card depth, subspec path,
   verification strategy, and focused commands.
+- Waves, `longest_chain`, `fan_in` and `concurrency_ready` from steps lint.
 - Corrections/reruns and open blockers.
 - Overall outcome: `prepared`, `decision-required`, or `blocked`.
 

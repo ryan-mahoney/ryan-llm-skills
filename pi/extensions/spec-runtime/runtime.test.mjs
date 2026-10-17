@@ -1,14 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readdirSync, writeFileSync, readFileSync, existsSync, rmSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, writeFileSync, readFileSync, existsSync, rmSync, realpathSync, chmodSync, symlinkSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { Runtime, launch, loadRun, summary, groupAlive, runEditor, runEditorBatch, packetPaths, fencedPath, runCommand, runVerification, runCompletion, runAdvice, activeGroups, spawnManaged, settleGroup, assertLease, assertIdleWriter, editorSlot, revoke } from './runtime.mjs';
+import { Runtime, launch, loadRun, summary, groupAlive, runEditor, runEditorBatch, packetPaths, fencedPath, runCommand, runVerification, runCompletion, runAdvice, activeGroups, spawnManaged, settleGroup, assertLease, assertIdleWriter, editorSlot, revoke, event, assertManagedModel, buildDependencyHandoff, waveSiblingMatches, waveSiblingConflict } from './runtime.mjs';
 import { createVerificationRecorder, readVerificationIncidents } from './sentinel.mjs';
 import { makePackageFixture } from './package-fixture.mjs';
+import { createOwnership } from './ownership.mjs';
+import { runCapabilityProbe } from './overlay.mjs';
 import { splitModelSelector } from './model-selector.mjs';
+import { completeOutcomes } from './completion.mjs';
 
 async function fixture(t, source) {
   const base = await makePackageFixture();
@@ -22,8 +26,18 @@ async function fixture(t, source) {
   const options = { indexDir: join(dir, 'index'), notify: notified, location, launchProcess: (record, role, prompt, launchOptions = {}) => {
     const task = launch(record, role, prompt, { command: process.execPath, prefix: [fake], ...launchOptions }); pids.push(task.child.pid); return task;
   } };
-  t.after(() => { for (const pid of pids) { try { process.kill(-pid, 'SIGKILL'); } catch {} } rmSync(dir, { recursive: true, force: true }); });
-  return { ...base, step, options, finished, pids, input: { package: packagePath, step, owner_model: 'test/owner', editor_model: 'test/editor' } };
+  const runtimes = new Set();
+  // Cancel every runtime this fixture's tests created BEFORE removing the
+  // directory: a retained deadline timer owns the run record and would outlive
+  // an rm, firing against a deleted package.
+  t.after(async () => {
+    for (const runtime of runtimes) {
+      try { await Promise.allSettled([...runtime.active.values()].map(({ record }) => runtime.cancel(record.package, record.id))); } catch {}
+    }
+    for (const pid of pids) { try { process.kill(-pid, 'SIGKILL'); } catch {} }
+    rmSync(dir, { recursive: true, force: true });
+  });
+  return { ...base, step, options, finished, pids, runtimes, input: { package: packagePath, step, owner_model: 'test/owner', editor_model: 'test/editor' } };
 }
 
 function prepare(f, difficulty = 'hard') {
@@ -168,6 +182,13 @@ test('parallel packets run concurrently in the shared checkout, each fenced to i
   assert.deepEqual(editors.map(e => JSON.parse(e.opts.env.SPEC_EDITOR_PATHS)), [['a.mjs'], ['lib/b.mjs']]);
   assert.notEqual(editors[0].opts.env.PI_INTERCOM_STABLE_ID, editors[1].opts.env.PI_INTERCOM_STABLE_ID);
   assert.match(editors[0].prompt, /PARALLEL PACKET: .*may edit or write only: a\.mjs\./);
+  // Each member keeps its own outcome receipt; the per-run receipt folds them.
+  const runs = join(f.packagePath, 'runtime/runs');
+  const memberReceipts = [1, 2].map(member => JSON.parse(readFileSync(join(runs, `${record.id}-editor-outcome-${member}.json`), 'utf8')));
+  assert.deepEqual(memberReceipts.map(item => [item.state, item.session]), reply.results.map(item => ['completed', item.editor_session]));
+  const folded = JSON.parse(readFileSync(join(runs, `${record.id}-editor-outcome.json`), 'utf8'));
+  assert.equal(folded.state, 'completed');
+  assert.deepEqual(folded.members.map(item => [item.member, item.state]), [[1, 'completed'], [2, 'completed']]);
   assert.deepEqual(editorStarts(f.packagePath).map(e => e.paths).sort(), [['a.mjs'], ['lib/b.mjs']], 'each packet start records its fenced paths');
   assert.equal(existsSync(editorSlot(record)), false, 'the batch releases the writer slot');
   await runtime.cancel(f.packagePath, record.id);
@@ -243,11 +264,17 @@ test('spec file and directory inputs share run identity; explicit start honors o
 });
 
 test('repeated starts return the same run before and after completion; a second coordinator cannot take its writer lease', async t => {
-  const f = await fixture(t);
+  // The worker answers only after the lease check: with a fixed 50 ms delay, a slow
+  // second start sometimes found the first run already finished and was admitted.
+  const f = await fixture(t, `const { existsSync } = require('node:fs'); const release = require('node:path').join(__dirname, 'release');
+const poll = setInterval(() => { if (!existsSync(release)) return; clearInterval(poll);
+  console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'Implemented; focused check passed.'}]}})); }, 20);`);
   const runtime = new Runtime(f.options);
   const first = await runtime.start(f.input, '/parent/session.jsonl');
   assert.equal((await runtime.start(f.input)).run_id, first.run_id);
   await assert.rejects(() => new Runtime(f.options).start({ ...f.input, assignment_id: 'another-step' }), /run-active/);
+  assert.equal(f.pids.length, 1, 'a refused second coordinator launched no process');
+  writeFileSync(join(f.dir, 'release'), '');
   const completed = await f.finished;
   assert.equal(completed.state, 'completed');
   assert.equal(completed.result, 'Implemented; focused check passed.');
@@ -256,6 +283,109 @@ test('repeated starts return the same run before and after completion; a second 
   assert.equal(record.parent_session, '/parent/session.jsonl');
   assert.throws(() => assertLease(record), /revoked/, 'a finished run no longer holds the writer role');
   assert.match(readFileSync(join(f.packagePath, 'runtime/events.jsonl'), 'utf8'), /run_finished/);
+  // A distinct assignment can start normally after the prior run ends. Cancel
+  // the replacement through the runtime that
+  // owns it so no retained deadline timer outlives the package this test removes.
+  const replacement = await runtime.start({ ...f.input, assignment_id: 'after-completion' });
+  assert.notEqual(replacement.run_id, first.run_id);
+  await runtime.cancel(f.packagePath, replacement.run_id);
+});
+
+// Request-time admission must derive overlap from the request's own entry clock,
+// not the recorded (possibly backdated) dispatch timestamp. enteredAt is read from
+// the local Date at start() entry, so a fake Date clock pins it deterministically
+// without mocking scheduling or sleeping. The injected inspectClaims seam suspends
+// the pending start; the synthetic prior run.json and the entry-relative prior
+// timestamps are published while it waits, before record inspection.
+const serialAdmissionIntervalScenarios = [
+  { scenario: 'before/before(-10,-1,completed)', startOffset: -10, finishOffset: -1, state: 'completed', admit: true },
+  { scenario: 'before/during(-10,+20,completed)', startOffset: -10, finishOffset: 20, state: 'completed', admit: false },
+  { scenario: 'before/active(-10,null,running)', startOffset: -10, finishOffset: null, state: 'running', admit: false },
+  { scenario: 'during/during(+10,+20,completed)', startOffset: 10, finishOffset: 20, state: 'completed', admit: false },
+  { scenario: 'during/active(+10,null,running)', startOffset: 10, finishOffset: null, state: 'running', admit: false },
+  { scenario: 'equality(-10,0,completed)', startOffset: -10, finishOffset: 0, state: 'completed', admit: false },
+  { scenario: 'missing-finish(-10,omitted,completed)', startOffset: -10, finishOffset: 'omit', state: 'completed', admit: false },
+  { scenario: 'null-finish(-10,null,completed)', startOffset: -10, finishOffset: null, state: 'completed', admit: false },
+  { scenario: 'malformed-finish(-10,invalid,completed)', startOffset: -10, finishOffset: 'invalid', state: 'completed', admit: false },
+  { scenario: 'dead-active missing-finish(-10,omitted,running)', startOffset: -10, finishOffset: 'omit', state: 'running', admit: false, coordinatorPid: 0 },
+  { scenario: 'dead-active null-finish(-10,null,running)', startOffset: -10, finishOffset: null, state: 'running', admit: false, coordinatorPid: 0 }
+];
+for (const row of serialAdmissionIntervalScenarios) {
+  test(`serial admission interval: ${row.scenario}`, async t => {
+    const entry = Date.parse('2025-01-01T00:00:00.000Z');
+    const f = await fixture(t, 'setInterval(() => {}, 1000);');
+    const iso = ms => ms === null ? null : new Date(entry + ms).toISOString();
+    let releaseSeam;
+    const seamOpen = new Promise(resolve => { releaseSeam = resolve; });
+    let enteredSeam;
+    const seamEntered = new Promise(resolve => { enteredSeam = resolve; });
+    const realOwnership = createOwnership({ registryRoot: f.options.indexDir ? join(f.options.indexDir, 'ownership') : undefined });
+    const runtime = new Runtime({ ...f.options, ownership: { inspectClaims: async filter => {
+      enteredSeam();
+      await seamOpen;
+      return realOwnership.inspectClaims(filter);
+    } } });
+    f.runtimes.add(runtime);
+    t.mock.timers.enable({ apis: ['Date'], now: entry });
+    const pending = runtime.start({ ...f.input, assignment_id: `prior-${row.scenario}` });
+    await seamEntered;
+    const prior = { id: 'prior-run', assignment_id: 'prior-distinct', state: row.state,
+      coordinator_pid: row.coordinatorPid ?? process.pid, started_at: iso(row.startOffset) };
+    if (row.finishOffset !== 'omit') prior.finished_at = row.finishOffset === 'invalid' ? 'invalid' : iso(row.finishOffset);
+    mkdirSync(join(f.packagePath, 'runtime'), { recursive: true });
+    writeFileSync(join(f.packagePath, 'runtime/run.json'), JSON.stringify(prior));
+    t.mock.timers.setTime(entry + 30);
+    const before = readFileSync(join(f.packagePath, 'runtime/run.json'), 'utf8');
+    releaseSeam();
+    try {
+      if (row.admit) {
+        const started = await pending;
+        assert.equal(f.pids.length, 1, `${row.scenario}: an admitted start launched one process`);
+        await runtime.cancel(f.packagePath, started.run_id);
+      } else {
+        await assert.rejects(pending, error => error.code === 'run-active', `${row.scenario}: refusal code run-active`);
+        assert.equal(f.pids.length, 0, `${row.scenario}: a refused start launched no process`);
+        assert.equal(readFileSync(join(f.packagePath, 'runtime/run.json'), 'utf8'), before, `${row.scenario}: a refused start did not mutate the prior record`);
+      }
+    } finally {
+      releaseSeam();
+      t.mock.timers.reset();
+    }
+  });
+}
+
+test('serial admission interval: unknown-start refuses closed', async t => {
+  const entry = Date.parse('2025-01-01T00:00:00.000Z');
+  const f = await fixture(t, 'setInterval(() => {}, 1000);');
+  let releaseSeam;
+  const seamOpen = new Promise(resolve => { releaseSeam = resolve; });
+  let enteredSeam;
+  const seamEntered = new Promise(resolve => { enteredSeam = resolve; });
+  const realOwnership = createOwnership({ registryRoot: f.options.indexDir ? join(f.options.indexDir, 'ownership') : undefined });
+  const runtime = new Runtime({ ...f.options, ownership: { inspectClaims: async filter => {
+    enteredSeam();
+    await seamOpen;
+    return realOwnership.inspectClaims(filter);
+  } } });
+  f.runtimes.add(runtime);
+  t.mock.timers.enable({ apis: ['Date'], now: entry });
+  const pending = runtime.start({ ...f.input, assignment_id: 'prior-unknown-start' });
+  await seamEntered;
+  const prior = { id: 'prior-run', assignment_id: 'prior-distinct', state: 'completed',
+    coordinator_pid: process.pid, finished_at: new Date(entry + 20).toISOString() };
+  mkdirSync(join(f.packagePath, 'runtime'), { recursive: true });
+  writeFileSync(join(f.packagePath, 'runtime/run.json'), JSON.stringify(prior));
+  t.mock.timers.setTime(entry + 30);
+  const before = readFileSync(join(f.packagePath, 'runtime/run.json'), 'utf8');
+  releaseSeam();
+  try {
+    await assert.rejects(pending, error => error.code === 'run-active', 'unknown-start: refusal code run-active');
+    assert.equal(f.pids.length, 0, 'unknown-start: a refused start launched no process');
+    assert.equal(readFileSync(join(f.packagePath, 'runtime/run.json'), 'utf8'), before, 'unknown-start: a refused start did not mutate the prior record');
+  } finally {
+    releaseSeam();
+    t.mock.timers.reset();
+  }
 });
 
 test('a rejected cancellation preserves the lease and prevents replacement', async t => {
@@ -346,7 +476,10 @@ test('start creates the target worktree on the target branch, records it in loca
   assert.match(readFileSync(f.step, 'utf8'), /<!-- spec-location:begin -->[\s\S]*Prepared step/, 'a card written after package creation is stamped on first dispatch');
   assert.equal(JSON.parse(readFileSync(join(f.dir, 'index', `${record.id}.json`), 'utf8')).package_ref, 'demo/feature');
   assert.equal(existsSync(join(f.packagePath, 'runtime/package.lock')), false);
-  assert.deepEqual(readdirSync(join(f.packagePath, 'runtime')).filter(name => name.endsWith('.lock')), []);
+  // The two remaining `.lock` entries are synchronization anchors, not writer
+  // claims: the event-append and progress-refresh flocks never unlink their
+  // anchor file, so a waiter can always re-acquire the same inode.
+  assert.deepEqual(readdirSync(join(f.packagePath, 'runtime')).filter(name => name.endsWith('.lock')).sort(), ['events.jsonl.lock', 'progress.lock']);
 });
 
 test('a package ref starts the same run as its folder', async t => {
@@ -943,19 +1076,32 @@ test('CURRENT handoff carries bounded latest prerequisite facts and preserves ex
 });
 
 // Run alone: node --test --test-name-pattern='prompt construction failure' runtime.test.mjs
+// "Later" means strictly later milliseconds: an equality-refuses rule treats a request
+// entered at a prior run's finished_at millisecond as an overlap. A Date-only fake clock
+// pins each start's entry instant to the preceding run's finished_at + 1 so the ordering
+// is deterministic without sleeps; no scheduling or process behavior is mocked.
 test('prompt construction failure leaves a terminal receipt and permits a later dispatch', async t => {
   const f = await fixture(t, 'setInterval(()=>{},1000);'), runtime = new Runtime(f.options);
-  const prepared = await runtime.start({ ...f.input, assignment_id: 'prepare-checkout' });
-  await runtime.cancel(f.packagePath, prepared.run_id, 1000);
-  const unreadableCard = join(f.packagePath, 'step-002-subspec.md'); mkdirSync(unreadableCard);
-  await assert.rejects(() => runtime.start({ ...f.input, step: unreadableCard, assignment_id: 'bad-card' }), /EISDIR/);
-  const failed = loadRun(f.packagePath);
-  assert.equal(failed.state, 'failed');
-  assert.ok(failed.finished_at);
-  assert.equal(f.pids.length, 1);
-  const next = await runtime.start({ ...f.input, assignment_id: 'good-card' });
-  assert.equal(next.state, 'running');
-  await runtime.cancel(f.packagePath, next.run_id, 1000);
+  const fixedEpoch = Date.parse('2025-01-01T00:00:00.000Z');
+  t.mock.timers.enable({ apis: ['Date'], now: fixedEpoch });
+  t.after(() => t.mock.timers.reset());
+  try {
+    const prepared = await runtime.start({ ...f.input, assignment_id: 'prepare-checkout' });
+    await runtime.cancel(f.packagePath, prepared.run_id, 1000);
+    t.mock.timers.setTime(Date.parse(loadRun(f.packagePath).finished_at) + 1);
+    const unreadableCard = join(f.packagePath, 'step-002-subspec.md'); mkdirSync(unreadableCard);
+    await assert.rejects(() => runtime.start({ ...f.input, step: unreadableCard, assignment_id: 'bad-card' }), /EISDIR/);
+    const failed = loadRun(f.packagePath);
+    assert.equal(failed.state, 'failed');
+    assert.ok(failed.finished_at);
+    assert.equal(f.pids.length, 1);
+    t.mock.timers.setTime(Date.parse(failed.finished_at) + 1);
+    const next = await runtime.start({ ...f.input, assignment_id: 'good-card' });
+    assert.equal(next.state, 'running');
+    await runtime.cancel(f.packagePath, next.run_id, 1000);
+  } finally {
+    t.mock.timers.reset();
+  }
 });
 
 test('clarification redispatch reuses retained sessions and refuses the stale attempt ID', async t => {
@@ -1100,4 +1246,1010 @@ test('native recovery after a length stop can finish without inheriting the earl
   assert.equal(outcome.state, 'completed');
   assert.equal(outcome.error, undefined);
   assert.equal(outcome.result, 'Recovered');
+});
+
+// ---------------------------------------------------------------------------
+// Wave runtime: input/ownership binding only.
+// ---------------------------------------------------------------------------
+
+async function waveSetup(t, source, composition = false) {
+  const f = await fixture(t, source);
+  if (composition) {
+    // A normal separate-git-dir integration checkout: fallback worktrees'
+    // shared admin storage must not be nested inside the integration tree.
+    const common = join(f.dir, 'common.git');
+    renameSync(join(f.repo, '.git'), common);
+    writeFileSync(join(f.repo, '.git'), `gitdir: ${common}\n`);
+    f.locations.targets[0].common = common;
+    writeFileSync(join(f.packagePath, 'locations.json'), JSON.stringify(f.locations, null, 2));
+  }
+  const ownershipRoot = join(f.dir, 'ownership');
+  const ownership = createOwnership({ registryRoot: ownershipRoot });
+  const coordinator = { session: 'coord-1', epoch: 1, pid: process.pid, started_at: new Date().toISOString() };
+  const acquired = await ownership.acquirePackage({ packageId: f.ref, packagePath: f.packagePath, coordinator });
+  const packageClaim = acquired.claim ?? acquired.result?.claim;
+  const waveRoot = join(f.dir, 'wave-root');
+  const base = execFileSync('git', ['-C', f.repo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  const common = realpathSync(execFileSync('git', ['-C', f.repo, 'rev-parse', '--absolute-git-dir'], { encoding: 'utf8' }).trim());
+  const fake = join(f.dir, 'fake-pi.cjs');
+  const reserveMember = async (step, attemptId) => {
+    const attemptRoot = join(waveRoot, 'attempts', attemptId);
+    for (const name of ['lower', 'upper', 'work', 'merged', 'git']) mkdirSync(join(attemptRoot, name), { recursive: true });
+    const reserved = await ownership.reserveCheckout({ packageId: f.ref, attempt: attemptId,
+      checkout: { gitCommonDir: join(attemptRoot, 'upper'), worktreeGitDir: join(attemptRoot, 'upper') }, coordinator });
+    const checkoutClaim = reserved.claim ?? reserved.result?.claim;
+    return { kind: 'step', backend: 'overlayfs', snapshotId: `snap-${step}`, baseCommit: base,
+      lower: join(attemptRoot, 'lower'), upper: join(attemptRoot, 'upper'), work: join(attemptRoot, 'work'),
+      merged: join(attemptRoot, 'merged'), gitDir: join(attemptRoot, 'git'), worktree: null,
+      claim: { token: checkoutClaim.token, epoch: checkoutClaim.epoch }, packageId: f.ref, setup: 'none',
+      requestedBackend: 'auto', selectedBackend: 'overlayfs', backendReason: 'overlay-supported', backendRemedy: 'overlayfs-mount' };
+  };
+  // Transport double only: it records the sanitized env/argv it receives, reports no
+  // kernel proof and launches a real disposable Node child that writes the native
+  // stream. Its stop/drain status is the sole cleanup authority the runtime sees.
+  const launches = [];
+  const children = new Set();
+  const services = new Map();
+  const adapter = {
+    kind: 'fake', kernel_proof: false, drainOutcome: { status: 'confirmed' }, beforeRegister: null, stops: [], drains: [],
+    async start(request) {
+      if (adapter.beforeRegister) adapter.beforeRegister();
+      launches.push({ argv: [...request.argv], env: { ...request.env }, cwd: request.cwd, deadline: request.deadline, limits: request.limits });
+      const service = { unit: `fake-unit-${launches.length}`, invocation: `fake-invocation-${launches.length}`, main_pid: null, terminal: false };
+      // Composition mode executes the exact production argv. Only the final
+      // `pi` on PATH is a fixture; neither bootstrap nor bwrap is substituted.
+      if (composition && !request.register(service)) throw new Error('contained registration refused');
+      const [command, ...args] = composition ? request.argv : [process.execPath, fake];
+      const child = spawn(command, args, { cwd: request.cwd, env: { ...request.env }, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
+      const submittedLaunch = launches.at(-1);
+      child.stderr.on('data', chunk => { submittedLaunch.stderr = (submittedLaunch.stderr ?? '') + chunk; });
+      child.on('error', () => {});
+      service.main_pid = child.pid;
+      services.set(service.unit, { service, child });
+      children.add(child);
+      try {
+        // A refused registration must not authorize a live bootstrap.
+        if (!composition && !request.register(service)) throw new Error('contained registration refused');
+      } catch (error) {
+        try { process.kill(-child.pid, 'SIGKILL'); } catch {}
+        throw error;
+      }
+      return { ok: true, status: 'running', child, main_pid: child.pid, record: service };
+    },
+    async stop(service) {
+      adapter.stops.push(service.unit);
+      const entry = services.get(service.unit);
+      if (entry && entry.child.exitCode === null && entry.child.signalCode === null) { try { process.kill(-entry.child.pid, 'SIGTERM'); } catch {} }
+      if (composition) await waitForExit(entry?.child);
+      return { status: 'confirmed', service, kernel_proof: false };
+    },
+    async drain(service) {
+      adapter.drains.push(service.unit);
+      const entry = services.get(service.unit);
+      // Unknown is absence of proof, even if the leader has already exited.
+      if (composition && adapter.drainOutcome.status !== 'confirmed')
+        return { ...adapter.drainOutcome, service, kernel_proof: false };
+      if (entry && entry.child.exitCode === null && entry.child.signalCode === null) { try { process.kill(-entry.child.pid, 'SIGKILL'); } catch {} }
+      if (composition) await waitForExit(entry?.child);
+      return { ...adapter.drainOutcome, service, kernel_proof: false };
+    },
+  };
+  t.after(async () => {
+    for (const child of children) {
+      try { process.kill(-child.pid, 'SIGKILL'); } catch {}
+      if (child.exitCode === null && child.signalCode === null)
+        await new Promise(resolve => { const timer = setTimeout(resolve, 2000); child.once('exit', () => { clearTimeout(timer); resolve(); }); });
+    }
+  });
+  const target = f.locations.targets[0];
+  const wave = { version: 1, package_ref: f.ref, claim_token: packageClaim.token,
+    coordinator: { session: coordinator.session, epoch: coordinator.epoch }, generation: 1,
+    target: { id: target.id, base_commit: base, common, integration_checkout: realpathSync(f.repo) }, members: {} };
+  const attachMember = (step, attemptId, memberWorkspace) => {
+    wave.members[String(step)] = { step, attempt_id: attemptId, phase: 'implementing', run_id: null, workspace: memberWorkspace };
+  };
+  const workspace = await reserveMember(1, 'attempt-1');
+  attachMember(1, 'attempt-1', workspace);
+  mkdirSync(join(f.packagePath, 'runtime', 'waves'), { recursive: true });
+  const wavePath = join(f.packagePath, 'runtime', 'waves', 'wave-1.json');
+  writeFileSync(wavePath, JSON.stringify(wave, null, 2));
+  const input = { ...f.input, wave_id: 'wave-1', expected_generation: 1, step_number: 1, attempt_id: 'attempt-1',
+    phase: 'implementing', claim_token: packageClaim.token, coordinator_epoch: 1 };
+  const addMember = async (step, attemptId = `attempt-${step}`) => {
+    const memberWorkspace = await reserveMember(step, attemptId);
+    attachMember(step, attemptId, memberWorkspace);
+    writeFileSync(wavePath, JSON.stringify(wave, null, 2));
+    const memberStep = join(f.packagePath, `step-${String(step).padStart(3, '0')}-subspec.md`);
+    writeFileSync(memberStep, 'Prepared step');
+    const stepsFile = join(f.packagePath, 'spec-steps.json');
+    const steps = existsSync(stepsFile) ? JSON.parse(readFileSync(stepsFile, 'utf8')).steps : [];
+    if (!steps.some(entry => entry.step === step)) steps.push({ step, difficulty: 'hard' });
+    writeFileSync(stepsFile, JSON.stringify({ steps }));
+    return { workspace: memberWorkspace, input: { ...input, step: memberStep, step_number: step, attempt_id: attemptId, assignment_id: `wave-member-${step}` } };
+  };
+  return { f, ownershipRoot, ownership, coordinator, waveRoot, wave, wavePath, workspace, input, adapter, launches, children, addMember, fake };
+}
+
+async function waitForExit(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('real child did not exit after stop/drain')), 5000);
+    child.once('exit', () => { clearTimeout(timer); resolve(); });
+  });
+}
+
+async function composedWave(t, source, portable = false) {
+  const originalPath = process.env.PATH;
+  t.after(() => { process.env.PATH = originalPath; });
+  const w = await waveSetup(t, source, portable ? 'portable' : true);
+  if (portable) {
+    // Real executable discovery, not a probe runner/result override: neither
+    // bwrap nor a directory containing it is reachable through this PATH.
+    const bin = join(w.f.dir, 'portable-bin');
+    mkdirSync(bin);
+    for (const command of ['git', 'sh', 'mkdir', 'flock', 'tar']) {
+      const executable = execFileSync('/bin/sh', ['-c', `command -v ${command}`], { encoding: 'utf8' }).trim();
+      symlinkSync(executable, join(bin, command));
+    }
+    process.env.PATH = bin;
+  }
+  // Use production capability classification and selection, never a fabricated
+  // unavailable result. This is NOT a systemd/cgroup or EV-14 rehearsal.
+  const probe = await runCapabilityProbe({ fixtureRoot: w.f.dir });
+  w.capability = probe.result;
+  if (portable) {
+    assert.equal(probe.result.status, 'unavailable');
+    assert.equal(probe.result.reason, 'bwrap-absent');
+  }
+  assert.notEqual(probe.result.status, 'blocked', JSON.stringify(probe));
+  w.wave.target.backend = 'auto';
+  w.wave.target.capability = probe.result;
+  await w.ownership.releaseClaim({ ...w.workspace.claim, drain: 'confirmed' });
+  w.wave.members['1'].workspace = null;
+  writeFileSync(w.wavePath, JSON.stringify(w.wave, null, 2));
+  const target = w.f.locations.targets[0].id;
+  writeFileSync(join(w.f.packagePath, 'spec-steps.json'), JSON.stringify({
+    steps: [{ step: 1, difficulty: 'hard' }],
+    setup: { [target]: { command: 'mkdir -p deps; printf prepared > deps/setup-output', environment: [], lockfiles: [] } },
+  }));
+  const bin = join(w.f.dir, 'bin');
+  mkdirSync(bin);
+  const pi = join(bin, 'pi');
+  writeFileSync(pi, `#!${process.execPath}\n${source}`);
+  chmodSync(pi, 0o700);
+  const previous = process.env.PATH;
+  process.env.PATH = `${bin}:${previous}`;
+  const runtime = waveRuntime(w);
+  const prepared = await runtime.prepareWaveMember(w.input);
+  w.workspace = prepared.workspace;
+  assert.equal(prepared.status, 'prepared');
+  assert.equal(prepared.preparation_receipt.trackedClean, true);
+  assert.equal(w.workspace.selectedBackend, probe.result.status === 'supported' ? 'overlayfs' : 'worktree');
+  assert.equal(w.workspace.backendReason, probe.result.reason);
+  if (portable) {
+    assert.equal(w.workspace.selectedBackend, 'worktree');
+    assert.equal(w.workspace.backend, 'worktree');
+    assert.ok(w.launches.every(({ argv }) => argv[0] === process.execPath && !argv.includes('bwrap')));
+  }
+  t.diagnostic(portable ? 'portable execution SUBSET: production worktree fallback, bwrap absent from PATH; setup publication KNOWN GAP outside step 6; kernel_proof:false; not EV-14'
+    : 'host-dependent/native auto-selection evidence only; not the portable contract; kernel_proof:false; not EV-14');
+  t.diagnostic(`composition backend=${w.workspace.selectedBackend}; capability=${probe.result.reason}; probe boundary=${probe.boundary}; no systemd/cgroup or EV-14 certification`);
+  const durable = JSON.parse(readFileSync(w.wavePath, 'utf8')).members['1'];
+  assert.equal(durable.workspace.snapshotId, w.workspace.snapshotId);
+  assert.equal(durable.preparation_receipt.drain, 'confirmed');
+  assert.equal(w.launches[0].argv[0], process.execPath, 'setup executes the real root bootstrap');
+  return { ...w, runtime };
+}
+
+const waveRuntime = w => {
+  const runtime = new Runtime({ ...w.f.options, ownershipRoot: w.ownershipRoot, serviceAdapter: w.adapter });
+  w.f.runtimes.add(runtime);
+  return runtime;
+};
+
+for (const portable of [false, true]) {
+// Original names/assertions stay intact for host-dependent auto-selection;
+// Portable variants establish execution/cleanup, but explicitly expose missing
+// setup publication. They cannot close F3 until the step-004 defect is repaired.
+const compositionName = portable ? 'portable fallback composition subset (KNOWN setup publication gap)' : 'composition';
+test(`wave runtime: ${compositionName} executes the submitted bootstrap and observes private worker context`, async t => {
+  const previousSecret = process.env.SPEC_RUNTIME_COMPOSITION_SECRET;
+  process.env.SPEC_RUNTIME_COMPOSITION_SECRET = 'private-composition-context';
+  t.after(() => {
+    if (previousSecret === undefined) delete process.env.SPEC_RUNTIME_COMPOSITION_SECRET;
+    else process.env.SPEC_RUNTIME_COMPOSITION_SECRET = previousSecret;
+  });
+  const w = await composedWave(t, `
+    const fs = require('fs'), path = require('path');
+    const record = JSON.parse(fs.readFileSync(process.env.SPEC_RUNTIME_RECORD, 'utf8'));
+    fs.writeFileSync(path.join(record.package, 'worker-environment.json'), JSON.stringify(process.env));
+    fs.writeFileSync(path.join(record.package, 'worker-checkout.json'), JSON.stringify({
+      cwd: process.cwd(), pointer: fs.readFileSync('.git', 'utf8'),
+      head: require('child_process').execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim(),
+      setup: fs.existsSync('deps/setup-output') ? fs.readFileSync('deps/setup-output', 'utf8') : null,
+    }));
+    setInterval(() => {}, 1000);
+  `, portable);
+  const { runtime } = w;
+  const started = await runtime.start(w.input);
+  if (portable) {
+    assert.equal(loadRun(w.f.packagePath, started.run_id).wave_bindings.backend, 'worktree');
+    assert.equal(w.launches.at(-1).argv[0], process.execPath);
+  }
+  const observed = join(w.f.packagePath, 'worker-environment.json');
+  const checkoutObserved = join(w.f.packagePath, 'worker-checkout.json');
+  for (let i = 0; i < 100 && !existsSync(checkoutObserved); i++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(existsSync(checkoutObserved), true, w.launches.at(-1).stderr);
+  assert.equal(existsSync(observed), true, 'submitted bootstrap must deliver the private request environment');
+  const env = JSON.parse(readFileSync(observed, 'utf8'));
+  assert.equal(env.SPEC_RUNTIME_RECORD, join(w.f.packagePath, 'runtime', 'runs', `${started.run_id}.json`));
+  assert.equal(env.SPEC_RUNTIME_ROLE, 'owner');
+  assert.equal(env.PI_INTERCOM_SCOPE_ID, started.run_id);
+  assert.equal(env.PI_INTERCOM_STABLE_ID, `spec-owner-${started.run_id}`);
+  assert.equal(env.PI_WARDEN_HOST_PATHS, realpathSync(w.f.packagePath));
+  assert.equal(env.PI_WARDEN_ENABLED, '1');
+  assert.equal(env.SPEC_RUNTIME_COMPOSITION_SECRET, 'private-composition-context');
+  for (const key of ['SPEC_RUNTIME_ROLE', 'SPEC_RUNTIME_RECORD', 'PI_INTERCOM_SCOPE_ID', 'PI_WARDEN_ENABLED', 'PI_WARDEN_HOST_PATHS', 'SPEC_RUNTIME_COMPOSITION_SECRET'])
+    assert.equal(w.launches.at(-1).env[key], undefined, `${key} is private, not transport`);
+  assert.ok(!w.launches.at(-1).argv.some(arg => arg.includes('private-composition-context')));
+  if (w.workspace.backend === 'overlayfs') {
+    const argv = w.launches.at(-1).argv;
+    assert.equal(argv[0], 'bwrap');
+    assert.ok(argv.includes('--unshare-user'));
+  }
+  const checkout = JSON.parse(readFileSync(checkoutObserved, 'utf8'));
+  assert.equal(checkout.cwd, w.workspace.merged ?? w.workspace.worktree);
+  assert.match(checkout.pointer, /^gitdir: /);
+  assert.equal(checkout.head, w.wave.target.base_commit);
+  if (portable) {
+    await t.test('prepared fallback output reaches portable worker (not EV-14)', () => {
+      assert.equal(checkout.setup, 'prepared', 'real setup output is published to fallback');
+    });
+    assert.equal(w.launches[0].argv[0], process.execPath);
+    const staging = join(w.workspace.worktree, '..', '..', '..', 'staging', 'attempt-1', 'dependencies', 'deps', 'setup-output');
+    assert.equal(readFileSync(staging, 'utf8'), 'prepared', 'real setup produced bytes in staging before publication');
+  } else {
+    assert.equal(checkout.setup, 'prepared');
+  }
+  await runtime.cancel(w.f.packagePath, started.run_id);
+});
+
+for (const drainStatus of ['confirmed', 'unknown']) {
+  test(`wave runtime: ${compositionName} contained settled cleanup with ${drainStatus} drain retains state for phase remount (not EV-14)`, { timeout: 60000 }, async t => {
+    const w = await composedWave(t, `
+      const fs = require('fs'), path = require('path');
+      const record = JSON.parse(fs.readFileSync(process.env.SPEC_RUNTIME_RECORD, 'utf8'));
+      const retained = fs.existsSync('retained.txt') ? fs.readFileSync('retained.txt', 'utf8') : null;
+      fs.writeFileSync(path.join(record.package, record.id + '-observed.json'), JSON.stringify({
+        retained, setup: fs.existsSync('deps/setup-output') ? fs.readFileSync('deps/setup-output', 'utf8') : null,
+        head: require('child_process').execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim(),
+      }));
+      fs.writeFileSync('retained.txt', 'dirty retained bytes');
+      process.on('SIGTERM', () => process.exit(143));
+      console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'Retained handoff'}]}}));
+      console.log(JSON.stringify({type:'agent_settled',aborted:false}));
+      setInterval(() => {}, 1000);
+    `, portable);
+    const { runtime } = w;
+    w.adapter.drainOutcome = { status: drainStatus, reason: drainStatus === 'unknown' ? 'inspection-unavailable' : undefined };
+    const started = await runtime.start(w.input);
+    const result = await w.f.finished;
+    let record = loadRun(w.f.packagePath, started.run_id);
+    if (portable) {
+      assert.equal(record.wave_bindings.backend, 'worktree');
+      assert.equal(w.launches.at(-1).argv[0], process.execPath);
+    }
+    const claims = () => JSON.parse(readFileSync(join(w.ownershipRoot, 'claims.json'), 'utf8')).claims;
+    const ownClaims = () => claims().filter(c => [record.capacity_claim.token, record.wave_bindings.checkout_claim].includes(c.token));
+    assert.equal(w.adapter.stops.filter(unit => unit === record.service.unit).length, 1, `real contained settled-worker callback ran exactly once: ${JSON.stringify(result)}`);
+    assert.ok(w.adapter.drains.includes(record.service.unit), 'Runtime.finish used contained drain');
+    const child = [...w.children].at(-1);
+    assert.notEqual(child.exitCode ?? child.signalCode, null, 'real submitted process exited before drain confirmation');
+    const receiptPath = join(w.f.packagePath, 'runtime', 'runs', `${record.id}-phase-drain.json`);
+    if (drainStatus === 'unknown') {
+      assert.equal(result.state, 'blocked');
+      assert.equal(ownClaims().length, 2, 'unknown drain retains BOTH capacity and checkout');
+      assert.equal(existsSync(receiptPath), false, 'unknown drain cannot mint release proof');
+      await assert.rejects(() => runtime.remountWaveMember(w.input), /confirmed phase drain receipt/);
+      w.adapter.drainOutcome = { status: 'confirmed' };
+      await runtime.finish(record, { code: 143, shutdown_cleanup: true, result: 'Retained handoff' });
+      record = loadRun(w.f.packagePath, started.run_id);
+    } else {
+      assert.equal(result.state, 'completed');
+      assert.equal(result.shutdown_cleanup, true, 'exit 143 from contained cleanup is not a crash');
+      assert.equal(result.error, undefined);
+    }
+    assert.equal(record.state, 'completed');
+    assert.equal(ownClaims().length, 0, 'confirmed drain/retry releases both claims');
+    assert.ok(claims().some(c => c.kind === 'package'), 'package authority is never released');
+    const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
+    assert.equal(receipt.run_id, started.run_id);
+    assert.deepEqual(receipt.released.map(c => c.kind).sort(), ['capacity', 'checkout']);
+    assert.equal(receipt.service.unit, record.service.unit);
+    const retained = w.workspace.retained;
+    const wave = JSON.parse(readFileSync(w.wavePath, 'utf8'));
+    wave.members['1'].phase = 'reviewing';
+    writeFileSync(w.wavePath, JSON.stringify(wave, null, 2));
+    const input = { ...w.input, phase: 'reviewing', assignment_id: 'retained-review-phase' };
+    const remounted = await runtime.remountWaveMember(input);
+    assert.equal(remounted.remounted, true);
+    assert.deepEqual(remounted.workspace.retained, retained, 'same immutable retained identity');
+    assert.notEqual(remounted.workspace.claim.token, w.workspace.claim.token);
+    assert.equal((await runtime.remountWaveMember(input)).idempotent, true);
+    const next = await runtime.start(input);
+    if (portable) {
+      assert.equal(loadRun(w.f.packagePath, next.run_id).wave_bindings.backend, 'worktree');
+      assert.equal(w.launches.at(-1).argv[0], process.execPath);
+    }
+    const observed = join(w.f.packagePath, `${next.run_id}-observed.json`);
+    for (let i = 0; i < 100 && !existsSync(observed); i++) await new Promise(resolve => setTimeout(resolve, 20));
+    const actual = JSON.parse(readFileSync(observed, 'utf8'));
+    assert.equal(actual.retained, 'dirty retained bytes', 'second real worker sees first worker dirty state');
+    if (portable) {
+      assert.equal(actual.setup, 'prepared', 'published setup output survives phase remount');
+    } else {
+      assert.equal(actual.setup, 'prepared', 'published setup output survives phase remount');
+    }
+    assert.equal(actual.head, w.wave.target.base_commit);
+    assert.notEqual(next.run_id, started.run_id);
+    await runtime.cancel(w.f.packagePath, next.run_id);
+  });
+}
+
+}
+
+test('wave runtime: nonnative overlay argv construction retains real bootstrap without executing bwrap (not EV-14)', async t => {
+  const w = await waveSetup(t, 'throw new Error("must not execute");');
+  let submitted;
+  w.adapter.start = async request => {
+    submitted = request;
+    throw new Error('argv inspection only: no execution');
+  };
+  await assert.rejects(() => waveRuntime(w).start(w.input), /argv inspection only/);
+  assert.ok(submitted, 'production containedRoot must submit the composition');
+  const layers = w.workspace;
+  assert.deepEqual(submitted.argv.slice(0, 20), [
+    'bwrap', '--unshare-user', '--die-with-parent', '--bind', '/', '/',
+    '--dev', '/dev', '--proc', '/proc', '--overlay-src', layers.lower,
+    '--overlay', layers.upper, layers.work, layers.merged, '--chdir', layers.merged,
+    '--', process.execPath,
+  ]);
+  assert.equal(submitted.argv[20], '-e');
+  assert.match(submitted.argv[21], /spawn/);
+  const requestPath = submitted.argv[22];
+  assert.equal(submitted.argv.length, 23, 'bootstrap request is the final argv element');
+  const request = JSON.parse(readFileSync(requestPath, 'utf8'));
+  assert.equal(request.checkout, layers.merged);
+  assert.equal(request.gitDir, layers.gitDir);
+  assert.equal(request.command, 'pi');
+  assert.ok(request.args.includes('--session'));
+  assert.equal(request.env.SPEC_RUNTIME_ROLE, 'owner');
+  assert.equal(w.children.size, 0, 'inspection never executes a transport');
+  t.diagnostic('nonnative production overlay argv inspection only; no capability probe, fixture bwrap or execution; kernel_proof:false; not EV-14');
+});
+
+test('wave runtime: production fallback workspace binds and starts without an overlay upper (not EV-14)', async t => {
+  const w = await composedWave(t, 'setInterval(() => {}, 1000);', true);
+  assert.equal(w.workspace.upper, null);
+  assert.equal(existsSync(join(w.workspace.worktree, '..', 'upper')), false);
+  const started = await w.runtime.start(w.input);
+  const record = loadRun(w.f.packagePath, started.run_id);
+  assert.equal(record.state, 'running');
+  assert.equal(record.wave_bindings.backend, 'worktree');
+  assert.equal(record.wave_bindings.layers, null);
+  assert.equal(record.checkout, w.workspace.worktree);
+  await w.runtime.cancel(w.f.packagePath, started.run_id);
+});
+
+test('wave runtime: overlay workspace with a missing upper still throws before launch', async t => {
+  const w = await waveSetup(t);
+  rmSync(w.workspace.upper, { recursive: true });
+  await assert.rejects(() => waveRuntime(w).start(w.input), error => {
+    assert.equal(error.code, 'ENOENT');
+    assert.equal(error.path, w.workspace.upper);
+    return true;
+  });
+  assert.equal(w.launches.length, 0);
+});
+
+test('wave runtime: a validated member binds its run and bypasses only the serial latest-run exclusion', async t => {
+  const w = await waveSetup(t, 'setInterval(() => {}, 1000);');
+  writeFileSync(join(w.f.packagePath, 'runtime', 'run.json'), JSON.stringify({ id: 'prior-run', state: 'running', coordinator_pid: process.pid, package: w.f.packagePath, step: w.f.step }));
+  const runtime = waveRuntime(w);
+  const started = await runtime.start(w.input);
+  const record = loadRun(w.f.packagePath, started.run_id);
+  assert.equal(record.state, 'running');
+  assert.equal(record.wave_bindings.wave_id, 'wave-1');
+  assert.equal(record.wave_bindings.generation, 1);
+  assert.equal(record.wave_bindings.backend, 'overlayfs');
+  assert.equal(summary(record).wave.wave_id, 'wave-1');
+  assert.equal(JSON.parse(readFileSync(w.wavePath, 'utf8')).members['1'].run_id, started.run_id);
+  assert.equal(JSON.parse(readFileSync(join(w.f.packagePath, 'runtime', 'run.json'), 'utf8')).id, 'prior-run');
+  const replayed = await runtime.start(w.input);
+  assert.equal(replayed.run_id, started.run_id, 'the wave binding is idempotent for the same assignment');
+});
+
+test('wave runtime: the start prompt uses the frozen base without probing the empty merged overlay', async t => {
+  const w = await waveSetup(t, 'setInterval(() => {}, 1000);');
+  const base = execFileSync('git', ['-C', w.f.repo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  // The fixture's joined overlay is an intentionally empty external mountpoint with
+  // no .git; the coordinator must build the prompt without reading it.
+  assert.equal(existsSync(join(w.workspace.merged, '.git')), false, 'fixture keeps the external merged mountpoint empty');
+  const runtime = waveRuntime(w);
+  const started = await runtime.start(w.input);
+  const request = JSON.parse(readFileSync(join(w.f.packagePath, 'runtime', 'runs', `${started.run_id}-owner-request.json`), 'utf8'));
+  const prompt = request.args.find(value => typeof value === 'string' && value.includes('CURRENT:'));
+  const current = JSON.parse(prompt.match(/CURRENT: ([^\n]+)/)[1]);
+  assert.equal(current.revision.commit, base, 'CURRENT revision is the durable frozen base');
+  assert.equal(current.revision.dirty, null, 'the coordinator never measures dirtiness against an unmounted overlay');
+  assert.equal(existsSync(join(w.workspace.merged, '.git')), false, 'the coordinator did not initialize the empty external merged mountpoint');
+  await runtime.cancel(w.f.packagePath, started.run_id);
+});
+
+test('wave runtime: a stale generation is refused', async t => {
+  const w = await waveSetup(t, 'setInterval(() => {}, 1000);');
+  await assert.rejects(() => waveRuntime(w).start({ ...w.input, expected_generation: 2 }), /expected_generation/);
+});
+
+test('wave runtime: a member reusing the integration checkout is refused', async t => {
+  const w = await waveSetup(t, 'setInterval(() => {}, 1000);');
+  w.wave.target.integration_checkout = w.workspace.merged;
+  writeFileSync(w.wavePath, JSON.stringify(w.wave, null, 2));
+  await assert.rejects(() => waveRuntime(w).start(w.input), /integration checkout/);
+});
+
+test('wave runtime: a serial start refuses any active package wave claim', async t => {
+  const w = await waveSetup(t, 'setInterval(() => {}, 1000);');
+  await assert.rejects(() => waveRuntime(w).start(w.f.input), /active wave claim/);
+});
+
+test('wave runtime: revoking the wave member binding fails the writer lease', async t => {
+  const w = await waveSetup(t, 'setInterval(() => {}, 1000);');
+  const started = await waveRuntime(w).start(w.input);
+  const record = loadRun(w.f.packagePath, started.run_id);
+  w.wave.members['1'].run_id = null;
+  writeFileSync(w.wavePath, JSON.stringify(w.wave, null, 2));
+  assert.throws(() => assertLease(record), /Wave member binding/);
+});
+
+test('wave runtime: a refused registration blocks the run and leaves no live bootstrap', { timeout: 120000 }, async t => {
+  const w = await waveSetup(t, 'setInterval(() => {}, 1000);');
+  w.adapter.beforeRegister = () => {
+    const current = JSON.parse(readFileSync(w.wavePath, 'utf8'));
+    current.members['1'].run_id = 'forged-run';
+    writeFileSync(w.wavePath, JSON.stringify(current, null, 2));
+  };
+  await assert.rejects(() => waveRuntime(w).start(w.input), /Wave member binding/);
+  const runsDir = join(w.f.packagePath, 'runtime', 'runs');
+  const runFile = readdirSync(runsDir).find(name => /^[0-9a-f-]{36}\.json$/.test(name));
+  const record = JSON.parse(readFileSync(join(runsDir, runFile), 'utf8'));
+  assert.equal(record.state, 'blocked');
+  assert.equal(record.pid ?? null, null, 'a wave launcher pid is never recorded as the run pid');
+  for (const child of w.children) {
+    if (child.exitCode === null && child.signalCode === null)
+      await new Promise(resolve => { const timer = setTimeout(resolve, 2000); child.once('exit', () => { clearTimeout(timer); resolve(); }); });
+    assert.equal(groupAlive(child.pid), false, 'no bootstrap survives a refused registration');
+  }
+});
+
+test('wave runtime: two members run concurrently in distinct workspaces and cancelling one leaves the sibling active', { timeout: 120000 }, async t => {
+  const w = await waveSetup(t, 'setInterval(() => {}, 1000);');
+  const second = await w.addMember(2);
+  const runtime = waveRuntime(w);
+  const [first, other] = await Promise.all([runtime.start(w.input), runtime.start(second.input)]);
+  const firstRecord = loadRun(w.f.packagePath, first.run_id);
+  const otherRecord = loadRun(w.f.packagePath, other.run_id);
+  assert.notEqual(firstRecord.checkout, otherRecord.checkout, 'members have distinct retained workspaces');
+  assert.equal(firstRecord.state, 'running');
+  assert.equal(otherRecord.state, 'running');
+  assert.equal(groupAlive(firstRecord.pid), true);
+  assert.equal(groupAlive(otherRecord.pid), true);
+  // Readiness barrier: each member's durable wave binding names its own run before cancellation.
+  const bound = JSON.parse(readFileSync(w.wavePath, 'utf8'));
+  assert.equal(bound.members['1'].run_id, first.run_id);
+  assert.equal(bound.members['2'].run_id, other.run_id);
+  const siblingGroupsBefore = activeGroups(loadRun(w.f.packagePath, other.run_id)).map(group => group.pid);
+  await runtime.cancelRun(w.f.packagePath, first.run_id);
+  assert.equal(loadRun(w.f.packagePath, first.run_id).state, 'cancelled');
+  const siblingAfter = loadRun(w.f.packagePath, other.run_id);
+  assert.equal(siblingAfter.state, 'running');
+  assert.equal(groupAlive(siblingAfter.pid), true, 'the sibling bootstrap was never signalled');
+  assert.deepEqual(activeGroups(siblingAfter).map(group => group.pid), siblingGroupsBefore);
+  await runtime.cancelRun(w.f.packagePath, other.run_id);
+});
+
+test('wave runtime: an unknown drain retains capacity and checkout and a confirmed retry releases only that member', { timeout: 120000 }, async t => {
+  const w = await waveSetup(t);
+  const runtime = waveRuntime(w);
+  const started = await runtime.start(w.input);
+  w.adapter.drainOutcome = { status: 'stop-requested', reason: 'inspect-error' };
+  const blocked = await w.f.finished;
+  assert.equal(blocked.state, 'blocked', 'a non-confirmed drain cannot finish the run');
+  const inspect = async () => (await w.ownership.inspectClaims({ packageId: w.f.ref })).claims;
+  const before = await inspect();
+  assert.ok(before.some(claim => claim.kind === 'capacity' && claim.attempt === 'wave-1:attempt-1:implementing'));
+  assert.ok(before.some(claim => claim.kind === 'checkout' && claim.attempt === 'attempt-1'));
+  assert.equal(loadRun(w.f.packagePath, started.run_id).state, 'blocked');
+  w.adapter.drainOutcome = { status: 'confirmed' };
+  await runtime.finish(loadRun(w.f.packagePath, started.run_id), { result: 'Done' });
+  const after = await inspect();
+  const released = claim => before.some(old => old.token === claim.token) && !after.some(next => next.token === claim.token);
+  const capacity = before.filter(claim => claim.kind === 'capacity' && claim.attempt === 'wave-1:attempt-1:implementing');
+  const checkout = before.filter(claim => claim.kind === 'checkout' && claim.attempt === 'attempt-1');
+  assert.equal(capacity.length, 1);
+  assert.equal(checkout.length, 1);
+  assert.equal(released(capacity[0]), true);
+  assert.equal(released(checkout[0]), true);
+  assert.equal(after.filter(claim => claim.kind === 'package').length, 1, 'the wave package claim is never released');
+  const record = loadRun(w.f.packagePath, started.run_id);
+  assert.equal(record.state, 'completed');
+  assert.equal(record.phase_drain.status, 'confirmed');
+  assert.ok(record.phase_drain.path && existsSync(record.phase_drain.path));
+  const receipt = JSON.parse(readFileSync(record.phase_drain.path, 'utf8'));
+  assert.equal(receipt.status, 'confirmed');
+  assert.deepEqual(receipt.released.map(item => item.kind).sort(), ['capacity', 'checkout']);
+});
+
+test('wave runtime: the private request carries Warden, SPEC_RUNTIME and intercom while the adapter transport stays sanitized', { timeout: 120000 }, async t => {
+  const w = await waveSetup(t, 'setInterval(() => {}, 1000);');
+  const secret = 'wave-private-secret-token';
+  const previous = process.env.SPEC_RUNTIME_TEST_SECRET;
+  process.env.SPEC_RUNTIME_TEST_SECRET = secret;
+  t.after(() => { if (previous === undefined) delete process.env.SPEC_RUNTIME_TEST_SECRET; else process.env.SPEC_RUNTIME_TEST_SECRET = previous; });
+  const runtime = waveRuntime(w);
+  const started = await runtime.start(w.input);
+  const launch = w.launches.at(-1);
+  assert.equal(launch.env.SPEC_RUNTIME_TEST_SECRET, undefined, 'secrets never reach the transport env');
+  assert.equal(launch.env.SPEC_RUNTIME_ROLE, undefined);
+  assert.equal(launch.env.PI_INTERCOM_SCOPE_ID, undefined);
+  assert.equal(launch.env.PI_WARDEN_HOST_PATHS, undefined);
+  assert.ok(!launch.argv.some(part => String(part).includes(secret)), 'secrets never reach the transport argv');
+  const record = loadRun(w.f.packagePath, started.run_id);
+  const request = JSON.parse(readFileSync(record.service_request, 'utf8'));
+  assert.equal(request.env.SPEC_RUNTIME_TEST_SECRET, secret, 'the mode-0600 private request forwards the full environment');
+  assert.equal(request.env.SPEC_RUNTIME_ROLE, 'owner');
+  assert.equal(request.env.SPEC_RUNTIME_RECORD, join(w.f.packagePath, 'runtime', 'runs', `${started.run_id}.json`));
+  assert.equal(request.env.PI_INTERCOM_SCOPE_ID, started.run_id);
+  assert.equal(request.env.PI_INTERCOM_STABLE_ID, `spec-owner-${started.run_id}`);
+  assert.equal(request.env.PI_WARDEN_HOST_PATHS, realpathSync(w.f.packagePath));
+  await runtime.cancelRun(w.f.packagePath, started.run_id);
+});
+
+test('wave runtime: a sibling member aliasing the same checkout is refused', { timeout: 120000 }, async t => {
+  const w = await waveSetup(t, 'setInterval(() => {}, 1000);');
+  const second = await w.addMember(2);
+  w.wave.members['2'].workspace = { ...w.workspace };
+  writeFileSync(w.wavePath, JSON.stringify(w.wave, null, 2));
+  await assert.rejects(() => waveRuntime(w).start(second.input), /same checkout or private git dir/i);
+});
+
+test('wave runtime: a caller presenting a replaced checkout claim is refused', { timeout: 120000 }, async t => {
+  const w = await waveSetup(t, 'setInterval(() => {}, 1000);');
+  const claimsFile = join(w.ownershipRoot, 'claims.json');
+  const registry = JSON.parse(readFileSync(claimsFile, 'utf8'));
+  registry.claims.find(claim => claim.kind === 'checkout').epoch += 1000;
+  writeFileSync(claimsFile, JSON.stringify(registry, null, 2));
+  await assert.rejects(() => waveRuntime(w).start(w.input), /checkout claim/i);
+});
+
+test('wave runtime: only a recorded role fallback is admitted and it never rewrites the requested selector', async () => {
+  const record = { owner_model: 'primalabs/owner-model', editor_model: 'primalabs/editor-model' };
+  const fallback = { provider: 'deepseek', id: 'deepseek-flash' };
+  const recovery = requested_model => ({ type: 'custom', customType: 'spec-provider-recovery',
+    data: { version: 1, requested_model, event: 'fallback_selected', effective_model: 'deepseek/deepseek-flash' } });
+  assert.doesNotThrow(() => assertManagedModel(record, 'owner', { provider: 'primalabs', id: 'owner-model' }, []), 'the exact requested selector passes');
+  assert.doesNotThrow(() => assertManagedModel(record, 'owner', fallback, [recovery('primalabs/owner-model')]), 'the recorded owner fallback passes');
+  assert.doesNotThrow(() => assertManagedModel(record, 'editor', fallback, [recovery('primalabs/editor-model')]), 'the recorded editor fallback passes');
+  assert.throws(() => assertManagedModel(record, 'owner', fallback, []), /SPEC_MODEL_SELECTOR_MISMATCH/, 'an unrecorded fallback is refused');
+  assert.throws(() => assertManagedModel(record, 'editor', fallback, [recovery('primalabs/owner-model')]), /SPEC_MODEL_SELECTOR_MISMATCH/, "another role's entry does not authorize the editor");
+  assert.throws(() => assertManagedModel(record, 'owner', { provider: 'deepseek', id: 'deepseek-chat' }, [recovery('primalabs/owner-model')]), /SPEC_MODEL_SELECTOR_MISMATCH/, 'an arbitrary model swap is refused');
+  assert.throws(() => assertManagedModel(record, 'owner', fallback, [{ type: 'custom', customType: 'spec-provider-recovery',
+    data: { version: 1, requested_model: 'primalabs/owner-model', event: 'fallback_selected', effective_model: 'deepseek/deepseek-chat' } }]), /SPEC_MODEL_SELECTOR_MISMATCH/, 'a mismatched effective model is refused');
+  assert.throws(() => assertManagedModel({ owner_model: 'test/owner' }, 'owner', fallback, [recovery('test/owner')]), /SPEC_MODEL_SELECTOR_MISMATCH/, 'only a primalabs requested selector is recovery-eligible');
+});
+
+test('wave runtime: sibling identity requires the same generation and a distinct member', async () => {
+  const validated = { wave_id: 'wave-1', package_ref: 'pkg', generation: 1, coordinator_epoch: 1, target: 'target-1', step_number: 1 };
+  assert.equal(waveSiblingMatches(validated, { ...validated, step_number: 2 }), true, 'a distinct member of the same generation matches');
+  assert.equal(waveSiblingMatches(validated, { ...validated }), false, 'the same member is not a sibling');
+  assert.equal(waveSiblingMatches(validated, { ...validated, step_number: 2, generation: 2 }), false, 'a stale generation is refused');
+  assert.equal(waveSiblingMatches(validated, { ...validated, step_number: 2, coordinator_epoch: 2 }), false, 'another coordinator epoch is refused');
+  assert.equal(waveSiblingMatches(validated, { ...validated, step_number: 2, target: 'target-2' }), false, 'another target is refused');
+  assert.equal(waveSiblingMatches(validated, { ...validated, step_number: 2, package_ref: 'other' }), false, 'another package is refused');
+  assert.equal(waveSiblingMatches(validated, null), false, 'a serial conflict is never a sibling');
+});
+
+test('wave runtime: a numeric shared deadline stays running with finite future remaining time', { timeout: 120000 }, async t => {
+  const w = await waveSetup(t, 'setInterval(() => {}, 1000);');
+  const runtime = waveRuntime(w);
+  const started = await runtime.start(w.input);
+  // Explicit ready barrier: the contained launch is registered before start
+  // returns, and a zero-delay (NaN) deadline timer fires before this later
+  // zero-delay timer, so a numerically mis-parsed deadline is observable here.
+  assert.ok(w.launches.length >= 1, 'the contained member launch is registered');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const record = loadRun(w.f.packagePath, started.run_id);
+  assert.equal(record.state, 'running', 'a numeric shared deadline does not cancel the run');
+  assert.ok(Number.isSafeInteger(record.deadline.expires_at), 'the shared expiry is a safe integer');
+  assert.equal(record.deadline.expires_at, record.deadline.started_at + record.deadline.timeout_ms, 'the recorded deadline is internally consistent');
+  const wave = JSON.parse(readFileSync(w.wavePath, 'utf8'));
+  assert.deepEqual(record.deadline, wave.deadline, 'the run retains the shared wave deadline unchanged');
+  const remaining = record.deadline.expires_at - Date.now();
+  assert.ok(Number.isFinite(remaining) && remaining > 0, 'the shared deadline retains finite future time');
+});
+
+test('wave runtime: a live distinct sibling conflict is waived while stale and same-member conflicts are refused', { timeout: 120000 }, async t => {
+  const w = await waveSetup(t, 'setInterval(() => {}, 1000);');
+  const runtime = waveRuntime(w);
+  const started = await runtime.start(w.input);
+  const bound = loadRun(w.f.packagePath, started.run_id).wave_bindings;
+  const siblingConfig = { wave_bindings: { ...bound, step_number: 2 } };
+  assert.equal(waveSiblingConflict(w.f.packagePath, { runId: started.run_id }, siblingConfig), true, 'a live distinct sibling is waived');
+  assert.equal(waveSiblingConflict(w.f.packagePath, { runId: started.run_id }, { wave_bindings: bound }), false, 'the same member stays a conflict');
+  assert.equal(waveSiblingConflict(w.f.packagePath, { runId: 'missing-run' }, siblingConfig), false, 'an unknown run is refused');
+  await runtime.cancelRun(w.f.packagePath, started.run_id);
+  assert.equal(waveSiblingConflict(w.f.packagePath, { runId: started.run_id }, siblingConfig), false, 'a cancelled sibling no longer holds a lease');
+});
+
+test('wave runtime: simultaneous event appenders lose no valid line', { timeout: 120000 }, async t => {
+  const f = await fixture(t, 'setInterval(() => {}, 1000);');
+  mkdirSync(join(f.packagePath, 'runtime'), { recursive: true });
+  const script = join(f.dir, 'append-events.mjs');
+  writeFileSync(script, `import { event } from ${JSON.stringify(new URL('./runtime.mjs', import.meta.url).href)};\nevent({ package: process.argv[2], id: process.argv[3] }, 'probe', {});`);
+  await Promise.all(Array.from({ length: 16 }, (_, i) => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [script, f.packagePath, `run-${i}`], { stdio: ['ignore', 'ignore', 'pipe'] });
+    let err = '';
+    child.stderr.on('data', chunk => { err += chunk; });
+    child.on('error', reject);
+    child.on('exit', code => code === 0 ? resolve() : reject(new Error(`append ${i} exited ${code}: ${err}`)));
+  })));
+  const lines = readFileSync(join(f.packagePath, 'runtime', 'events.jsonl'), 'utf8').split('\n').filter(Boolean);
+  assert.equal(lines.length, 16, 'no append is lost');
+  assert.deepEqual(lines.map(line => JSON.parse(line).run_id).sort(), Array.from({ length: 16 }, (_, i) => `run-${i}`).sort(), 'every line stays valid JSON');
+});
+
+test('wave runtime: a failed event lock append surfaces an explicit error', async t => {
+  const f = await fixture(t, 'setInterval(() => {}, 1000);');
+  mkdirSync(join(f.packagePath, 'runtime'), { recursive: true });
+  const emptyPath = join(f.dir, 'empty-path');
+  mkdirSync(emptyPath, { recursive: true });
+  const previousPath = process.env.PATH;
+  process.env.PATH = emptyPath;
+  t.after(() => { process.env.PATH = previousPath; });
+  assert.throws(() => event({ package: f.packagePath, id: 'run-lock' }, 'probe'), /Cannot append runtime event probe/, 'a missing lock command is surfaced, not silently dropped');
+});
+
+for (const code of [137, 143]) {
+  test(`wave runtime: wait cleanup maps a confirmed stop that exits ${code} to cleanup, not a crash`, { timeout: 120000 }, async t => {
+    const f = await fixture(t, `
+      process.on('SIGTERM', () => { process.exit(${code}); });
+      console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'Retained handoff'}]}}));
+      console.log(JSON.stringify({type:'agent_settled',aborted:false}));
+      setInterval(() => {}, 1000);
+    `);
+    const launchProcess = f.options.launchProcess;
+    f.options.launchProcess = (r, role, prompt, opts) => launchProcess(r, role, prompt, { ...opts, shutdownGraceMs: 25 });
+    const runtime = new Runtime(f.options);
+    const started = await runtime.start(f.input);
+    const result = await f.finished;
+    assert.equal(result.state, 'completed');
+    assert.equal(result.shutdown_cleanup, true);
+    assert.equal(result.error, undefined, 'a numeric cleanup exit is not reported as a crash');
+    assert.equal(loadRun(f.packagePath, started.run_id).state, 'completed');
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Dependency handoff: bounded prerequisite context from the requires graph.
+// ---------------------------------------------------------------------------
+
+function writeIndex(packagePath, steps) {
+  writeFileSync(join(packagePath, 'spec-steps.json'), JSON.stringify({ steps }));
+}
+
+function writeRun(packagePath, { id, step, started_at, completion, state = 'completed' }) {
+  const dir = join(packagePath, 'runtime/runs');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${id}.json`), JSON.stringify({ id, step: join(packagePath, step), state, started_at }));
+  if (completion) writeFileSync(join(dir, `${id}-completion.json`), JSON.stringify(completion));
+}
+
+function writeWave(packagePath, id, record) {
+  const dir = join(packagePath, 'runtime/waves');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${id}.json`), JSON.stringify(record));
+}
+
+const SESSION_DUMP_PI = `const fs = require('node:fs'), path = require('node:path');
+const args = process.argv;
+const session = args[args.indexOf('--session') + 1];
+fs.writeFileSync(session.replace(/\\.jsonl$/, '') + '.argv.json', JSON.stringify(args));
+const dumps = fs.readdirSync(path.dirname(session)).filter(name => name.endsWith('.argv.json'));
+if (process.env.SPEC_RUNTIME_ROLE === 'owner') { setInterval(() => {}, 1000); }
+else if (dumps.length === 1) {
+  fs.writeFileSync('partial.txt', 'partial editor work');
+  console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'length',content:[{type:'text',text:'Partial'}]}}));
+} else if (dumps.length === 3) {
+  console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'error',errorMessage:'upstream timeout',content:[]}}));
+} else {
+  console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'Done'}]}}));
+}`;
+
+// Run alone: node --test --test-name-pattern='^wave handoff: step 13' pi/extensions/spec-runtime/runtime.test.mjs
+test('wave handoff: step 13 owner prompt lists accepted step 1 despite eleven newer unrelated runs', async t => {
+  const f = await fixture(t, 'setInterval(()=>{},1000);');
+  writeIndex(f.packagePath, Array.from({ length: 13 }, (_, i) => ({ step: i + 1, difficulty: 'hard', writes: [`src/s${i + 1}.txt`], requires: i + 1 === 13 ? [1] : [] })));
+  writeFileSync(f.step, 'Prepared step');
+  writeFileSync(join(f.packagePath, 'step-013-subspec.md'), 'Prepared step');
+  writeRun(f.packagePath, { id: 'older-1', step: 'step-001-subspec.md', started_at: '2026-01-01T00:00:00.000Z', completion: { decisions: ['keep wave ids stable'], gaps: ['g1', 'g2'] } });
+  writeWave(f.packagePath, 'wave-a', { version: 1, generation: 1, state: 'integrated', members: { '1': { step: 1, phase: 'sealed', run_id: 'older-1', sealed_head: 'a'.repeat(40), review_artifacts: ['reviews/step-001-review.md'] } } });
+  writeFileSync(join(f.packagePath, 'runtime/runs/older-1-learning.md'), 'older run learning');
+  mkdirSync(join(f.packagePath, 'learnings'), { recursive: true });
+  writeFileSync(join(f.packagePath, 'learnings', 'step-001-learning.md'), 'canonical learning');
+  mkdirSync(join(f.packagePath, 'reviews'), { recursive: true });
+  for (let k = 0; k <= 9; k++) writeFileSync(join(f.packagePath, 'reviews', `step-001-fix-${String(k).padStart(2, '0')}.md`), `fix review ${k}`);
+  for (let k = 2; k <= 12; k++) writeRun(f.packagePath, { id: `newer-${k}`, step: `step-${String(k).padStart(3, '0')}-subspec.md`, started_at: `2026-02-${String(k).padStart(2, '0')}T00:00:00.000Z`, completion: { decisions: [], gaps: [] } });
+  let prompt;
+  const runtime = new Runtime({ ...f.options, launchProcess: (record, role, text, launchOptions = {}) => { if (role === 'owner') prompt = text; return f.options.launchProcess(record, role, text, launchOptions); } });
+  f.runtimes.add(runtime);
+  await runtime.start({ ...f.input, step: join(f.packagePath, 'step-013-subspec.md') });
+  const handoff = JSON.parse(prompt.match(/DEPENDENCIES: ([^\n]+)/)[1]);
+  assert.deepEqual(handoff.index.map(entry => entry.step), [1]);
+  assert.equal(handoff.index[0].status, 'accepted');
+  assert.equal(handoff.index[0].reason, null);
+  assert.equal(handoff.index[0].wave_id, 'wave-a');
+  assert.equal(handoff.index[0].accepted_commit, 'a'.repeat(40));
+  assert.equal(handoff.index[0].review_status, 'closed');
+  assert.equal(handoff.index[0].unresolved_obligations, 2);
+  assert.ok(handoff.index[0].artifacts.includes('runtime/waves/wave-a.json'));
+  assert.ok(handoff.index[0].artifacts.includes('reviews/step-001-review.md'));
+  assert.ok(handoff.index[0].artifacts.includes('runtime/runs/older-1-completion.json'));
+  assert.deepEqual(handoff.index[0].artifacts, [
+    'runtime/waves/wave-a.json',
+    'reviews/step-001-review.md',
+    'runtime/runs/older-1-completion.json',
+    'runtime/runs/older-1-learning.md',
+    'learnings/step-001-learning.md',
+    'reviews/step-001-fix-00.md',
+    'reviews/step-001-fix-01.md',
+    'reviews/step-001-fix-02.md',
+  ]);
+  assert.equal(handoff.index[0].artifacts_omitted, 7);
+  assert.deepEqual(handoff.details[0].decisions, ['keep wave ids stable']);
+  assert.deepEqual(handoff.omitted_details, []);
+  assert.deepEqual(handoff.coverage_gaps, []);
+  assert.ok(JSON.parse(prompt.match(/CURRENT: ([^\n]+)/)[1]).observations.every(observation => observation.step === '013'));
+  assert.doesNotMatch(prompt, /newer-/);
+  await runtime.cancel(f.packagePath, undefined, 1000);
+});
+
+// Run alone: node --test --test-name-pattern='^wave handoff: nine prerequisites' pi/extensions/spec-runtime/runtime.test.mjs
+test('wave handoff: nine prerequisites stay indexed when detail budget omits excerpts', async t => {
+  const f = await makePackageFixture();
+  t.after(() => rmSync(f.dir, { recursive: true, force: true }));
+  writeIndex(f.packagePath, Array.from({ length: 10 }, (_, i) => ({ step: i + 1, difficulty: 'hard', writes: [`src/s${i + 1}.txt`], requires: i + 1 === 10 ? [1, 2, 3, 4, 5, 6, 7, 8, 9] : [] })));
+  for (let k = 1; k <= 9; k++) writeRun(f.packagePath, {
+    id: `run-${k}`, step: `step-${String(k).padStart(3, '0')}-subspec.md`, started_at: `2026-01-0${k}T00:00:00.000Z`,
+    completion: { decisions: Array.from({ length: 4 }, () => 'd'.repeat(300)), gaps: Array.from({ length: 10 - k }, () => 'g'.repeat(300)) },
+  });
+  const handoff = buildDependencyHandoff({ packageDir: f.packagePath, step: 10, targets: ['repo'] });
+  assert.deepEqual(handoff.index.map(entry => entry.step), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  for (let k = 1; k <= 9; k++) assert.equal(handoff.index[k - 1].unresolved_obligations, 10 - k);
+  assert.ok(handoff.omitted_details.length > 0);
+  assert.ok(handoff.omitted_details.includes(9));
+  assert.deepEqual([...handoff.details.map(detail => detail.step), ...handoff.omitted_details], [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.ok(JSON.stringify(handoff.details).length <= 8000);
+  for (const detail of handoff.details) for (const list of [detail.decisions, detail.unresolved, detail.remaining_work, detail.findings]) {
+    assert.ok(list.length <= 4);
+    assert.ok(list.every(item => item.length <= 300));
+  }
+  assert.equal(handoff.details[0].step, 1);
+  assert.equal(handoff.details[0].unresolved.length, 4);
+  assert.equal(handoff.details[0].truncated, true);
+  assert.equal(handoff.index[0].unresolved_obligations, 9);
+  assert.match(handoff.obligations, /Omitted details are not evidence of no blockers/);
+});
+
+// Run alone: node --test --test-name-pattern='^wave handoff: fresh editor packets' pi/extensions/spec-runtime/runtime.test.mjs
+test('wave handoff: fresh editor packets carry incomplete-packet state and length stop blocks completion', async t => {
+  const f = await fixture(t, SESSION_DUMP_PI);
+  // completion.mjs gatesFor unconditionally reads evidence-plan.json; the
+  // checkpoint submission below must reach it with a valid gates array.
+  writeFileSync(join(f.packagePath, 'evidence-plan.json'), JSON.stringify({ gates: [] }));
+  const runtime = new Runtime(f.options);
+  f.runtimes.add(runtime);
+  const started = await runtime.start(f.input);
+  const record = loadRun(f.packagePath, started.run_id);
+  const first = await runEditor(record, 'Change: alpha-unique', undefined, f.options.launchProcess);
+  assert.match(first.error, /length limit/);
+  assert.match(first.error, /packet is incomplete/);
+  assert.equal(first.stop_reason, 'length');
+  assert.equal(existsSync(join(record.checkout, 'partial.txt')), true);
+  const outcomeFile = join(f.packagePath, 'runtime/runs', `${record.id}-editor-outcome.json`);
+  assert.equal(JSON.parse(readFileSync(outcomeFile, 'utf8')).state, 'incomplete');
+  await assert.rejects(runCompletion(record, { outcome: 'as-specified' }), /Latest editor packet stopped incomplete \(length\)/);
+  const second = await runEditor(record, 'Change: beta-unique', undefined, f.options.launchProcess);
+  const sessions = JSON.parse(readFileSync(join(f.packagePath, 'runtime/runs', `${record.id}-editor-sessions.json`), 'utf8'));
+  assert.notEqual(first.editor_session, second.editor_session);
+  assert.equal(first.editor_session, sessions[0]);
+  assert.equal(second.editor_session, sessions[1]);
+  const secondArgv = JSON.parse(readFileSync(second.editor_session.replace(/\.jsonl$/, '') + '.argv.json', 'utf8'));
+  const secondPrompt = secondArgv.at(-1);
+  assert.match(secondPrompt, /PREVIOUS PACKET INCOMPLETE/);
+  assert.match(secondPrompt, /"stop_reason":"length"/);
+  assert.match(secondPrompt, /partial\.txt/);
+  assert.match(secondPrompt, /beta-unique/);
+  assert.doesNotMatch(secondPrompt, /alpha-unique/);
+  assert.equal(JSON.parse(readFileSync(outcomeFile, 'utf8')).state, 'completed');
+  try {
+    const completion = await runCompletion(record, { outcome: 'as-specified' });
+    assert.ok(!completion.error || !/Latest editor packet stopped incomplete/.test(completion.error));
+  } catch (error) {
+    assert.doesNotMatch(String(error?.message ?? error), /Latest editor packet stopped incomplete/);
+  }
+  const third = await runEditor(record, 'Change: gamma-unique', undefined, f.options.launchProcess);
+  assert.match(third.error, /upstream timeout/);
+  assert.notEqual(third.stop_reason, 'length');
+  const thirdOutcome = JSON.parse(readFileSync(outcomeFile, 'utf8'));
+  assert.equal(thirdOutcome.state, 'incomplete');
+  assert.equal(thirdOutcome.stop_reason, third.stop_reason);
+  assert.match(thirdOutcome.error, /upstream timeout/);
+  for (const outcome of completeOutcomes) {
+    await assert.rejects(runCompletion(record, { outcome }), /Latest editor packet stopped incomplete/);
+  }
+  const checkpoint = await runCompletion(record, {
+    outcome: 'checkpoint', strategy: 'implementation-first', checkpoint_reason: 'blocker',
+    remaining_work: ['Complete the errored editor packet'], decisions: [], gaps: [], findings: [], introduced: [], evidence: [],
+  });
+  assert.equal(checkpoint.status, 'recorded');
+  assert.equal(checkpoint.outcome, 'checkpoint');
+  assert.deepEqual(checkpoint.remaining_work, ['Complete the errored editor packet']);
+  const persisted = JSON.parse(readFileSync(join(f.packagePath, 'runtime/runs', `${record.id}-completion.json`), 'utf8'));
+  assert.equal(persisted.learning.outcome, 'checkpoint');
+  assert.deepEqual(persisted.learning.remaining_work, ['Complete the errored editor packet']);
+  const fourth = await runEditor(record, 'Change: delta-unique', undefined, f.options.launchProcess);
+  const fourthArgv = JSON.parse(readFileSync(fourth.editor_session.replace(/\.jsonl$/, '') + '.argv.json', 'utf8'));
+  const fourthPrompt = fourthArgv.at(-1);
+  assert.match(fourthPrompt, /PREVIOUS PACKET INCOMPLETE/);
+  assert.match(fourthPrompt, /upstream timeout/);
+  assert.match(fourthPrompt, /"session":/);
+  assert.ok(fourthPrompt.includes(JSON.stringify(third.editor_session)));
+  assert.match(fourthPrompt, /delta-unique/);
+  assert.equal(JSON.parse(readFileSync(outcomeFile, 'utf8')).state, 'completed');
+  await runtime.cancel(f.packagePath, undefined, 1000);
+});
+
+// Run alone: node --test --test-name-pattern='^wave handoff: worker receipts' pi/extensions/spec-runtime/runtime.test.mjs
+test('wave handoff: worker receipts never make unsealed, unintegrated, conflicting or unreadable dependencies accepted', async t => {
+  const f = await makePackageFixture();
+  t.after(() => rmSync(f.dir, { recursive: true, force: true }));
+  const head = 'a'.repeat(40);
+  const steps = [
+    { step: 1, difficulty: 'hard', writes: ['src/s1.txt'], requires: [] },
+    { step: 2, difficulty: 'hard', writes: ['src/s2.txt'], requires: [] },
+    { step: 3, difficulty: 'hard', writes: ['src/s3.txt'], requires: [] },
+    { step: 4, difficulty: 'hard', writes: ['src/s4.txt'], requires: [] },
+    { step: 5, difficulty: 'hard', writes: ['src/s5.txt'], requires: [] },
+    { step: 6, difficulty: 'hard', writes: ['src/s6.txt'], requires: [1, 2, 3, 4, 5] }
+  ];
+  writeIndex(f.packagePath, steps);
+  for (let k = 1; k <= 5; k++) writeRun(f.packagePath, { id: `run-${k}`, step: `step-${String(k).padStart(3, '0')}-subspec.md`, started_at: `2026-01-0${k}T00:00:00.000Z`, completion: { learning: { outcome: 'as-specified', commit: 'c'.repeat(40) }, decisions: [], gaps: [], findings: [] } });
+  writeWave(f.packagePath, 'wave-a', { version: 1, generation: 1, state: 'integrated', members: { '1': { step: 1, phase: 'sealed', run_id: 'run-1', sealed_head: head, review_artifacts: ['reviews/step-001-review.md'] }, '5': { step: 5, phase: 'sealed', run_id: 'run-5', sealed_head: head, review_artifacts: ['reviews/step-005-review.md'] } } });
+  writeWave(f.packagePath, 'wave-b', { version: 1, generation: 1, state: 'ready-to-integrate', members: { '2': { step: 2, phase: 'blocked', run_id: 'run-2' }, '3': { step: 3, phase: 'sealed', run_id: 'run-3', sealed_head: head, review_artifacts: ['reviews/step-003-review.md'] } } });
+  writeWave(f.packagePath, 'wave-d', { version: 1, generation: 1, state: 'integrated', members: { '5': { step: 5, phase: 'sealed', run_id: 'run-5', sealed_head: 'd'.repeat(40), review_artifacts: ['reviews/step-005-review.md'] } } });
+
+  const first = buildDependencyHandoff({ packageDir: f.packagePath, step: 6, targets: ['repo'] });
+  const byStep = step => first.index.find(entry => entry.step === step);
+  assert.deepEqual([byStep(1).status, byStep(1).reason], ['accepted', null]);
+  assert.deepEqual([byStep(2).status, byStep(2).reason], ['blocked', 'member-blocked:wave-b']);
+  assert.deepEqual([byStep(3).status, byStep(3).reason], ['pending', 'wave-not-integrated:wave-b:ready-to-integrate']);
+  assert.deepEqual([byStep(4).status, byStep(4).reason], ['unknown', 'no-accepted-wave-record']);
+  assert.equal(byStep(4).review_status, 'none');
+  assert.deepEqual([byStep(5).status, byStep(5).reason], ['conflict', 'conflicting-wave-records:wave-a,wave-d']);
+  for (const step of [2, 3, 4, 5]) assert.equal(byStep(step).accepted_commit, null);
+
+  writeWave(f.packagePath, 'wave-c', { version: 1, generation: 1, state: 'ready-to-integrate', members: { '1': { step: 1, phase: 'sealed', run_id: 'run-1', sealed_head: head, review_artifacts: ['reviews/step-001-review.md'] } } });
+  const conflicting = buildDependencyHandoff({ packageDir: f.packagePath, step: 6, targets: ['repo'] });
+  const conflictRow = conflicting.index.find(entry => entry.step === 1);
+  assert.equal(conflictRow.status, 'conflict');
+  assert.equal(conflictRow.reason, 'conflicting-wave-records:wave-a,wave-c');
+  assert.equal(conflictRow.accepted_commit, null);
+  assert.notEqual(conflictRow.review_status, 'closed');
+  rmSync(join(f.packagePath, 'runtime/waves/wave-c.json'));
+
+  const waveFile = join(f.packagePath, 'runtime/waves/wave-a.json');
+  const waveRecord = JSON.parse(readFileSync(waveFile, 'utf8'));
+  delete waveRecord.members['1'].review_artifacts;
+  writeFileSync(waveFile, JSON.stringify(waveRecord));
+  const malformed = buildDependencyHandoff({ packageDir: f.packagePath, step: 6, targets: ['repo'] });
+  assert.deepEqual([malformed.index.find(entry => entry.step === 1).status, malformed.index.find(entry => entry.step === 1).reason], ['unknown', 'wave-member-malformed:wave-a']);
+
+  waveRecord.members['1'].review_artifacts = ['reviews/step-001-review.md'];
+  writeFileSync(waveFile, JSON.stringify(waveRecord));
+  writeFileSync(join(f.packagePath, 'runtime/waves/bad.json'), '{');
+  const unreadable = buildDependencyHandoff({ packageDir: f.packagePath, step: 6, targets: ['repo'] });
+  assert.deepEqual([unreadable.index.find(entry => entry.step === 1).status, unreadable.index.find(entry => entry.step === 1).reason], ['unknown', 'wave-record-unreadable:bad.json']);
+  assert.ok(unreadable.coverage_gaps.some(gap => gap.includes('bad.json')));
+  rmSync(join(f.packagePath, 'runtime/waves/bad.json'));
+
+  steps[4].requires = [9];
+  writeIndex(f.packagePath, steps);
+  assert.throws(() => buildDependencyHandoff({ packageDir: f.packagePath, step: 6, targets: ['repo'] }), error => error.code === 'dependency-graph-invalid');
+
+  rmSync(join(f.packagePath, 'spec-steps.json'));
+  assert.equal(buildDependencyHandoff({ packageDir: f.packagePath, step: 6, targets: ['repo'] }), null);
+  writeIndex(f.packagePath, [{ step: 1 }]);
+  assert.equal(buildDependencyHandoff({ packageDir: f.packagePath, step: 6, targets: ['repo'] }), null);
+});
+
+// Run alone: node --test --test-name-pattern='^wave handoff: validates wave checks against the package evidence plan' pi/extensions/spec-runtime/runtime.test.mjs
+test('wave handoff: validates wave checks against the package evidence plan', async t => {
+  const f = await makePackageFixture();
+  t.after(() => rmSync(f.dir, { recursive: true, force: true }));
+  const indexFile = join(f.packagePath, 'spec-steps.json');
+  const planFile = join(f.packagePath, 'evidence-plan.json');
+  const index = {
+    version: 1,
+    setup: { repo: 'none' },
+    wave_checks: [{ after: 1, owner_step: 1, gates: ['EV-1'] }],
+    steps: [{ step: 1, difficulty: 'hard', requires: [], writes: ['a.txt'] }]
+  };
+  const plan = {
+    version: 1,
+    gates: [{ id: 'EV-1', ownerStep: 1, required: true, phase: 'merge', kind: 'focused-test', command: 'node -e "process.exit(0)"', artifact: 'evidence/a.txt' }]
+  };
+  writeFileSync(indexFile, JSON.stringify(index));
+  writeFileSync(planFile, JSON.stringify(plan));
+
+  // The wave check names a gate the plan defines, and step 1 declares no
+  // prerequisites, so building the handoff must resolve the graph and return an
+  // empty requires index. This currently throws dependency-graph-invalid
+  // because the evidence plan is not threaded into validation yet.
+  const handoff = buildDependencyHandoff({ packageDir: f.packagePath, step: 1, targets: ['repo'] });
+  assert.equal(handoff.step, 1);
+  assert.deepEqual(handoff.index, []);
+
+  // A gate the evidence plan does not contain leaves the requires graph invalid.
+  index.wave_checks[0].gates = ['EV-MISSING'];
+  writeFileSync(indexFile, JSON.stringify(index));
+  assert.throws(
+    () => buildDependencyHandoff({ packageDir: f.packagePath, step: 1, targets: ['repo'] }),
+    error => error.code === 'dependency-graph-invalid'
+  );
+
+  // Naming a gate with no evidence plan at all is refused, never accepted.
+  index.wave_checks[0].gates = ['EV-1'];
+  writeFileSync(indexFile, JSON.stringify(index));
+  rmSync(planFile);
+  assert.throws(
+    () => buildDependencyHandoff({ packageDir: f.packagePath, step: 1, targets: ['repo'] }),
+    error => error.code === 'dependency-graph-invalid'
+  );
+
+  // An unreadable evidence plan is a refusal, never a silent acceptance.
+  writeFileSync(planFile, '{');
+  assert.throws(() => buildDependencyHandoff({ packageDir: f.packagePath, step: 1, targets: ['repo'] }));
+});
+
+// Run alone: node --test --test-name-pattern='^wave handoff: owner and editor profiles' pi/extensions/spec-runtime/runtime.test.mjs
+test('wave handoff: owner and editor profiles carry overlay EXDEV rename guidance', async t => {
+  const f = await fixture(t, SESSION_DUMP_PI);
+  const runtime = new Runtime(f.options);
+  f.runtimes.add(runtime);
+  const started = await runtime.start(f.input);
+  const record = loadRun(f.packagePath, started.run_id);
+  const editor = await runEditor(record, 'Change: gamma-unique', undefined, f.options.launchProcess);
+  const ownerArgv = JSON.parse(readFileSync(record.owner_session.replace(/\.jsonl$/, '') + '.argv.json', 'utf8'));
+  const editorArgv = JSON.parse(readFileSync(editor.editor_session.replace(/\.jsonl$/, '') + '.argv.json', 'utf8'));
+  const agents = fileURLToPath(new URL('../../agents/', import.meta.url));
+  assert.equal(ownerArgv[ownerArgv.indexOf('--append-system-prompt') + 1], join(agents, 'spec-step-owner.md'));
+  assert.equal(editorArgv[editorArgv.indexOf('--append-system-prompt') + 1], join(agents, 'spec-step-editor.md'));
+  for (const file of [join(agents, 'spec-step-owner.md'), join(agents, 'spec-step-editor.md')]) {
+    const text = readFileSync(file, 'utf8');
+    assert.ok(text.includes('can fail with EXDEV'));
+    assert.ok(text.includes('coreutils `mv` or an explicit copy-then-delete'));
+    assert.ok(text.includes('`git status` and `git diff`'));
+    assert.ok(text.includes('Never run a recursive `chmod` on the lower layer'));
+  }
+  await runtime.cancel(f.packagePath, undefined, 1000);
 });

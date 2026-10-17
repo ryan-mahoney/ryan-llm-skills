@@ -3,11 +3,12 @@ import { Type } from '@earendil-works/pi-ai';
 import { isRetryableAssistantError } from '@earendil-works/pi-ai/compat';
 import { getAgentDir, SettingsManager } from '@earendil-works/pi-coding-agent';
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
-import { randomUUID, createHash } from 'node:crypto';
+import { randomUUID, createHash, randomInt } from 'node:crypto';
 import { join, resolve, realpathSync } from 'node:path';
 import { homedir } from 'node:os';
-import { Runtime, loadRun, summary, assertLease, runEditor, runEditorBatch, fencedPath, runCommand, runVerification, runAdvice, runCompletion, packageDirOf, assertIdleWriter, event as runtimeEvent } from './runtime.mjs';
+import { Runtime, loadRun, summary, assertLease, assertManagedModel, ROLE_CONTRACT, FENCED_EDITOR_TOOLS, waveSiblingConflict, runEditor, runEditorBatch, fencedPath, runCommand, runVerification, runAdvice, runCompletion, packageDirOf, assertIdleWriter, event as runtimeEvent } from './runtime.mjs';
 import { assertModelSelector } from './model-selector.mjs';
+import { submitStage, recordStageFingerprint, REVIEW_CATEGORIES } from './wave-review.mjs';
 import { createCommunication } from './communication.mjs';
 import { createMonitor, publicHint } from './monitor.mjs';
 import { createSentinelObserver, createVerificationRecorder, readVerificationIncidents, recordCheckpoint as recordSentinelCheckpoint, readInboxGuard, readCheckpointRecord, observeInput, reconcileRuntimeReturn, checkpointPath, createSentinelAuthority, createDiagnosisController, activatePolicy, activateRuntimePolicy, disablePolicy, handleBeforeSettle, finishIntent, considerCancellation } from './sentinel.mjs';
@@ -22,6 +23,8 @@ import { metrics, formatMetrics } from './metrics.mjs';
 import installContextBudget from '../context-budget/index.ts';
 import { createWorkflowContinuation } from './workflow-continuation.mjs';
 import { installProviderRecovery } from './provider-recovery.mjs';
+import { createNativeWaveController, nativeWaveAction } from './waves-native.mjs';
+import { processIdentity } from '../../../scripts/spec-observe/process-identity.mjs';
 
 const result = (value: unknown, isError = false) => ({ content: [{ type: 'text', text: JSON.stringify(value) }], details: value, isError });
 const optional = (description: string) => Type.Optional(Type.String({ description }));
@@ -68,7 +71,7 @@ function assignmentRunId(packagePath: string, assignmentId: string): string | nu
 // steps reuse one workflow). An unreadable run cannot prove the writer exited,
 // so it stays a conflict until a coordinator checkpoint reconciles it. A
 // resume of the same assignment or of the ledger's own run is not a conflict.
-function activeAssignmentConflict(packagePath: string, record: any, args: any): { id: string; state: string } | null {
+function activeAssignmentConflict(packagePath: string, record: any, args: any, allowedSibling?: ((conflict: { id: string; state: string; runId: string | null }) => boolean) | null): { id: string; state: string; runId: string | null } | null {
   const candidateKey = typeof args?.assignment_id === 'string' && args.assignment_id ? args.assignment_id
     : args?.action === 'start' && typeof args?.step === 'string' && args.step ? realpathStep(args.step) : null;
   let ledgerRunId: string | null = null;
@@ -85,7 +88,12 @@ function activeAssignmentConflict(packagePath: string, record: any, args: any): 
     let state: string | null = null;
     try { state = summary(loadRun(packagePath, runId))?.state ?? null; } catch { state = null; }
     if (state === null || !['completed', 'failed', 'cancelled'].includes(state)) {
-      return { id: worker.id, state: state ?? 'unresolved' };
+      const conflict = { id: worker.id, state: state ?? 'unresolved', runId };
+      // Each candidate conflict is offered to the optional sibling predicate;
+      // only a validated live sibling is skipped, and the first genuinely
+      // conflicting writer is returned.
+      if (allowedSibling?.(conflict)) continue;
+      return conflict;
     }
   }
   return null;
@@ -107,43 +115,77 @@ export default function (pi: any) {
   if (role) {
     const record = JSON.parse(readFileSync(process.env.SPEC_RUNTIME_RECORD!, 'utf8'));
     installProgressContext(pi, { record, role });
-    const communication = createCommunication(pi, record, role, { onEvent: (name: string, detail: any) => runtimeEvent(record, name, detail) });
+    const stageRole = role === 'reviewer' || role === 'fixer';
+    // Stage roles have no intercom communication channel; createCommunication
+    // rejects them (Invalid communication role) before stage tools install.
+    const communication = stageRole ? undefined : createCommunication(pi, record, role, { onEvent: (name: string, detail: any) => runtimeEvent(record, name, detail) });
     // A parallel packet's editor may write only its declared files and has no shell or owner channel.
     const fence: string[] | undefined = role === 'editor' && process.env.SPEC_EDITOR_PATHS ? JSON.parse(process.env.SPEC_EDITOR_PATHS) : undefined;
     if (role === 'editor') installDiscoveryBudget(pi, { parallel: Boolean(fence), report: (name: string, detail: any) => runtimeEvent(record, name, detail) });
-    const allowed = role === 'owner' ? ['read', 'grep', 'find', 'ls', 'spec_editor', 'spec_answer', 'spec_verify', 'spec_scout', 'spec_search', 'spec_advice', 'spec_complete']
-      : fence ? ['read', 'grep', 'find', 'ls', 'edit', 'write'] : ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'spec_question'];
-    pi.on('session_shutdown', () => communication.close());
+    // Known roles select their tool allowlist from the shared contract; a fenced
+    // editor keeps the editor contract minus its shell and owner channel. An
+    // unknown role keeps the historical editor list (the guard still runs).
+    const contract = (ROLE_CONTRACT as any)[role];
+    const allowed: string[] = fence ? [...FENCED_EDITOR_TOOLS]
+      : contract ? [...contract.tools, ...contract.providerTools]
+      : ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'spec_question'];
+    // Stage roles are the union of contract names and the names this Pi
+    // actually exposes; the intersection is both the active set and the guard.
+    let stageAllowed: string[] = [];
+    pi.on('session_shutdown', () => communication?.close());
     pi.on('session_start', (_event: any, ctx: any) => {
       // Apply the process guard only to a managed worker with a run record.
-      if (!['owner', 'editor'].includes(role) || !record.id) return;
+      if (!['owner', 'editor', 'reviewer', 'fixer'].includes(role) || !record.id) return;
       assertLease(record);
-      try { assertModelSelector(record[`${role}_model`], ctx.model); }
+      try {
+        if (stageRole) assertModelSelector(record[`${role === 'reviewer' ? 'review_model' : 'fix_model'}`], ctx.model);
+        else assertManagedModel(record, role, ctx.model, ctx.sessionManager.getBranch());
+      }
       catch (error: any) {
         // Extension hook errors are caught by Pi. Exit this managed child before
         // an API request can use a fuzzy match or a restored session's model.
         process.stderr.write(`${error.message}\n`);
         process.exit(78);
       }
-      pi.setActiveTools(allowed);
+      if (stageRole) {
+        const native = new Set((pi.getAllTools() as any[]).map((tool: any) => tool.name));
+        stageAllowed = allowed.filter(name => native.has(name));
+        const names = new Set(stageAllowed);
+        const missing = [
+          names.has('spec_stage_complete') ? null : 'check stage-complete',
+          names.has('bash') || (names.has('exec_command') && names.has('write_stdin')) ? null : 'shell',
+          role === 'fixer' && !(names.has('apply_patch') || (names.has('edit') && names.has('write'))) ? 'write' : null
+        ].filter(Boolean);
+        if (missing.length) {
+          for (const family of missing) process.stderr.write(`SPEC_ROLE_CAPABILITY_MISSING: ${role} lacks ${family}\n`);
+          process.exit(78);
+        }
+      }
+      pi.setActiveTools(stageRole ? stageAllowed : allowed);
       if (role === 'owner') {
         try { runtimeEvent(record, 'context_pack_written', { path: writeContextPack({ packageDir: record.package, stepPath: record.step, checkout: record.checkout }) }); }
         catch (error: any) { runtimeEvent(record, 'context_pack_failed', { error: error.message }); }
+      }
+      if (role === 'reviewer') {
+        try { recordStageFingerprint(record); }
+        catch (error: any) { process.stderr.write(`${error.message}\n`); process.exit(78); }
       }
     });
     if (['owner', 'editor'].includes(role)) installProviderRecovery(pi, { requestedModel: record[`${role}_model`],
       assertActive: () => assertLease(record),
       nativeRetryable: isRetryableAssistantError,
       retrySettings: () => SettingsManager.inMemory(pi.getSettings()).getRetrySettings(),
-      onEvent: (data: any) => runtimeEvent(record, 'provider_recovery', { role, ...data }) });
+      onEvent: (data: any) => runtimeEvent(record, 'provider_recovery', { role, recovery: data }) });
     pi.on('tool_call', (event: any) => {
       try {
         assertLease(record);
-        if (!allowed.includes(event.toolName)) return { block: true, reason: 'This tool is outside the managed worker role.' };
-        if (fence && ['edit', 'write'].includes(event.toolName) && !fencedPath(record.checkout, event.input?.path, fence))
+        const list = stageRole ? stageAllowed : allowed;
+        if (!list.includes(event.toolName)) return { block: true, reason: 'This tool is outside the managed worker role.' };
+        const input = event.input || {};
+        if (fence && ['edit', 'write'].includes(event.toolName) && !fencedPath(record.checkout, input.path, fence))
           return { block: true, reason: `This parallel packet may write only ${fence.join(', ')}. Return the needed change to the owner instead.` };
-        if (['bash', 'spec_verify'].includes(event.toolName) && /\bgit\s+(?:-[^\s]+\s+)*reset\s+--hard\b/.test(event.input.command)) return { block: true, reason: 'Hard resets are not allowed in a managed step. Return the recovery decision to the coordinator.' };
-        if (event.toolName === 'spec_verify' && /\bgit\s+(?:-[^\s]+\s+)*reset\s+--hard\b/.test(event.input.server?.command || '')) return { block: true, reason: 'Hard resets are not allowed in managed server commands.' };
+        if (['bash', 'spec_verify'].includes(event.toolName) && /\bgit\s+(?:-[^\s]+\s+)*reset\s+--hard\b/.test(input.command)) return { block: true, reason: 'Hard resets are not allowed in a managed step. Return the recovery decision to the coordinator.' };
+        if (event.toolName === 'spec_verify' && /\bgit\s+(?:-[^\s]+\s+)*reset\s+--hard\b/.test(input.server?.command || '')) return { block: true, reason: 'Hard resets are not allowed in managed server commands.' };
       } catch (error: any) { return { block: true, reason: error.message }; }
     });
     if (role === 'owner') {
@@ -200,7 +242,7 @@ export default function (pi: any) {
         async execute(_id: string, args: any, signal: AbortSignal) {
           try {
             if (args.packets && args.assignment) throw new Error('send either assignment or packets, not both');
-            const reply = await communication.beginEditor(() => args.packets
+            const reply = await communication!.beginEditor(() => args.packets
               ? runEditorBatch(record, args.packets, signal)
               : runEditor(record, args.assignment, signal, undefined, { context: args.context, reasoning: args.reasoning }), signal);
             return result(reply, Boolean(reply.error)); }
@@ -209,14 +251,41 @@ export default function (pi: any) {
       pi.registerTool({ name: 'spec_answer', label: 'Answer editor', description: 'Answer the retained editor\'s pending decision and await the same editor process. Do not start a replacement editor.',
         parameters: Type.Object({ request_id: Type.String(), answer: Type.String() }),
         async execute(_id: string, args: any, signal: AbortSignal) {
-          try { const reply = await communication.answer(args.request_id, args.answer, signal); return result(reply, Boolean(reply.error)); }
+          try { const reply = await communication!.answer(args.request_id, args.answer, signal); return result(reply, Boolean(reply.error)); }
           catch (error: any) { return result({ error: error.message, ...(signal?.aborted ? { requires_cancellation: true } : {}), next: 'resolve the pending editor question without launching another writer' }, true); }
+        } });
+    } else if (role === 'reviewer' || role === 'fixer') {
+      const parameters = role === 'reviewer'
+        ? Type.Object({
+            verdict: Type.Union([Type.Literal('pass'), Type.Literal('needs-fix')]),
+            findings: Type.Array(Type.Object({
+              id: Type.String(), severity: Type.Union(['HIGH', 'MED', 'LOW'].map(v => Type.Literal(v))),
+              category: Type.Union(REVIEW_CATEGORIES.map(v => Type.Literal(v))),
+              actionable: Type.Boolean(), file: Type.String(), line: Type.Number({ minimum: 1 }), symbol: Type.String(),
+              signature: Type.String(), explanation: Type.String(), correction: Type.Optional(Type.String()), commit: Type.String() })),
+            fix_verdicts: Type.Array(Type.Object({ fix: Type.String(), id: Type.String(),
+              verdict: Type.Union([Type.Literal('resolved'), Type.Literal('unresolved')]), evidence: Type.String() })),
+            limitations: Type.Array(Type.String()) })
+        : Type.Object({
+            commits: Type.Array(Type.String()),
+            decisions: Type.Array(Type.Object({ id: Type.String(), decision: Type.Union([Type.Literal('fixed'), Type.Literal('dismissed')]),
+              signature: Type.String(), note: Type.String(), dismissal: Type.Optional(Type.String()),
+              approved: Type.Optional(Type.Boolean()), approval_source: Type.Optional(Type.String()) })),
+            evidence: Type.Array(Type.Object({ gate_id: Type.Optional(Type.String()), artifact: Type.String(),
+              outcome: Type.Union([Type.Literal('passed'), Type.Literal('failed')]), observed_commit: Type.String() })),
+            unresolved: Type.Array(Type.String()),
+            triage: Type.Optional(Type.Object({ summary: Type.String(), fallback: Type.Boolean() })) });
+      pi.registerTool({ name: 'spec_stage_complete', label: 'Submit stage result', description: 'Submit this stage role\'s review or fix result for the current assignment. Runtime validates the payload against the stage role, records the source fingerprint (reviewer) or commit/head checks (fixer), writes the artifact and receipt, and refuses anything outside the assignment. A reviewer may not edit the checkout; a fixer result must be committed with a clean tree.',
+        parameters,
+        async execute(_id: string, args: any) {
+          try { return result(submitStage(record, role, args)); }
+          catch (error: any) { return result({ error: error.message, next: 'correct the reported stage result; do not change role or assignment' }, true); }
         } });
     } else {
       pi.registerTool({ name: 'spec_question', label: 'Ask step owner', description: 'Ask the current step owner one concrete implementation decision. Wait for its answer in this same editor process. Include relevant source excerpts or diagnostics; do not contact other sessions.',
         parameters: Type.Object({ question: Type.String() }),
         async execute(_id: string, args: any, signal: AbortSignal) {
-          try { return result(await communication.question(args.question, signal)); }
+          try { return result(await communication!.question(args.question, signal)); }
           catch (error: any) { return result({ error: error.message, next: 'return the unresolved decision to the owner; do not assume permission or launch another agent' }, true); }
         } });
       pi.registerTool({ name: 'bash', label: 'Managed bash', description: 'Run a bounded foreground editing, formatting or explicitly assigned commit command in the code checkout. Do not run tests, compile/build checks, lint or other verification; the owner runs those after your return. Do not leave background or detached processes alive after it returns. Large output is saved to the run log.',
@@ -228,6 +297,37 @@ export default function (pi: any) {
     }
     return;
   }
+  // Coordinator-only stage plumbing for wave members. Registered after the
+  // worker-role early return, so managed owners/editors never receive it. It
+  // only prepares or remounts a member workspace and returns the prepared
+  // receipt: it accepts no step result and makes no phase transition. The
+  // caller must durably select the member's current phase and supply the exact
+  // package claim token and coordinator epoch from the durable wave record;
+  // backend, capability, setup command, layers, target and base come from that
+  // record, never from the caller.
+  pi.registerTool({ name: 'spec_wave_stage', label: 'Prepare wave member stage', description: 'Coordinator-only stage plumbing for a wave member. action=prepare provisions the retained workspace from the durable wave target policy; action=remount re-claims a retained workspace whose previous phase positively drained. The prepared receipt only confirms preparation/remount; it accepts no step result and makes no phase transition. The caller must durably select the member\'s current phase and supply the exact package claim_token and coordinator_epoch from the durable wave record; backend, capability, setup command, layers, target and base come from that record, never the caller. Idempotent for the same membership identity.',
+    parameters: Type.Object({ action: Type.Union([Type.Literal('prepare'), Type.Literal('remount')]),
+      package: Type.String({ description: 'The spec package (a `workspace/slug` ref or its folder)' }),
+      step: Type.String({ description: 'Absolute canonical prepared subspec path; must match the indexed step card' }),
+      wave_id: Type.String({ description: 'Validated wave ID; must match the durable wave record' }),
+      expected_generation: Type.Number({ description: 'Expected durable wave generation (integer); must match the wave record' }),
+      step_number: Type.Number({ description: 'Wave member step number (integer); must match the step card' }),
+      attempt_id: Type.String({ description: 'Durable wave member attempt ID; must match the wave record' }),
+      phase: Type.String({ description: 'Durable wave member phase; the caller selects the current phase, this tool never advances it' }),
+      claim_token: Type.String({ description: 'Exact package claim token from the durable wave record; required and validated' }),
+      coordinator_epoch: Type.Number({ description: 'Wave coordinator epoch; must match the durable wave record' }) }),
+    async execute(_id: string, args: any) {
+      try {
+        const packagePath = await packageDirOf(args.package);
+        const input = { ...args, package: packagePath };
+        const receipt = args.action === 'remount'
+          ? await runtime.remountWaveMember(input)
+          : await runtime.prepareWaveMember(input);
+        return result(receipt);
+      } catch (error: any) {
+        return result({ error: error.message, next: 'Correct this specific wave stage error; this tool never launches or accepts a member result.' }, true);
+      }
+    } });
   const progress = installProgressContext(pi);
   const ownedWorkflow = createWorkflowContinuation(pi);
   pi.on('session_start', (_event: any, ctx: any) => ownedWorkflow.restore(ctx));
@@ -528,7 +628,17 @@ export default function (pi: any) {
     },
   });
   const verificationRecorder = createVerificationRecorder();
+  let waveController: any;
+  // One stable native coordinator epoch per composed native lifecycle (not per
+  // callback): a random 48-bit safe integer, retained across callbacks for this
+  // extension instance.
+  const nativeCoordinatorEpoch = randomInt(2 ** 48 - 1);
+  const nativeCoordinatorProcess = processIdentity(process.pid);
   const runtime = new Runtime({ indexDir: join(getAgentDir(), 'spec-runtime'), notify: (value: any) => {
+    // A wave-bound notification is consumed by the native wave controller before
+    // the legacy per-run reconciliation runs; an unrecognized notification falls
+    // through to the existing reconciliation and completion message unchanged.
+    if (waveController?.routeNotification(value)) return;
     // On a mapped terminal runtime notification, reconcile the checkpoint before
     // sending the existing native completion message. A runtime return is
     // reconciliation work, never acceptance; any reconcile error is reported
@@ -581,6 +691,12 @@ export default function (pi: any) {
       if (!observed?.incident) return;
       diagnoseObserved(record, observed.incident);
     } });
+  waveController = createNativeWaveController({
+    runtime,
+    indexDir: join(getAgentDir(), 'spec-runtime'),
+    coordinator: () => ({ session: coordinatorIdentity(sessionCtx), epoch: nativeCoordinatorEpoch, ...nativeCoordinatorProcess }),
+    send: (message: any, options: any) => pi.sendMessage(message, options),
+  });
   function diagnoseObserved(record: any, incident: any) {
       const routed = runtimeAuthorityFor(record);
       const authority = routed?.authority ?? sentinelAuthority;
@@ -641,7 +757,7 @@ export default function (pi: any) {
       const { authority, scope } = entry;
       const continued = await handleBeforeSettle(event, { authority, workflow_id: scope.workflow_id,
         package: scope.package, coordinator_session: scope.coordinator_session,
-        inputGuard: () => inputGuard, activeManaged: () => runtime.active.size > 0,
+        inputGuard: () => inputGuard, activeManaged: () => runtime.active.size > 0 || waveController?.progressing() === true,
         onRequested: (intent: any) => {
           pendingContinuation = { workflow_id: scope.workflow_id, intent_id: typeof intent?.id === 'string' ? intent.id : null, authority, scope };
           if (entry.activation) sentinelControl?.report({ message: `Sentinel continuing: ${scope.package} · ${scope.workflow_id}.` });
@@ -650,7 +766,7 @@ export default function (pi: any) {
     }
     if (allowOwned && sessionCtx) return ownedWorkflow.beforeSettle(event, {
       coordinator_session: coordinatorIdentity(sessionCtx), inputGuard,
-      activeManaged: runtime.active.size > 0,
+      activeManaged: runtime.active.size > 0 || waveController?.progressing() === true,
       notify: (message: string) => sessionCtx?.ui?.notify(message, 'warning'),
     });
     return undefined;
@@ -719,17 +835,24 @@ export default function (pi: any) {
     revokeRuntimeAuthorities();
     await sentinel?.close();
     sentinel = undefined;
+    await waveController?.shutdown();
     sessionCtx = null;
     diagnosisController?.close();
     diagnosisController = null;
     await Promise.allSettled([...runtime.active.values()].map(({ record }: any) => runtime.cancel(record.package, record.id)));
   });
   pi.registerTool({ name: 'spec_dispatch', label: 'Spec step runtime', description: 'Use startup to enter a prepared package in one call: first-step selection, recorded difficulty routing, worktree setup and dispatch; existing progress returns a resume obligation without replay. Start launches an explicit prepared spec step with a retained owner and fresh editor per assignment. Creates/reuses the worktree of the target repository named by the step (spec-steps.json `repository`; required with several targets), refuses a package whose previous run still has a live coordinator, and delivers a completion event. Repeated assignment IDs are idempotent. Status is for explicit recovery, never polling. Cancellation returns only after confirmed process-group termination.',
-    parameters: Type.Object({ action: Type.Union([Type.Literal('startup'), Type.Literal('start'), Type.Literal('status'), Type.Literal('cancel')]), package: Type.String({ description: 'The spec package (a `workspace/slug` ref or its folder)' }),
+    parameters: Type.Object({ action: Type.Union([Type.Literal('startup'), Type.Literal('start'), Type.Literal('status'), Type.Literal('cancel'), Type.Literal('advance'), Type.Literal('recover')]), package: Type.String({ description: 'The spec package (a `workspace/slug` ref or its folder)' }),
       strong_owner_model: optional('Optional STRONG_OWNER; startup routes prepared hard steps here'), owner_override: optional('Explicit owner for the selected step; takes precedence over owner_model in start and startup, including tier routing'),
       step: optional('Absolute canonical prepared subspec path; required for start'), owner_model: optional('provider/model[:thinking]; required unless owner_override is supplied'), editor_model: optional('provider/model[:thinking]; required for start'), scout_model: optional('SCOUT_AGENT selector as provider/model[:thinking]; default openai-codex/gpt-6-luna:low'),
       base: optional('Start ref for a new branch, default HEAD'),
+      execution: Type.Optional(Type.Union(['auto', 'serial', 'waves'].map(value => Type.Literal(value)), { description: 'Wave execution mode; auto selects from host capacity and package shape, serial forces the legacy per-run route.' })),
+      isolation: Type.Optional(Type.Union(['auto', 'overlayfs', 'worktree'].map(value => Type.Literal(value)), { description: 'Member checkout isolation backend; auto selects from host capability.' })),
+      review_model: optional('Reviewer selector as provider/model[:thinking]; overrides the package review routing for this wave.'), fix_model_override: optional('Fix-model selector as provider/model[:thinking]; overrides repair routing for this wave.'),
+      max_parallel: Type.Optional(Type.Number({ minimum: 1, maximum: 16, description: 'Maximum concurrent wave members (integer 1..16).' })),
+      adaptations: Type.Optional(Type.Array(Type.Object({ path: Type.String({ description: 'Adapted file path' }), reason: Type.String({ description: 'Why this adaptation is required' }) }), { description: 'Declared deviations from the prepared plan, each with its path and reason.' })),
       assignment_id: optional('Stable ID for this step attempt. Omit to use step path. Use a new ID only for an intentional subsequent attempt.'), run_id: optional('Existing run ID, otherwise latest'), workflow_id: optional('Registered workflow ID from a prior spec_sentinel_checkpoint; binds this real dispatch to its checkpoint'),
+      wave_id: optional('Validated wave ID; explicit wave member start binds to the durable wave record'), expected_generation: Type.Optional(Type.Number({ description: 'Expected durable wave generation (integer); must match the wave record' })), step_number: Type.Optional(Type.Number({ description: 'Wave member step number (integer); must match the step card' })), attempt_id: optional('Durable wave member attempt ID; must match the wave record'), phase: optional('Durable wave member phase; must match the wave record'), claim_token: optional('Wave claim token; must match the durable wave record'), coordinator_epoch: optional('Wave coordinator epoch; must match the durable wave record'),
       attempt_kind: Type.Optional(Type.Union(['implementation', 'verification-continuation', 'implementation-repair', 'review-repair', 'launch-retry'].map(value => Type.Literal(value)), { description: 'Explicit reason for this assignment; observation only, grants no retry authority.' })),
       session_scope: Type.Optional(Type.Union([Type.Literal('package'), Type.Literal('step')], { description: 'New steps default to step: separate retained sessions per canonical step. Omitted scope preserves an existing attempt or the latest same-step retry scope. Explicit package preserves cross-step reuse.' })),
       instructions: optional('Scoped task direction, acceptance constraints and publication authority'), timeout_ms: Type.Optional(Type.Number({ minimum: 1000, maximum: 86400000, description: 'Whole assignment deadline, default 7200000 (2 hours)' })), child_extensions: Type.Optional(Type.Array(Type.String({ description: 'Explicit trusted pi-intercom and provider/compat extension paths; discovery is disabled in managed children' }))) }),
@@ -738,8 +861,19 @@ export default function (pi: any) {
       let receipt: any = null;
       try {
         const packagePath = await packageDirOf(args.package); progress.attach(packagePath);
-        if (args.action === 'status') { const record = loadRun(packagePath, args.run_id); monitor.attach(record, ctx); return result(summary(record)); }
-        if (args.action === 'cancel') return result(await runtime.cancel(packagePath, args.run_id));
+        const nativeAction = nativeWaveAction(args);
+        if (!nativeAction) {
+          if (args.action === 'status') { const record = loadRun(packagePath, args.run_id); monitor.attach(record, ctx); return result(summary(record)); }
+          if (args.action === 'cancel') return result(await runtime.cancel(packagePath, args.run_id));
+        }
+        const configFile = join(homedir(), '.pi/agent/spec-runtime.json');
+        const config = existsSync(configFile) ? JSON.parse(readFileSync(configFile, 'utf8')) : {};
+        const input = { ...args, package: packagePath, scout_model: args.scout_model ?? config.scout_model ?? SCOUT_MODEL, child_extensions: args.child_extensions ?? config.child_extensions ?? [] };
+        // An explicit wave member start is validated against the durable wave
+        // record (target, generation, member, claims) before any conflict
+        // bookkeeping; a raw wave_id never bypasses the serial guard.
+        const waveConfig: any = args.action === 'start' && input.wave_id !== undefined && input.wave_id !== null
+          ? await runtime.validateWaveAssignment(input) : null;
         // A supplied workflow_id is a registered mapping key, validated before any
         // dispatch side effect. Dispatch never mints workflow ownership: a missing,
         // malformed, differently-owned or checkout-conflicting checkpoint is refused
@@ -765,15 +899,17 @@ export default function (pi: any) {
           // run record or process precedes a refusal; terminal
           // assignments free the workflow for its next assignment while the
           // per-run notification mappings stay retained.
-          const conflict = activeAssignmentConflict(packagePath, registeredWorkflow, args);
+          // A validated wave may run its distinct siblings concurrently; the
+          // predicate waives only a live sibling of the same wave/package/
+          // generation/epoch/target, evaluated per candidate conflict. Every
+          // other unknown, stale or serial conflict still refuses the dispatch.
+          const conflict = activeAssignmentConflict(packagePath, registeredWorkflow, args,
+            waveConfig ? (candidate: { id: string; state: string; runId: string | null }) => waveSiblingConflict(packagePath, candidate, waveConfig) : null);
           if (conflict) {
             return result({ error: `workflow ${workflowId} still has active assignment ${conflict.id} (run state ${conflict.state}); refusing a concurrent dispatch`, next: 'await its completion or confirmed cancellation, or reconcile the assignment with spec_sentinel_checkpoint before dispatching the next one' }, true);
           }
         }
-        const configFile = join(homedir(), '.pi/agent/spec-runtime.json');
-        const config = existsSync(configFile) ? JSON.parse(readFileSync(configFile, 'utf8')) : {};
-        const input = { ...args, package: packagePath, scout_model: args.scout_model ?? config.scout_model ?? SCOUT_MODEL, child_extensions: args.child_extensions ?? config.child_extensions ?? [] };
-        receipt = args.action === 'startup' ? await runtime.startup(input, ctx.sessionManager.getSessionFile()) : await runtime.start(input, ctx.sessionManager.getSessionFile());
+        receipt = nativeAction ? await waveController[nativeAction](input, ctx.sessionManager.getSessionFile()) : await runtime.start(input, ctx.sessionManager.getSessionFile());
         if (receipt.run_id) monitor.attach(loadRun(packagePath, receipt.run_id), ctx);
         if (receipt.run_id && !ownPackages.includes(packagePath)) ownPackages.push(packagePath);
         // The actual receipt binds its run/checkout to the workflow validated above
@@ -797,11 +933,18 @@ export default function (pi: any) {
           // worker is the caller's explicit attempt ID or the real run UUID;
           // the runtime assignment key stays in the receipt untouched.
           const assignmentId = args.assignment_id ?? receipt.run_id;
-          const boundCheckoutValue = receipt.checkout ?? existing.checkout ?? null;
+          // A wave member keeps the canonical integration checkout on its
+          // workflow binding; the isolated member attempt checkout is retained
+          // only as per-run provenance and never becomes the workflow checkout.
+          const waveIntegration = waveConfig?.wave_bindings?.integration_checkout ?? null;
+          const boundCheckoutValue = waveConfig
+            ? (waveIntegration ?? existing.checkout ?? null)
+            : (receipt.checkout ?? existing.checkout ?? null);
           // Retain the real run identity before checkpoint I/O: a failed update
           // must neither hide a launched worker nor lose its terminal mapping.
           const binding = { package: packagePath, run_id: receipt.run_id, workflow_id: workflowId,
-            assignment_id: assignmentId, checkout: boundCheckoutValue, coordinator_session };
+            assignment_id: assignmentId, checkout: boundCheckoutValue, coordinator_session,
+            ...(waveConfig ? { wave: receipt.wave ?? null, attempt_checkout: receipt.checkout ?? null } : {}) };
           dispatchBindings.set(`${packagePath}\u0000${receipt.run_id}`, binding);
           dispatchBindings.set(workflowId, binding);
           receipt.workflow_id = workflowId;
@@ -830,7 +973,20 @@ export default function (pi: any) {
           }
           receipt.checkpoint_revision = revision;
         }
-        return result(receipt);
+        // A successful dispatch into a still-running native wave hands control
+        // back to the wave itself. The installed SDK's AgentToolResult.terminate
+        // stops the automatic post-tool model request for the rest of this
+        // batch, so the coordinator issues no extra tool calls while members
+        // work; genuine spec-wave attention (barrier/promotion) still arrives
+        // as a triggerTurn message and drives later requests. The SDK
+        // wrapToolDefinition forwards this object verbatim and agent-loop stops
+        // a batch when every tool result terminates. Serial routes, refusals,
+        // terminal/native status/cancel receipts and error returns keep their
+        // existing continuation because they still need a follow-up turn.
+        const waveHoldsTurn = nativeAction !== null
+          && ['startup', 'advance', 'recover'].includes(nativeAction)
+          && receipt.execution === 'waves' && receipt.state === 'running';
+        return waveHoldsTurn ? { ...result(receipt), terminate: true } : result(receipt);
       } catch (error: any) {
         if (receipt?.run_id) return result({ ...receipt, bookkeeping_error: error.message,
           next: 'The existing run is identified above; dispatch was not refused. Reconcile checkpoint bookkeeping for this run, await it if active, and never launch a replacement because of this warning.' });

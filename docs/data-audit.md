@@ -324,11 +324,106 @@ Scale in this checkout (2026-10-11): 17 package directories, 2.3 GB (`du`), of w
 ### 8. `spec-steps.json`
 
 - **Location/format**: `.specs/<f>/spec-steps.json`, 16 files. **No `version`/`schema_version`**. Schema (`spec-write/SKILL.md:393-434`): `{ "spec": ".specs/<f>/spec.md", "steps": [ { step:int, name, description, difficulty: easy|medium|hard, visualDesign: bool, evidence: ["EV-n"…], design?: {workspace, design, step, path, sha256} } ] }`. Census: 109 step entries with `evidence`, 8 (all in the June `3-agent-docs-automation`) without; `design` appears in none yet.
-- **Purpose**: derived index so runners can enumerate/route steps without parsing Markdown; "spec.md stays canonical".
+- **Wave contract (Oct 2026)**: the wave extension adds **per-step** `requires` — earlier unique step integers (`[]` for none, never the string `none`), `writes` (declared write paths), and optional `resources` (a shared `resources` key adds an implicit edge to the lower-numbered step). It adds **top-level** `wave_checks` rows `{after, owner_step, gates: ["EV-n"…]}` — exactly one per derived wave, `after` the final step of that wave and `owner_step` a member of it — and top-level `setup`, keyed by target id, with value `"none"` or `{command, lockfiles, environment}` (environment names, not values). Gate definitions live in `evidence-plan.json` with `id/ownerStep/kind/phase/required/command/artifact`, **not** inline in `steps`. `steps lint` (`scripts/spec-observe/cli.mjs steps lint`) validates these. Wave-aware packages require per-step `requires` and `writes`; legacy packages omit them together. `resources` stays optional. Legacy packages that omit `requires`/`writes` remain serial, not concurrency ready.
+
+<!-- wave-index-example:begin -->
+```json
+{
+  "spec": "spec.md",
+  "steps": [
+    {
+      "step": 1,
+      "name": "Alpha",
+      "description": "Implement alpha.",
+      "difficulty": "easy",
+      "visualDesign": false,
+      "requires": [],
+      "writes": ["lib/alpha.mjs", "lib/alpha.test.mjs"],
+      "resources": ["port:4101"],
+      "evidence": ["EV-1"]
+    },
+    {
+      "step": 2,
+      "name": "Beta",
+      "description": "Implement beta.",
+      "difficulty": "easy",
+      "visualDesign": false,
+      "requires": [],
+      "writes": ["lib/beta.mjs", "lib/beta.test.mjs"],
+      "resources": ["port:4102"],
+      "evidence": ["EV-2"]
+    },
+    {
+      "step": 3,
+      "name": "Compose",
+      "description": "Integrate alpha and beta.",
+      "difficulty": "medium",
+      "visualDesign": false,
+      "requires": [1, 2],
+      "writes": ["app/compose.mjs", "app/compose.test.mjs"],
+      "evidence": ["EV-3"]
+    }
+  ],
+  "wave_checks": [
+    { "after": 2, "owner_step": 1, "gates": ["EV-1"] },
+    { "after": 3, "owner_step": 3, "gates": ["EV-3"] }
+  ],
+  "setup": {
+    "service": {
+      "command": "npm ci --prefix lib --ignore-scripts --no-audit --no-fund",
+      "lockfiles": ["lib/package-lock.json"],
+      "environment": []
+    }
+  }
+}
+```
+<!-- wave-index-example:end -->
+
+The following is a **wave-relevant excerpt** of `evidence-plan.json`, not a complete evidence-plan validation example:
+
+<!-- wave-evidence-example:begin -->
+```json
+{
+  "version": 2,
+  "spec": "spec.md",
+  "gates": [
+    {
+      "id": "EV-1",
+      "ownerStep": 1,
+      "kind": "focused-test",
+      "phase": "merge",
+      "required": true,
+      "command": "node --test lib/alpha.test.mjs",
+      "artifact": "evidence/alpha.txt"
+    },
+    {
+      "id": "EV-2",
+      "ownerStep": 2,
+      "kind": "focused-test",
+      "phase": "merge",
+      "required": true,
+      "command": "node --test lib/beta.test.mjs",
+      "artifact": "evidence/beta.txt"
+    },
+    {
+      "id": "EV-3",
+      "ownerStep": 3,
+      "kind": "integration-test",
+      "phase": "merge",
+      "required": true,
+      "command": "node --test app/compose.test.mjs",
+      "artifact": "evidence/compose.txt"
+    }
+  ]
+}
+```
+<!-- wave-evidence-example:end -->
+
+- **Purpose**: derived index so runners can enumerate/route steps without parsing Markdown; "spec.md stays canonical". Its `requires`/`writes`/`wave_checks`/`setup` fields are the reader-consumed wave contract.
 - **Lifecycle**: written last in planning, reconciled to spec.md; difficulty can be refined once after Jev `step-difficulty` advice. Not touched during execution.
-- **Writers**: spec-write. **Readers**: `startup.mjs:34-40` (validates ordered unique positive ints, picks cards, routes `hard` -> strong owner), spec-run, sentinel `readStepIndex` (progress bar position/total, `spec_progress`; `accepted_steps` stays null), dashboard, epics status (`proposed` vs `prepared` = file exists), spec-gym-extract.
-- **Relationships**: `step` <-> `step-NNN-subspec.md` filename (zero-padded 3) <-> learning/review/fix names.
-- **Observations**: Presence of this file is the **definition of "prepared"** in epic status (`docs/spec-epics.md` derived-status table), even though `spec-prepare.md` may say `Outcome: decision-required / Package prepared: no` (adj1, adj7). No schema version means the `design` extension and `evidence` array were added silently.
+- **Writers**: spec-write. **Readers**: `startup.mjs:34-40` (validates ordered unique positive ints, picks cards, routes `hard` -> strong owner), spec-run, sentinel `readStepIndex` (progress bar position/total, `spec_progress`; `accepted_steps` stays null), dashboard, epics status (`proposed` vs `prepared` = file exists), spec-gym-extract, and `scripts/spec-observe/steps.mjs validateStepIndex` (resolves waves, `longest_chain`, `fan_in` and `concurrency_ready`).
+- **Relationships**: `step` <-> `step-NNN-subspec.md` filename (zero-padded 3) <-> learning/review/fix names; `requires`/`resources` <-> wave and longest-chain derivation; `wave_checks` <-> evidence-plan gate IDs.
+- **Observations**: Presence of this file is the **definition of "prepared"** in epic status (`docs/spec-epics.md` derived-status table), even though `spec-prepare.md` may say `Outcome: decision-required / Package prepared: no` (adj1, adj7). No schema version means the `design` extension, the `evidence` array and the `requires`/`writes`/`wave_checks`/`setup` wave fields were added silently.
 
 ---
 
@@ -435,7 +530,7 @@ Scale in this checkout (2026-10-11): 17 package directories, 2.3 GB (`du`), of w
 - **Lifecycle**: one per completed step, launched in background while the next step runs; range pinned to full SHAs; a second round only as `final-2`. Never rewritten.
 - **Writers**: `spec-branch-review` run by `spec-stage-reviewer` (never edits code). **Readers**: `spec-branch-fix`, the next reviews (prior dismissals / `fix_verdicts`), `build-history-index`, spec-run (reads only the leading YAML), work-tour/merge-evidence (`stepReview.reviews[]`).
 - **Relationships**: `commit`/`target` <-> git; `findings[].signature` <-> fix `decisions[].signature`; `step` <-> learning/subspec.
-- **Observations**: (a) The `target` of adj1 step-001 is `d6a022c..d6a022c` (same SHA both ends, empty range) because that step's deliverables were non-committed evidence in `.specs/`; the schema allows it but the review verifies nothing in Git. (b) `step` is a quoted string (`"001"`) here but an integer in learnings/spec-steps. (c) All 169 fix decisions across 58 fix records are `fixed`; none `dismissed`, so the dismissal-class machinery (false-positive/intentional/accepted-risk/deferred/unfixable) and `dismissals[]` are unexercised in 8 packages.
+- **Observations**: (a) The `target` of adj1 step-001 is `d6a022c..d6a022c` (same SHA both ends, empty range) because that step's deliverables were non-committed evidence in `.specs/`; the schema allows it but the review verifies nothing in Git. (b) `step` is a quoted string (`"001"`) here but an integer in learnings/spec-steps. (c) All 169 fix decisions across 58 fix records are `fixed`; none `dismissed`, so the dismissal-class machinery (false-positive/intentional/accepted-risk/deferred/unfixable) and `dismissals[]` are unexercised in 8 packages. (d) A managed wave writes its independent step reviews under wave labels `wave-<id>-step-<NNN>-review-<k>` (integration repairs: `wave-<id>-integration-<n>-review-<k>`), one writer per checkout at the sealed head, consumed by the wave coordinator and the scoped integration review rather than a whole-branch audit. `spec_stage_complete` writes these wave reviews; they are never written by hand.
 
 ---
 
@@ -512,7 +607,13 @@ All under `.specs/<f>/runtime/` (`docs/spec-runtime-observation.md:5-18`, `pi/ex
 
 **24l. `runtime/sentinel/<workflow-id>/`** - Sentinel/runtime-owned state per workflow: `checkpoint.json` (`version: 1, workflow_id, package, checkout, coordinator_session, revision, obligation_revision, state, obligation{key, stage, step?, summary<=160, artifacts[{path, sha256}]}, workers[{id, kind, state}], inbox{items[{id, sha256, outcome, release_source_id?}], observed_directories}, inbox_guard{…}, input_revision, observed_at`; validators `sentinel.mjs:875-1010`), `verification-incidents.json` (per-assignment repeated-failure fingerprints and replay ids), `authority/grant.json` + `authority/activations/<uuid>.json` (mode shadow|recover grant: `actions`, `max_effects`, `max_diagnostics`, `expires_at`, `authority_reference`, revoked/reason), and a legacy flat `runtime/sentinel/verification-incidents.json` (spec-sentinel/early runs). Another audit covers sentinel internals.
 
-- **Relationships (runtime as a whole)**: `workflow_id` (checkpoint key) <-> package slug (equal for 10/11; `spec-repo-search-index` for repo-search-index); `run id` <-> `assignment_id` <-> `runs/<id>.*`; `parent_session` <-> `~/.pi/agent/sessions/…jsonl` and the global index `~/.pi/agent/spec-runtime/<run-id>.json` (826 entries) outside the repo; `learning.commit` <-> branch commits in `~/.agents-<slug>`.
+**24m. `runtime/waves/<wave-id>.json`** - retained managed-wave record, version 1 (Architecture K, spec.md:238-252), the sole wave authority. Holds `package_ref`, `workflow_id`, coordinator `{session, epoch, process_identity}`, input identities, target `{id, common, integration_checkout, branch, base_commit, candidate_commit, promotion}` and per-workspace `{backend, source_common, git_dir, snapshot_id, upper_id, layer_claim, active_phase, fallback_reason}`, members keyed by numeric step, host/boot/uid identity, `timeout_ms`/`expires_at` and phase effect IDs. `active_phase` binds unit/InvocationID/process identity only while a phase may be alive; retained lower/upper/work/Git identities survive its drain. `promotion` records `expected_old`, `candidate`, `index_before`, `state` and actual observed ref/index state. Fields use runtime-resolved absolute paths only where identity or process invocation requires them; spec paths remain portable. **Writers**: `waves.mjs` and its `waves-*.mjs` modules through `updateWaveRecord`; Runtime's locked member binding, deadline and workspace mutations in `runtime.mjs`; and wave-integration.mjs journal fields. **Readers**: startup (`activeWaveRecords`), status, Sentinel (`scripts/spec-observe/sentinel-waves.mjs`), metrics, `refreshProgress` (derived `runtime/progress.json` `waves` and `waves_truncated`), the assignment relaunch guard (`scripts/workspaces/worker-guard.mjs`) and spec-pr. Observers share `scripts/spec-observe/core.mjs` `readWaveRecords`/`projectWaveRecord`, as built at 9bcf62d. The `spec_dispatch` `status`/`advance`/`recover`/`cancel` actions and the receipt `{wave_id, generation, state, requested_width, admitted_width, software_ceiling:16, effective_limits, members[…], member_count, omitted_count, record_path, next_action}` resolve through this record; `record_path` is authoritative for every member, and no bounded preview supplies the active-worker set.
+
+**24n. `~/.pi/agent/spec-runtime/ownership/claims.json` (ownership registry)** - the cross-checkout ownership registry under the Pi spec-runtime root, serialized by `flock` with `registry.lock`, ceiling `SOFTWARE_CEILING = 16` in `ownership.mjs`. **Writer**: `ownership.mjs` under flock; it holds package, checkout and capacity claims. **Readers**: startup admission (`acquirePackage` on the wave path; the serial path does not call it), Sentinel readiness, relaunch guards. Distinguish from 24k flat lock dirs: this entry is the cross-process claim registry and its serializing lock.
+
+**24o. `runtime/waves/<wave-id>/` per-member phase and seal state** - per wave, member phase staging, sealed heads, stage receipts and seal receipts: stage receipts `runtime/runs/<run_id>-stage.json` with the reviewer fingerprint `runtime/runs/<run_id>-stage-fingerprint.json` (writer: `spec_stage_complete` through `submitStage`); seal receipts `runtime/waves/<wave-id>/step-<NNN>-seal.json` (writer: `sealMember`); sealed heads retained at `refs/waves/retained/<wave-id>/step-<NNN>`; private per-member Git directories and overlay upper/lower/work state referenced by 24m. Isolation modes are `auto | overlayfs | worktree`; a worktree fallback records `fallback_reason` and never stands in for a real-OverlayFS rehearsal. **Readers**: `spec-branch-review`/`spec-branch-fix` wave scope, integration promotion (`expected_old` protection), `spec-pr` publication (integrated heads only; `refs/waves/` and candidate/private worker refs are never pushed), and restart reconciliation. On the wave path `run.json` is only the latest observation.
+
+- **Relationships (runtime as a whole)**: `workflow_id` (checkpoint key) <-> package slug (equal for 10/11; `spec-repo-search-index` for repo-search-index); `run id` <-> `assignment_id` <-> `runs/<id>.*`; `parent_session` <-> `~/.pi/agent/sessions/…jsonl` and the global index `~/.pi/agent/spec-runtime/<run-id>.json` (826 entries) outside the repo; `learning.commit` <-> branch commits in `~/.agents-<slug>`; `wave_id` <-> `runtime/waves/<wave-id>.json` <-> `runtime/waves/<wave-id>/` seals <-> retained `refs/waves/retained/` heads.
 - **Observations**: (1) Runtime evidence for a merged feature is ~96% of package bytes and never expires. (2) Learnings, receipts, tours and `merge-evidence` reference `runtime/runs/*.md` by absolute path, so pruning raw JSONL while keeping `*-verification-*.md` and `*-completion.json` would be safe, but no tool encodes that split. (3) `progress.json.runs[].verification_receipts` is a count, not a list. (4) `run.json.token` is a live lease secret stored in plaintext in an ignored-but-unbacked directory.
 
 ---

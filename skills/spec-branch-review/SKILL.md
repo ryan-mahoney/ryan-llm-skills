@@ -7,7 +7,7 @@ disable-model-invocation: true
 argument-hint: "[spec=<path/to/spec.md>] [iter=<n>] [scope=committed|working-tree|step] [step=<NNN|label>] [base=<ref>] [since=<commit>] [head=<commit>]"
 license: MIT
 metadata:
-  version: "26"
+  version: "27"
 ---
 
 # Spec Branch Evidence Audit
@@ -115,6 +115,32 @@ branch audit is assumed.
 
 Return the artifact path, verdict, reviewed range, and any unresolved decision or
 material limitation. The coordinator derives actionable findings from the YAML list.
+
+### Wave Scope
+
+`scope=wave` reviews one wave of parallel per-target implementations. The runtime
+launches a **native reviewer** for the wave — not a scout or any subagent — labeled
+`wave-<id>-step-<NNN>-review-1`, then a second round labeled
+`wave-<id>-step-<NNN>-review-2` for confirmation, after every implementation process
+in that checkout has stopped. No implementation worker is active during either round.
+
+- Apply the Step Scope rules to the pinned `<base>..<head>` range using `git show` at
+  fixed revisions. Run only the necessary focused checks there; do not edit, stage or
+  commit. Any HEAD, index, or tracked/untracked change voids the verdict.
+- As built, the finding categories are the Step Scope set: `correctness`, `security`,
+  `perf`, `simplification`, `design`, `guardrail`, and `evidence`. Ignored files may
+  change without affecting the verdict; any other mutation refuses the verdict as
+  `reviewer-mutated-source`.
+- Submit the verdict, findings (each with `id`, `severity`, `category`, `actionable`,
+  `file`, `line`, `symbol`, `signature`, `explanation`, optional `correction`, and
+  `commit`), `fix_verdicts`, and limitations through `spec_stage_complete`. That call
+  writes the review file; do not write it by hand.
+- **Confirmation.** The `-review-2` round covers the fix delta and must resolve every
+  originally actionable finding or confirm a supported dismissal. An explicit repair's
+  confirmation is the next round (`-review-3`).
+- **Integration-repair review.** Compare the resolved merge tree with both parents and
+  cover conflict resolutions and candidate-gate repairs. Existing member reviews
+  certify their original trees only.
 
 ## Autonomous Audit
 

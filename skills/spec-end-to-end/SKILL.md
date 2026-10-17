@@ -3,7 +3,7 @@ name: spec-end-to-end
 description: "Run the complete standalone spec-driven workflow from a feature goal or existing spec package through architecture, specification, preparation, branch or worktree setup, implementation and step review/fix cycles, evidence assembly, work tour, and a published pull request. Use when the user says \"do the spec workflow end to end\", \"take this from idea to PR\", \"run the whole spec process\", \"finish this spec and open a PR\", or asks for the full workflow with modifiers such as a named subagent or worktree."
 license: MIT
 metadata:
-  version: "25"
+  version: "26"
 ---
 
 # Spec End To End
@@ -45,13 +45,16 @@ no final branch review is automatic. Merge remains operator-owned.
 
 For an explicitly prepared package after `spec-write`, read applicable `AGENTS.md`
 and honor user directives, then call `spec_dispatch action=startup` with `package`,
-`owner_model` (DEFAULT_OWNER/IMPLEMENT_AGENT), `editor_model` (EDITOR_MODEL/EDITOR_AGENT), and optional
-`strong_owner_model`, `scout_model`, base and step override. The worktree and branch come from `locations.json`, not from dispatch arguments.
+`owner_model` (DEFAULT_OWNER/IMPLEMENT_AGENT), `editor_model` (EDITOR_MODEL/EDITOR_AGENT), `review_model`
+(REVIEW_AGENT), and optional `strong_owner_model`, `scout_model`, `fix_model_override`, `workflow_id`,
+`timeout_ms`, base and step override, and `execution` (default `execution: auto`, R21; `serial` only
+on explicit direction). The worktree and branch come from `locations.json`, not from dispatch arguments.
 Omit `step` on first entry. `owner_override` pins a selected step's owner.
 This route takes precedence over the general startup reading sequence below.
 
 The runtime reads the package's `locations.json`, uses the prepared index, routes hard steps,
 creates/reuses each target's worktree and starts the pair in one call.
+With a single-target package whose steps lint reports `concurrency_ready: true` on a Linux host whose runtime-host check passes, `execution: auto` runs dependency waves. Each member works in a kernel OverlayFS workspace (R26) mounted through unprivileged bubblewrap; a Git worktree is the explicit fallback with a recorded reason. Startup returns `needs_preparation` (R23) for incomplete wave metadata and `setup-required` (R22) with a remedy for a missing host capability; neither silently runs serial. With `execution: waves`, incomplete metadata is refused as `needs-preparation` instead. Admission uses `software_ceiling: 16` (R24) and visible resource limits.
 It returns pending inbox messages or existing progress instead of replaying work.
 On resume, consume that receipt and only the ledger/history entries needed to resolve
 its next obligation. A completed worker still needs its independent review/fix cycle.
@@ -82,6 +85,7 @@ call `spec_workflow` with the replacement outcome and `update` containing the re
 `objective_revision` as `expected_revision` and current user/inbox `authority`; preserve
 every unsuperseded limit. This replaces stale context without resetting continuation attempts.
 Do not register a step-sized objective for a package run.
+Run the coordinator as a long-lived interactive Pi session, never one-shot print mode (R25); its model may idle while native events advance the wave. A disconnected terminal does not stop progress; process exit does.
 The runtime continues only at a completed idle boundary with reconciled input and no
 hold, pending message or active worker. Two nudges without a new obligation expose a
 stall instead of retrying indefinitely. Failures and aborts still need their specific
@@ -286,8 +290,8 @@ architecturally novel in the resolved context. A file type or maturity label alo
 
 ## Delegate With Compact Handoffs
 
-When delegation is authorized, use existing stage and prepared-step boundaries. Preserve sequential
-steps, retained implementation sessions per selected owner, commit boundaries, and independent reviewer separation.
+When delegation is authorized, use existing stage and prepared-step boundaries. Preserve the prepared step order on the serial path and the derived waves on the wave path,
+retained implementation sessions per selected owner, commit boundaries, and independent reviewer separation.
 Use known harness capabilities and installed role contracts without a startup probe.
 Investigate nesting or tool access only after a concrete dispatch error; on a harness
 known to lack nesting, retain that stage's coordination locally.
@@ -380,11 +384,11 @@ excluded by the routing policy above:
    commands a capable agent already knows how to run.
 5. Run `spec-run` from the implementation checkout. It owns prepared step implementation,
    per-step commits, background step reviews and the fixes between steps, evidence
-   production, and merge-evidence assembly. This run's PR scope authorizes early
+   production, and merge-evidence assembly. On the wave path the runtime runs member reviews and fixes; spec-run consumes attention events instead of launching reviewers. This run's PR scope authorizes early
    draft publication at the first meaningful coherent checkpoint and subsequent useful pushes;
    apply `spec-pr mode=draft` without waiting for final local regression or a ready tour.
 6. The last step's review/fix cycle includes the bounded final fix review over the
-   trailing fix range, launched by `spec-run` at the current pre-rebase HEAD. After it
+   trailing fix range, launched by `spec-run` at the current pre-rebase HEAD. Never rebase the integration branch while any wave is open, integrating or promoting; promotion compares against the frozen expected head. After it
    finishes, apply `spec-pr`'s **Rebase Safely** procedure before final evidence/tour
    assembly. Refresh only affected
    evidence; route substantive conflict changes or uncovered implementation back to the
@@ -439,7 +443,8 @@ artifact, return to the owning stage, refresh it, and then resume the ordered pi
 ## Worktree Ownership
 
 The top-level agent decides how to operate in a selected worktree. It may set tool working
-directories explicitly, continue locally, or delegate later stages when authorized. Do not open an
+directories explicitly, continue locally, or delegate later stages when authorized.
+On the wave path the runtime provisions each member and candidate workspace. Never open a member path, pass it as `checkout`, or record it with `spec-location worktree`; code reaches the target worktree only through promotion. Do not open an
 editor, create a new editor window, start a replacement agent session, or install a continuation
 hook as part of worktree setup.
 
@@ -451,7 +456,7 @@ worktree paths to every worker.
 ## Completion
 
 Complete only when `spec-pr` reports the published PR URL at the requested readiness
-and the branch evidence remains bound to the published HEAD. Reconcile this run's
+and the branch evidence remains bound to the published HEAD. On the wave path, every wave record is `integrated` and no member reports an active phase. Reconcile this run's
 known worker and command IDs using completion receipts or a targeted status check;
 required work must be finished and no run-owned worker or required command may still
 be active. Retained inactive sessions are fine. Do not sweep unrelated processes,

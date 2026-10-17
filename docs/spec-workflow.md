@@ -28,6 +28,18 @@ project context and consequential decisions → architecture → optional critiq
 → step implementation + independent step reviews/fixes → base reconciliation → selected final red-flag review/fixes → final push → work tour → PR publication
 ```
 
+For a prepared concurrency-ready single-target package whose step index declares dependencies and
+wave checks, startup with `execution: auto` runs dependent steps as a managed wave: ready members
+launch concurrently in per-member isolation through the kernel OverlayFS workspace, admit work up to
+`software_ceiling: 16`, and serialize only where declared paths or resources conflict.
+`isolation: auto` uses a per-member kernel OverlayFS workspace through unprivileged `bubblewrap` and
+falls back to a per-member worktree with a reasoned worktree fallback recorded before any writes.
+Automatic startup never treats the worktree fallback as proof of the OverlayFS path; a passing
+`real-OverlayFS rehearsal` on the host is required before concurrent OverlayFS activation. Candidate
+promotion happens only at an integrated barrier over sealed heads between waves. See
+[wave dispatch](../pi/extensions/spec-runtime/README.md#wave-dispatch)
+and the [Linux host setup](linux-host-setup.md) section 3 (Node 22.19+).
+
 `spec-run` reviews each finished step in the background while the next step is built,
 and fixes those findings before the following step. It finishes the last step's review
 and fixes, then runs the bounded final fix review over the trailing fix range before
@@ -63,6 +75,10 @@ require another planning exercise. A failed focused check is a failure to fix or
 record as a checkpoint, not a deferred pass. Steps use a local smoke check only for runtime
 evidence the focused tests do not establish, and visual steps keep rendered inspection.
 Broad regression suites belong to CI or the operator after publication; no stage waits for them.
+
+Wave checks run the prepared combined-candidate gates once per wave, not a full suite. Each member
+still establishes its own required isolated evidence; combined proofs needing sibling producers
+belong to a later integration step requiring those producers.
 
 Review closes outstanding focused acceptance gaps,
 combining overlapping commands and reusing valid results after fixes. Commands have finite wall-clock limits:
@@ -129,6 +145,12 @@ The runtime retains owner/editor disk sessions, creates or reuses the selected w
 and sends a completion event. The owner calls `spec_editor` synchronously; only the editor
 writes implementation code. Independent fixes run between completed steps; the retained
 pair receives those commits and refreshes affected source before continuing.
+
+On the wave path, concurrent owners share no checkout: each claimed member runs in its
+own isolated workspace and exactly one writer owns it at a time (one writer per checkout).
+Editors are independent fresh editors per packet; a step's single writer is preserved even
+while sibling members write their own checkouts concurrently. Integration and promotion stay
+with the wave coordinator, which merges sealed member heads at the integrated barrier.
 `EDITOR_AGENT` remains an alias for the editor assignment. The final-review stage
 uses a fresh `spec-final-reviewer` session with `FINAL_REVIEWER` and bounded
 `spec-final-editor` subagents with `EDITOR_MODEL`; it does not use step-card dispatch.
@@ -297,6 +319,15 @@ to the implemented commit. Do not recompute preparation fingerprints.
 
 Equivalent existing prose and evidence satisfy the engineering decision contract.
 Missing headings alone do not require a rewrite. Missing or contradicted behavior and proof return to the owning stage for correction.
+
+A fresh coordinator resumes from durable wave records; completion needs every wave integrated.
+
+Resume reconciles an interrupted managed wave from its durable retained wave record:
+mounts, private Git state and sealed member heads are re-imported unchanged, and an
+already-integrated wave is adopted rather than re-run. Dispatch of any dependent member
+stays blocked until interrupted promotion or reconciliation succeeds, and no partially
+integrated candidate is treated as accepted. A whole wave is all-integrated or it is
+resumed; individual members are never silently dropped.
 
 Spec files live in the workspace, at `specs/<slug>/` under the storage root, and never in a
 checkout. All spec reads and writes, including logs, captures, reviews, and tours, use that folder,

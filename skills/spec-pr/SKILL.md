@@ -7,7 +7,7 @@ disable-model-invocation: true
 argument-hint: "[package=<workspace/slug or folder>] [mode=draft|ready]"
 license: MIT
 metadata:
-  version: "19"
+  version: "20"
 ---
 
 # Spec PR
@@ -78,6 +78,13 @@ and the actual diff without requiring final artifacts. Missing or legacy require
 inputs, unresolved merge blockers, invalid audit/completion, a tour other than `ready`,
 or stale commit bindings block ready status, not an honest authorized draft.
 
+On the wave path, publish only integrated canonical target heads: ready status needs
+every wave record `integrated` and the branch HEAD equal to, or a reviewed descendant
+of, the last promoted candidate. Check this with
+`git merge-base --is-ancestor <candidate> HEAD`, and require that the commits after the
+candidate are covered by `final-fix-review`. Never push wave, candidate or private
+worker refs, including `refs/waves/`.
+
 Write these artifacts atomically in `package_dir`, with one section per target in a multi-target package:
 
 - `pr-rebase-log.md` — base, SHAs, conflicts, resolutions, commands, and evidence invalidation/re-establishment.
@@ -111,6 +118,9 @@ ready: fetch/rebase -> resolve conflicts -> commit coherent work -> focused evid
 ```
 
 The work tour covers the combined diff of all targets and is rendered once, after every target is rebased and pushed.
+
+Do not rebase or push while a wave is `promoting`; recover the journal first. Draft
+pushes expose only integrated barriers.
 
 Push checkpoints and open/update the draft before final regression evidence is complete.
 After review fixes or other new commits, push again before ready status. Preserve the
@@ -181,7 +191,7 @@ publish a failed gate as passed.
 
 ## Push Without Overwriting Foreign Work
 
-Push all coherent task-owned commits, including final step fixes; preserve unrelated user work. After a rebase, use `--force-with-lease`, never bare `--force`. If the lease fails, fetch and inspect remote divergence. Rebase/integrate the remote work and repeat the affected evidence, scoped review if needed, and tour sequence, or stop. Never overwrite commits the lease identified as foreign.
+Push only the target branch from `locations.json`. Push all coherent task-owned commits, including final step fixes; preserve unrelated user work. After a rebase, use `--force-with-lease`, never bare `--force`. If the lease fails, fetch and inspect remote divergence. Rebase/integrate the remote work and repeat the affected evidence, scoped review if needed, and tour sequence, or stop. Never overwrite commits the lease identified as foreign.
 
 After pushing, compare the remote branch SHA to local HEAD. For ready status it must also
 match the current tour/evidence. Do not wait for a tour to make the initial push.

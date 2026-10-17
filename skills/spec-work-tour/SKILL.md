@@ -3,7 +3,7 @@ name: spec-work-tour
 description: "Build or refresh the final machine-readable evidence verdict and practitioner-facing HTML work tour for an implemented standalone spec. Use as the explicit stage after step review/fix completion and before spec-pr (or after explicitly requested branch refinement), or when asked for an implementation walkthrough, deploy-safety case, executable-evidence report, proof review, or QA handoff. The tour surfaces blocking evidence, residual risk, claim-to-gate traceability, rerunnable proof, QA scenarios, and deployment recovery without presenting the manifest as a wall of cards or tables."
 license: MIT
 metadata:
-  version: "13"
+  version: "14"
 ---
 
 # Spec Work Tour
@@ -74,6 +74,11 @@ step reviews and fixes, including the last step, from current merge evidence. No
 audit artifact is required. Do not launch a final review or turn artifact assembly into
 one. Additional PR review and merge decisions belong to the operator/organization.
 
+On the wave path, consume member reviews and confirmations under their wave labels plus
+the scoped integration review of each repaired candidate. Present them as step reviews
+plus integration review, not a whole-branch audit. Show wave-check receipts under their
+original gate IDs with the candidate `observedCommit`.
+
 ### Selected Final Review
 
 When `FINAL_REVIEWER` or an explicit request selected `spec-final-review`, apply the
@@ -116,7 +121,9 @@ target it also creates `merge-evidence.draft.json` and a renderer-compatible
 `work-tour.draft.json`. It refuses to overwrite existing drafts. `--stdout` is read-only
 and useful when reconciling an existing tour. Missing legacy structured handoffs remain
 explicit gaps with canonical learning references. Multiple targets receive the facts
-bundle; assemble their per-repository manifests explicitly.
+bundle; assemble their per-repository manifests explicitly. If the helper omits wave
+references, add them in the existing draft fields and record the gap; do not edit the
+helper.
 
 Reconcile the scoped review verdicts and applicability, then supply behavior, context,
 architecture, QA and deployment explanations in the drafts and save the final canonical
@@ -145,7 +152,7 @@ that handoff insufficient, inspect the affected original evidence and apply thes
    effects, authority source, outcome and proof boundary. Later-phase gates may be `pending`, with a
    concrete procedure but no fabricated observations. Commands are not permission to execute them.
 4. Reuse valid results with their actual observed revision and scope. Re-run a gate only when a relevant change or concrete uncertainty affects its applicability; cost alone does not justify re-execution. Never relabel an earlier run as a new execution. When reusing prior evidence, retain its `observedCommit` and record `applicability` explaining why it supports the candidate `commit`.
-5. Confirm the selected review/fix process completed, including the last step, and every actionable finding has a recorded resolution. Preserve the original review SHAs and consume the recorded bounded final fix review outcome (`final-fix-review`): `not-needed`, `pass`, `pass-after-fix` or `deferred-to-branch-refinement` completes; `blocked` is a checkpoint gap naming the remaining signatures or uncovered range. Do not imply an integrated branch audit occurred.
+5. Confirm the selected review/fix process completed, including the last step, and every actionable finding has a recorded resolution. Preserve the original review SHAs and consume the recorded bounded final fix review outcome (`final-fix-review`): `not-needed`, `pass`, `pass-after-fix` or `deferred-to-branch-refinement` completes; `blocked` is a checkpoint gap naming the remaining signatures or uncovered range. On the wave path, read member reviews and confirmations under their wave labels and the promoted candidate the `final-fix-review` used as its base. Do not imply an integrated branch audit occurred.
 6. Treat open merge blockers, unresolved merge findings, material context changes, stale code
    bindings and missing required merge environments as blocking. Classify later-phase gaps
    separately; a known defect that also disproves a merge claim remains a merge blocker.

@@ -1,12 +1,13 @@
 import test from 'node:test';
 import { EventEmitter } from 'node:events';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
-import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, existsSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { execFileSync, spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { setWorktree } from '../../../scripts/spec-location/index.mjs';
 import { makePackageFixture } from './package-fixture.mjs';
-import { submitCompletion, completionStatus, recordVerification, verificationReceipts, revision, refreshProgress, recordCheckpoint, installProgressContext, watchProgress, reminder } from './completion.mjs';
+import { submitCompletion, completionStatus, recordVerification, verificationReceipts, revision, refreshProgress, recordCheckpoint, unfinishedPreparedSteps, installProgressContext, watchProgress, reminder } from './completion.mjs';
 
 async function fixture(t) {
   const base = await makePackageFixture({ prefix: 'completion-' });
@@ -29,6 +30,49 @@ async function fixture(t) {
   const input = { outcome: 'as-specified', strategy: 'implementation-first', decisions: ['Preserve existing caller contract.'], gaps: [], findings: [], introduced: [{ symbol: 'value', path: 'source.js', purpose: 'shared fixture value' }],
     evidence: [{ id: 'EV-1', status: 'passed', receipt_id: receipt.id, proof_boundary: 'isolated focused behavior only' }] };
   return { root, pkg, git, r, input, evidence };
+}
+
+// Wave attempts keep their own retained checkout, Git history and evidence, plus the
+// runtime `wave_bindings` that name the target/attempt identity used by completion.mjs.
+async function waveRuns(t, specs) {
+  const f = await fixture(t);
+  const runs = [];
+  for (const { id, attempt_id, started_at, decisions = ['Wave attempt records its own immutable learning.'] } of specs) {
+    const checkout = join(dirname(f.pkg), 'wave-attempts', attempt_id);
+    mkdirSync(join(checkout, 'evidence'), { recursive: true });
+    const agit = (...args) => execFileSync('git', ['-C', checkout, ...args], { encoding: 'utf8', stdio: 'pipe' }).trim();
+    agit('init', '-q'); agit('config', 'user.name', 'Wave Attempt'); agit('config', 'user.email', 'wave@example.invalid');
+    writeFileSync(join(checkout, 'source.js'), `export const value = '${attempt_id}';\n`);
+    writeFileSync(join(checkout, 'evidence/check.txt'), `${attempt_id} local check result\n`);
+    agit('add', '.'); agit('commit', '-qm', `Wave attempt ${attempt_id}`);
+    const base_commit = agit('rev-parse', 'HEAD');
+    const wave_bindings = { wave_id: 'wave-1', generation: 1, step_number: 1, attempt_id, phase: 'implementing',
+      target: 'repo', backend: 'overlayfs', base_commit };
+    const r = { id, completion_contract: 1, step: join(f.pkg, 'step-001-subspec.md'), package: f.pkg, primary: f.root,
+      checkout, state: 'running', started_at, wave_bindings };
+    writeFileSync(join(f.pkg, 'runtime/runs', `${id}.json`), JSON.stringify(r));
+    const receipt = recordVerification(r, `node ${attempt_id}-check.js`, revision(r), revision(r),
+      { exit_code: 0, full_output_path: join(checkout, 'evidence/check.txt') });
+    const input = { outcome: 'as-specified', strategy: 'implementation-first', decisions, gaps: [], findings: [],
+      introduced: [{ symbol: 'value', path: 'source.js', purpose: `wave ${attempt_id} value` }],
+      evidence: [{ id: 'EV-1', status: 'passed', receipt_id: receipt.id, artifact: 'repo:evidence/check.txt', proof_boundary: 'isolated wave attempt behavior only' }] };
+    runs.push({ r, input, checkout, git: agit, base_commit, attempt_id });
+  }
+  return { ...f, runs };
+}
+
+// Spawn workers exactly as refreshProgress does: the fixed direct-exec helper under flock.
+function refreshWorker(packagePath) {
+  const lock = join(packagePath, 'runtime', 'progress.lock');
+  return new Promise((resolve, reject) => {
+    const child = spawn('flock', ['-x', lock, process.execPath, fileURLToPath(new URL('./completion.mjs', import.meta.url)), 'refresh-progress']);
+    let out = '', err = '';
+    child.stdout.on('data', chunk => { out += chunk; });
+    child.stderr.on('data', chunk => { err += chunk; });
+    child.on('error', reject);
+    child.on('close', code => code === 0 ? resolve(JSON.parse(out)) : reject(new Error(`refresh worker exited ${code}: ${err}`)));
+    child.stdin.end(JSON.stringify({ package: packagePath }));
+  });
 }
 
 test('structured handoff writes canonical learning and index without converting process exit into acceptance', async t => {
@@ -284,3 +328,393 @@ test('session restore clears input and package bindings from the previous branch
   assert.equal(handlers.context({ messages: [] }), undefined);
   await handlers.session_shutdown();
 });
+
+// Run alone: node --test --test-name-pattern='^wave runtime:' pi/extensions/spec-runtime/completion.test.mjs
+test('wave runtime: concurrent same-step attempts retain immutable per-run learning while the canonical pointer stays deterministic', async t => {
+  const w = await waveRuns(t, [
+    { id: 'wave-a', attempt_id: 'attempt-a', started_at: '2026-01-01T00:00:00.000Z', decisions: ['Attempt a keeps its own learning.'] },
+    { id: 'wave-b', attempt_id: 'attempt-b', started_at: '2026-01-02T00:00:00.000Z', decisions: ['Attempt b keeps its own learning.'] },
+  ]);
+  const [a, b] = w.runs;
+  assert.equal(submitCompletion(a.r, a.input).status, 'recorded');
+  assert.equal(submitCompletion(b.r, b.input).status, 'recorded');
+  const aLearning = join(w.pkg, 'runtime/runs', `${a.r.id}-learning.md`);
+  const bLearning = join(w.pkg, 'runtime/runs', `${b.r.id}-learning.md`);
+  assert.match(readFileSync(aLearning, 'utf8'), /Attempt a keeps its own learning/);
+  assert.match(readFileSync(bLearning, 'utf8'), /Attempt b keeps its own learning/);
+  assert.equal(completionStatus(a.r).status, 'recorded');
+  assert.equal(completionStatus(b.r).status, 'recorded');
+  await refreshProgress(w.pkg);
+  const canonical = join(w.pkg, 'learnings', 'step-001-learning.md');
+  assert.equal(readFileSync(canonical, 'utf8'), readFileSync(bLearning, 'utf8'));
+  await refreshProgress(w.pkg);
+  assert.equal(readFileSync(canonical, 'utf8'), readFileSync(bLearning, 'utf8'));
+  assert.match(readFileSync(aLearning, 'utf8'), /Attempt a keeps its own learning/, 'earlier attempt learning is immutable');
+});
+
+test('wave runtime: concurrent cross-process refresh workers produce both run entries without corrupting history or the ledger', async t => {
+  const w = await waveRuns(t, [
+    { id: 'wave-a', attempt_id: 'attempt-a', started_at: '2026-01-01T00:00:00.000Z' },
+    { id: 'wave-b', attempt_id: 'attempt-b', started_at: '2026-01-02T00:00:00.000Z' },
+  ]);
+  for (const run of w.runs) submitCompletion(run.r, run.input);
+  const ledgers = await Promise.all([refreshWorker(w.pkg), refreshWorker(w.pkg)]);
+  for (const ledger of ledgers) {
+    assert.deepEqual(ledger.runs.map(r => r.run_id).sort(), ['attempt-1', 'wave-a', 'wave-b']);
+    assert.equal(ledger.runs.find(r => r.run_id === 'wave-a').wave.wave_id, 'wave-1');
+    assert.equal(ledger.runs.find(r => r.run_id === 'wave-a').wave.attempt_id, 'attempt-a');
+    assert.equal(ledger.runs.find(r => r.run_id === 'attempt-1').wave, null);
+  }
+  const progress = JSON.parse(readFileSync(join(w.pkg, 'runtime/progress.json'), 'utf8'));
+  assert.equal(progress.runs.length, 3);
+  const index = JSON.parse(readFileSync(join(w.pkg, 'history-index.json'), 'utf8'));
+  assert.ok(Array.isArray(index.records));
+  for (const run of w.runs) assert.match(readFileSync(join(w.pkg, 'runtime/runs', `${run.r.id}-learning.md`), 'utf8'), /learning:/);
+});
+
+test('wave runtime: worker target artifacts resolve the attempt checkout and reject a foreign target', async t => {
+  const w = await waveRuns(t, [{ id: 'wave-a', attempt_id: 'attempt-a', started_at: '2026-01-01T00:00:00.000Z' }]);
+  const [a] = w.runs;
+  // The canonical integration worktree lacks the wave-relative evidence; only the attempt checkout has it.
+  assert.equal(existsSync(join(w.root, 'evidence/check.txt')), false);
+  assert.equal(submitCompletion(a.r, a.input).status, 'recorded');
+  assert.throws(() => submitCompletion(a.r, { ...a.input, evidence: [{ ...a.input.evidence[0], artifact: 'other:evidence/check.txt' }] }), /foreign target/);
+});
+
+test('wave runtime: a drained overlay is checked via the same-run revision receipt, and forged or missing provenance fails', async t => {
+  const w = await waveRuns(t, [{ id: 'wave-a', attempt_id: 'attempt-a', started_at: '2026-01-01T00:00:00.000Z' }]);
+  const [a] = w.runs;
+  assert.equal(submitCompletion(a.r, a.input).status, 'recorded');
+  const receiptFile = join(w.pkg, 'runtime/runs', `${a.r.id}-revision.json`);
+  const receipt = JSON.parse(readFileSync(receiptFile, 'utf8'));
+  assert.equal(receipt.run_id, a.r.id);
+  assert.equal(receipt.wave_id, 'wave-1');
+  assert.equal(receipt.attempt_id, 'attempt-a');
+  assert.equal(receipt.target, 'repo');
+  assert.equal(receipt.commit, a.base_commit);
+  // Confirmed drain: the overlay is gone and the outside checkout is unmounted/empty.
+  rmSync(a.checkout, { recursive: true, force: true });
+  a.r.phase_drain = { status: 'confirmed' };
+  assert.equal(completionStatus(a.r, { checkHead: true }).status, 'recorded');
+  writeFileSync(receiptFile, JSON.stringify({ ...receipt, wave_id: 'wave-forged' }));
+  assert.equal(completionStatus(a.r, { checkHead: true }).status, 'handoff_incomplete');
+  writeFileSync(receiptFile, JSON.stringify({ ...receipt, commit: '0'.repeat(40) }));
+  assert.equal(completionStatus(a.r, { checkHead: true }).status, 'handoff_incomplete');
+  rmSync(receiptFile);
+  assert.equal(completionStatus(a.r, { checkHead: true }).status, 'handoff_incomplete');
+});
+
+for (const proof of ['valid', 'missing', 'mismatched']) {
+  test(`wave runtime: Runtime finish and refresh reject invalid revision proof (${proof})`, async t => {
+    const { Runtime } = await import('./runtime.mjs');
+    const w = await waveRuns(t, [{ id: 'wave-a', attempt_id: 'attempt-a', started_at: '2026-01-01T00:00:00.000Z' }]);
+    const [a] = w.runs;
+    assert.equal(submitCompletion(a.r, a.input).status, 'recorded');
+    const receiptFile = join(w.pkg, 'runtime/runs', `${a.r.id}-revision.json`);
+    if (proof === 'missing') rmSync(receiptFile);
+    if (proof === 'mismatched') {
+      const receipt = JSON.parse(readFileSync(receiptFile, 'utf8'));
+      writeFileSync(receiptFile, JSON.stringify({ ...receipt, commit: '0'.repeat(40) }));
+    }
+    // No outside Git checkout remains after the contained service drains.
+    rmSync(a.checkout, { recursive: true, force: true });
+    const runtime = new Runtime();
+    runtime.drainContainedService = async () => {
+      a.r.phase_drain = { status: 'confirmed' };
+      return a.r.phase_drain;
+    };
+    await runtime.finish(a.r, { result: 'Done' });
+    const expected = proof === 'valid' ? 'recorded' : 'handoff_incomplete';
+    const saved = JSON.parse(readFileSync(join(w.pkg, 'runtime/runs', `${a.r.id}.json`), 'utf8'));
+    assert.equal(saved.handoff.status, expected);
+    const progress = await refreshProgress(w.pkg);
+    assert.equal(progress.runs.find(run => run.run_id === a.r.id).handoff.status, expected);
+    assert.equal(existsSync(join(w.pkg, 'learnings/step-001-learning.md')), proof === 'valid');
+  });
+}
+
+// Step 11 wave-observation tranche. Records use the production-shaped `wave_bindings`
+// (never a top-level wave_id). Written test-first: the production wave aggregate view
+// and stage gate are implemented in the following step.
+test('wave observation: derived progress lists every wave member and run after a sibling finishes', async t => {
+  const f = await fixture(t);
+  writeFileSync(join(f.pkg, 'spec-steps.json'), JSON.stringify({ steps: [1, 2, 3, 4, 5].map(step => ({ step })) }));
+  const steps = [1, 2, 3, 4, 5];
+  const phases = ['sealed', 'implementing', 'implementing', 'implementing', 'implementing'];
+  const states = ['completed', 'running', 'running', 'running', 'running'];
+  steps.forEach((step, i) => {
+    const run_id = `r${step}`;
+    const checkout = join(dirname(f.pkg), 'wave-attempts', `attempt-${step}`);
+    const wave_bindings = { wave_id: 'w1', generation: 1, step_number: step, attempt_id: `attempt-${step}`, phase: phases[i],
+      target: 'repo', backend: 'overlayfs', base_commit: null };
+    const r = { id: run_id, completion_contract: 1, step: join(f.pkg, `step-00${step}-subspec.md`), package: f.pkg,
+      primary: f.root, checkout, state: states[i], started_at: `2026-01-0${step}T00:00:00.000Z`, wave_bindings };
+    writeFileSync(join(f.pkg, 'runtime/runs', `${run_id}.json`), JSON.stringify(r));
+  });
+  const record_path = join(f.pkg, 'runtime/waves/w1.json');
+  mkdirSync(join(f.pkg, 'runtime/waves'), { recursive: true });
+  const H = 'a'.repeat(40);
+  const members = Object.fromEntries(steps.map((step, i) => [String(step), { step,
+    phase: phases[i], run_id: `r${step}`, sealed_head: step === 1 ? H : null, blocking_reason: null,
+    transitions: [{ phase: phases[i], at: `2026-01-0${step}T00:00:00.000Z`, reason: null }] }]));
+  writeFileSync(record_path, JSON.stringify({ version: 1, wave_id: 'w1', generation: 1, revision: 1, state: 'running',
+    started_at: '2026-01-01T00:00:00.000Z',
+    transitions: [{ state: 'open', at: '2026-01-01T00:00:00.000Z' }, { state: 'running', at: '2026-01-01T00:01:00.000Z' }],
+    members }));
+  const ledger = await refreshProgress(f.pkg);
+  const waveRuns_ = ledger.runs.filter(run => run.wave_id === 'w1');
+  assert.deepEqual(waveRuns_.map(run => run.run_id).sort(), ['r1', 'r2', 'r3', 'r4', 'r5']);
+  assert.deepEqual(waveRuns_.map(run => `${run.run_id}:${run.phase}`).sort(),
+    ['r1:sealed', 'r2:implementing', 'r3:implementing', 'r4:implementing', 'r5:implementing']);
+  assert.ok(ledger.runs.some(run => run.run_id === 'attempt-1'), 'legacy attempt-1 run is still present');
+  assert.deepEqual(ledger.waves, [{ wave_id: 'w1', generation: 1, state: 'running', record_path, member_count: 5, active_count: 4,
+    members: [
+      { step: 1, phase: 'sealed', run_id: 'r1', sealed_head: H, blocking_reason: null },
+      { step: 2, phase: 'implementing', run_id: 'r2', sealed_head: null, blocking_reason: null },
+      { step: 3, phase: 'implementing', run_id: 'r3', sealed_head: null, blocking_reason: null },
+      { step: 4, phase: 'implementing', run_id: 'r4', sealed_head: null, blocking_reason: null },
+      { step: 5, phase: 'implementing', run_id: 'r5', sealed_head: null, blocking_reason: null },
+    ] }]);
+  assert.equal(ledger.waves_truncated, false);
+  assert.deepEqual(JSON.parse(readFileSync(join(f.pkg, 'runtime/progress.json'), 'utf8')), ledger);
+});
+
+// Case 2: two sealed completed legacy-unchecked wave runs gate the stage until the wave
+// integrates. The legacy attempt-1 run is removed locally (its evidence artifacts are
+// harmless) so the wave-only stage gate is isolated; the shared fixture is untouched.
+test('wave observation: completion stages consume only integrated waves', async t => {
+  const f = await fixture(t);
+  rmSync(join(f.pkg, 'runtime/runs/attempt-1.json'));
+  writeFileSync(join(f.pkg, 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1 }, { step: 2 }] }));
+  const steps = [1, 2];
+  steps.forEach(step => {
+    const run_id = `r${step}`;
+    const checkout = join(dirname(f.pkg), 'wave-attempts', `attempt-${step}`);
+    const wave_bindings = { wave_id: 'w1', generation: 1, step_number: step, attempt_id: `attempt-${step}`, phase: 'sealed',
+      target: 'repo', backend: 'overlayfs', base_commit: null };
+    const r = { id: run_id, step: join(f.pkg, `step-00${step}-subspec.md`), package: f.pkg, primary: f.root,
+      checkout, state: 'completed', started_at: `2026-01-0${step}T00:00:00.000Z`, wave_bindings,
+      handoff: { status: 'legacy_unchecked' } };
+    writeFileSync(join(f.pkg, 'runtime/runs', `${run_id}.json`), JSON.stringify(r));
+  });
+  const record_path = join(f.pkg, 'runtime/waves/w1.json');
+  mkdirSync(join(f.pkg, 'runtime/waves'), { recursive: true });
+  const members = Object.fromEntries(steps.map(step => [String(step), { step, phase: 'sealed', run_id: `r${step}`,
+    sealed_head: String(step).repeat(40).slice(0, 40), blocking_reason: null,
+    transitions: [{ phase: 'sealed', at: `2026-01-0${step}T00:00:00.000Z`, reason: null }] }]));
+  writeFileSync(record_path, JSON.stringify({ version: 1, wave_id: 'w1', generation: 1, revision: 1, state: 'ready-to-integrate',
+    started_at: '2026-01-01T00:00:00.000Z',
+    transitions: [{ state: 'open', at: '2026-01-01T00:00:00.000Z' }, { state: 'ready-to-integrate', at: '2026-01-02T00:00:00.000Z' }],
+    members }));
+  await refreshProgress(f.pkg);
+  assert.throws(() => recordCheckpoint(f.pkg, { stage: 'implementation', status: 'complete', next: 'Publish', decisions: [], artifacts: ['spec.md'] }),
+    /Wave w1 is ready-to-integrate/);
+  assert.equal(existsSync(join(f.pkg, 'runtime/stages/implementation.json')), false);
+  // An integrated wave releases the same call.
+  const record = JSON.parse(readFileSync(record_path, 'utf8'));
+  record.state = 'integrated';
+  record.transitions.push({ state: 'integrated', at: '2026-01-03T00:00:00.000Z' });
+  writeFileSync(record_path, JSON.stringify(record));
+  await refreshProgress(f.pkg);
+  assert.equal(recordCheckpoint(f.pkg, { stage: 'implementation', status: 'complete', next: 'Publish', decisions: [], artifacts: ['spec.md'] }).status, 'complete');
+  // A malformed record makes publication refuse rather than assume integration.
+  writeFileSync(join(f.pkg, 'runtime/waves/w2.json'), '{');
+  await refreshProgress(f.pkg);
+  assert.throws(() => recordCheckpoint(f.pkg, { stage: 'publication', status: 'complete', next: 'Publish', decisions: [], artifacts: ['spec.md'] }),
+    /Wave records are unreadable/);
+  // A pre-step-11 ledger (no `waves` key) with runtime/waves on disk is refused.
+  const progress = JSON.parse(readFileSync(join(f.pkg, 'runtime/progress.json'), 'utf8'));
+  delete progress.waves;
+  writeFileSync(join(f.pkg, 'runtime/progress.json'), JSON.stringify(progress));
+  assert.throws(() => recordCheckpoint(f.pkg, { stage: 'publication', status: 'complete', next: 'Publish', decisions: [], artifacts: ['spec.md'] }),
+    /Progress predates wave records/);
+});
+
+// Case 3: the default watcher observes a wave record write and refreshes progress
+// without any model request.
+test('wave observation: a wave record change refreshes progress without a model request', async t => {
+  const f = await fixture(t);
+  const waves = join(f.pkg, 'runtime/waves');
+  mkdirSync(waves, { recursive: true });
+  const errors = [];
+  const close = watchProgress(f.pkg, error => errors.push(error));
+  t.after(close);
+  writeFileSync(join(waves, 'w1.json'), JSON.stringify({ version: 1, wave_id: 'w1', generation: 1, revision: 1, state: 'integrating',
+    started_at: '2026-01-01T00:00:00.000Z',
+    transitions: [{ state: 'open', at: '2026-01-01T00:00:00.000Z' }, { state: 'integrating', at: '2026-01-01T00:02:00.000Z' }],
+    members: { 1: { step: 1, phase: 'sealed', run_id: 'r1', sealed_head: 'b'.repeat(40), blocking_reason: null,
+      transitions: [{ phase: 'sealed', at: '2026-01-01T00:02:00.000Z', reason: null }] } } }));
+  const deadline = Date.now() + 2500;
+  let state;
+  while (Date.now() < deadline) {
+    try {
+      const progress = JSON.parse(readFileSync(join(f.pkg, 'runtime/progress.json'), 'utf8'));
+      state = progress.waves?.[0]?.state;
+    } catch { state = undefined; }
+    if (state === 'integrating') break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  assert.equal(state, 'integrating');
+  assert.deepEqual(errors, []);
+});
+
+// Case 4: the completion contract's prepared-step view counts a prepared step as
+// finished only when the owning wave integrated it. A prepared step inside no wave
+// keeps the legacy latest-run/handoff fallback, and a completed run never masks a
+// later blocked one for the same step.
+test('wave observation: unfinishedPreparedSteps keeps legacy fallback for a step outside every wave', async t => {
+  const f = await fixture(t);
+  writeFileSync(join(f.pkg, 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1 }] }));
+  const step1 = join(f.pkg, 'step-001-subspec.md');
+  // A completed legacy run stays finished even when a later blocked wave run is the
+  // newest ledger row: the legacy fallback reads only runs without `wave_id`.
+  const completedThenWaveBlocked = { runs: [
+    { step: step1, run_id: 'legacy-run', execution: 'completed', handoff: { status: 'recorded', outcome: 'as-specified' } },
+    { step: step1, run_id: 'wave-run', wave_id: 'w1', execution: 'blocked', handoff: { status: 'handoff_incomplete', outcome: null } },
+  ], waves: [] };
+  assert.deepEqual(unfinishedPreparedSteps(f.pkg, completedThenWaveBlocked), []);
+  // A completed wave run cannot mask an earlier blocked legacy run for the same step.
+  const blockedThenWaveCompleted = { runs: [
+    { step: step1, run_id: 'legacy-run', execution: 'blocked', handoff: { status: 'handoff_incomplete', outcome: null } },
+    { step: step1, run_id: 'wave-run', wave_id: 'w1', execution: 'completed', handoff: { status: 'recorded', outcome: 'as-specified' } },
+  ], waves: [] };
+  assert.deepEqual(unfinishedPreparedSteps(f.pkg, blockedThenWaveCompleted), [1]);
+});
+
+test('wave observation: a wave run does not mask a blocked legacy obligation at checkpoint', async t => {
+  const f = await fixture(t);
+  const step1 = join(f.pkg, 'step-001-subspec.md');
+  const step2 = join(f.pkg, 'step-002-subspec.md');
+  // The legacy handoff check reads only runs without `wave_id`. A later completed
+  // wave run for step 2 must not hide the earlier blocked legacy run for that step.
+  const progress = { waves: [], runs: [
+    { step: step1, run_id: 'legacy-step-1', execution: 'completed', handoff: { status: 'recorded', outcome: 'as-specified' } },
+    { step: step2, run_id: 'legacy-step-2', execution: 'blocked', handoff: { status: 'handoff_incomplete', outcome: null } },
+    { step: step2, run_id: 'wave-step-2', wave_id: 'w1', execution: 'completed', handoff: { status: 'recorded', outcome: 'as-specified' } },
+  ] };
+  writeFileSync(join(f.pkg, 'runtime/progress.json'), JSON.stringify(progress));
+  assert.throws(() => recordCheckpoint(f.pkg, { stage: 'implementation', status: 'complete', next: 'Publish', decisions: [], artifacts: ['spec.md'] }),
+    /Unfinished worker\/handoff obligations/);
+  assert.equal(existsSync(join(f.pkg, 'runtime/stages/implementation.json')), false);
+});
+
+test('wave observation: an integrating wave blocks completion even when the legacy step finished', async t => {
+  const f = await fixture(t);
+  writeFileSync(join(f.pkg, 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1 }] }));
+  mkdirSync(join(f.pkg, 'runtime/waves'), { recursive: true });
+  const record_path = join(f.pkg, 'runtime/waves/w1.json');
+  // A pending integrating wave with no members: the step is not a member, so only the
+  // wave gate can refuse. Legacy step 1 is fully completed and recorded.
+  writeFileSync(record_path, JSON.stringify({ version: 1, wave_id: 'w1', generation: 1, revision: 1, state: 'integrating',
+    started_at: '2026-01-01T00:00:00.000Z',
+    transitions: [{ state: 'open', at: '2026-01-01T00:00:00.000Z' }, { state: 'integrating', at: '2026-01-01T00:02:00.000Z' }],
+    members: {} }));
+  const step1 = join(f.pkg, 'step-001-subspec.md');
+  const legacyCompleted = { id: 'legacy-run', completion_contract: 1, step: step1, package: f.pkg, primary: f.root,
+    checkout: f.root, state: 'completed', started_at: '2026-01-01T00:00:00.000Z',
+    handoff: { status: 'recorded', outcome: 'as-specified' } };
+  writeFileSync(join(f.pkg, 'runtime/runs', 'legacy-run.json'), JSON.stringify(legacyCompleted));
+  const progress = { waves: [{ wave_id: 'w1', generation: 1, state: 'integrating', record_path, member_count: 0, active_count: 0, members: [] }],
+    runs: [{ step: step1, run_id: 'legacy-run', execution: 'completed', handoff: { status: 'recorded', outcome: 'as-specified' } }] };
+  writeFileSync(join(f.pkg, 'runtime/progress.json'), JSON.stringify(progress));
+  // The persisted ledger is authoritative: even after the wave directory is gone,
+  // its integrating wave must still refuse the checkpoint.
+  rmSync(join(f.pkg, 'runtime/waves'), { recursive: true, force: true });
+  assert.throws(() => recordCheckpoint(f.pkg, { stage: 'implementation', status: 'complete', next: 'Publish', decisions: [], artifacts: ['spec.md'] }),
+    /Wave w1 is integrating/);
+  assert.equal(existsSync(join(f.pkg, 'runtime/stages/implementation.json')), false);
+});
+
+test('wave observation: containing-wave selection prefers the highest generation, then the latest opened record', async t => {
+  const f = await fixture(t);
+  writeFileSync(join(f.pkg, 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1 }] }));
+  const step1 = join(f.pkg, 'step-001-subspec.md');
+  mkdirSync(join(f.pkg, 'runtime/waves'), { recursive: true });
+  // Two waves each contain step 1 with a sealed member. `opened_at` is read from the
+  // owned raw record's `started_at`; the ledger row omits it.
+  const writeRecord = (wave_id, generation, state, started_at) => {
+    const record_path = join(f.pkg, 'runtime/waves', `${wave_id}.json`);
+    writeFileSync(record_path, JSON.stringify({ version: 1, wave_id, generation, revision: 1, state, started_at,
+      transitions: [{ state: 'open', at: started_at }, { state, at: started_at }],
+      members: { 1: { step: 1, phase: 'sealed', run_id: `r-${wave_id}`, sealed_head: 'a'.repeat(40), blocking_reason: null,
+        transitions: [{ phase: 'sealed', at: started_at, reason: null }] } } }));
+    return record_path;
+  };
+  const row = (wave_id, generation, state, record_path) => ({ wave_id, generation, state, record_path, member_count: 1, active_count: 0,
+    members: [{ step: 1, phase: 'sealed', run_id: `r-${wave_id}`, sealed_head: 'a'.repeat(40), blocking_reason: null }] });
+  const runs = [{ step: step1, run_id: 'r-w-old', execution: 'completed', handoff: { status: 'legacy_unchecked', outcome: null } },
+    { step: step1, run_id: 'r-w-new', execution: 'completed', handoff: { status: 'legacy_unchecked', outcome: null } }];
+  // Older generation integrated, newer generation blocked: the newer wave governs,
+  // so the step is unfinished even though an integrated wave also contains it.
+  const old_path = writeRecord('w-old', 1, 'integrated', '2026-01-01T00:00:00.000Z');
+  const new_path = writeRecord('w-new', 2, 'ready-to-integrate', '2026-01-02T00:00:00.000Z');
+  assert.deepEqual(unfinishedPreparedSteps(f.pkg, { waves: [row('w-old', 1, 'integrated', old_path), row('w-new', 2, 'ready-to-integrate', new_path)], runs }), [1]);
+  // Swap priorities: the higher-generation wave integrates and the lower one blocks,
+  // so the same step becomes finished.
+  writeRecord('w-old', 1, 'ready-to-integrate', '2026-01-01T00:00:00.000Z');
+  writeRecord('w-new', 2, 'integrated', '2026-01-02T00:00:00.000Z');
+  assert.deepEqual(unfinishedPreparedSteps(f.pkg, { waves: [row('w-old', 1, 'ready-to-integrate', old_path), row('w-new', 2, 'integrated', new_path)], runs }), []);
+  // Equal generation breaks the tie by the latest raw `started_at`.
+  writeRecord('w-old', 3, 'integrated', '2026-01-05T00:00:00.000Z');
+  writeRecord('w-new', 3, 'ready-to-integrate', '2026-01-06T00:00:00.000Z');
+  assert.deepEqual(unfinishedPreparedSteps(f.pkg, { waves: [row('w-old', 3, 'integrated', old_path), row('w-new', 3, 'ready-to-integrate', new_path)], runs }), [1]);
+  writeRecord('w-old', 3, 'ready-to-integrate', '2026-01-07T00:00:00.000Z');
+  writeRecord('w-new', 3, 'integrated', '2026-01-08T00:00:00.000Z');
+  assert.deepEqual(unfinishedPreparedSteps(f.pkg, { waves: [row('w-old', 3, 'ready-to-integrate', old_path), row('w-new', 3, 'integrated', new_path)], runs }), []);
+});
+
+for (const proof of ['missing', 'mismatched']) {
+  test(`wave runtime: unknown-drain finish and refresh reject ${proof} revision proof and allow confirmed retry`, async t => {
+    const { Runtime } = await import('./runtime.mjs');
+    const { createOwnership } = await import('./ownership.mjs');
+    const w = await waveRuns(t, [{ id: 'wave-a', attempt_id: 'attempt-a', started_at: '2026-01-01T00:00:00.000Z' }]);
+    const [a] = w.runs;
+    assert.equal(submitCompletion(a.r, a.input).status, 'recorded');
+    const receiptFile = join(w.pkg, 'runtime/runs', `${a.r.id}-revision.json`);
+    const receipt = JSON.parse(readFileSync(receiptFile, 'utf8'));
+    if (proof === 'missing') rmSync(receiptFile);
+    else writeFileSync(receiptFile, JSON.stringify({ ...receipt, commit: '0'.repeat(40) }));
+    const ownership = createOwnership({ registryRoot: join(dirname(w.pkg), 'ownership') });
+    const coordinator = { session: 'completion-test', epoch: 1, pid: process.pid, started_at: new Date().toISOString() };
+    const capacity = await ownership.reserveCapacity({ packageId: w.pkg, attempt: a.attempt_id,
+      request: { memoryBytes: 1024, tasks: 1 }, coordinator });
+    const checkout = await ownership.reserveCheckout({ packageId: w.pkg, attempt: a.attempt_id,
+      checkout: { gitCommonDir: a.checkout, worktreeGitDir: a.checkout }, coordinator });
+    assert.equal(capacity.status, 'reserved');
+    assert.equal(checkout.status, 'reserved');
+    a.r.capacity_claim = { token: capacity.claim.token, epoch: capacity.claim.epoch };
+    a.r.wave_bindings.checkout_claim = checkout.claim.token;
+    a.r.wave_bindings.checkout_claim_epoch = checkout.claim.epoch;
+    a.r.service = { unit: 'completion-test.service', invocation: 'same-run' };
+    rmSync(a.checkout, { recursive: true, force: true });
+    let drainStatus = 'unknown';
+    const runtime = new Runtime({ ownership, serviceAdapter: {
+      drain: async () => ({ status: drainStatus, reason: 'test-transport; not kernel proof' }),
+    } });
+    const ownClaims = async () => (await ownership.inspectClaims({ packageId: w.pkg })).claims
+      .filter(claim => [capacity.claim.token, checkout.claim.token].includes(claim.token));
+    await runtime.finish(a.r, { result: 'Done' });
+    const saved = JSON.parse(readFileSync(join(w.pkg, 'runtime/runs', `${a.r.id}.json`), 'utf8'));
+    assert.equal(saved.state, 'blocked');
+    assert.deepEqual((await ownClaims()).map(claim => claim.kind).sort(), ['capacity', 'checkout']);
+    assert.equal(existsSync(join(w.pkg, 'runtime/runs', `${a.r.id}-phase-drain.json`)), false);
+    const progress = await refreshProgress(w.pkg);
+    const run = progress.runs.find(run => run.run_id === a.r.id);
+    assert.equal(run.execution, 'blocked');
+    assert.equal(run.handoff.status, 'handoff_incomplete');
+    assert.equal(completionStatus(a.r).status, 'handoff_incomplete');
+    assert.equal(completionStatus(a.r, { checkHead: false }).status, 'handoff_incomplete', 'wave proof cannot be opted out of');
+    assert.equal(existsSync(join(w.pkg, 'learnings/step-001-learning.md')), false);
+    // Restore the same-run proof, not the absent checkout. Neither refresh nor
+    // the confirmed retry may need Git outside the retained namespace.
+    writeFileSync(receiptFile, JSON.stringify(receipt));
+    drainStatus = 'confirmed';
+    await runtime.finish(a.r, { result: 'Done' });
+    assert.equal(a.r.state, 'completed');
+    assert.equal(a.r.handoff.status, 'recorded');
+    assert.deepEqual(await ownClaims(), []);
+    const retried = await refreshProgress(w.pkg);
+    assert.equal(retried.runs.find(run => run.run_id === a.r.id).handoff.status, 'recorded');
+    assert.equal(existsSync(join(w.pkg, 'learnings/step-001-learning.md')), true);
+  });
+}

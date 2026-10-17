@@ -17,6 +17,7 @@ import { manualCompletion, COMPLETION_FILE } from './manual-completion.mjs';
 import { readPreparation, readDecision, readPlanningArtifacts } from './preparation.mjs';
 import { publicHint } from '../../pi/extensions/spec-runtime/monitor.mjs';
 import { discoverManaged } from './core.mjs';
+import { collectWaves, waveMemberRunIds, waveCurrentRuns, waveLifecycleActive, waveRunMatch, runWaveProjection, waveMemberCheckout, waveRows, renderWaveLine } from './sentinel-waves.mjs';
 import { collectAssignments } from './assignments.mjs';
 import { readWorkspaceEpics, collectEpics } from './epics.mjs';
 import { legacySpecs, listPackages, locatePackage, previewLocations } from '../spec-location/index.mjs';
@@ -29,6 +30,9 @@ export const SENTINEL_LIMITS = Object.freeze({
   packageChildren: 500,
   receiptFiles: 100,
   receiptDirectoryEntries: 5000,
+  waveFiles: 100,
+  waveRecordBytes: 262144,
+  waveMembers: 32,
   indexEntries: 1000,
   incidentEntries: 20,
   actionFiles: 64,
@@ -442,6 +446,10 @@ export function renderWorkspace(snapshot) {
       lines.push(renderDetail('    ', run.conditions.map(condition => `${condition.kind} [${condition.severity}/${condition.state}]`).join(' · ')));
     }
   }
+  for (const row of snapshot?.waves ?? []) {
+    if (row.member_count == null) continue;
+    lines.push(renderLine(renderWaveLine(row)));
+  }
   const assignments = snapshot?.assignments ?? [];
   const assignmentCoverage = snapshot?.assignment_coverage;
   if (assignmentCoverage) {
@@ -665,6 +673,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
   const completed = [];
   const planned = [];
   const inactive = [];
+  const observedWaveFacts = [];
   const completionCutoff = Date.parse(readTime) - SENTINEL_LIMITS.recentCompletionMs;
   let staleReceipts = false;
   // Each package draws its floor first; lifecycle files are read before the
@@ -693,6 +702,11 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
       - (Date.parse(a.receipt.started_at ?? a.receipt.dispatch_requested_at) || 0)
       || compareCandidates(a, b))[0]?.id ?? null;
     fact.candidates = candidates;
+    // Active wave members are current assignments even after a sibling finishes;
+    // keep each recorded run alongside the latest handoff.
+    fact.currentRuns = waveCurrentRuns(fact);
+    if (fact.currentAssignment) fact.currentRuns.add(fact.currentAssignment);
+    const waveLifecycle = waveLifecycleActive(fact);
     const checkpoints = await readCheckpoints(fact, budget);
     fact.completionRevision = !fact.staleReceipts && !fact.receiptsIncomplete && !fact.checkpointNotes.length
       && candidates.length && candidates.every(c => validTime(c.receipt.started_at ?? c.receipt.dispatch_requested_at))
@@ -736,7 +750,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
       }
     }
     fact.completion = completion || null;
-    if (completion && Date.parse(completion.completed_at) <= Date.parse(readTime)) {
+    if (completion && Date.parse(completion.completed_at) <= Date.parse(readTime) && !waveLifecycle) {
       if (Date.parse(completion.completed_at) >= completionCutoff) completed.push({ fact, completion });
       if (!includeInactive) {
         activityFilter.hidden_completed_packages++;
@@ -752,7 +766,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
     const hasUnresolvedCheckpoint = fact.checkpoints?.some(item => item.package !== fact.packagePath
       || item.state !== 'complete' || !validTime(item.observed_at) || item.active_workers?.length);
     const candidatesSettled = (fact.candidates ?? []).every(item => item.receipt.state === 'cancelled');
-    if (!fact.completion && !fact.staleReceipts && !fact.receiptsIncomplete && !fact.checkpointNotes.length
+    if (!fact.completion && !fact.hasWaveFiles && !fact.staleReceipts && !fact.receiptsIncomplete && !fact.checkpointNotes.length
         && candidatesSettled && !hasAttention && !hasUnresolvedCheckpoint
         && !await packageHasImplementation(fact, budget, noteUnknown)) {
       planned.push({ workspace: fact.workspace, package_ref: fact.ref, package: fact.packagePath,
@@ -770,7 +784,13 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
       if (recent === null) noteUnknown(`activity-filter-unknown: ${fact.packagePath}`);
     }
     await collectFact(fact);
+    if (fact.hasWaveFiles) observedWaveFacts.push(fact);
   }
+
+  // Wave rows are projected for every observed active fact, even without
+  // receipts; active, blocked and cancelled members lead the bounded display.
+  const waves = observedWaveFacts.flatMap(fact => waveRows(fact, SENTINEL_LIMITS));
+  waves.sort((a, b) => String(a.wave_id).localeCompare(String(b.wave_id)) || String(a.record_path).localeCompare(String(b.record_path)));
 
   collected.sort(compareCandidates);
   const chosen = collected.slice(0, SENTINEL_LIMITS.assignments);
@@ -851,7 +871,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
   const coverage = makeCoverage(state, reasons, unknownOmission ? null : knownOmitted, budget.bytes, readTime);
   return reduceConditions({ version: 1, workspace, coverage, activity_filter: activityFilter, runs,
     assignments, assignment_coverage: assignmentCoverage,
-    recently_completed: recentlyCompleted, planned_packages: plannedPackages, epics: epicState.epics, attention,
+    recently_completed: recentlyCompleted, planned_packages: plannedPackages, waves, epics: epicState.epics, attention,
     completion_history: { window_ms: SENTINEL_LIMITS.recentCompletionMs, cutoff: new Date(completionCutoff).toISOString(),
       limit: SENTINEL_LIMITS.completedPackages, omitted: Math.max(0, completed.length - recentlyCompleted.length) },
     spec_roots: [...new Set([...facts.values()].map(f => dirname(f.packagePath)), ...epicEntries.map(e => dirname(e.dir)))], ...(discovery ? { discovery } : {}) });
@@ -1051,6 +1071,10 @@ async function collectPackage(fact, budget, report, reportUnknown, afterCurrent 
     }
     const receipt = {};
     for (const key of RECEIPT_KEYS) if (typeof value[key] === 'string') receipt[key] = value[key];
+    // Wave identity is derived from the receipt's own bindings; copy them raw
+    // (still bounded by the receipt read) so the observer never invents a member.
+    if (value.wave_bindings && typeof value.wave_bindings === 'object') receipt.wave_bindings = value.wave_bindings;
+    if (value.command_phase && typeof value.command_phase === 'object') receipt.command_phase = value.command_phase;
     if (Number.isSafeInteger(value.coordinator_pid) && value.coordinator_pid > 0) receipt.coordinator_pid = value.coordinator_pid;
     if (['implementation', 'verification-continuation', 'implementation-repair', 'review-repair', 'launch-retry'].includes(value.attempt_kind)) receipt.attempt_kind = value.attempt_kind;
     if (['as-specified', 'adapted', 'checkpoint', 'no-artifact', 'decision-required', 'needs-spec-correction'].includes(value.handoff?.outcome)) receipt.handoff = { outcome: value.handoff.outcome };
@@ -1061,7 +1085,14 @@ async function collectPackage(fact, budget, report, reportUnknown, afterCurrent 
   // The current receipt has a stable path. Read it directly so logs and result
   // files cannot push the latest run beyond the bounded directory scan.
   if (!await readReceipt(join(fact.packagePath, 'runtime', 'run.json'))) return [...found.values()];
+  await collectWaves(fact, { listDirectory, readJson, budget, note: report, noteUnknown: reportUnknown, limits: SENTINEL_LIMITS });
   await afterCurrent(found.size > 0);
+  // Every wave member names its current run in the record; read those directly
+  // so an unrelated receipt flood cannot push active members past the receipt cap.
+  for (const id of waveMemberRunIds(fact)) {
+    if (found.has(id)) continue;
+    if (!await readReceipt(join(runsDir, `${id}.json`), id)) break;
+  }
   const listed = await listDirectory(runsDir, SENTINEL_LIMITS.receiptFiles,
     // `<id>-revoked.json` is the runtime's writer-lease revocation marker
     // ({revoked_at}), not a receipt: reading it as one marks the package incomplete.
@@ -1079,6 +1110,7 @@ async function collectPackage(fact, budget, report, reportUnknown, afterCurrent 
   for (const entry of listed.entries) {
     const file = join(runsDir, entry.name);
     const id = entry.name.slice(0, -'.json'.length);
+    if (found.has(id)) continue;
     if (!await readReceipt(file, id)) break;
   }
   return [...found.values()];
@@ -1165,10 +1197,20 @@ async function observeRun(candidate, budget, note, readTime) {
   // completion, lifecycle, lease or condition decisions in this collector.
   const tour = await readTourEvidence(fact, runBudget, observed_at);
   if (tour.digest) source.push({ file: tour.file, digest: tour.digest });
-  // The recorded checkout is a claim, not an identity: validate its Git common
-  // directory read-only against the package's target repositories before asserting it.
+  // Wave runs project the member record's checkout without opening it: the
+  // record owns the path, and a disagreeing receipt stays stale evidence. The
+  // ordinary git-common-dir validation applies only to non-wave runs.
   let checkout = null;
-  if (typeof receipt.checkout === 'string') {
+  const wave = waveRunMatch(fact, receipt);
+  if (wave) {
+    if (!wave.match) {
+      mark(`wave-member-unknown: ${candidate.id}`, 'partial');
+    } else {
+      checkout = waveMemberCheckout(wave.match);
+      const sourceFile = candidate.source?.[0]?.file ?? candidate.id;
+      if (typeof receipt.checkout === 'string' && receipt.checkout !== checkout) mark(`checkout-mismatch: ${sourceFile}`, 'stale');
+    }
+  } else if (typeof receipt.checkout === 'string') {
     const key = resolve(receipt.checkout);
     if (!fact.checkouts.has(key)) {
       const real = await realpath(key).catch(() => null);
@@ -1188,13 +1230,14 @@ async function observeRun(candidate, budget, note, readTime) {
     targets: fact.targets.map(({ id, primary }) => ({ id, primary })),
     package: fact.packagePath,
     checkout,
+    ...(wave ? { wave: runWaveProjection(wave.identity, wave.match) } : {}),
     workflow_id,
     workflow_state,
     workflow_workers,
     workflow_observed_at,
     merge: fact.merge ?? { state: 'unknown' },
     completion_revision: fact.completionRevision ?? null,
-    is_current_assignment: fact.currentAssignment === candidate.id,
+    is_current_assignment: fact.currentAssignment === candidate.id || fact.currentRuns?.has(candidate.id) === true,
     assignment_id: typeof receipt.assignment_id === 'string' ? receipt.assignment_id : candidate.id,
     coordinator_session: typeof receipt.parent_session === 'string' ? receipt.parent_session : null,
     execution,

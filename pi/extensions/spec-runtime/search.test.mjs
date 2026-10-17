@@ -437,20 +437,23 @@ test("wiring parity and import hygiene", { timeout: 60000 }, async () => {
   const searchText = await readFile(join(here, "search.mjs"), "utf8");
 
   assert.match(indexText, /registerRepositorySearch\(pi, record\)/);
-  // Owner list, then the fenced parallel-editor list and the ordinary editor list.
-  const allowedMatch = /const allowed = role === 'owner' \? \[([^\]]*)\]\s*: fence \? \[([^\]]*)\] : \[([^\]]*)\];/.exec(indexText);
-  assert.ok(allowedMatch, "owner/editor allowlist literals present");
-  assert.match(allowedMatch[1], /'spec_search'/);
-  assert.doesNotMatch(allowedMatch[2], /'spec_search'|'bash'|'spec_question'/);
-  assert.doesNotMatch(allowedMatch[3], /'spec_search'/);
-  assert.match(
-    runtimeText,
-    /role === 'owner' \? 'read,grep,find,ls,spec_editor,spec_answer,spec_verify,spec_scout,spec_search,spec_advice,spec_complete'/,
-  );
-  const toolsMatch = /--tools',\s*options\.tools \|\| \(role === 'owner' \? '([^']*)' : '([^']*)'\)/.exec(runtimeText);
-  assert.ok(toolsMatch, "owner/editor tool lists present");
-  assert.equal(toolsMatch[1].split(",").includes("spec_search"), true);
-  assert.equal(toolsMatch[2].split(",").includes("spec_search"), false);
+  // ROLE_CONTRACT drives launch --tools and index.ts allowlists; spec_search is owner-only.
+  const contractTools = role => {
+    const match = new RegExp(`\\n  ${role}: \\{[^}]*?\\n    tools: \\[([^\\]]*)\\]`).exec(runtimeText);
+    assert.ok(match, `${role} contract tool list present`);
+    return match[1];
+  };
+  assert.match(contractTools("owner"), /'spec_search'/);
+  for (const role of ["editor", "reviewer", "fixer"]) assert.doesNotMatch(contractTools(role), /'spec_search'/);
+  assert.match(runtimeText, /'--tools', options\.tools \|\| contract\.tools\.concat\(contract\.providerTools\)\.join\(','\)/);
+  assert.match(indexText, /const contract = \(ROLE_CONTRACT as any\)\[role\];/);
+  // The fenced parallel editor drops the shell and owner channel from the editor contract.
+  const fenced = /export const FENCED_EDITOR_TOOLS = Object\.freeze\(ROLE_CONTRACT\.editor\.tools\.filter\(name => !\[([^\]]*)\]\.includes\(name\)\)\);/.exec(runtimeText);
+  assert.ok(fenced, "fenced editor list derived from the editor contract");
+  assert.match(fenced[1], /'bash'/);
+  assert.match(fenced[1], /'spec_question'/);
+  assert.match(indexText, /const allowed: string\[\] = fence \? \[\.\.\.FENCED_EDITOR_TOOLS\]/);
+  assert.match(runtimeText, /tools: FENCED_EDITOR_TOOLS\.join\(','\)/);
 
   const specifiers = staticImportSpecifiers(searchText);
   assert.ok(specifiers.length > 0);

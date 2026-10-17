@@ -1,6 +1,6 @@
 # Pi spec step runtime
 
-This extension runs one prepared step with a retained owner and a fresh editor session per assignment. `spec-run`
+This extension runs prepared steps: one step per assignment on the serial path, or every admitted member of a dependency wave on the wave path, each with a retained owner and a fresh editor session per assignment. `spec-run`
 still chooses the step and owner tier, evaluates the result, requests independent
 review, and advances the package. No model discovery, baseline test suite, generated
 workflow script, or separate editor reconnaissance pass is part of startup.
@@ -108,6 +108,117 @@ publication readiness. `failed` retains the actual model/process failure. `block
 retains the writer reservation because termination is uncertain. A failed stop never
 authorizes a replacement.
 
+## Wave dispatch
+
+Wave dispatch is the concurrent sibling of the serial contract above; both share the
+process lifecycle, session reuse and receipt rules. Call `spec_dispatch` with
+`execution: "waves"` (or `"auto"`, which admits a wave when the package declares one):
+
+```json
+{
+  "action": "startup",
+  "package": "sample-workspace/feature",
+  "execution": "auto",
+  "isolation": "auto",
+  "owner_model": "deepseek/deepseek-flash:max",
+  "strong_owner_model": "deepseek/deepseek-flash:max",
+  "editor_model": "deepseek/deepseek-flash:low",
+  "review_model": "deepseek/deepseek-flash:max",
+  "fix_model_override": "deepseek/deepseek-flash:low",
+  "workflow_id": "<id>",
+  "timeout_ms": 7200000
+}
+```
+
+`isolation` accepts `overlayfs` (primary), `worktree` or `auto`. `fix_model_override` is
+optional; `review_model` and `strong_owner_model` are the native reviewer/fixer and
+owners selectors. `workflow_id` binds the assignment to the durable wave record.
+
+Wave controls parallel the serial actions, keyed by `wave_id`:
+
+```json
+{"action":"advance","package":"sample-workspace/feature","wave_id":"<id>","expected_generation":3}
+{"action":"recover","package":"sample-workspace/feature","wave_id":"<id>","expected_generation":3}
+{"action":"cancel","package":"sample-workspace/feature","wave_id":"<id>","step":4}
+{"action":"status","package":"sample-workspace/feature","wave_id":"<id>"}
+```
+
+`advance` is idempotent reconciliation for restart, replayed events or operator
+intervention, not a required clock for ordinary progress; `cancel` is package-wide
+when `step` is omitted and member-scoped otherwise. The wave receipt exposes:
+
+```json
+{
+  "execution": "waves",
+  "wave_id": "<id>",
+  "generation": 3,
+  "state": "running",
+  "requested_width": 9,
+  "admitted_width": 5,
+  "software_ceiling": 16,
+  "effective_limits": {
+    "software_ceiling": 16,
+    "explicit_cap": null,
+    "memory": {"pool_bytes": 8589934592, "per_lifecycle_bytes": 1073741824, "slots": 8},
+    "tasks": {"pool": 1024, "per_lifecycle": 128, "slots": 8},
+    "binding": "memory",
+    "source": "host"
+  },
+  "members": [
+    {"step":4,"phase":"implementation","run_id":"<id>","checkout":"<path>",
+     "base_commit":"<sha>","sealed_head":null,"review_artifacts":[],
+     "blocking_reason":null,"backend":"overlayfs","fallback_reason":null,
+     "snapshot_id":"<id>","upper_id":"<id>","active_phase":"<invocation-id>",
+     "git_dir":"<path>"}
+  ],
+  "member_count": 9,
+  "omitted_count": 4,
+  "record_path": "<package>/runtime/waves/<id>.json",
+  "next_action": "await-completion"
+}
+```
+
+`software_ceiling: 16` is fixed. `effective_limits` is an object, not a list; memory and
+tasks are kept as separate entries because their pools are measured in different units
+(bytes vs. tasks) and are consumed by different admission paths, so a single shared
+"limit" field could not represent both. The values shown are illustrative, not
+machine-specific. `requested_width` is the declared wave width and `admitted_width` the
+resource-eligible subset; `omitted_count` bounds how much of the member summary is
+omitted. The summary is bounded; `record_path` resolves every member and no bounded preview supplies the
+authoritative active-worker set.
+
+Selection
+
+With `execution: auto`, a concurrency-ready single-target package on a passing Linux runtime host runs waves. Legacy packages return serial with reason `legacy-serial`; multi-target packages return `multiple-targets`. Incomplete wave metadata returns `needs_preparation` under auto, or `needs-preparation` under explicit `execution: waves`. Missing host capability returns `setup-required` with a remedy and stops dependent dispatch; neither incomplete metadata nor missing capability silently runs serial.
+
+The index `setup` declaration prepares the target snapshot. Its prepared output is published once per snapshot
+identity as the frozen lower every member starts from, in kernel OverlayFS or the
+worktree fallback. Members run in kernel OverlayFS (R59) through the fixed
+unprivileged bubblewrap adapter (R62); the worktree fallback (R60) applies only before
+writes and requires a recorded reason. Each attempt uses a private Git directory (R61),
+imported unchanged at seal; every member starts at its frozen accepted base and canonical
+locations and user work are preserved.
+
+One coordinator per package and one writer per checkout are held by token-bound
+claims in the ownership registry at
+`~/.pi/agent/spec-runtime/ownership/claims.json` with its `registry.lock`; `run.json` is
+a latest observation only and never the authority for who owns a package or checkout.
+The wave path uses `acquirePackage`; the serial path does not.
+
+Reviewer and fixer are native roles with stage tools, `spec_stage_complete` and
+context-budget installation; the coordinator hosts the in-process event handler and is
+the sole phase-progression owner. Progression is event-driven with an idle long-lived
+coordinator: routine phase completions, launches and capacity updates are recorded and
+displayed with `triggerTurn: false`, and only deduplicated attention events (barrier
+reached, member blocked, promotion result, asynchronous setup-required) use
+`triggerTurn: true`. No coordinator model turn or tool call is required after startup.
+
+Completed members flow into candidate integration; `wave_checks` run through
+`runCommand` against an existing required merge step-owned gate and promotion is
+guarded by expected-old. Enabling waves needs the real-OverlayFS rehearsal (R63);
+fallback success never satisfies it. See [Linux host setup](../../../docs/linux-host-setup.md)
+(R64) for host setup and Node PATH.
+
 ## Optional scouting
 
 `scout_model` carries the initial SCOUT_AGENT selector; default is
@@ -133,7 +244,19 @@ transformation. The editor chooses local implementation details and batches rela
 source facts are read directly by the owner; facts-only editor assignments are reserved
 for blocking information requiring the editor's tools. The editor normally reads and
 edits in one assignment. Returns should be compact (about 4,000 characters), with paths
-for larger artifacts. `spec_editor` waits for the editor to exit and returns its final
+for larger artifacts. Before the owner starts, the runtime writes `runtime/context/step-NNN.md`
+(R57): changes since the card was written, prerequisite exports and `introduced` blocks
+from `requires`, an anchor map of `writes`, and test names, recording
+`context_pack_written` or `context_pack_failed`. `spec_editor` accepts `context` (R58)
+ranges `{path, start, end}` (checkout or package files only, at most 600 lines per range
+and 120,000 characters in total) attached as exact current lines. It also accepts
+`reasoning` (`off`, `low`, `high`, `max`), which overrides the editor thinking level for
+that packet only. `packets` carries 2-4 closed packets
+`{assignment, paths, context?, reasoning?}` run concurrently: disjoint `paths` share the
+checkout, while overlapping `paths` run in isolated packet workspaces and merge back by
+per-file three-way merge in packet order; a conflicting packet applies nothing and
+returns `conflicting_paths` and its `patch`. Every editor packet starts fresh.
+`spec_editor` waits for the editor to exit and returns its final
 response plus full-output paths. Responses over 8,000 characters have an explicit
 truncation notice and `result_truncated: true`; `full_result_path` contains the complete
 plain-text response for targeted reads without another editor call. The owner assesses that
@@ -188,12 +311,16 @@ and missing credentials produce a specific failure without speculative discovery
 
 ## Lifecycle and records
 
-There are no lock directories. Each run records `coordinator_pid` (the dispatching
-process) in `runtime/run.json`. Dispatch refuses `run-active` while the latest run is
+There are no lock directories. On the serial path, each run records `coordinator_pid`
+(the dispatching process) in `runtime/run.json`; the serial concurrency check is built on
+that record. Dispatch refuses `run-active` while the latest run is
 `running`, `cancelling` or `blocked` and that pid is alive. If the pid is dead the
 runtime marks that run `stale` and proceeds; it does not stop the old run's process
 groups. A run holds the writer role while its own record is `running` or `blocked` and
-no `runs/<id>-revoked.json` marker exists; tools check this before each call. Two
+no `runs/<id>-revoked.json` marker exists; tools check this before each call. Only the
+wave path calls `acquirePackage` (via `waves.mjs` `openWave`) to bind claims in the
+ownership registry at `~/.pi/agent/spec-runtime/ownership/claims.json` with its `registry.lock`; the serial `start`/`startup` path does
+not. Two
 coordinators dispatching in the same instant are not serialized. Owner, editor and shell process groups are registered before execution;
 a stdin gate prevents an unregistered child from starting useful work. Revocation
 blocks new tool calls and prevents unopened gates from proceeding. Managed shell
@@ -246,6 +373,11 @@ Records stay in the spec package (`<storage root>/projects/<workspace>/specs/<sl
 | `sessions/<pair>/owner.jsonl`, `editor.jsonl` | Native retained Pi sessions |
 | `runs/<id>-processes/*.json` | Process group lifecycle registry |
 | `runs/<id>-*.jsonl`, `.stderr`, `-command-<uuid>.log` | Detailed diagnostics, read only for concrete failures; legacy runs may use `-commands.log` |
+| `waves/<wave-id>.json` | Retained version 1 wave record and generation authority |
+| `context/step-NNN.md` | Per-step context pack (R57) written at owner start |
+
+`progress.json`, when present, gains `waves`, `waves_truncated` and per-run `wave_id`
+and `phase` so aggregate progress cannot lose concurrent events.
 
 `~/.pi/agent/spec-runtime/<id>.json` indexes each manifest, `package_ref` and parent session for
 future discovery. Session/log content can contain repository and command details;
@@ -543,6 +675,34 @@ port. The server log path is returned separately from the capture log. The examp
 selects no production data or fixture setup for the caller. Readiness and capture have
 separate finite deadlines; the whole assignment deadline remains in force.
 
+### Native wave proof
+
+Two commands record the native evidence, and each maps to one expectation prefix.
+Run the host-native suite (EV13, prefix `wave native`):
+
+```
+node --test pi/extensions/spec-runtime/waves.integration.test.mjs
+```
+
+Run the Linux rehearsal (EV14, prefix `wave linux`) from `~/.agents`:
+
+```
+SPEC_WAVES_LINUX_REHEARSAL=1 PI_WARDEN_ENABLED=1 node --test --test-name-pattern='^wave linux:' pi/extensions/spec-runtime/waves.linux.test.mjs
+```
+
+EV13 uses external executable shims and loopback, but the real SDK and `pi` are
+required; a shim standing in for either is not native evidence. EV14 requires a
+real user manager and kernel opt-in, and its blocking authority is
+[Required native rehearsal before activation](../../../docs/linux-host-setup.md#required-native-rehearsal-before-activation);
+that section also supplies the exact environment, the quiesced-writer
+precondition and the restore step. Neither command may be skipped to accept a
+wave: a skip is not a pass.
+
+Both artifacts carry the same header fields (command, observed commit, worktree
+cleanliness, Node, `pi`, host) and the same TAP count rule. EV13 requires 6
+passing, 0 failing, 0 skipped, 0 todo with exit status 0; EV14 requires 9. A
+lower count, a non-zero exit or a skipped expectation leaves the evidence
+unproven rather than accepted.
 
 ## Structured handoffs and durable progress
 

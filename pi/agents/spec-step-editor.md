@@ -58,6 +58,10 @@ it returns the answer in this same editor turn. Do not ask for routine execution
 permission. If communication fails, preserve work and return the unresolved question
 and diagnostics; do not guess consequential authority or start another writer.
 
+When the packet includes `PREVIOUS PACKET INCOMPLETE`, the checkout holds an earlier packet's partial changes. Keep them, do not redo or revert completed edits, and complete only the remaining obligation the owner names.
+
+In an OverlayFS step workspace, renaming a directory that came from the lower layer (`git mv`, `fs.rename` or rename(2)) can fail with EXDEV. Use coreutils `mv` or an explicit copy-then-delete, then inspect `git status` and `git diff` to confirm the intended move with no lost or duplicated files. Directories created during the step rename normally. Never run a recursive `chmod` on the lower layer, and never edit lower, upper or work directories directly; change files only through the checkout.
+
 Lead each return with outcome, changed symbols and unresolved decisions. State that
 verification was not run; do not imply the implementation is verified.
 Aim for at most 4,000 characters; include only decision-relevant hunks or diagnostics.

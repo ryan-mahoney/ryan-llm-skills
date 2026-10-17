@@ -1,16 +1,19 @@
 // Durable workflow facts. Process exit, a complete handoff and acceptance are distinct.
-import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, readdirSync, lstatSync, watch } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, readdirSync, lstatSync, realpathSync, watch } from 'node:fs';
 import { join, dirname, basename, resolve, relative, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { buildHistoryIndex } from '../../../skills/spec-run/scripts/build-history-index.mjs';
+import { readWaveRecords, runWaveIdentity, ACTIVE_MEMBER_PHASES } from '../../../scripts/spec-observe/core.mjs';
 
 const read = file => JSON.parse(readFileSync(file, 'utf8'));
 const now = () => new Date().toISOString();
 const runFile = (r, suffix) => join(r.package, 'runtime/runs', `${r.id}-${suffix}.json`);
+const isWave = r => Boolean(r.wave_bindings);
 export const outcomes = ['as-specified', 'adapted', 'checkpoint', 'no-artifact', 'decision-required', 'needs-spec-correction'];
 export const checkpointReasons = ['blocker', 'deadline', 'decision', 'owner-transfer', 'interruption'];
-const completeOutcomes = new Set(['as-specified', 'adapted', 'no-artifact']);
+export const completeOutcomes = new Set(['as-specified', 'adapted', 'no-artifact']);
 function safePath(root, file) {
   const target = resolve(root, file), rel = relative(root, target);
   if (!rel || rel === '..' || rel.startsWith('../') || isAbsolute(rel)) throw new Error('Artifact must be inside its canonical root');
@@ -33,6 +36,26 @@ function git(r, ...args) {
 export function revision(r) {
   return { commit: git(r, 'rev-parse', 'HEAD'), dirty: Boolean(git(r, 'status', '--porcelain', '--untracked-files=no')) };
 }
+// Immutable per-run revision proof. A wave attempt records the revision it actually
+// observed inside its namespace, so a coordinator can check a drained overlay
+// without running git against an unmounted (empty) outside checkout.
+function persistRevisionReceipt(r, observed) {
+  const binding = r.wave_bindings || {};
+  atomic(safePath(r.package, runFile(r, 'revision')), { schema_version: 1, run_id: r.id, observed_at: now(),
+    wave_id: binding.wave_id ?? null, generation: binding.generation ?? null, step_number: binding.step_number ?? null,
+    attempt_id: binding.attempt_id ?? null, phase: binding.phase ?? null, target: binding.target ?? null,
+    backend: binding.backend ?? null, base_commit: binding.base_commit ?? null,
+    commit: observed.commit, dirty: observed.dirty, checkout: r.checkout });
+}
+export function revisionReceipt(r) {
+  const file = runFile(r, 'revision');
+  return existsSync(file) ? read(file) : null;
+}
+function observeRevision(r) {
+  const observed = revision(r);
+  if (isWave(r)) persistRevisionReceipt(r, observed);
+  return observed;
+}
 export function verificationReceipts(r) {
   const file = runFile(r, 'verification');
   return existsSync(file) ? read(file).receipts : [];
@@ -52,6 +75,7 @@ export function recordVerification(r, command, before, after, result, timing = {
     + '```json\n' + JSON.stringify({ ...receipt, checkout: r.checkout }, null, 2) + '\n```\n', true);
   receipts.push(receipt);
   atomic(safePath(r.package, runFile(r, 'verification')), { version: 1, run_id: r.id, receipts });
+  if (isWave(r)) persistRevisionReceipt(r, after);
   return receipt;
 }
 function stepNumber(r) {
@@ -59,7 +83,10 @@ function stepNumber(r) {
   if (!value) throw new Error('Completion requires a canonical numbered step card');
   return Number(value);
 }
-function learningPath(r) { return join(r.package, 'learnings', `step-${String(stepNumber(r)).padStart(3, '0')}-learning.md`); }
+function runLearningPath(r) { return join(r.package, 'runtime/runs', `${r.id}-learning.md`); }
+// A wave attempt learns into its immutable run file; only the coordinator refresh
+// (under flock) selects a canonical latest pointer for other steps to read.
+function learningPath(r) { return isWave(r) ? runLearningPath(r) : join(r.package, 'learnings', `step-${String(stepNumber(r)).padStart(3, '0')}-learning.md`); }
 function gatesFor(r) {
   const plan = read(join(r.package, 'evidence-plan.json'));
   if (!Array.isArray(plan.gates)) throw new Error('evidence-plan.json must contain gates; repair preparation rather than invent evidence obligations');
@@ -79,11 +106,18 @@ function packageArtifactPath(packagePath, path) {
   return safePath(root, resolve(root, legacyPath(root, path)));
 }
 // `<repo id>:<path>` names a file in that target's worktree (locations.json), when the id is a target.
-function targetPath(packagePath, path) {
+// A wave attempt may only name its own target; that resolves inside its own checkout,
+// never the canonical integration worktree, and never a sibling target.
+function targetPath(r, path) {
   const match = /^([A-Za-z0-9][A-Za-z0-9_-]*):(.+)$/.exec(path);
   if (!match) return null;
+  if (isWave(r)) {
+    if (match[1] !== r.wave_bindings.target)
+      throw new Error(`Wave artifact ${path} names target ${match[1]}, not this attempt's target ${r.wave_bindings.target}; the attempt cannot reference a foreign target`);
+    return safePath(r.checkout, resolve(r.checkout, match[2]));
+  }
   let targets;
-  try { targets = read(join(packagePath, 'locations.json')).targets; } catch { return null; }
+  try { targets = read(join(r.package, 'locations.json')).targets; } catch { return null; }
   const target = targets?.find(entry => entry.id === match[1]);
   if (!target) return null;
   if (!target.worktree) throw new Error(`Target ${target.id} has no worktree yet; ${path} cannot be resolved`);
@@ -92,7 +126,7 @@ function targetPath(packagePath, path) {
 function artifactPath(r, path) {
   if (typeof path !== 'string' || !path.trim()) throw new Error('Evidence artifact path is required');
   path = legacyPath(r.package, path);
-  const inTarget = targetPath(r.package, path);
+  const inTarget = targetPath(r, path);
   if (inTarget) return inTarget;
   if (isAbsolute(path)) return safePath(path.startsWith(r.package + '/') ? r.package : r.checkout, path);
   const packageTarget = safePath(r.package, path);
@@ -125,7 +159,7 @@ function strings(value, name) {
 export function submitCompletion(r, input) {
   if (JSON.stringify(input).length > 48000) throw new Error('Completion exceeds 48KB; reference existing evidence, not transcripts');
   if (!outcomes.includes(input.outcome)) throw new Error('Unknown completion outcome');
-  const head = revision(r), gates = gatesFor(r), receipts = verificationReceipts(r);
+  const head = observeRevision(r), gates = gatesFor(r), receipts = verificationReceipts(r);
   if (!Number.isInteger(input.fix_attempts ?? 0) || (input.fix_attempts ?? 0) < 0) throw new Error('fix_attempts must be a nonnegative integer');
   const decisions = strings(input.decisions, 'decisions'), gaps = strings(input.gaps, 'gaps'), findings = strings(input.findings, 'findings');
   const remainingWork = input.remaining_work === undefined ? undefined : strings(input.remaining_work, 'remaining_work');
@@ -180,7 +214,7 @@ export function submitCompletion(r, input) {
   atomic(safePath(r.package, learningPath(r)), render(submission), true);
   return completionStatus(r);
 }
-export function completionStatus(r, { checkHead = false } = {}) {
+export function completionStatus(r, { checkHead = isWave(r) } = {}) {
   if (!r.completion_contract) return { status: 'legacy_unchecked', missing: ['legacy handoff needs coordinator reconciliation'] };
   try {
     const file = runFile(r, 'completion');
@@ -188,7 +222,17 @@ export function completionStatus(r, { checkHead = false } = {}) {
     const submission = read(file);
     if (submission.invalidated_at) throw new Error('work continued after submission; submit the updated handoff');
     if (submission.run_id !== r.id || readFileSync(safePath(r.package, learningPath(r)), 'utf8') !== render(submission)) throw new Error('canonical learning missing, changed, or belongs to another attempt');
-    if (checkHead && (revision(r).commit !== submission.learning.commit || completeOutcomes.has(submission.learning.outcome) && revision(r).dirty)) throw new Error('HEAD changed after submission; update the handoff');
+    if (isWave(r)) {
+      // Wave provenance is mandatory even for aggregate/default callers or an
+      // explicit checkHead:false. The option only controls live Git for non-waves.
+      // Never run git against an unmounted/empty overlay checkout: require the
+      // durable same-run revision receipt recorded inside the namespace instead.
+      const proof = revisionReceipt(r), binding = r.wave_bindings;
+      if (!proof || proof.run_id !== r.id) throw new Error('wave revision receipt for this run is missing; completion cannot be checked outside its namespace');
+      if (proof.wave_id !== binding.wave_id || proof.attempt_id !== binding.attempt_id || proof.target !== binding.target || proof.commit !== submission.learning.commit)
+        throw new Error('wave revision receipt does not match the submitted handoff; provenance is forged, foreign or stale');
+      if (completeOutcomes.has(submission.learning.outcome) && proof.dirty) throw new Error('the recorded wave revision was dirty; update the handoff');
+    } else if (checkHead && (revision(r).commit !== submission.learning.commit || completeOutcomes.has(submission.learning.outcome) && revision(r).dirty)) throw new Error('HEAD changed after submission; update the handoff');
     const remainingWork = submission.learning.remaining_work ?? (completeOutcomes.has(submission.learning.outcome) ? [] : [...(submission.gaps || []),
       ...(submission.learning.evidence || []).filter(e => e.phase === 'merge' && e.status !== 'passed')
         .map(e => `${e.id}: ${e.status}; ${e.proof_boundary}`)]);
@@ -199,33 +243,94 @@ export function completionStatus(r, { checkHead = false } = {}) {
   } catch (error) { return { status: 'handoff_incomplete', missing: [error.message] }; }
 }
 const refreshes = new Map();
+function waveProvenance(r) {
+  const binding = r.wave_bindings;
+  if (!binding) return null;
+  return { wave_id: binding.wave_id ?? null, generation: binding.generation ?? null, step_number: binding.step_number ?? null,
+    attempt_id: binding.attempt_id ?? null, phase: binding.phase ?? null, target: binding.target ?? null,
+    backend: binding.backend ?? null, base_commit: binding.base_commit ?? null };
+}
+// The canonical `learnings/step-NNN-learning.md` is a coordinator aggregate: only
+// the latest recorded run per step is selected, and only while the refresh flock is
+// held. Attempts keep their immutable per-run learning file either way.
+function writeCanonicalLearning(packagePath, records) {
+  const latest = new Map();
+  for (const r of records) {
+    const step = Number(basename(r.step).match(/^step-(\d+)-subspec\.md$/)?.[1]);
+    if (!Number.isInteger(step)) continue;
+    const previous = latest.get(step);
+    if (!previous || (r.started_at || '').localeCompare(previous.started_at || '') > 0 ||
+        (r.started_at || '') === (previous.started_at || '') && r.id.localeCompare(previous.id) > 0) latest.set(step, r);
+  }
+  for (const [step, r] of latest) {
+    const status = r.handoff || completionStatus(r);
+    if (status.status !== 'recorded') continue;
+    const target = join(packagePath, 'learnings', `step-${String(step).padStart(3, '0')}-learning.md`);
+    const source = isWave(r) ? runLearningPath(r) : target;
+    if (resolve(source) === resolve(target) || !existsSync(source)) continue;
+    atomic(safePath(packagePath, target), readFileSync(source, 'utf8'), true);
+  }
+}
+// Aggregate facts under the package refresh flock. This is the direct-exec helper
+// refreshProgress runs; it must never call refreshProgress itself (no recursive lock).
+async function computeProgress(packagePath) {
+  const index = await buildHistoryIndex(packagePath);
+  atomic(safePath(packagePath, join(packagePath, 'history-index.json')), index);
+  const runsPath = join(packagePath, 'runtime/runs');
+  const records = existsSync(runsPath) ? readdirSync(runsPath).filter(n => /^[\w-]+\.json$/.test(n))
+    .map(n => read(join(runsPath, n))).filter(r => r.id && r.step && r.state) : [];
+  const waveRead = await readWaveRecords(packagePath);
+  const runs = records.map(r => {
+    const identity = runWaveIdentity(r);
+    return { run_id: r.id, step: r.step, checkout: r.checkout, execution: r.state, started_at: r.started_at,
+      finished_at: r.finished_at, handoff: r.handoff || completionStatus(r), verification_receipts: verificationReceipts(r).length,
+      wave: waveProvenance(r), wave_id: identity?.wave_id ?? null, phase: identity?.phase ?? null };
+  });
+  runs.sort((a, b) => (a.started_at || '').localeCompare(b.started_at || '') || a.run_id.localeCompare(b.run_id));
+  const waves = [
+    ...waveRead.waves.map(w => ({
+      wave_id: w.wave_id, generation: w.generation, state: w.state, record_path: w.record_path,
+      member_count: w.members.length,
+      active_count: w.members.filter(m => ACTIVE_MEMBER_PHASES.includes(m.phase)).length,
+      members: w.members.map(m => ({ step: m.step, phase: m.phase, run_id: m.run_id, sealed_head: m.sealed_head, blocking_reason: m.blocking_reason })),
+    })),
+    ...waveRead.invalid.map(i => ({ wave_id: null, generation: null, state: 'unknown', record_path: i.record_path, reason: i.reason,
+      member_count: 0, active_count: 0, members: [] })),
+  ];
+  const ledger = { version: 1, observed_at: now(), purpose: 'Runtime facts, not acceptance or publication authority', runs,
+    waves, waves_truncated: waveRead.truncated,
+    stages: existsSync(join(packagePath, 'runtime/stages')) ? readdirSync(join(packagePath, 'runtime/stages')).filter(n => n.endsWith('.json')).map(n => read(join(packagePath, 'runtime/stages', n))) : [],
+    artifacts: index.records.map(({ path, kind, step }) => ({ path, kind, step, assessment: 'inspect source; presence is not approval' })) };
+  const latestStages = new Map();
+  for (const entry of ledger.stages) {
+    const stage = stageAliases[entry.stage] || entry.stage;
+    const previous = latestStages.get(stage);
+    if (!previous || (entry.recorded_at || '') > (previous.recorded_at || '') ||
+        entry.recorded_at === previous.recorded_at && entry.status === 'blocked') latestStages.set(stage, { ...entry, stage });
+  }
+  ledger.stages = [...latestStages.values()];
+  writeCanonicalLearning(packagePath, records);
+  atomic(safePath(packagePath, join(packagePath, 'runtime/progress.json')), ledger);
+  return ledger;
+}
+// Cross-process serialization: flock guards recompute + history/progress writes, so
+// concurrent attempts/coordinators cannot interleave a torn ledger. The process-local
+// `refreshes` chain below still coalesces callers within one process.
+// `progress.lock` is a permanent synchronization anchor: it is intentionally never
+// unlinked, since a waiter can hold the old inode after an unlink and a fresh lock
+// file would then let two refreshers proceed concurrently.
+function runRefreshWorker(packagePath) {
+  mkdirSync(join(packagePath, 'runtime'), { recursive: true });
+  const lock = join(packagePath, 'runtime', 'progress.lock');
+  const result = spawnSync('flock', ['-x', lock, process.execPath, fileURLToPath(import.meta.url), 'refresh-progress'],
+    { input: JSON.stringify({ package: packagePath }), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  if (result.error || result.status !== 0)
+    throw new Error(`progress refresh failed: ${result.error?.message || `flock/node exited ${result.status}`}${result.stderr ? `; ${String(result.stderr).trim().slice(0, 400)}` : ''}`);
+  return JSON.parse(readFileSync(join(packagePath, 'runtime/progress.json'), 'utf8'));
+}
 export function refreshProgress(packagePath) {
   const prior = refreshes.get(packagePath) || Promise.resolve();
-  const next = prior.catch(() => {}).then(async () => {
-    const index = await buildHistoryIndex(packagePath);
-    atomic(safePath(packagePath, join(packagePath, 'history-index.json')), index);
-    const runsPath = join(packagePath, 'runtime/runs');
-    const runs = existsSync(runsPath) ? readdirSync(runsPath).filter(n => /^[\w-]+\.json$/.test(n)).flatMap(n => {
-      const r = read(join(runsPath, n));
-      if (!r.id || !r.step || !r.state) return [];
-      return [{ run_id: r.id, step: r.step, checkout: r.checkout, execution: r.state, started_at: r.started_at, finished_at: r.finished_at,
-        handoff: r.handoff || completionStatus(r), verification_receipts: verificationReceipts(r).length }];
-    }) : [];
-    runs.sort((a, b) => (a.started_at || '').localeCompare(b.started_at || '') || a.run_id.localeCompare(b.run_id));
-    const ledger = { version: 1, observed_at: now(), purpose: 'Runtime facts, not acceptance or publication authority', runs,
-      stages: existsSync(join(packagePath, 'runtime/stages')) ? readdirSync(join(packagePath, 'runtime/stages')).filter(n => n.endsWith('.json')).map(n => read(join(packagePath, 'runtime/stages', n))) : [],
-      artifacts: index.records.map(({ path, kind, step }) => ({ path, kind, step, assessment: 'inspect source; presence is not approval' })) };
-    const latestStages = new Map();
-    for (const entry of ledger.stages) {
-      const stage = stageAliases[entry.stage] || entry.stage;
-      const previous = latestStages.get(stage);
-      if (!previous || (entry.recorded_at || '') > (previous.recorded_at || '') ||
-          entry.recorded_at === previous.recorded_at && entry.status === 'blocked') latestStages.set(stage, { ...entry, stage });
-    }
-    ledger.stages = [...latestStages.values()];
-    atomic(safePath(packagePath, join(packagePath, 'runtime/progress.json')), ledger);
-    return ledger;
-  });
+  const next = prior.catch(() => {}).then(() => runRefreshWorker(packagePath));
   refreshes.set(packagePath, next);
   next.finally(() => { if (refreshes.get(packagePath) === next) refreshes.delete(packagePath); }).catch(() => {});
   return next;
@@ -248,7 +353,7 @@ export function watchProgress(packagePath, onError = () => {}, onFresh = () => {
   const reconcile = () => {
     try {
     if (closed) return;
-    const dirs = [packagePath, ...['learnings', 'reviews', 'runtime/runs'].map(d => join(packagePath, d))];
+    const dirs = [packagePath, ...['learnings', 'reviews', 'runtime', 'runtime/runs', 'runtime/waves'].map(d => join(packagePath, d))];
     const parts = [];
     for (const dir of dirs) {
       if (!existsSync(dir)) continue;
@@ -256,8 +361,10 @@ export function watchProgress(packagePath, onError = () => {}, onFresh = () => {
         try {
           const watcher = watchDirectory(dir, (_event, filename) => {
           const name = filename?.toString();
-          if (!name || /(?:learning|review|fix)\.md$/.test(name) || dir.endsWith('/runs') && name.endsWith('.json')) refresh();
+          const structured = dir.endsWith('/runs') || dir.endsWith('/waves');
+          if (!name || /(?:learning|review|fix)\.md$/.test(name) || structured && name.endsWith('.json')) refresh();
           if (dir === packagePath && ['learnings', 'reviews', 'runtime'].includes(name)) reconcile();
+          if (dir.endsWith('/runtime') && name === 'waves') reconcile();
           });
           watcher.on('error', error => {
             watchers.delete(dir);
@@ -267,7 +374,7 @@ export function watchProgress(packagePath, onError = () => {}, onFresh = () => {
           watchers.set(dir, watcher);
         } catch (error) { onError(error); }
       }
-      for (const name of readdirSync(dir)) if (/(?:learning|review|fix)\.md$/.test(name) || dir.endsWith('/runs') && name.endsWith('.json')) {
+      for (const name of readdirSync(dir)) if (/(?:learning|review|fix)\.md$/.test(name) || (dir.endsWith('/runs') || dir.endsWith('/waves')) && name.endsWith('.json')) {
         const s = lstatSync(join(dir, name)); parts.push(`${dir}/${name}:${s.mtimeMs}:${s.size}`);
       }
     }
@@ -287,9 +394,30 @@ export function unfinishedPreparedSteps(packagePath, progress) {
   const steps = read(join(packagePath, 'spec-steps.json')).steps;
   if (!Array.isArray(steps) || !steps.length || steps.some(s => !Number.isInteger(s.step) || s.step < 1))
     throw new Error('Prepared step index is missing or invalid; cannot establish package completion');
+  const waves = (Array.isArray(progress.waves) ? progress.waves : []).filter(w => w.state !== 'unknown');
+  // `opened_at` is deliberately absent from the ledger row, so read the owned
+  // record to break equal-generation ties deterministically.
+  const openedAt = row => {
+    try { const value = read(row.record_path); return typeof value.started_at === 'string' ? value.started_at : null; }
+    catch { return null; }
+  };
+  const waveForStep = step => {
+    const containing = waves.filter(w => Array.isArray(w.members) && w.members.some(m => m.step === step));
+    if (!containing.length) return null;
+    containing.sort((a, b) => (b.generation ?? 0) - (a.generation ?? 0)
+      || String(openedAt(b) || '').localeCompare(String(openedAt(a) || '')));
+    return containing[0];
+  };
   const latest = new Map();
-  for (const run of progress.runs) latest.set(Number(basename(run.step).match(/^step-(\d+)-subspec\.md$/)?.[1]), run);
+  for (const run of progress.runs) if (!run.wave_id) latest.set(Number(basename(run.step).match(/^step-(\d+)-subspec\.md$/)?.[1]), run);
   return steps.filter(step => {
+    // A wave member is finished only when sealed and the owning wave integrated;
+    // a step outside any wave keeps the legacy latest-run fallback.
+    const wave = waveForStep(step.step);
+    if (wave) {
+      const member = wave.members.find(m => m.step === step.step);
+      return !(member && member.phase === 'sealed' && wave.state === 'integrated');
+    }
     const run = latest.get(step.step);
     return !run || run.execution !== 'completed' || run.handoff?.status !== 'recorded' || !completeOutcomes.has(run.handoff.outcome);
   }).map(step => step.step);
@@ -303,11 +431,23 @@ export function recordCheckpoint(packagePath, input) {
   if (input.status === 'complete' && !input.artifacts.length) throw new Error('A complete stage must reference its actual artifacts');
   if (input.status === 'complete' && ['implementation', 'publication'].includes(input.stage)) {
     const progress = read(join(packagePath, 'runtime/progress.json'));
+    // Wave gates run before the legacy step/handoff checks: wave members can be
+    // sealed and legacy-unchecked, so only their owning wave's integration state
+    // establishes package completion.
+    // A missing waves directory permits only legacy progress without wave fields.
+    const hasWavesProperty = Object.prototype.hasOwnProperty.call(progress, 'waves');
+    if (!hasWavesProperty && existsSync(join(packagePath, 'runtime/waves'))) throw new Error('Progress predates wave records; refresh progress before closing this stage');
+    // Any persisted waves property is gated regardless of directory presence.
+    if (hasWavesProperty || progress.waves_truncated) {
+      if (!Array.isArray(progress.waves) || progress.waves_truncated || progress.waves.some(w => w.state === 'unknown')) throw new Error('Wave records are unreadable; integrated completion cannot be established');
+      const pending = progress.waves.find(w => w.state !== 'integrated' && w.state !== 'cancelled');
+      if (pending) throw new Error(`Wave ${pending.wave_id} is ${pending.state}; publication consumes only integrated canonical target heads`);
+    }
     const unfinished = unfinishedPreparedSteps(packagePath, progress);
     if (unfinished.length) throw new Error(`Unfinished prepared steps: ${unfinished.join(', ')}; attempted steps alone do not establish package completion`);
     const latest = new Map();
-    for (const r of progress.runs) latest.set(r.step, r);
-    if ([...latest.values()].some(r => r.execution !== 'completed' || r.handoff.status !== 'recorded' || !completeOutcomes.has(r.handoff.outcome))) throw new Error('Unfinished worker/handoff obligations remain; preserve them before closing this stage');
+    for (const r of progress.runs) if (!r.wave_id) latest.set(r.step, r);
+    if ([...latest.values()].some(r => !r.wave_id && (r.execution !== 'completed' || r.handoff.status !== 'recorded' || !completeOutcomes.has(r.handoff.outcome)))) throw new Error('Unfinished worker/handoff obligations remain; preserve them before closing this stage');
   }
   const directory = safePath(packagePath, join(packagePath, 'runtime/stages'));
   const value = { version: 1, ...input, recorded_at: now(), source: 'coordinator assessment; not a runtime verification verdict' };
@@ -375,4 +515,20 @@ export function installProgressContext(pi, { record, role, onError = () => {} } 
 export function invalidateCompletion(r) {
   const file = runFile(r, 'completion');
   if (existsSync(file)) atomic(safePath(r.package, file), { ...read(file), invalidated_at: now() });
+}
+
+// Fixed direct-exec entrypoint: `flock -x <lock> node completion.mjs <op>` with a
+// JSON stdin request. A single fixed operation keeps child invocation data bounded
+// and shell-free. Importing this module never starts the helper.
+const invokedAs = process.argv[1] && (() => { try { return realpathSync(resolve(process.argv[1])); } catch { return resolve(process.argv[1]); } })();
+const selfPath = (() => { const self = fileURLToPath(import.meta.url); try { return realpathSync(self); } catch { return self; } })();
+if (invokedAs === selfPath) {
+  const operation = process.argv[2];
+  const request = JSON.parse(readFileSync(0, 'utf8'));
+  if (operation === 'refresh-progress') {
+    process.stdout.write(JSON.stringify(await computeProgress(request.package)));
+  } else {
+    process.stderr.write(`Unknown completion operation: ${operation}\n`);
+    process.exit(2);
+  }
 }
