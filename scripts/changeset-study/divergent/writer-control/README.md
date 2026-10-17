@@ -46,3 +46,24 @@ builder and edit engine. They compare actual staged excerpts, local retry failur
 final candidate, dispatched plan and receipts. Execution and verification outcomes
 remain separate; no independent semantic review is claimed. All costs remain
 retained even when a routing, retry or source-provenance audit fails.
+
+For a main fixed-off replay, the same read-only auditor can be selected explicitly:
+
+```sh
+node scripts/changeset-study/divergent/writer-control/fixed-off-audit.mjs \
+  --run "$FIXED_OFF_RUN" --donor "$RUN18" --sdk-root "$PINNED_SDK_ROOT"
+```
+
+This does not prepare or execute another arm. It independently binds main-run jobs
+to donor18 tasks, plans, briefs and result hashes, verifies main/donor frozen manifests,
+SDK/model/dependency pins and the canonical ledger, then uses the same response/source
+replay with explicit DeepSeek-off and main frozen-backend parameters. Transport/model
+retries disqualify the observed local-retry comparison while retaining charges. The
+Sol-control prepare/run functions and the audit's default selector remain Sol-only;
+historical main reporter behavior is unchanged. No new owner/query/review occurs.
+
+The fixed-off CLI exits zero when evidence integrity is valid, including a correctly
+recorded application failure. A nonzero exit means invalid provenance/evidence or an
+audit error. Check `all_qualified_application` and `all_delivery_checks_pass` separately
+for outcomes; exit status does not certify success. `audit_provider_calls: 0` describes
+the read-only audit itself, not the writer calls retained in the observed run.

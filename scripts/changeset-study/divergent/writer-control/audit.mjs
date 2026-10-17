@@ -4,7 +4,8 @@ import { pathToFileURL } from 'node:url';
 import { hash, model, packet, read, rows, safePath, same } from './support.mjs';
 
 // No model/runtime imports. The caller verifies the frozen manifest/inputs first.
-export async function auditCell({ directory, expectedJob, expectedPlan, taskHash }) {
+export async function auditCell({ directory, expectedJob, expectedPlan, taskHash, expectedWriterSelector = model, frozenBackendRoot = join(dirname(directory), 'backend') }) {
+  if (![model, 'deepseek/deepseek-flash:off'].includes(expectedWriterSelector)) throw new Error('Unsupported explicit audit writer selector');
   const checks = [], check = (ok, name) => checks.push({ check: name, ok: Boolean(ok) });
   let result = {}, requests = [], receipts = [], responses = [], actualJob = {}, plan = null, candidate = null;
   try { result = read(join(directory, 'result.json')); } catch {}
@@ -14,13 +15,13 @@ export async function auditCell({ directory, expectedJob, expectedPlan, taskHash
   try { candidate = read(join(directory, 'candidate.json')); } catch {}
   check(same(actualJob, expectedJob) && actualJob.task && hash(JSON.stringify(actualJob.task)) === taskHash, 'exact frozen source task, brief, plan, limits and control job');
   check(result.task_hash === taskHash && result.task === expectedJob.task.id && result.strategy === 'owner-query-writer' && result.selector === expectedJob.selector &&
-    result.editor_selector === model && result.writer_recovery_selector == null, 'result source identity and Sol writer role');
+    result.editor_selector === expectedWriterSelector && result.writer_recovery_selector == null, 'result source identity and authorized writer role');
   check(result.optimization === 'none' && result.query_mode === expectedJob.queryMode && result.query_granularity === expectedJob.queryGranularity,
     'result treatment identity');
   check(Object.entries(expectedJob.task.limits).every(([key, value]) => same(result.limits?.[key], value)), 'unchanged requested limits');
   check((result.reviews ?? []).length === 0 && result.repairs === 0 && !result.routing?.attempted, 'no review, batch repair or routing inference');
-  check(requests.length > 0 && requests.every(request => request.selector === model && request.stage === 'editor') &&
-    receipts.every(receipt => receipt.selector === model && receipt.stage === 'editor'), 'only authorized Sol writer requests and receipts');
+  check(requests.length > 0 && requests.every(request => request.selector === expectedWriterSelector && request.stage === 'editor') &&
+    receipts.every(receipt => receipt.selector === expectedWriterSelector && receipt.stage === 'editor'), 'only authorized writer requests and receipts');
   const ids = new Set(requests.map(request => request.reservation));
   check(requests.every(request => typeof request.reservation === 'string' && request.reservation.length > 0) && ids.size === requests.length && receipts.length === requests.length && new Set(receipts.map(receipt => receipt.reservation)).size === receipts.length &&
     receipts.every(receipt => ids.has(receipt.reservation)), 'one receipt per unique request');
@@ -68,7 +69,7 @@ export async function auditCell({ directory, expectedJob, expectedPlan, taskHash
   check(records.length === operations.length && new Set(records.map(record => record.id)).size === records.length &&
     records.every(record => operations.some(operation => operation.id === record.id)), 'one execution status per dispatched operation');
   try {
-    const backend = join(dirname(directory), 'backend/scripts');
+    const backend = join(frozenBackendRoot, 'scripts');
     const [{ compile, transform, validateFileSyntax }, { focusedInput }, { parse }, { parseJson }] = await Promise.all([
       import(pathToFileURL(join(backend, 'changeset/engine.mjs')).href),
       import(pathToFileURL(join(backend, 'changeset-study/focused-editors.mjs')).href),

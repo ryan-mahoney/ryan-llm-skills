@@ -2,10 +2,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { cpSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { auditCell } from './audit.mjs';
+import { auditFixedOffRun } from './fixed-off-audit.mjs';
 import { prepare, verifyPrepared, auditPrepared, reservationReadiness } from './runner.mjs';
 import { hash, inventory, model, read, taskIds, write } from './support.mjs';
 
@@ -52,10 +54,10 @@ w('plan-0.json',plan);w('candidate.json',candidate);w('result.json',{task:job.ta
       implementation_brief_hash: hash(brief), executions: [{ ok: true, plan_sha256: hash(JSON.stringify(plan)), operations: [{ id: 'answer', executor: 'simple', status: 'passed' }] }] });
     writeFileSync(join(directory, 'requests.jsonl'), JSON.stringify({ stage: 'editor', context: { messages: [{ role: 'user', content: 'offline retained packet' }] } }) + '\n');
   }
-  write(join(source, 'manifest.json'), { revision: '80cf4f1' + '0'.repeat(33), comparison: 'deepseek-owner-sol-query-deepseek-writer', strategy: 'owner-query-writer', selector: model, editor_selector: 'deepseek/deepseek-flash:off',
+  write(join(source, 'manifest.json'), { revision: '80cf4f1' + '0'.repeat(33), comparison: 'deepseek-owner-sol-query-deepseek-writer', source_run: 'original-workflow', source_manifest_hash: hash('original-workflow-fixture'), strategy: 'owner-query-writer', selector: model, editor_selector: 'deepseek/deepseek-flash:off',
     query_mode: 'catalog-lookup', query_granularity: 'smaller-regions', optimization: 'none', schedule: taskIds, tasks_hash: hash(readFileSync(join(source, 'tasks.json'))),
     frozen_files: inventory(backend), sdk_files: Object.fromEntries(['pi-agent-core', 'pi-coding-agent', 'pi-ai'].map(pkg => [pkg, inventory(join(sdk, pkg, 'dist'))])),
-    dependencies_hash: hash(JSON.stringify(inventory(dependency))), models: [{ selector: model, model: metadata }] });
+    dependencies_hash: hash(JSON.stringify(inventory(dependency))), models: [{ selector: model, model: metadata }, { selector: 'deepseek/deepseek-flash:off', model: { ...metadata, provider: 'deepseek', id: 'deepseek-flash' } }] });
   return { source, sdk, ledger, output: join(root, 'writer-controls/sol') };
 }
 
@@ -197,5 +199,84 @@ test('writer audit rejects unexecuted success claims, dependency misordering and
       assert.equal(orphan.qualified_application, false, stage);
       assert.ok(orphan.validation.some(check => check.check.includes('no orphan responses') && !check.ok), stage);
     }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+// Run alone: CHANGESET_TEST_PARSER=/path/to/acorn.mjs node --test --test-name-pattern='explicit fixed-off audit' scripts/changeset-study/divergent/writer-control/runner.test.mjs
+test('explicit fixed-off audit verifies donor provenance while default Sol audit stays strict and transport retries fail', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'fixed-off-audit-'));
+  try {
+    const args = fixture(root), sourceManifest = read(join(args.source, 'manifest.json'));
+    const run = join(dirname(args.source), '22-off-fixture'), frozen = join(run, 'frozen');
+    cpSync(join(args.source, 'frozen'), frozen, { recursive: true });
+    mkdirSync(join(frozen, 'skills/spec-changeset-plan'), { recursive: true });
+    writeFileSync(join(frozen, 'skills/spec-changeset-plan/SKILL.md'), 'Unused offline planner skill');
+    cpSync(join(args.source, 'tasks.json'), join(run, 'tasks.json'));
+    write(join(run, 'manifest.json'), { ...sourceManifest, revision: 'offline-fixed-off', plans_from: '18-fixture', briefs_from: null,
+      writer_recovery_selector: null, frozen_files: inventory(frozen) });
+    for (const [index, id] of taskIds.entries()) {
+      const name = `${String(index).padStart(3, '0')}-${id}`, source = join(args.source, name), directory = join(run, name);
+      mkdirSync(directory);
+      const original = read(join(source, 'job.json')), resultBytes = readFileSync(join(source, 'result.json'));
+      const brief = readFileSync(join(source, 'implementation-brief.md'), 'utf8'), raw = readFileSync(join(source, 'raw-plan.json'));
+      const job = { task: original.task, optimization: 'none', queryMode: 'catalog-lookup', queryGranularity: 'smaller-regions',
+        preparedPlan: JSON.parse(raw), preparedBrief: brief,
+        planningSource: { run: '18-fixture', cell: name, plan_hash: hash(raw), plan_artifact: 'raw-plan.json', result_hash: hash(resultBytes), query_granularity: 'smaller-regions' },
+        briefSource: { run: '18-fixture', cell: name, brief_hash: hash(brief), result_hash: hash(resultBytes) },
+        arm: 'changeset', strategy: 'owner-query-writer', selector: model, editorSelector: 'deepseek/deepseek-flash:off', writerRecoverySelector: null,
+        ledger: args.ledger, directory, mounts: original.mounts, plannerPrompt: 'Unused offline planner skill' };
+      write(join(directory, 'job.json'), job);
+      execFileSync(process.execPath, [join(frozen, 'scripts/changeset-study/worker.mjs'), join(directory, 'job.json')]);
+      const result = read(join(directory, 'result.json'));
+      Object.assign(result, { process_elapsed_ms: 1, planning_source: job.planningSource, brief_source: job.briefSource,
+        implementation_brief_hash: hash(brief), query_assignment_budget: { max_calls: 8, calls_used: 0, query_calls_reserved: 0, writer_attempts_per_operation: 2, max_operations: 4 } });
+      write(join(directory, 'result.json'), result);
+    }
+    const options = { run, donor: args.source, sdk: args.sdk };
+    const report = await auditFixedOffRun(options);
+    assert.equal(report.all_qualified_application, true, JSON.stringify(report));
+    const directory = join(run, '000-hard-context-calibration'), job = read(join(directory, 'job.json'));
+    const defaultAudit = await auditCell({ directory, expectedJob: job, expectedPlan: read(join(directory, 'plan-0.json')),
+      taskHash: hash(JSON.stringify(job.task)), frozenBackendRoot: frozen });
+    assert.equal(defaultAudit.integrity_valid, false, 'default audit still accepts only Sol writer evidence');
+    assert.ok(defaultAudit.validation.some(check => check.check === 'only authorized writer requests and receipts' && !check.ok));
+    const badJob = structuredClone(job); badJob.preparedBrief = 'Unbound owner brief'; write(join(directory, 'job.json'), badJob);
+    assert.equal((await auditFixedOffRun(options)).all_integrity_valid, false, 'expected job must derive from donor, not tampered actual job');
+    write(join(directory, 'job.json'), job);
+    const request = read(join(directory, 'requests.jsonl')), receipt = read(join(directory, 'receipts.jsonl')), response = read(join(directory, 'responses.jsonl'));
+    const savedResult = read(join(directory, 'result.json')), savedCandidate = readFileSync(join(directory, 'candidate.json'));
+    const failedRetry = { ...request, reservation: 'failed-retry', writer_attempt: 1, context: { ...request.context,
+      messages: [{ role: 'user', content: JSON.stringify({ ...JSON.parse(request.context.messages[0].content), application_failure: 'Editor returned no edits' }), timestamp: 1 }] } };
+    writeFileSync(join(directory, 'requests.jsonl'), [request, failedRetry].map(JSON.stringify).join('\n'));
+    writeFileSync(join(directory, 'receipts.jsonl'), [receipt, { ...receipt, reservation: 'failed-retry', writer_attempt: 1 }].map(JSON.stringify).join('\n'));
+    const failedResponse = structuredClone(response); failedResponse.response.content[0].text = '{"edits":[]}';
+    writeFileSync(join(directory, 'responses.jsonl'), [failedResponse, { ...failedResponse, reservation: 'failed-retry' }].map(JSON.stringify).join('\n'));
+    const failedResult = structuredClone(savedResult); failedResult.model_calls = 2;
+    for (const key of ['input', 'output', 'cacheRead', 'cacheWrite', 'totalTokens']) failedResult.tokens[key] *= 2;
+    failedResult.executions[0].ok = false; failedResult.executions[0].operations[0].status = 'failed';
+    failedResult.executions[0].operations[0].error = 'Editor returned no edits'; failedResult.accepted = false; failedResult.hidden_pass = false;
+    failedResult.checks[0].visible.ok = false; failedResult.candidate_hash = hash(JSON.stringify(job.task.files));
+    writeFileSync(join(directory, 'candidate.json'), JSON.stringify(job.task.files)); write(join(directory, 'result.json'), failedResult);
+    const cliResult = JSON.parse(execFileSync(process.execPath, [fileURLToPath(new URL('./fixed-off-audit.mjs', import.meta.url)),
+      '--run', run, '--donor', args.source, '--sdk-root', args.sdk], { encoding: 'utf8' }));
+    assert.equal(cliResult.all_integrity_valid, true, 'CLI exits zero for a valid failed observation');
+    assert.equal(cliResult.all_qualified_application, false); assert.equal(cliResult.all_delivery_checks_pass, false);
+    assert.equal(cliResult.audit_provider_calls, 0); assert.equal(Object.hasOwn(cliResult, 'provider_calls'), false);
+    writeFileSync(join(directory, 'requests.jsonl'), JSON.stringify(request)); writeFileSync(join(directory, 'receipts.jsonl'), JSON.stringify(receipt));
+    writeFileSync(join(directory, 'responses.jsonl'), JSON.stringify(response)); writeFileSync(join(directory, 'candidate.json'), savedCandidate); write(join(directory, 'result.json'), savedResult);
+    const retry = { ...request, reservation: 'retry', writer_attempt: 1, context: { ...request.context,
+      messages: [{ role: 'user', content: JSON.stringify({ ...JSON.parse(request.context.messages[0].content), application_failure: 'Transport error' }), timestamp: 1 }] } };
+    const zeroUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { total: 0 } };
+    writeFileSync(join(directory, 'requests.jsonl'), [request, retry].map(JSON.stringify).join('\n'));
+    writeFileSync(join(directory, 'receipts.jsonl'), [{ ...receipt, stop_reason: 'error', error: 'Transport error', usage: zeroUsage },
+      { ...receipt, reservation: 'retry', writer_attempt: 1 }].map(JSON.stringify).join('\n'));
+    writeFileSync(join(directory, 'responses.jsonl'), [{ reservation: 'one', stage: 'editor', response: { stopReason: 'error', errorMessage: 'Transport error', usage: zeroUsage, content: [] } },
+      { ...response, reservation: 'retry' }].map(JSON.stringify).join('\n'));
+    const result = read(join(directory, 'result.json')); result.model_calls = 2; write(join(directory, 'result.json'), result);
+    const rejected = await auditFixedOffRun(options);
+    assert.equal(rejected.all_qualified_application, false);
+    assert.ok(rejected.cells[0].validation.some(check => check.check.includes('never transport') && !check.ok));
+    assert.equal(rejected.cells[0].reported_usd, 0.001);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
