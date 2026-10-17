@@ -96,9 +96,18 @@ function currentHandoff(record) {
           completion?.learning?.checkpoint_reason].some(value => value != null && String(value).length > 300),
       assessment: 'Observation only; inspect the full handoff and latest review/fix evidence for applicability.' };
   });
-  while (JSON.stringify(observations).length > 10000 && observations.length) observations.pop();
-  return `CURRENT: ${JSON.stringify({ step: record.step, checkout: record.checkout, revision: revision(record), observations,
-    omitted_steps: Math.max(0, steps.length - observations.length), coverage_gaps: coverageGaps.slice(0, 8).map(gap => gap.slice(0, 300)),
+  // A retained owner session received the earlier-step context in its first prompt.
+  // Resending it every round made each prompt 16-18k characters, and Codex compaction
+  // keeps recent prompts verbatim, so eleven rounds filled the owner's window on their own.
+  let resumed = false;
+  try { resumed = Boolean(record.owner_session) && statSync(record.owner_session).size > 0; } catch {}
+  const withoutResults = observations.filter(entry => !entry.run_id && !entry.learning_path).map(entry => entry.step);
+  const kept = observations.filter(entry => !withoutResults.includes(entry.step) && (!resumed || entry.step === steps[0]));
+  while (JSON.stringify(kept).length > 10000 && kept.length) kept.pop();
+  return `CURRENT: ${JSON.stringify({ step: record.step, checkout: record.checkout, revision: revision(record), observations: kept,
+    ...(withoutResults.length ? { steps_without_results: withoutResults } : {}),
+    ...(resumed ? { earlier_steps: 'sent earlier in this owner session; read the sources for changes' } : {}),
+    omitted_steps: Math.max(0, steps.length - kept.length - withoutResults.length), coverage_gaps: coverageGaps.slice(0, 8).map(gap => gap.slice(0, 300)),
     sources: [join(record.package, 'runtime/progress.json'), join(record.package, 'history-index.json')],
     obligations: 'Read all card prerequisites. Reconcile historical gaps against latest evidence; worker exit and handoff outcome do not establish acceptance. Preserve original evidence revisions.' })}\n`;
 }

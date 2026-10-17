@@ -927,7 +927,19 @@ test('CURRENT handoff carries bounded latest prerequisite facts and preserves ex
   assert.ok(prompt.includes('use existing helper'));
   assert.ok(prompt.includes('Preserve explicit direction'));
   assert.ok(prompt.includes('do not establish acceptance'));
+  assert.deepEqual(current.steps_without_results, ['001'], 'a step with no run or learning is listed, not described');
+  assert.ok(!current.observations.some(item => item.step === '001'));
   await runtime.cancel(f.packagePath, receipt.run_id, 1000);
+  // The retained owner session already holds the earlier-step context; the next round
+  // sends only the current step's observation.
+  writeFileSync(JSON.parse(readFileSync(join(dir, `${receipt.run_id}.json`), 'utf8')).owner_session, '{"type":"session"}\n');
+  const again = await runtime.start({ ...f.input, assignment_id: 'round-2', instructions: 'Preserve explicit direction' });
+  const resumed = JSON.parse(prompt.match(/CURRENT: ([^\n]+)/)[1]);
+  assert.deepEqual(resumed.observations.map(item => [item.step, item.run_id]), [['001', receipt.run_id]], 'only the current step, from the prior round');
+  assert.match(resumed.earlier_steps, /sent earlier/);
+  assert.ok(!prompt.includes('use existing helper'));
+  assert.ok(prompt.includes('Preserve explicit direction'));
+  await runtime.cancel(f.packagePath, again.run_id, 1000);
 });
 
 // Run alone: node --test --test-name-pattern='prompt construction failure' runtime.test.mjs
