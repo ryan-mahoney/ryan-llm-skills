@@ -305,6 +305,9 @@ test('wave dispatch: real Runtime candidate binding uses the candidate checkout 
       const run = loadRun(f.packagePath, started.run_id);
       assert.equal(run.checkout, candidateCheckout, 'the candidate run executes in the candidate checkout');
       assert.equal(run.wave_bindings?.candidate, 1, 'the candidate run records candidate 1');
+      assert.deepEqual(run.revisions.checkout, { head: config.wave_bindings.base_commit, dirty: null },
+        'a wave run records its frozen base, not git state found above the overlay mountpoint');
+      assert.match(run.revisions.checkout.head, /^[0-9a-f]{40}$/);
       assert.equal(f.runtime.active.has(started.run_id), true, 'the candidate run is active under the Runtime');
 
       // The candidate lease accepts while its run is the current repair run.

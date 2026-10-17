@@ -1182,7 +1182,10 @@ export class Runtime {
       dispatch_requested_at: requestedAt, routing_reason: config.routing_reason,
       attempt_kind: config.attempt_kind ?? null, session_scope: scope,
       environment: environmentFacts(config.checkout, config.primary),
-      revisions: { runtime: revisionOf(here), checkout: revisionOf(config.checkout) },
+      // A wave member's checkout is an overlay mountpoint that is empty in the coordinator;
+      // git there would search parent directories, so record the frozen base instead.
+      revisions: { runtime: revisionOf(here), checkout: config.wave_bindings
+        ? { head: config.wave_bindings.base_commit ?? null, dirty: null } : revisionOf(config.checkout) },
       child_extensions: config.child_extensions || [], owner_session: join(sessionDir, 'owner.jsonl'), editor_session: join(sessionDir, 'editor.jsonl'),
       stage: config.stage ?? null, review_model: config.review_model ?? null, fix_model: config.fix_model ?? null,
       ...(config.stage ? { [`${config.stage.role}_session`]: join(sessionDir, 'stages', `${id}-${config.stage.role}.jsonl`) } : {}),
