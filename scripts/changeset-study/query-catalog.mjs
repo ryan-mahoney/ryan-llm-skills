@@ -61,8 +61,13 @@ function resolvePaths(files, brief, sourceRoot) {
   for (const ref of refs.filter(item => !resolved.has(item) && !absentPaths.includes(item))) {
     let candidates = [];
     const statedTargets = explicitTargets.get(basename(ref.normalized));
-    if (statedTargets?.size === 1) candidates = [...statedTargets];
+    // A brief may spell the same file both checkout-relative and relative to a test
+    // module; the relative form can normalize to a path that does not exist. Only
+    // existing stated targets compete for the basename.
+    const existingTargets = [...(statedTargets ?? [])].filter(path => keys.includes(path));
+    if (existingTargets.length === 1) candidates = existingTargets;
     else if (statedTargets?.size > 1) throw new Error(`needs-discovery: ambiguous basename ${ref.normalized}`);
+    else if (statedTargets?.size === 1) candidates = [...statedTargets];
     if (ref.raw.startsWith('./')) {
       if (!candidates.length) {
         candidates = explicitDirectories.map(dir => normalize(join(dir, ref.normalized))).filter(path => keys.includes(path));

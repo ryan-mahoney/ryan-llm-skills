@@ -83,7 +83,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
     ...(dispatchProfile ? { dispatch_profile: dispatchProfile, dispatch_options: dispatch.options, writer_format: dispatch.writerFormat, writer_attempts: [] } : {}),
     ...(dispatchOnly(strategy) ? { review_mode: 'executable-checks-only', checks: [] } : {}),
   };
-  let client, agent, simpleClient, recoveryClient, seamRetryClient, contextParse;
+  let client, agent, ownerAgent, simpleClient, recoveryClient, seamRetryClient, contextParse;
   const stage = async (name, fn) => { const start = performance.now(); try { return await fn(); } finally { stages.push({ name, elapsed_ms: performance.now() - start }); } };
   const check = async () => {
     const files = Workspace.load(root).snapshot();
@@ -130,19 +130,27 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
       writeFileSync(join(directory, 'implementation-brief.md'), preparedBrief);
       result.implementation_brief_hash = hash(preparedBrief);
     }
+    let reviseBrief = null;
     if (strategy === 'owner-query-writer' && !preparedPlan && preparedBrief === null) {
-      const owner = await nativeAgent({ root, client: simpleClient, transcript: join(directory, 'implementation-owner-transcript.jsonl'),
+      ownerAgent = await nativeAgent({ root, client: simpleClient, transcript: join(directory, 'implementation-owner-transcript.jsonl'),
         signal: controller.signal, readOnly: true, stage: 'implementation-planning', ...toolOptions, extraPrompt: dependencyNote + implementationOwnerPrompt });
-      try {
-        implementationBrief = await stage('implementation-planning', () => owner.prompt(prompt));
-        if (!implementationBrief.trim() || implementationBrief.length > 64000) throw new Error('Implementation brief must contain 1..64000 characters');
-        writeFileSync(join(directory, 'implementation-brief.md'), implementationBrief + '\n');
-        result.implementation_brief_hash = hash(implementationBrief + '\n');
-        if (queryMode.startsWith('catalog')) implementationBrief += '\n';
-      } finally {
-        for (const [name, count] of Object.entries(owner.counts)) toolCalls[name] = (toolCalls[name] ?? 0) + count;
-        owner.dispose();
-      }
+      const checkBrief = text => { if (!text.trim() || text.length > 64000) throw new Error('Implementation brief must contain 1..64000 characters'); return text; };
+      implementationBrief = checkBrief(await stage('implementation-planning', () => ownerAgent.prompt(prompt)));
+      writeFileSync(join(directory, 'implementation-brief.md'), implementationBrief + '\n');
+      result.implementation_brief_hash = hash(implementationBrief + '\n');
+      if (queryMode.startsWith('catalog')) implementationBrief += '\n';
+      // The planner may not invent an owner decision. When it reports one missing, the
+      // owner that wrote the brief settles it in its own retained context and planning
+      // restarts from the revised brief. At most two revisions per cell; the planner
+      // still never sees test feedback and writers never see either role.
+      reviseBrief = async blocked => {
+        const revised = checkBrief(await stage('implementation-planning', () => ownerAgent.prompt(JSON.stringify({ previous_brief: implementationBrief,
+          blocked_by_query_planner: blocked, instruction: 'The query planner cannot proceed without this decision and must not invent it. Settle it yourself from the source and the prepared step, verify the resolved paths against the file tree, revise the brief so the decision and its consequences are explicit, and return the complete revised brief only.' }))));
+        const index = (result.owner_revisions ??= []).length + 1;
+        writeFileSync(join(directory, `implementation-brief-revised-${index}.md`), revised + '\n');
+        result.owner_revisions.push({ blocked: String(blocked).slice(0, 2000), brief_hash: hash(revised + '\n') });
+        return queryMode.startsWith('catalog') ? revised + '\n' : revised;
+      };
     }
     if (arm === 'agent') agent = await nativeAgent({ root, client, transcript: join(directory, 'transcript.jsonl'), signal: controller.signal, extraPrompt: dependencyNote, ...toolOptions });
     const implement = async feedback => {
@@ -265,7 +273,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
         const query = async payload => {
           while (true) {
             // Bound every complete request, including source followup and correction.
-            const maxKiB = lookupMode ? 160 : 80;
+            const maxKiB = lookupMode ? 256 : 80;
             const requestBytes = Buffer.byteLength(JSON.stringify({ systemPrompt: system,
               messages: [{ role: 'user', content: JSON.stringify(payload), timestamp: Date.now() }] }));
             if (requestBytes > maxKiB * 1024)
@@ -288,6 +296,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
             throw new Error('needs discovery: source lookup is allowed only once, before the final plan');
           return value;
         };
+        const planOnce = async () => {
         plan = await query(input);
         if (lookupMode && Object.hasOwn(plan ?? {}, 'source_requests')) {
           if (Object.hasOwn(plan, 'operations') || Object.hasOwn(plan, 'blocked'))
@@ -314,6 +323,15 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
             instruction: 'The single source lookup batch is complete. Return the complete final plan JSON or a blocked result; no further source requests are available.' };
           plan = requirePlan(await query(input));
         } else if (lookupMode) plan = requirePlan(plan);
+        return plan;
+        };
+        plan = await planOnce();
+        while (plan?.blocked && reviseBrief && (result.owner_revisions?.length ?? 0) < 2) {
+          implementationBrief = await reviseBrief(plan.blocked);
+          input = { ...input, implementation_brief: implementationBrief, source_requests: undefined, source_lookup: undefined, instruction: undefined };
+          queryCalls = 0; correctionUsed = false; queryLookup = null;
+          plan = await planOnce();
+        }
         plan = await beforeDispatch(plan, async correction => {
           if (correctionUsed) throw new Error('Query correction allowance already used for JSON format');
           correctionUsed = true;
@@ -423,6 +441,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
   finally {
     agent?.dispose();
     Object.assign(toolCalls, agent?.counts ?? {});
+    if (ownerAgent) { for (const [name, count] of Object.entries(ownerAgent.counts)) toolCalls[name] = (toolCalls[name] ?? 0) + count; ownerAgent.dispose(); }
   }
   // Freeze before mounting hidden code. No subsequent model calls are allowed.
   result.implementation_ms = performance.now() - started;

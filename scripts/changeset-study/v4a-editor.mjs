@@ -109,9 +109,12 @@ export function seedIntegrity(seed, output, { parse } = {}) {
   // A line-commented copy must not count: comment-only output lines are excluded.
   const outputs = code.split(/\r\n|\r|\n/).map(normalize).filter(line => line && !line.startsWith('//')), lines = new Set(outputs);
   const missing = [];
+  // A declaration header may legitimately change form at a seam (a method becomes an
+  // exported function, a function gains `export`); its body lines must still survive.
+  const header = /^(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function\s*\*?\s*)?[\w$]+\s*\([^()]*\)\s*\{$/;
   for (const raw of String(seed).split(/\r\n|\r|\n/)) {
     const line = normalize(raw);
-    if (!line || /^(\/\/|\*)/.test(line)) continue;
+    if (!line || /^(\/\/|\*)/.test(line) || header.test(line)) continue;
     if (lines.has(line) || lines.has(line + ',') || outputs.some(out => out.endsWith(line) || out.endsWith(line + ','))) continue;
     missing.push(line.slice(0, 160));
     if (missing.length === 5) break;

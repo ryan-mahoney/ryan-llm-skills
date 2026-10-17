@@ -181,6 +181,8 @@ test('seeded move pre-fills an absent destination from its declared excerpts and
   assert.deepEqual(seedIntegrity('function a() {}\nconst b = 1;\n', '/*\nfunction a() {}\n*/\nconst b = 1;\n', { parse }), ['function a() {}']);
   assert.deepEqual(seedIntegrity("const g = '/*';\nfunction a() {}\n", "const g = '/*';\nfunction a() {}\n", { parse: (code, options) => { options.onComment.push(); } }), [], 'only parser-reported comment ranges are blanked');
   assert.deepEqual(seedIntegrity('function a() {}\n', '// function a() {}\n'), ['function a() {}']);
+  assert.deepEqual(seedIntegrity('  async containedRoot(record, prompt) {\n    return 1;\n  }\n', 'export async function containedRoot(record, prompt) {\n  return 1;\n}\n'), [], 'a method header may become a function header at a seam');
+  assert.deepEqual(seedIntegrity('  async containedRoot(record, prompt) {\n    return 1;\n  }\n', 'export async function containedRoot(record, prompt) {\n}\n'), ['return 1;'], 'body lines must survive');
   const commenting = { text: async () => '*** Begin Patch\n*** Update File: new.mjs\n@@\n-function helper() { return 1; }\n+/* function helper() { return 1; } */\n*** End Patch', json: async () => { throw new Error('no JSON'); } };
   await assert.rejects(v4aEditor(commenting, 'editor', seed, { seed }), error => { assert.match(error.message, /missing or commented out/); assert.deepEqual(error.writer_attempts.map(row => [row.format, row.applied, row.syntax_valid]), [['v4a', true, true], ['v4a', true, true]]); return true; });
   // A failed seam patch gets one more seam attempt carrying the applier diagnostic, never a JSON rewrite.

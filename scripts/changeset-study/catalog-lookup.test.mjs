@@ -99,9 +99,9 @@ test('catalog lookup reads frozen source once before the final plan and permits 
     assert.ok(Buffer.byteLength(JSON.stringify(directRequest.context)) > 80 * 1024);
     assert.equal(existsSync(join(directDirectory, 'source-requests.json')), false);
     const oversizedDirectory = join(root, 'oversized');
-    const oversized = await runCell({ ...options, directory: oversizedDirectory, preparedBrief: brief + 'direct ' + 'x '.repeat(85000) });
+    const oversized = await runCell({ ...options, directory: oversizedDirectory, preparedBrief: brief + 'direct ' + 'x '.repeat(135000) });
     assert.equal(existsSync(join(oversizedDirectory, 'requests.jsonl')), false);
-    assert.match(oversized.checks[0].implementation_error, /exceeds 160 KiB/);
+    assert.match(oversized.checks[0].implementation_error, /exceeds 256 KiB/);
 
     for (const [mode, expectedStages, succeeds] of [
       ['malformed-once direct', ['planning', 'planning', 'editor'], true],

@@ -192,3 +192,13 @@ test('named imported helpers add uniquely resolved source signatures without gue
   assert.ok(!catalog.files.some(file => file.path === 'outside/missing.mjs'));
   assert.ok(catalog.unresolved_refs.some(ref => ref.reference === '../outside/missing.mjs'));
 });
+
+// CHANGESET_TEST_PARSER=... node --test --test-name-pattern='test-relative spelling' scripts/changeset-study/query-catalog.test.mjs
+test('a test-relative spelling of an existing file does not make its basename ambiguous', async () => {
+  const parse = await parser();
+  const files = { 'pi/agents/spec-step-editor.md': '# Editor profile\n', 'pi/extensions/spec-runtime/runtime.test.mjs': "import test from 'node:test';\n" };
+  const brief = "Edit `pi/agents/spec-step-editor.md`. The test resolves `new URL('../agents/spec-step-editor.md', import.meta.url)` from `pi/extensions/spec-runtime/runtime.test.mjs` and reads `spec-step-editor.md`.";
+  const catalog = buildQueryCatalog(files, brief, { parse });
+  assert.ok(catalog.files.some(file => file.path === 'pi/agents/spec-step-editor.md' && file.exists));
+  assert.throws(() => buildQueryCatalog({ 'a/x.md': '# a\n', 'b/x.md': '# b\n' }, 'Edit `a/x.md` and `b/x.md`, then `x.md`.', { parse }), /ambiguous basename x\.md/);
+});

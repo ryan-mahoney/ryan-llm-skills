@@ -19,6 +19,11 @@ against the supplied file tree and existing path construction. Settle these mech
 details yourself. Do not leave alternatives, questions or instructions for the query
 planner to choose an implementation. If a requirement is genuinely unresolved, report
 that input gap explicitly rather than presenting an unsettled brief as ready.
+Write the brief in its final settled form only. Do not include deliberation, rejected
+alternatives, self-questions ("Let me reconsider", "Wait:", "Good."), or working notes;
+resolve them before writing. State every data shape a writer must consume exactly
+(object keyed by what, array of what, which field lives on which record) and give
+code-level recipes (predicates, object literals, call signatures) as literal code.
 
 The query planner translates your decisions into small executable assignments and a
 dependency graph; it must not design the implementation or fill in missing behavioral
@@ -48,6 +53,12 @@ All paths are checkout-relative. Owned writes are readable. File read/write conf
 serialize, independent operations run concurrently, and dependencies see staged updates.
 Split a compound owner transformation into small assignments without changing its design.
 Supply explicit settled interfaces so independent writers do not need each other's files.
+Carry the owner's code-level detail into the packet verbatim: exact predicates, object
+literals, data shapes (an object keyed by step string is not an array; a field on the
+wave record is not a field on its member), key names, error codes and messages. Never
+compress such detail into prose a writer must re-derive; if it does not fit the packet
+bound, split the packet. A writer sees only its packet, so every shape it consumes or
+produces must be stated in that packet.
 Do not run tests or verification. No model reviews or revises the batch after dispatch.
 The runtime may return planning_validation_errors before any writer starts; correct your
 own source bindings and plan once. That correction must preserve the owner's decisions.
@@ -114,7 +125,7 @@ One shared correction is available for invalid JSON or an invalid plan before
 writers run; a format correction consumes that same allowance. Source requests
 are unavailable after the final plan. You have no repository tools,
 original step specification or behavioral feedback. Preserve the owner's decisions.
-Complete serialized system+input is capped at 160 KiB on every call in this mode.
+Complete serialized system+input is capped at 256 KiB on every call in this mode.
 `;
 
 export function catalogPlannerRole({ lookup = false } = {}) {
@@ -164,7 +175,10 @@ unchanged function body merely because it is large.
 The current edit backend can compose source parts ONLY into an absent destination.
 It cannot insert source parts into an existing file: replace and replace-range require
 literal replacement text. Keep a source-range compose assembly and its required
-scope/separator conversions atomic. Do not propose scaffolding followed by source-part
+scope/separator conversions atomic. In a compose recipe, list the copy steps in the
+order the finished file should read, naming each copied range by its start anchor, and
+state which copied ranges sit inside which wrapper; the runtime pre-fills the destination
+in that order and the writer patches only the seams. Do not propose scaffolding followed by source-part
 appends, temporary helper files, or regeneration of large unchanged bodies to bypass
 that limitation. Split independent edits to existing source regions instead.
 Chain repeated writes to the same file with explicit depends_on edges. Each assignment
