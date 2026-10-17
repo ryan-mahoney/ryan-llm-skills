@@ -2,6 +2,8 @@
 
 Neither route delivered a complete task: **Morph 0/3; Relace 0/3**. Morph applied both eligible preparations; Relace applied calibration and rejected handoff's third file on syntax. Lifecycle failed during DeepSeek preparation, so neither vendor was tested there. These are six retained cells, including both owner failures. Fast file modification did not establish a delivery or whole-workflow win. Missing vendor preservation-marker conventions also prevent treating this freeze as a clean vendor-quality comparison.
 
+**Selection decision:** Morph and Relace are excluded from the current implementation candidates on cost. Preserve these measurements, but do not pursue further tuning or trials for either model. Reconsider the specialized-writer approach only if a materially lower-cost alternative becomes available. This is a cost decision, not a conclusion that the format-confounded quality results rule out the architecture.
+
 The [JSON evidence](task-results.json) records stage timings, calls, tokens, charges, candidate/input hashes and qualification. The [protocol](PROTOCOL.md) describes this standalone alternative to changesets: direct DeepSeek Flash off prepares settled instructions and code snippets; each vendor receives those exact snippets and original source files. No Sol planning/review, changeset IR, hidden feedback, model review or semantic repair occurred.
 
 | Task | DeepSeek preparation | Preparation s | Calls | Catalog USD |
