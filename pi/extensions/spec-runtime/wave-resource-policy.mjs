@@ -14,5 +14,15 @@ export function calculateWaveResourcePolicy(options = {}) {
     error.code = resolved.reason;
     throw error;
   }
+  // The resolver stays ok:true for an absent policy so setup can still create
+  // one; a native launch refuses it here rather than using bare defaults.
+  if (resolved.savedPolicyStatus === 'absent') {
+    const error = new Error(
+      `No saved host policy at ${resolved.paths ? resolved.paths.policyPath : 'the host config path'}; `
+      + 'run CLI runtime-host setup before launching waves so the launch uses the recorded host policy',
+    );
+    error.code = 'host-policy-missing';
+    throw error;
+  }
   return calculateResourcePolicy(resolved.options);
 }

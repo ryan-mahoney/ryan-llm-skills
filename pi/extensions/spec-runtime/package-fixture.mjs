@@ -387,6 +387,8 @@ export { makeLinuxOverlayFixture } from './wave-linux-overlay-fixture.mjs';
 export { checkRuntimeHost, createSystemdServiceAdapter } from './linux-resources.mjs';
 export { buildOverlayArgv } from './overlay.mjs';
 export { importSealedHead } from './step-workspaces.mjs';
+// EV-13 native wave case helpers read the durable member workspace shape.
+export { memberCheckouts, memberWorkspace } from './wave-native-workspaces.mjs';
 // EV-14 native Linux wave fixture: sandbox HOME, real environment and the
 // actual loopback provider/coordinator pair, with no host modification.
 export { bootLinuxWave } from './wave-linux-native-fixture.mjs';

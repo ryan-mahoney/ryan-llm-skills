@@ -20,6 +20,7 @@ import {
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, relative, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   assertCommand,
@@ -33,6 +34,8 @@ import {
   makeLinuxServices,
 } from './package-fixture.mjs';
 import { registerLinuxWaveCases } from './wave-linux-wave-cases.mjs';
+import { bootLinuxWave } from './wave-linux-native-fixture.mjs';
+import { parseUsecProperty } from './wave-linux-duration.mjs';
 
 const OPT_IN = process.env.SPEC_WAVES_LINUX_REHEARSAL === '1';
 const SKIP_REASON = 'rehearsal not authorized in this environment';
@@ -211,15 +214,6 @@ function parseByteProperty(value) {
   return Math.round(Number(match[1]) * scale);
 }
 
-function parseUsecProperty(value) {
-  const text = String(value ?? '').trim();
-  if (/^\d+$/.test(text)) return Number(text);
-  const match = /^(\d+(?:\.\d+)?)\s*(us|ms|s)?$/i.exec(text);
-  if (!match) return Number.NaN;
-  const scale = { US: 1, MS: 1000, S: 1000000 }[String(match[2] || 'us').toUpperCase()] || 1;
-  return Math.round(Number(match[1]) * scale);
-}
-
 function linuxTest(name, timeout, fn) {
   test(name, { timeout, skip: OPT_IN ? false : SKIP_REASON }, async t => {
     const preconditions = linuxPreconditions(t);
@@ -229,27 +223,44 @@ function linuxTest(name, timeout, fn) {
 
 // Case 9 stays below the insertion point for the remaining native Linux cases
 // 6-8, so adding them does not renumber this case.
+//
+// The lifecycle policy this case exercises is fixture-owned: bootLinuxWave copies
+// the operator's real saved policy and narrows only the lifecycle block inside the
+// sandbox configHome, so the sandbox admits width 9 without any live host setup or
+// mutation. The aggregate slice remains the operator's real saved slice and is
+// still compared exactly against the live slice.
 linuxTest('wave linux: operator-installed host policy matches the live slice', 120000, async (t, facts) => {
-  const policyPath = join(homedir(), '.config', 'spec-runtime', 'host-policy.json');
-  const setupRemedy = 'run node scripts/spec-observe/cli.mjs runtime-host setup --lifecycle-memory-mib 2048 --lifecycle-tasks 448';
-  assert.ok(existsSync(policyPath), `operator setup is pending: ${setupRemedy}`);
+  const fixtureRemedy = 'run this case via the EV-14 Linux rehearsal (it writes the fixture lifecycle policy into its own sandbox configHome)';
 
-  const hostCheck = facts.hostCheck;
+  // The boot used this sandbox (fixture lifecycle policy + copied real aggregate),
+  // so the real CLI resolves the same saved file through XDG_CONFIG_HOME.
+  const boot = await bootLinuxWave(t, facts, { members: 9 });
+  const policyPath = join(boot.sandbox.configHome, 'spec-runtime', 'host-policy.json');
+  assert.ok(existsSync(policyPath), `the fixture lifecycle policy exists at ${policyPath}; ${fixtureRemedy}`);
+
+  const checked = linuxCommand(process.execPath, [
+    fileURLToPath(new URL('../../../scripts/spec-observe/cli.mjs', import.meta.url)),
+    'runtime-host', 'check', '--probe',
+  ], { env: boot.env });
+  assert.equal(checked.error, undefined, `runtime host check could not run: ${checked.error && checked.error.message}`);
+  assert.equal(checked.status, 0,
+    `runtime host check failed (status ${checked.status}): ${checked.stderr || checked.stdout}`);
+  const hostCheck = JSON.parse(checked.stdout);
   assert.equal(hostCheck.ok, true, `runtime host check is not ok: ${JSON.stringify(hostCheck)}`);
   assert.equal(hostCheck.route, 'native');
   assert.equal(hostCheck.nativeReady, true);
   const admittedWidth = hostCheck.admission && hostCheck.admission.admittedWidth;
   assert.ok(Number.isInteger(admittedWidth) && admittedWidth >= 9,
-    `operator setup is pending: admitted width ${admittedWidth} is below 9; ${setupRemedy}`);
+    `the fixture lifecycle policy must admit width 9, got ${admittedWidth}; ${fixtureRemedy}`);
 
   const saved = readJson(policyPath);
   assert.equal(saved.schema, 'spec-runtime-host-policy/v1');
-  // The setup command records explicit lifecycle values. Reading only the
-  // effective defaults would not prove the operator installed this policy.
+  // The fixture writes explicit lifecycle provenance, so a policy with only
+  // effective defaults cannot satisfy this case.
   assert.equal(saved.provenance && saved.provenance.lifecycleMemoryMib, 'explicit',
-    'saved policy must record explicit lifecycle memory provenance');
+    'fixture policy must record explicit lifecycle memory provenance');
   assert.equal(saved.provenance && saved.provenance.lifecycleTasks, 'explicit',
-    'saved policy must record explicit lifecycle task provenance');
+    'fixture policy must record explicit lifecycle task provenance');
   const aggregate = saved.aggregate;
   assert.ok(aggregate && typeof aggregate === 'object', 'saved policy has no aggregate slice values');
 
@@ -268,7 +279,9 @@ linuxTest('wave linux: operator-installed host policy matches the live slice', 1
     if (split > 0) live[line.slice(0, split)] = line.slice(split + 1).trim();
   }
 
-  // Compare the exact aggregate values, not an ordering or an inequality.
+  // Compare the exact aggregate values, not an ordering or an inequality. The
+  // aggregate is the operator's unchanged real slice; only the fixture lifecycle
+  // block differs, and the live host is never modified by this case.
   assert.equal(parseByteProperty(live.MemoryMax), aggregate.memoryMaxBytes, 'slice MemoryMax');
   assert.equal(parseByteProperty(live.MemoryHigh), aggregate.memoryHighBytes, 'slice MemoryHigh');
   assert.equal(parseByteProperty(live.MemorySwapMax), aggregate.memorySwapMaxBytes, 'slice MemorySwapMax');
@@ -276,7 +289,14 @@ linuxTest('wave linux: operator-installed host policy matches the live slice', 1
   assert.equal(parseUsecProperty(live.CPUQuotaPerSecUSec), aggregate.cpuQuotaPercent * 10000, 'slice CPUQuotaPerSecUSec');
   assert.equal(Number(live.CPUWeight), aggregate.cpuWeight, 'slice CPUWeight');
 
-  t.diagnostic(JSON.stringify({ ev: 'EV-14', case: 'host-policy', kernel_proof: hostCheck.nativeReady === true, policyPath }));
+  t.diagnostic(JSON.stringify({
+    ev: 'EV-14',
+    case: 'host-policy',
+    kernel_proof: hostCheck.nativeReady === true,
+    policyPath,
+    lifecycle_fixture: true,
+    aggregate_slice: 'live',
+  }));
 });
 
 linuxTest('wave linux: kernel overlay semantics in a contained phase', 120000, async t => {

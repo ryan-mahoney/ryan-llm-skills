@@ -221,3 +221,35 @@ console.log(JSON.stringify({ captures, expected: stageCapacityRequest([]) }));
   // kernel enforcement, and the queued answer stops before any process starts.
   assert.equal(child.signal, null, 'the bounded child exited without a timeout signal');
 });
+
+test('wave native F13-2b-4: a missing saved policy refuses the check instead of defaulting', async t => {
+  const { options } = await isolatedHost(t);
+
+  // No setup runs here, so the isolated config home has no saved policy. A
+  // flagless check must refuse rather than silently falling back to the
+  // fabricated defaults, and the refusal must name the missing policy.
+  const result = await runtimeHostCommand('check', {}, { ...options, readyMembers: 9 });
+  assert.equal(result.exitCode, 1, 'a check with no saved policy exits nonzero');
+  assert.equal(result.result.reason, 'host-policy-missing', 'the refusal names the missing saved policy');
+  assert.equal(result.result.status, 'refused', 'the missing policy never reports ready');
+});
+
+test('wave native F13-2b-4: a missing saved policy refuses the launch policy calculation', async t => {
+  const { options } = await isolatedHost(t);
+  const { calculateWaveResourcePolicy } = await import('./wave-resource-policy.mjs');
+  const { resolveRuntimeHostPolicyOptions } = await import('./linux-resources.mjs');
+
+  // The launch policy calculator shares the saved-options resolver, so the same
+  // missing policy is an error there: no launch reserves fabricated capacity.
+  assert.throws(
+    () => calculateWaveResourcePolicy({ ...options, readyMembers: 9 }),
+    error => error.code === 'host-policy-missing',
+    'the launch policy calculation reports the missing saved policy',
+  );
+
+  // Provenance is preserved: the resolver records that no policy was saved
+  // rather than reporting an absent policy as an installed one.
+  const resolved = resolveRuntimeHostPolicyOptions({ ...options, readyMembers: 9 });
+  assert.equal(resolved.ok, true, `resolving without a saved policy failed: ${resolved.reason ?? ''}`);
+  assert.equal(resolved.savedPolicyStatus, 'absent', 'the resolver reports the saved policy as absent');
+});

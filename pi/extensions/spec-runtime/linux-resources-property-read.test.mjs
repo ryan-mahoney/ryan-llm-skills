@@ -11,11 +11,34 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { runtimeHostCommand } from './linux-resources.mjs';
-import { isolatedHost, realSystemctlReader } from './linux-resources-fix-fixture.mjs';
+import { hostTransport, isolatedHost, realSystemctlReader } from './linux-resources-fix-fixture.mjs';
+
+// The saved-policy contract now fails closed, so a check needs a real installed
+// policy before it can read the manager. Install it through the production
+// setup action on a *separate* synthetic transport: setup composes its own host
+// commands and would otherwise be recorded by the reader's transport, mixing
+// setup traffic into the read records each test asserts on. This is an additive
+// prerequisite -- the real root-slice query stays the only delegated read.
+const SAVED = { lifecycleMemoryMib: 2048, lifecycleTasks: 384 };
+
+async function hostWithSavedPolicy(t, reader) {
+  const host = await isolatedHost(t, { systemctlDelegate: reader.delegate });
+  const setup = await runtimeHostCommand('setup', { ...SAVED }, {
+    ...host.options,
+    run: hostTransport(host.fixture).run,
+    ownership: { inspectClaims: async () => ({ claims: [] }) },
+  });
+  assert.equal(
+    setup.exitCode,
+    0,
+    `setup failed: ${JSON.stringify(setup.result?.reason)} ${setup.result?.detail ?? ''}`
+  );
+  return host;
+}
 
 test('wave linux: real root-slice property read runs through the production query', async t => {
   const reader = realSystemctlReader();
-  const { run, calls, options } = await isolatedHost(t, { systemctlDelegate: reader.delegate });
+  const { run, calls, options } = await hostWithSavedPolicy(t, reader);
 
   const handled = await runtimeHostCommand('check', {}, { ...options });
   const result = handled.result;
@@ -63,7 +86,7 @@ test('wave linux: real root-slice property read runs through the production quer
 
 test('wave linux: real manager argv is forwarded, not substituted', async t => {
   const reader = realSystemctlReader();
-  const { calls, options } = await isolatedHost(t, { systemctlDelegate: reader.delegate });
+  const { calls, options } = await hostWithSavedPolicy(t, reader);
 
   await runtimeHostCommand('check', {}, { ...options });
 

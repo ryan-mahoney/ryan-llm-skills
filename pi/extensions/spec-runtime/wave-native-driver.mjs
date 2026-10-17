@@ -199,6 +199,13 @@ function emitEvent(event) {
   }
 }
 
+// Coordinator session store: a real persisted session is recorded through the
+// normal dispatch path, so the wave record's runs are produced by the runtime
+// rather than fabricated by the fixture.
+export function createCoordinatorSessionManager(SessionManager, config, sessionDir) {
+  return SessionManager.create(config.integrationCheckout, sessionDir);
+}
+
 // The child entry point: import the installed SDK, load the real index.ts and
 // drive one coordinator session until SIGTERM.
 async function runCoordinator(config) {
@@ -237,7 +244,7 @@ async function runCoordinator(config) {
 
   const sessionDir = join(config.dir, `coordinator-${config.tag}-session`);
   mkdirSync(sessionDir, { recursive: true });
-  const sessionManager = SessionManager.inMemory(sessionDir);
+  const sessionManager = createCoordinatorSessionManager(SessionManager, config, sessionDir);
   const { session } = await createAgentSession({
     cwd: config.integrationCheckout,
     agentDir: process.env.PI_CODING_AGENT_DIR,

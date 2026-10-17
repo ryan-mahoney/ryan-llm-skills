@@ -450,6 +450,7 @@ export const HOST_REMEDIES = Object.freeze({
   'symlink-target': 'replace the symlink with a regular owned file; runtime-host setup never writes through a symlink',
   'install-failed': 'free disk space and verify the config directory is writable by the wave user, then re-run runtime-host setup',
   'claims-unreadable': 'repair the ownership registry (readable, valid JSON) before runtime-host setup; a failed claims query blocks the install',
+  'host-policy-missing': 'run runtime-host setup to record the advanced host policy this native check/launch needs; there is no default fallback',
   'claims-active': 'wait for recorded capacity/checkout claims to finish; runtime-host setup never releases live claims',
   'claims-unknown': 'repair malformed or unrecognized claim records in the ownership registry; a policy change conservatively refuses an unknown claim shape instead of assuming no live claims',
   'services-unreadable': 'make systemctl --user list-units reachable for the wave user, then re-run runtime-host setup',
@@ -1396,7 +1397,9 @@ export function resolveRuntimeHostPolicyOptions(options = {}) {
     return { ok: false, paths, reason: savedPolicy.reason, detail: savedPolicy.detail };
   }
   applySavedHostPolicy(savedPolicy.values, shared);
-  return { ok: true, paths, options: shared };
+  // ok:true for an absent policy keeps setup and non-native resolution working;
+  // the native check/launch callers refuse the absent status themselves.
+  return { ok: true, paths, options: shared, savedPolicyStatus: savedPolicy.status };
 }
 
 function runtimeHostCheckRefusal(paths, reason, detail = null) {
@@ -1771,6 +1774,11 @@ export async function runtimeHostCommand(action, flags = {}, options = {}) {
   const resolved = resolveRuntimeHostPolicyOptions(shared);
   if (!resolved.ok) {
     return { exitCode: 1, result: runtimeHostCheckRefusal(resolved.paths, resolved.reason, resolved.detail) };
+  }
+  // A native check never invents advanced values: without a saved policy the
+  // calculator defaults would silently differ from the launched unit limits.
+  if (resolved.savedPolicyStatus === 'absent') {
+    return { exitCode: 1, result: runtimeHostCheckRefusal(resolved.paths, 'host-policy-missing', resolved.paths.policyPath) };
   }
   const checkOptions = resolved.options;
   if (flags.probe === true) checkOptions.probe = true;

@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import assert from 'node:assert/strict';
 
 import { bootLinuxWave } from './package-fixture.mjs';
+import { parseUsecProperty } from './wave-linux-duration.mjs';
 import { startCoordinator } from './wave-native-driver.mjs';
 
 const GIB = 1024 ** 3;
@@ -206,15 +207,6 @@ function parseByteProperty(value) {
   const match = /^(\d+(?:\.\d+)?)\s*([KMGT])?$/i.exec(text);
   if (!match) return Number.NaN;
   const scale = { K: 1024, M: 1024 ** 2, G: 1024 ** 3, T: 1024 ** 4 }[String(match[2] || '').toUpperCase()] || 1;
-  return Math.round(Number(match[1]) * scale);
-}
-
-function parseUsecProperty(value) {
-  const text = String(value ?? '').trim();
-  if (/^\d+$/.test(text)) return Number(text);
-  const match = /^(\d+(?:\.\d+)?)\s*(us|ms|s)?$/i.exec(text);
-  if (!match) return Number.NaN;
-  const scale = { US: 1, MS: 1000, S: 1000000 }[String(match[2] || 'us').toUpperCase()] || 1;
   return Math.round(Number(match[1]) * scale);
 }
 

@@ -23,6 +23,8 @@ import {
   startLoopbackProvider,
   writeLoopbackExtension,
   writeSandboxHome,
+  memberCheckouts,
+  memberWorkspace,
 } from './package-fixture.mjs';
 import { HOST_REMEDIES } from './linux-resources.mjs';
 
@@ -167,12 +169,6 @@ function attentionIn(request) {
     }
   }
   return found;
-}
-
-function memberCheckouts(record) {
-  return Object.values(record.members ?? {})
-    .map(member => member.checkout ?? member.checkout_path ?? member.worktree)
-    .filter(Boolean);
 }
 
 // The candidate checks are recorded on record.target.integration.checks; the
@@ -496,11 +492,22 @@ test('wave native: width five implements, reviews, repairs and promotes through 
   // record.target.integration.workspace (runtime.mjs / wave-candidate-binding).
   const memberEntries = Object.values(record.members ?? {});
   assert.equal(memberEntries.length, 5, 'the wave record has five members');
+  // Each member's provisioned workspace is corroborated against the run that
+  // actually implemented that step, so the canonical path comes from the run
+  // record rather than a flat member field.
+  const implementingRunFor = step => readRunRecords(fixture).find(run =>
+    run.wave_bindings?.wave_id === record.wave_id
+    && run.wave_bindings?.step_number === step
+    && run.wave_bindings?.phase === 'implementing');
   for (const member of memberEntries) {
     const workspace = member.workspace ?? {};
     assert.equal(workspace.backend, 'worktree', `member step ${member.step} workspace backend is worktree`);
     assert.equal(workspace.backendReason, 'userns-denied', `member step ${member.step} workspace backendReason is userns-denied`);
-    assert.equal(workspace.worktree, member.checkout, `member step ${member.step} workspace.worktree is its checkout`);
+    const implementingRun = implementingRunFor(member.step);
+    assert.ok(implementingRun, `member step ${member.step} has an implementing run record`);
+    const canonical = memberWorkspace(member, implementingRun);
+    assert.equal(typeof canonical, 'string', `member step ${member.step} has a canonical workspace path`);
+    assert.ok(canonical.length > 0, `member step ${member.step} canonical workspace path is non-empty`);
     assert.equal(typeof workspace.snapshotId, 'string', `member step ${member.step} workspace has a snapshotId`);
     assert.ok(workspace.snapshotId.length > 0, `member step ${member.step} snapshotId is non-empty`);
     assert.equal(typeof workspace.baseCommit, 'string', `member step ${member.step} workspace has a baseCommit`);
@@ -789,12 +796,24 @@ test('wave native: blocked members preserve work and repeated entry launches not
   const member = step => Object.values(blocked.members ?? {}).find(entry => entry.step === step);
   const member3 = member(3);
   const member4 = member(4);
+  // Blocked members keep their durable workspace; the canonical path is again
+  // corroborated by an actual implementing run for that step.
+  const implementingRunFor = step => readRunRecords(fixture).find(run =>
+    run.wave_bindings?.wave_id === blocked.wave_id
+    && run.wave_bindings?.step_number === step
+    && run.wave_bindings?.phase === 'implementing');
+  const member3Run = implementingRunFor(3);
+  const member4Run = implementingRunFor(4);
+  assert.ok(member3Run, 'step 3 has an implementing run record');
+  assert.ok(member4Run, 'step 4 has an implementing run record');
+  const member3Path = memberWorkspace(member3, member3Run);
+  const member4Path = memberWorkspace(member4, member4Run);
   assert.equal(member3.blocking_reason, 'length-stop', 'step 3 blocks on the length stop');
-  assert.equal(git(member3.checkout, 'status', '--porcelain').trimEnd(), '?? src/step-03.txt',
+  assert.equal(git(member3Path, 'status', '--porcelain').trimEnd(), '?? src/step-03.txt',
     'step 3 preserves the uncommitted implementation file');
   assert.equal(member4.blocking_reason, 'review-transport-failed', 'step 4 blocks on the review transport');
   assert.equal(member4.sealed_head, null, 'step 4 has no sealed head');
-  assert.equal(member4.head_commit, git(member4.checkout, 'rev-parse', 'HEAD').trim(),
+  assert.equal(member4.head_commit, git(member4Path, 'rev-parse', 'HEAD').trim(),
     'step 4 checkout HEAD is its implementation commit');
 
   const step4Runs = reviewingRuns();
