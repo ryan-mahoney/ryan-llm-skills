@@ -23,6 +23,9 @@ export const GIB = 1024 * MIB;
 
 export const DEFAULT_WAVE_TIMEOUT_MS = 7_200_000;
 export const DEFAULT_LIFECYCLE_MEMORY_MIB = 3072;
+// Per-member MemoryMax: a generous crash guard, not the admission budget. The
+// aggregate spec-runtime.slice (MemoryMax = pool) protects the host.
+export const DEFAULT_MEMBER_MEMORY_MAX_MIB = 8192;
 export const DEFAULT_LIFECYCLE_TASKS = 512;
 export const DEFAULT_AGGREGATE_TASKS = 4096;
 export const MEMORY_RESERVE_PERCENT = 30;
@@ -42,11 +45,15 @@ export const DEFAULT_RUNTIME_DIR_BASE = '/run/user';
 // and are subtracted from the effective ceilings independently, so lowering one
 // budget alone cannot exceed the other. The result reports slot floors, the
 // effective free reservations, the binding constraint(s) and value provenance.
+// Admission reserves lifecycleMemoryBytes per member; each member unit is
+// instead capped at memberMemoryMaxBytes (MemoryMax), which is never below the
+// reservation and never above the effective memory ceiling.
 export function calculateResourcePolicy(options = {}) {
   const {
     physicalMemoryBytes,
     cpuCount = availableParallelism(),
     lifecycleMemoryMib = DEFAULT_LIFECYCLE_MEMORY_MIB,
+    memberMemoryMaxMib = DEFAULT_MEMBER_MEMORY_MAX_MIB,
     lifecycleTasks = DEFAULT_LIFECYCLE_TASKS,
     aggregateTasks = DEFAULT_AGGREGATE_TASKS,
     explicitCap = null,
@@ -58,6 +65,7 @@ export function calculateResourcePolicy(options = {}) {
   requirePositiveSafeInteger(physicalMemoryBytes, 'physicalMemoryBytes');
   requirePositiveSafeInteger(cpuCount, 'cpuCount');
   requirePositiveInteger(lifecycleMemoryMib, 'lifecycleMemoryMib');
+  requirePositiveInteger(memberMemoryMaxMib, 'memberMemoryMaxMib');
   requirePositiveInteger(lifecycleTasks, 'lifecycleTasks');
   requirePositiveInteger(aggregateTasks, 'aggregateTasks');
   requireNonNegativeInteger(readyMembers, 'readyMembers');
@@ -66,6 +74,13 @@ export function calculateResourcePolicy(options = {}) {
 
   const lifecycleMemoryBytes = lifecycleMemoryMib * MIB;
   if (!Number.isSafeInteger(lifecycleMemoryBytes)) throw new Error('lifecycleMemoryMib exceeds the safe integer range');
+  const requestedMemberMaxBytes = memberMemoryMaxMib * MIB;
+  if (!Number.isSafeInteger(requestedMemberMaxBytes)) throw new Error('memberMemoryMaxMib exceeds the safe integer range');
+  // An explicit ceiling below the reservation is refused rather than raised:
+  // the operator asked for a value that cannot hold one admitted member.
+  if (options.memberMemoryMaxMib !== undefined && requestedMemberMaxBytes < lifecycleMemoryBytes) {
+    throw new Error(`memberMemoryMaxMib ${memberMemoryMaxMib} is below the lifecycle reservation of ${lifecycleMemoryMib} MiB; the per-member ceiling must be at least the reservation`);
+  }
   const cpuQuotaPercent = CPU_QUOTA_PER_CPU_PERCENT * cpuCount;
   if (!Number.isSafeInteger(cpuQuotaPercent)) throw new Error('cpuCount exceeds the safe integer range');
 
@@ -96,6 +111,10 @@ export function calculateResourcePolicy(options = {}) {
   if (taskCeiling < lifecycleTasks) {
     throw new Error(`resource policy does not fit: free task budget ${freeTasks} is below one lifecycle of ${lifecycleTasks} tasks`);
   }
+  // Clamped to the effective ceiling (a unit can never use more than the slice
+  // holds); only the default can fall below the reservation, and then the
+  // reservation itself is the ceiling.
+  const memberMemoryMaxBytes = Math.max(lifecycleMemoryBytes, Math.min(requestedMemberMaxBytes, memoryCeilingBytes));
 
   const free = {
     memoryBytes: Math.max(0, freeMemoryBytes),
@@ -124,9 +143,11 @@ export function calculateResourcePolicy(options = {}) {
     poolReserveSource,
     lifecycleMemoryBytes,
     lifecycleMemoryMib,
+    memberMemoryMaxBytes,
+    memberMemoryMaxMib,
     lifecycleTasks,
     aggregateTasks,
-    memoryHighBytes: Math.floor((lifecycleMemoryBytes * MEMORY_HIGH_PERCENT) / 100),
+    memoryHighBytes: Math.floor((memberMemoryMaxBytes * MEMORY_HIGH_PERCENT) / 100),
     memorySwapMaxBytes: MEMORY_SWAP_MAX_BYTES,
     cpuQuotaPercent,
     cpuWeight: CPU_WEIGHT,
@@ -141,6 +162,7 @@ export function calculateResourcePolicy(options = {}) {
     bindings,
     provenance: {
       lifecycleMemoryMib: options.lifecycleMemoryMib === undefined ? 'default' : 'explicit',
+      memberMemoryMaxMib: options.memberMemoryMaxMib === undefined ? 'default' : 'explicit',
       lifecycleTasks: options.lifecycleTasks === undefined ? 'default' : 'explicit',
       aggregateTasks: options.aggregateTasks === undefined ? 'default' : 'explicit',
       explicitCap: explicitCap === null ? 'absent' : 'explicit',
@@ -439,7 +461,7 @@ export const HOST_REMEDIES = Object.freeze({
   'bwrap-unknown': 'install an OS bubblewrap package and pass its absolute path so the check can read its setuid bit',
   'overlay-options-absent': 'install bubblewrap >= 0.11.0 from the OS package manager so the overlay options are present',
   userns: 'an administrator installs the OS-approved AppArmor user-namespace profile or enables unprivileged user namespaces',
-  'capacity-below-lifecycle': 'raise the effective memory/task ceiling or lower the explicit lifecycle budget; never launch without a bounded lifecycle',
+  'capacity-below-lifecycle': 'raise the effective memory/task ceiling or lower the explicit lifecycle budget, and keep --member-memory-max-mib at or above --lifecycle-memory-mib; never launch without a bounded lifecycle',
   backing: 'place retained overlay layers on a local filesystem whose statfs the check can read',
   'probe-required': 'run the runtime host check with the explicitly requested isolated probe (--probe) to exercise the transient user-service boundary',
   'probe-skipped': 'resolve the earlier host refusals before probing the transient user-service boundary',
@@ -486,6 +508,7 @@ export async function checkRuntimeHost(options = {}) {
     physicalMemoryBytes = null,
     cpuCount = null,
     lifecycleMemoryMib,
+    memberMemoryMaxMib,
     lifecycleTasks,
     aggregateTasks,
     explicitCap = null,
@@ -640,6 +663,7 @@ export async function checkRuntimeHost(options = {}) {
       physicalMemoryBytes: physicalMemoryBytes ?? totalmem(),
       cpuCount: cpuCount ?? availableParallelism(),
       lifecycleMemoryMib,
+      memberMemoryMaxMib,
       lifecycleTasks,
       aggregateTasks,
       explicitCap,
@@ -1162,7 +1186,7 @@ function propertyProbeArgs(policy, runtimeMaxSec) {
     '--wait',
     '--collect',
     '--service-type=exec',
-    `--property=MemoryMax=${policy.lifecycleMemoryBytes}`,
+    `--property=MemoryMax=${policy.memberMemoryMaxBytes}`,
     `--property=MemoryHigh=${policy.memoryHighBytes}`,
     `--property=MemorySwapMax=${policy.memorySwapMaxBytes}`,
     `--property=TasksMax=${policy.lifecycleTasks}`,
@@ -1186,7 +1210,7 @@ function runProbeService({ runCommand, argv, policy, runtimeMaxSec, timeoutMs, e
     '--wait',
     '--collect',
     '--service-type=exec',
-    `--property=MemoryMax=${policy.lifecycleMemoryBytes}`,
+    `--property=MemoryMax=${policy.memberMemoryMaxBytes}`,
     `--property=MemoryHigh=${policy.memoryHighBytes}`,
     `--property=MemorySwapMax=${policy.memorySwapMaxBytes}`,
     `--property=TasksMax=${policy.lifecycleTasks}`,
@@ -1251,8 +1275,12 @@ function buildHostPolicy(policy) {
       cpuWeight: policy.cpuWeight,
     },
     lifecycle: {
+      // memoryMib/memoryBytes are the admission reservation; memoryMax* is the
+      // per-member unit MemoryMax and memoryHighBytes is 80% of that ceiling.
       memoryMib: policy.lifecycleMemoryMib,
       memoryBytes: policy.lifecycleMemoryBytes,
+      memoryMaxMib: policy.memberMemoryMaxMib,
+      memoryMaxBytes: policy.memberMemoryMaxBytes,
       memoryHighBytes: policy.memoryHighBytes,
       memorySwapMaxBytes: policy.memorySwapMaxBytes,
       tasksMax: policy.lifecycleTasks,
@@ -1344,6 +1372,9 @@ function loadSavedHostPolicy(paths) {
   const provenance = target.parsed.provenance !== null && typeof target.parsed.provenance === 'object' ? target.parsed.provenance : {};
   const values = {};
   if (provenance.lifecycleMemoryMib !== 'default') values.lifecycleMemoryMib = lifecycle.memoryMib;
+  // A policy saved before the per-member ceiling existed has no provenance for
+  // it and inherits the default; only an explicitly saved ceiling is reapplied.
+  if (provenance.memberMemoryMaxMib === 'explicit') values.memberMemoryMaxMib = lifecycle.memoryMaxMib;
   if (provenance.lifecycleTasks !== 'default') values.lifecycleTasks = lifecycle.tasksMax;
   if (provenance.aggregateTasks !== 'default') values.aggregateTasks = aggregate.tasksMax;
   const validation = validateSavedHostPolicy(values);
@@ -1528,11 +1559,11 @@ function runtimeHostUsage(action, reason, message) {
     status: 'usage',
     reason,
     message,
-    remedy: 'run runtime-host setup or runtime-host check with only --lifecycle-memory-mib N, --lifecycle-tasks N, --aggregate-tasks N (check also accepts --probe)',
+    remedy: 'run runtime-host setup or runtime-host check with only --lifecycle-memory-mib N, --member-memory-max-mib N, --lifecycle-tasks N, --aggregate-tasks N (check also accepts --probe)',
   };
 }
 
-const RUNTIME_HOST_FLAGS = Object.freeze(['lifecycleMemoryMib', 'lifecycleTasks', 'aggregateTasks']);
+const RUNTIME_HOST_FLAGS = Object.freeze(['lifecycleMemoryMib', 'memberMemoryMaxMib', 'lifecycleTasks', 'aggregateTasks']);
 
 export async function setupRuntimeHost(options = {}) {
   if (options === null || typeof options !== 'object') throw new Error('options must be an object');
@@ -1944,12 +1975,14 @@ async function resolveHostIdentity(identity) {
   return { host_id: hostId, boot_id: bootId, uid };
 }
 
-// The lifecycle reservation is fixed per adapter (or per start request). The
+// The lifecycle limits are fixed per adapter (or per start request). The
 // values come from calculateResourcePolicy() when no explicit policy is given.
+// An explicit limits.memoryBytes is the unit MemoryMax; a policy supplies its
+// per-member ceiling, never the admission reservation.
 function normalizeServiceLimits(source) {
   if (source === null || source === undefined) return null;
   if (typeof source !== 'object' || Array.isArray(source)) throw new Error('limits must be an object');
-  const memoryBytes = source.memoryBytes ?? source.lifecycleMemoryBytes;
+  const memoryBytes = source.memoryBytes ?? source.memberMemoryMaxBytes ?? source.lifecycleMemoryBytes;
   const memoryHighBytes = source.memoryHighBytes;
   const tasksMax = source.tasksMax ?? source.lifecycleTasks;
   const cpuWeight = source.cpuWeight;

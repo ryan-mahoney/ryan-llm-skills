@@ -69,14 +69,53 @@ test('wave resources: exact 30 GiB sizing admits seven memory and eight task slo
   assert.equal(result.lifecycleMemoryBytes, 3072 * MIB);
   assert.equal(result.lifecycleTasks, 512);
   assert.equal(result.aggregateTasks, 4096);
-  assert.equal(result.memoryHighBytes, Math.floor((3072 * MIB * 80) / 100));
+  assert.equal(result.memberMemoryMaxMib, 8192);
+  assert.equal(result.memberMemoryMaxBytes, 8192 * MIB);
+  assert.equal(result.memoryHighBytes, Math.floor((8192 * MIB * 80) / 100));
   assert.equal(result.memorySwapMaxBytes, 0);
   assert.equal(result.cpuQuotaPercent, 600);
   assert.equal(result.cpuWeight, 50);
   assert.equal(result.provenance.lifecycleMemoryMib, 'default');
+  assert.equal(result.provenance.memberMemoryMaxMib, 'default');
   assert.equal(result.provenance.lifecycleTasks, 'default');
   assert.equal(result.provenance.aggregateTasks, 'default');
   assert.equal(result.provenance.explicitCap, 'absent');
+});
+
+// node --test --test-name-pattern='per-member ceiling' pi/extensions/spec-runtime/linux-resources.test.mjs
+test('wave resources: the default per-member ceiling leaves 2048 MiB memory slots unchanged', { timeout: CASE_TIMEOUT_MS }, () => {
+  const result = policy({ lifecycleMemoryMib: 2048 });
+  assert.equal(result.slots.memory, 10, 'admission still divides the pool by the 2048 MiB reservation');
+  assert.equal(result.lifecycleMemoryBytes, 2048 * MIB);
+  assert.equal(result.memberMemoryMaxBytes, 8192 * MIB);
+  assert.equal(result.memoryHighBytes, Math.floor((8192 * MIB * 80) / 100));
+  assert.equal(result.provenance.memberMemoryMaxMib, 'default');
+  const explicit = policy({ lifecycleMemoryMib: 2048, memberMemoryMaxMib: 12288 });
+  assert.deepEqual(explicit.slots, result.slots, 'raising the ceiling never changes admitted width');
+  assert.equal(explicit.memberMemoryMaxBytes, 12288 * MIB);
+  assert.equal(explicit.provenance.memberMemoryMaxMib, 'explicit');
+});
+
+test('wave resources: an explicit per-member ceiling below the reservation is refused', { timeout: CASE_TIMEOUT_MS }, () => {
+  assert.throws(() => policy({ lifecycleMemoryMib: 2048, memberMemoryMaxMib: 1024 }),
+    /memberMemoryMaxMib 1024 is below the lifecycle reservation of 2048 MiB/);
+  assert.throws(() => policy({ memberMemoryMaxMib: 2048 }), /below the lifecycle reservation of 3072 MiB/);
+  assert.throws(() => policy({ memberMemoryMaxMib: 0 }), /memberMemoryMaxMib/);
+  assert.equal(policy({ lifecycleMemoryMib: 2048, memberMemoryMaxMib: 2048 }).memberMemoryMaxBytes, 2048 * MIB, 'a ceiling equal to the reservation is accepted');
+});
+
+test('wave resources: the default per-member ceiling clamps to a small pool or ancestor limit', { timeout: CASE_TIMEOUT_MS }, () => {
+  // 10 GiB physical minus the 4 GiB reserve floor leaves a 6 GiB pool.
+  const small = policy({ physicalMemoryBytes: 10 * GIB, lifecycleMemoryMib: 2048 });
+  assert.equal(small.poolMemoryBytes, 6 * GIB);
+  assert.equal(small.memberMemoryMaxBytes, 6 * GIB);
+  assert.equal(small.memoryHighBytes, Math.floor((6 * GIB * 80) / 100));
+  assert.equal(small.slots.memory, 3);
+  const ancestor = policy({ lifecycleMemoryMib: 2048, ancestorLimits: { memoryBytes: 5 * GIB } });
+  assert.equal(ancestor.memberMemoryMaxBytes, 5 * GIB);
+  // Only the default may fall below the reservation; the reservation then caps.
+  const large = policy({ lifecycleMemoryMib: 10240 });
+  assert.equal(large.memberMemoryMaxBytes, 10240 * MIB);
 });
 
 test('wave resources: lowering memory alone leaves the task ceiling binding at eight', { timeout: CASE_TIMEOUT_MS }, () => {
@@ -571,6 +610,19 @@ test('wave resources: host probe proves unit properties even when bubblewrap is 
   assert.ok(calls.some(call => call.command === 'systemd-run' && !call.args.includes('--version')));
 });
 
+// node --test --test-name-pattern='probe unit carries the per-member ceiling' pi/extensions/spec-runtime/linux-resources.test.mjs
+test('wave resources: the property probe unit carries the per-member ceiling and 80% MemoryHigh', { timeout: CASE_TIMEOUT_MS }, async t => {
+  const fixture = await hostFixture(t);
+  const { run, calls } = hostTransport(fixture, { bwrapAvailable: false });
+  const result = await checkRuntimeHost(hostOptions(fixture, run, { probe: true, lifecycleMemoryMib: 2048, memberMemoryMaxMib: 6144 }));
+  assert.equal(result.ok, true);
+  const probe = calls.find(call => call.command === 'systemd-run' && !call.args.includes('--version'));
+  assert.ok(probe, 'the probe launches one transient unit');
+  assert.ok(probe.args.includes(`--property=MemoryMax=${6144 * MIB}`), probe.args.join(' '));
+  assert.ok(probe.args.includes(`--property=MemoryHigh=${Math.floor((6144 * MIB * 80) / 100)}`), probe.args.join(' '));
+  assert.ok(!probe.args.includes(`--property=MemoryMax=${2048 * MIB}`), 'the reservation is not the unit ceiling');
+});
+
 test('wave resources: host check keeps unproven unit properties probe-required', { timeout: CASE_TIMEOUT_MS }, async t => {
   const fixture = await hostFixture(t);
   const propertyLines = HOST_PROPERTY_LINES.filter(line => !line.startsWith('TasksMax='));
@@ -802,6 +854,38 @@ test('wave resources: a recorded advanced policy survives repeated setup and fla
   assert.equal(overridden.result.policy.aggregateTasks, 2048);
 });
 
+// node --test --test-name-pattern='saved per-member ceiling' pi/extensions/spec-runtime/linux-resources.test.mjs
+test('wave resources: a saved per-member ceiling is reapplied and an older policy gets the default', { timeout: CASE_TIMEOUT_MS }, async t => {
+  const fixture = await hostFixture(t);
+  const { run } = hostTransport(fixture, { bwrapAvailable: false });
+  const first = await setupRuntimeHost({ ...setupOptions(fixture, run), lifecycleMemoryMib: 2048, memberMemoryMaxMib: 4096 });
+  assert.equal(first.ok, true, `setup failed: ${first.reason} ${first.detail ?? ''}`);
+  const stored = JSON.parse(readFileSync(first.paths.policyPath, 'utf8'));
+  assert.equal(stored.lifecycle.memoryBytes, 2048 * MIB, 'memoryBytes stays the admission reservation');
+  assert.equal(stored.lifecycle.memoryMaxMib, 4096);
+  assert.equal(stored.lifecycle.memoryMaxBytes, 4096 * MIB);
+  assert.equal(stored.lifecycle.memoryHighBytes, Math.floor((4096 * MIB * 80) / 100));
+  assert.equal(stored.provenance.memberMemoryMaxMib, 'explicit');
+
+  const reapplied = await runtimeHostCommand('check', {}, setupOptions(fixture, run));
+  assert.equal(reapplied.exitCode, 0);
+  assert.equal(reapplied.result.policy.memberMemoryMaxBytes, 4096 * MIB);
+  assert.equal(reapplied.result.policy.provenance.memberMemoryMaxMib, 'explicit');
+
+  // A policy written before the ceiling existed has no memoryMax* fields and
+  // no provenance for them; it still loads and gets the default ceiling.
+  const older = structuredClone(stored);
+  delete older.lifecycle.memoryMaxMib;
+  delete older.lifecycle.memoryMaxBytes;
+  delete older.provenance.memberMemoryMaxMib;
+  writeFileSync(first.paths.policyPath, JSON.stringify(older, null, 2), { mode: 0o600 });
+  const legacy = await runtimeHostCommand('check', {}, setupOptions(fixture, run));
+  assert.equal(legacy.exitCode, 0, JSON.stringify(legacy.result));
+  assert.equal(legacy.result.policy.lifecycleMemoryBytes, 2048 * MIB);
+  assert.equal(legacy.result.policy.memberMemoryMaxBytes, 8192 * MIB);
+  assert.equal(legacy.result.policy.provenance.memberMemoryMaxMib, 'default');
+});
+
 test('wave resources: a default setup keeps default provenance for flagless checks', { timeout: CASE_TIMEOUT_MS }, async t => {
   const fixture = await hostFixture(t);
   const { run } = hostTransport(fixture, { bwrapAvailable: false });
@@ -912,7 +996,7 @@ test('wave resources: runtime-host CLI composes positive flags and real setup ef
   }
   const setupFixture = await hostFixture(t);
   const setup = hostCli(setupFixture, ['setup',
-    '--lifecycle-memory-mib', '2048', '--lifecycle-tasks', '384']);
+    '--lifecycle-memory-mib', '2048', '--lifecycle-tasks', '384', '--member-memory-max-mib', '4096']);
   assert.equal(setup.status, 0, setup.stdout + setup.stderr);
   const installed = JSON.parse(setup.stdout);
   const assertInstalled = (result, target) => {
@@ -925,6 +1009,7 @@ test('wave resources: runtime-host CLI composes positive flags and real setup ef
     assert.equal(result.installed.verified, true);
     const stored = JSON.parse(readFileSync(result.paths.policyPath, 'utf8'));
     assert.equal(stored.lifecycle.memoryBytes, 2048 * MIB);
+    assert.equal(stored.lifecycle.memoryMaxBytes, 4096 * MIB);
     assert.equal(stored.lifecycle.tasksMax, 384);
     assert.match(readFileSync(result.paths.slicePath, 'utf8'), /# spec-runtime-host-slice\/v1/);
     assert.equal(statSync(result.paths.policyPath).mode & 0o777, 0o600);
@@ -1250,7 +1335,7 @@ test('wave resources: systemd start authorizes the gate only after registration 
     '--property=KillMode=control-group',
     '--property=SendSIGKILL=yes',
     '--property=RuntimeMaxSec=120',
-    `--property=MemoryMax=${limits.lifecycleMemoryBytes}`,
+    `--property=MemoryMax=${limits.memberMemoryMaxBytes}`,
     `--property=MemoryHigh=${limits.memoryHighBytes}`,
     '--property=MemorySwapMax=0',
     `--property=TasksMax=${limits.lifecycleTasks}`,
@@ -1269,7 +1354,7 @@ test('wave resources: systemd start authorizes the gate only after registration 
   assert.deepEqual(registered.deadline, deadline);
   assert.equal(registered.runtime_max_sec, 120);
   assert.deepEqual(registered.limits, {
-    memoryBytes: limits.lifecycleMemoryBytes,
+    memoryBytes: limits.memberMemoryMaxBytes,
     memoryHighBytes: limits.memoryHighBytes,
     memorySwapMaxBytes: 0,
     tasksMax: limits.lifecycleTasks,

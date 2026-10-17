@@ -26,9 +26,10 @@ const usage = `Usage: node scripts/spec-observe/cli.mjs list|runs|report|metrics
                          pass (default 10, at most 60; checks every 60 seconds); print members and what changed
   steps lint PACKAGE [--root PATH]
                          Validate the package step index against its targets and evidence plan (exit 1 when invalid); --root resolves PACKAGE against an alternate storage root
-  runtime-host setup|check [--lifecycle-memory-mib N] [--lifecycle-tasks N] [--aggregate-tasks N] [--probe]
+  runtime-host setup|check [--lifecycle-memory-mib N] [--member-memory-max-mib N] [--lifecycle-tasks N] [--aggregate-tasks N] [--probe]
                          setup verifies the user manager and installs the owned host policy and slice (it always runs the isolated probe);
-                         check is read-only unless --probe is requested (exit 1 on refusal)
+                         check is read-only unless --probe is requested (exit 1 on refusal);
+                         --lifecycle-memory-mib is the admission reservation, --member-memory-max-mib the per-member MemoryMax (default 8192)
   metrics --package PATH  Calls, role/model response time, steps, test submissions and cost
   --format text|json     Metrics output (default json)
   --all-sessions         Metrics across all recorded coordinator sessions, including pauses
@@ -121,8 +122,8 @@ try {
   if (command === 'runtime-host') {
     const [action, ...rest] = args;
     const flags = {};
-    const valueFlags = new Set(['--lifecycle-memory-mib', '--lifecycle-tasks', '--aggregate-tasks']);
-    const keyFor = { '--lifecycle-memory-mib': 'lifecycleMemoryMib', '--lifecycle-tasks': 'lifecycleTasks', '--aggregate-tasks': 'aggregateTasks' };
+    const valueFlags = new Set(['--lifecycle-memory-mib', '--member-memory-max-mib', '--lifecycle-tasks', '--aggregate-tasks']);
+    const keyFor = { '--lifecycle-memory-mib': 'lifecycleMemoryMib', '--member-memory-max-mib': 'memberMemoryMaxMib', '--lifecycle-tasks': 'lifecycleTasks', '--aggregate-tasks': 'aggregateTasks' };
     for (let i = 0; i < rest.length; i += 1) {
       const token = rest[i];
       if (token === '--probe') {

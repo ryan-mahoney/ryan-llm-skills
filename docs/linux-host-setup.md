@@ -193,8 +193,11 @@ node ~/.agents/scripts/spec-observe/cli.mjs runtime-host setup
 `check` is read-only unless `--probe` is passed, and it exits nonzero on refusal.
 `setup` always runs the isolated user-service probe, verifies the user manager and
 refuses when a property is unsupported; re-running it with unchanged inputs
-rewrites nothing. The three advanced policy inputs
-(`--lifecycle-memory-mib`, `--lifecycle-tasks`, `--aggregate-tasks`) are optional.
+rewrites nothing. The advanced policy inputs (`--lifecycle-memory-mib`,
+`--member-memory-max-mib`, `--lifecycle-tasks`, `--aggregate-tasks`) are optional.
+`--lifecycle-memory-mib` is the memory each member reserves for admission;
+`--member-memory-max-mib` (default 8192) is each member's `MemoryMax` crash guard and
+does not change the admitted width. The aggregate slice caps all members at the pool.
 Defaults, the automatic pool and the sizing examples are in
 [agent-resource-limits.md](agent-resource-limits.md).
 

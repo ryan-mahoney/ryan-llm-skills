@@ -55,9 +55,10 @@ node ~/.agents/scripts/spec-observe/cli.mjs runtime-host setup
 - `setup` always runs the isolated probe, verifies the user manager, and installs
   the owned policy and slice. It is idempotent: identical content is never
   rewritten.
-- Three advanced inputs tune the policy: `--lifecycle-memory-mib N`,
-  `--lifecycle-tasks N` and `--aggregate-tasks N`. Defaults are 3072 MiB, 512
-  tasks and 4096 aggregate tasks; ordinary users need no flags.
+- Four advanced inputs tune the policy: `--lifecycle-memory-mib N`,
+  `--member-memory-max-mib N`, `--lifecycle-tasks N` and `--aggregate-tasks N`.
+  Defaults are 3072 MiB, 8192 MiB, 512 tasks and 4096 aggregate tasks; ordinary
+  users need no flags.
 
 The command also checks cgroup v2, the `cpu`, `memory` and `pids` controllers
 delegated to the user manager, the `systemd-run`, `systemctl` and `flock`
@@ -87,6 +88,13 @@ work:
 - admitted width = min(memory slots, task slots, 16, ready members, held claims,
   any explicit cap)
 
+Lifecycle memory is a reservation for admission only. Each member's hard limit is
+the separate per-member ceiling (`--member-memory-max-mib`, default 8192 MiB), a
+crash guard rather than a budget: raising it gives a member more headroom without
+changing the admitted width. The ceiling is clamped to the pool (or a lower
+ancestor cgroup limit), and an explicit ceiling below the lifecycle memory is
+refused. The aggregate slice protects the host when several members grow at once.
+
 Memory and task reservations are checked independently, so lowering one budget
 alone cannot exceed the other. The result reports the slot floors, the bound that
 sets the width and whether each value was a default or explicit input.
@@ -108,8 +116,8 @@ Each admitted lifecycle runs as a transient user service with:
 
 | Property | Value |
 | --- | --- |
-| `MemoryMax` | lifecycle memory (default 3072 MiB) |
-| `MemoryHigh` | 80% of the lifecycle memory |
+| `MemoryMax` | per-member ceiling (default 8192 MiB, at most the pool) |
+| `MemoryHigh` | 80% of the per-member ceiling |
 | `MemorySwapMax` | 0 |
 | `TasksMax` | lifecycle tasks (default 512) |
 | `CPUWeight` | 50 |
@@ -127,7 +135,9 @@ regardless of host size.
 
 - `~/.config/spec-runtime/host-policy.json` (mode 0600) — schema
   `spec-runtime-host-policy/v1`, with the exact aggregate and lifecycle values and
-  the provenance of each input.
+  the provenance of each input. `lifecycle.memoryBytes` is the reservation and
+  `lifecycle.memoryMaxBytes` the per-member ceiling; a policy saved before the
+  ceiling existed loads with the default.
 - `~/.config/systemd/user/spec-runtime.slice` (mode 0644) — the aggregate slice,
   marked `# spec-runtime-host-slice/v1`.
 

@@ -574,7 +574,7 @@ export function createWaveController(deps = {}) {
     const effectiveLimits = {
       software_ceiling: host.softwareCeiling ?? policy.softwareCeiling ?? 16,
       explicit_cap: explicitCap === null ? null : { value: explicitCap, source: 'run' },
-      memory: { pool_bytes: policy.poolMemoryBytes ?? null, per_lifecycle_bytes: policy.lifecycleMemoryBytes, slots: policy.slots?.memory ?? null },
+      memory: { pool_bytes: policy.poolMemoryBytes ?? null, per_lifecycle_bytes: policy.lifecycleMemoryBytes, per_member_max_bytes: policy.memberMemoryMaxBytes ?? null, slots: policy.slots?.memory ?? null },
       tasks: { pool: policy.aggregateTasks ?? policy.limits?.tasks ?? null, per_lifecycle: policy.lifecycleTasks, slots: policy.slots?.tasks ?? null },
       binding: admission.binding ?? policy.binding ?? null,
       source: 'host-policy'

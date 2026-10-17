@@ -391,7 +391,10 @@ function assertLifecycleLimits(policy, waveRecord, runs, pids) {
       `run ${run.id} records service.runtime_max_sec: ${JSON.stringify(serviceOf(run))}`);
 
     const shown = unitProperties(unit, ['MemoryMax', 'MemoryHigh', 'MemorySwapMax', 'TasksMax', 'RuntimeMaxUSec']);
-    assert.equal(parseByteProperty(shown.MemoryMax), policy.lifecycle.memoryBytes, `${unit} MemoryMax equals the lifecycle policy`);
+    // Units carry the per-member ceiling, not the admission reservation; a
+    // policy saved before the ceiling existed used the reservation for both.
+    const memoryMaxBytes = policy.lifecycle.memoryMaxBytes ?? policy.lifecycle.memoryBytes;
+    assert.equal(parseByteProperty(shown.MemoryMax), memoryMaxBytes, `${unit} MemoryMax equals the per-member ceiling`);
     assert.equal(parseByteProperty(shown.MemoryHigh), policy.lifecycle.memoryHighBytes, `${unit} MemoryHigh equals the lifecycle policy`);
     assert.equal(parseByteProperty(shown.MemorySwapMax), policy.lifecycle.memorySwapMaxBytes, `${unit} MemorySwapMax equals the lifecycle policy`);
     assert.ok(Number.isInteger(policy.lifecycle.tasksMax) && policy.lifecycle.tasksMax > 0,
