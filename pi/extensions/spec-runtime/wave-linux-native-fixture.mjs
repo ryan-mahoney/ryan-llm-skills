@@ -93,7 +93,9 @@ export function writeControlledLinuxPolicy(configHome) {
     throw new Error(`the copied live host policy is required at ${policyPath}`);
   }
   const policy = JSON.parse(readFileSync(policyPath, 'utf8'));
-  if (!policy || typeof policy !== 'object') throw new Error(`saved host policy is not an object: ${policyPath}`);
+  if (!policy || typeof policy !== 'object') {
+    throw new Error(`saved host policy is not an object: ${policyPath}`);
+  }
   if (policy.schema !== 'spec-runtime-host-policy/v1') {
     throw new Error(`saved host policy has unexpected schema ${JSON.stringify(policy.schema)}: ${policyPath}`);
   }
@@ -175,16 +177,31 @@ export async function bootLinuxWave(t, facts, options = {}) {
     runDir: join(fixture.packagePath, 'runtime', 'runs'),
   });
 
-  const state = { fixture, sandbox, env, services, providers, coordinators };
+  const state = { fixture, sandbox, env, services, providers, coordinators, diagnostics: [] };
 
   async function teardown() {
     if (torndown) return;
     torndown = true;
     const failures = [];
 
+    // Case-registered post-mortems run first, while the fixture and the observed
+    // coordinator state still exist. A diagnostic failure is reported but never
+    // prevents the resource cleanup below.
+    for (const callback of state.diagnostics) {
+      try { await callback(); }
+      catch (error) {
+        if (t && typeof t.diagnostic === 'function')
+          t.diagnostic(`EV-14 diagnostic callback failed: ${error && error.message ? error.message : String(error)}`);
+      }
+    }
+
     if (t && typeof t.diagnostic === 'function') {
-      for (const record of coordinatorDiagnostics(coordinators)) t.diagnostic(JSON.stringify(record));
-      for (const record of providerRequestDiagnostics(providers)) t.diagnostic(JSON.stringify(record));
+      for (const record of coordinatorDiagnostics(coordinators)) {
+        t.diagnostic(JSON.stringify(record));
+      }
+      for (const record of providerRequestDiagnostics(providers)) {
+        t.diagnostic(JSON.stringify(record));
+      }
       if (fixture !== null) {
         try {
           t.diagnostic(JSON.stringify(collectRuntimeRunDiagnostics(fixture)));

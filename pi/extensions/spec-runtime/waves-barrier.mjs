@@ -85,7 +85,10 @@ function refuse(code, message) {
 }
 
 export function createWaveBarrier(deps = {}) {
-  const { runtime, ownership, integration, checkpoint, patchRecord, pendingInbox, attentionKey, send, nowMs, review = null, loadRun = null } = deps;
+  const {
+    runtime, ownership, integration, checkpoint, patchRecord, pendingInbox, attentionKey, send, nowMs,
+    review = null, loadRun = null
+  } = deps;
   const now = () => (typeof nowMs === 'function' ? nowMs() : Date.now());
   const at = () => isoTimestamp(now());
   const deliver = typeof send === 'function' ? send : () => ({ delivered: false });
@@ -129,7 +132,9 @@ export function createWaveBarrier(deps = {}) {
   // so a replayed notification or a repeated capacity release can never emit a
   // second attention turn.
   function emitAttention(entry, kind, extra = {}) {
-    const key = attentionKey({ wave_id: entry.waveId, kind, step: null, transition: extra.transition ?? 'wave' });
+    const key = attentionKey({
+      wave_id: entry.waveId, kind, step: null, transition: extra.transition ?? 'wave'
+    });
     let first = false;
     try {
       patchRecord(entry.recordPath, entry.session, draft => {
@@ -184,7 +189,8 @@ export function createWaveBarrier(deps = {}) {
     }
     try {
       const { claims } = await ownership.inspectClaims({ packageId: record.package_ref });
-      const held = (claims ?? []).find(claim => claim?.kind === 'package' && claim.token === record.claim_token);
+      const held = (claims ?? [])
+        .find(claim => claim?.kind === 'package' && claim.token === record.claim_token);
       if (!held) return false;
       if (String(held.epoch) !== String(record.coordinator.epoch)) return false;
     } catch {
@@ -325,16 +331,32 @@ export function createWaveBarrier(deps = {}) {
   function isLastWave(record) {
     const index = readJson(join(record.package, 'spec-steps.json'));
     if (!index) return false;
-    const maxStep = (index.steps ?? []).reduce((max, row) => Math.max(max, Number(row.step) || 0), 0);
+    const maxStep =
+      (index.steps ?? []).reduce((max, row) => Math.max(max, Number(row.step) || 0), 0);
     return maxStep <= Number(record.after);
   }
 
   async function releasePackageClaim(entry, record) {
     if (!isLastWave(record)) return;
     try {
-      await ownership.releaseClaim({ token: record.claim_token, epoch: record.coordinator?.epoch, drain: 'confirmed' });
+      await ownership.releaseClaim({
+        token: record.claim_token, epoch: record.coordinator?.epoch, drain: 'confirmed'
+      });
     } catch {
       // A failed release leaves the claim for reconciliation to resolve.
+    }
+  }
+
+  // Diagnostic-only checkpoint-reconcile snapshot. Every write goes through the
+  // same record guard as the wave itself and a diagnostic failure is swallowed:
+  // reconciliation is never suppressed, retried or changed for diagnostics.
+  function persistCheckpointReconcile(entry, snapshot) {
+    try {
+      patchRecord(entry.recordPath, entry.session, draft => {
+        draft.checkpoint_reconcile = snapshot;
+      });
+    } catch {
+      // A foreign record is not overwritten; reconciliation still proceeds.
     }
   }
 
@@ -342,18 +364,60 @@ export function createWaveBarrier(deps = {}) {
     if (!record.workflow_id) return;
     if (!checkpoint || typeof checkpoint.reconcileRuntimeReturn !== 'function')
       throw refuse('checkpoint-reconciler-missing', 'the checkpoint reconciler is unavailable');
-    const existing = (() => { try { return checkpoint.readCheckpointRecord(record.package, record.workflow_id) ?? {}; } catch { return {}; } })();
-    checkpoint.reconcileRuntimeReturn({
-      package: record.package,
+    const existing = (() => {
+      try { return checkpoint.readCheckpointRecord(record.package, record.workflow_id) ?? {}; } catch { return {}; }
+    })();
+    let ownershipSnapshot;
+    try {
+      const observed = await ownership.inspectClaims({ packageId: record.package_ref });
+      ownershipSnapshot = { claims: observed?.claims ?? [] };
+    } catch (error) {
+      ownershipSnapshot = { error: error?.message ?? String(error) };
+    }
+    // Wave ownership/claim guards authorize the replacement drive; runtime
+    // completion retains the checkpoint binding rather than adopting workflow
+    // ownership, so the completion is submitted under the checkpoint's own
+    // coordinator session when one is bound.
+    const completionSession = existing.coordinator_session ?? entry.session;
+    const snapshot = {
+      at: at(),
+      component: 'checkpoint_reconcile',
+      wave_id: record.wave_id ?? entry.waveId ?? null,
       workflow_id: record.workflow_id,
-      expected_revision: existing.revision ?? 0,
-      assignment_id: entry.waveId,
-      return_state: 'completed',
-      workers: Array.isArray(existing.workers) ? existing.workers : [],
-      reconciles_input_revision: existing.input_revision ?? 0,
-      coordinator_session: entry.session,
-      checkout: record.target?.integration_checkout ?? null
-    });
+      session: entry.session,
+      completion_session: completionSession,
+      existing: {
+        coordinator_session: existing.coordinator_session ?? null,
+        revision: existing.revision ?? null,
+        checkout: existing.checkout ?? null
+      },
+      wave: { coordinator: record.coordinator ?? null },
+      ownership: ownershipSnapshot
+    };
+    persistCheckpointReconcile(entry, { ...snapshot, status: 'attempted' });
+    try {
+      checkpoint.reconcileRuntimeReturn({
+        package: record.package,
+        workflow_id: record.workflow_id,
+        expected_revision: existing.revision ?? 0,
+        assignment_id: entry.waveId,
+        return_state: 'completed',
+        workers: Array.isArray(existing.workers) ? existing.workers : [],
+        reconciles_input_revision: existing.input_revision ?? 0,
+        coordinator_session: completionSession,
+        checkout: record.target?.integration_checkout ?? null
+      });
+    } catch (error) {
+      persistCheckpointReconcile(entry, {
+        ...snapshot,
+        at: at(),
+        status: 'refused',
+        reason: error?.reason ?? error?.code ?? null,
+        message: error?.message ?? String(error)
+      });
+      throw error;
+    }
+    persistCheckpointReconcile(entry, { ...snapshot, at: at(), status: 'succeeded' });
   }
 
   // The controller-FIFO entry point. Runs only on an owned, non-terminal wave:
@@ -430,7 +494,9 @@ export function createWaveBarrier(deps = {}) {
       transition(entry, 'promoting');
       const promoted = await integration.promoteWave(buildContextAtFreshRevision(entry));
       if (promoted.status !== 'promoted') {
-        blockWave(entry, promoted.reason ?? promoted.blocked_reason ?? 'promotion-blocked', { status: promoted.status });
+        blockWave(entry, promoted.reason ?? promoted.blocked_reason ?? 'promotion-blocked', {
+          status: promoted.status
+        });
         return { status: 'blocked', reason: promoted.reason ?? promoted.blocked_reason ?? 'promotion-blocked' };
       }
 

@@ -3,7 +3,9 @@
 // runtime and spec-location take (root, pinned hostname and home).
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync
+} from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +13,9 @@ import { newPackage } from '../../../scripts/spec-location/index.mjs';
 import { put } from '../../../scripts/spec-location/fixture.mjs';
 import { prepareSpecWorktree } from '../../../scripts/spec-location/worktree.mjs';
 import { createProcessRegistry } from './waves-fixture-processes.mjs';
-import { cleanupPortableHostShims, installPortableHostShims, setShimMode, writeSandboxHome } from './wave-native-fixture.mjs';
+import {
+  cleanupPortableHostShims, installPortableHostShims, setShimMode, writeSandboxHome
+} from './wave-native-fixture.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const cliPath = join(here, '..', '..', '..', 'scripts', 'spec-observe', 'cli.mjs');
@@ -30,10 +34,15 @@ export async function makePackageFixture({ prefix = 'spec-runtime-test-', slug =
   const root = join(dir, 'storage');
   const workspaceDir = join(root, 'projects', 'demo');
   put(join(workspaceDir, 'kit.yaml'), `version: 1\nid: demo\nname: demo\nexecution_host: ${executionHost}\nrepositories:\n${repos.map(id => `  - id: ${id}\n    path: ${paths[id]}\n`).join('')}`);
-  const location = { root, hostname: `${executionHost}.local`, home: dir, env: { XDG_DATA_HOME: join(dir, 'data') } };
-  const created = await newPackage({ workspace: 'demo', slug, targets: targets.map(id => ({ id })), ...location });
+  const location = {
+    root, hostname: `${executionHost}.local`, home: dir, env: { XDG_DATA_HOME: join(dir, 'data') }
+  };
+  const created = await newPackage({
+    workspace: 'demo', slug, targets: targets.map(id => ({ id })), ...location
+  });
   if (!created.ok) throw new Error(`${created.code}: ${created.message}`);
-  return { dir, repo: paths[repos[0]], paths, root, workspaceDir, location, locations: created.locations,
+  return {
+    dir, repo: paths[repos[0]], paths, root, workspaceDir, location, locations: created.locations,
     packagePath: created.locations.package_dir, ref: created.locations.package_ref };
 }
 
@@ -144,23 +153,37 @@ function installPromotionHook(primary, sandbox, branch) {
     '#!/bin/sh',
     `sandbox=${JSON.stringify(sandbox)}`,
     `branch=${JSON.stringify(branch)}`,
-    '[ "$1" = committed ] || exit 0',
+    'phase="$1"',
+    'hook_pid=$$',
+    'hook_ppid=$PPID',
+    'coordinator_pid=""',
+    'if [ -f "$sandbox/coordinator.pid" ]; then coordinator_pid="$(cat "$sandbox/coordinator.pid")"; fi',
+    'obs="$sandbox/hook-observations.log"',
+    'if [ "$phase" != "committed" ]; then',
+    '  printf \'phase=%s pid=%s ppid=%s refmatch=no coordinator_pid=%s kill_attempt=none\\n\' "$phase" "$hook_pid" "$hook_ppid" "$coordinator_pid" >> "$obs"',
+    '  exit 0',
+    'fi',
     'tmp="$sandbox/hook.tmp"',
     ': > "$tmp"',
+    'refmatch=no',
     'while IFS= read -r line; do',
     '  case "$line" in',
-    '    *"$branch"*) printf \'%s\\n\' "$line" >> "$tmp" ;;',
+    '    *"$branch"*) refmatch=yes; printf \'%s\\n\' "$line" >> "$tmp" ;;',
     '  esac',
     'done',
+    'kill_attempt=none',
     'if [ -s "$tmp" ]; then',
     '  cat "$tmp" >> "$sandbox/hook.log"',
     '  if [ -e "$sandbox/kill-on-promote" ]; then',
     '    rm -f "$sandbox/kill-on-promote"',
     '    if [ -f "$sandbox/coordinator.pid" ]; then',
+    '      coordinator_pid="$(cat "$sandbox/coordinator.pid")"',
+    '      kill_attempt="kill -9 $coordinator_pid"',
     '      kill -9 "$(cat "$sandbox/coordinator.pid")" 2>/dev/null || true',
     '    fi',
     '  fi',
     'fi',
+    'printf \'phase=%s pid=%s ppid=%s refmatch=%s coordinator_pid=%s kill_attempt=%s\\n\' "$phase" "$hook_pid" "$hook_ppid" "$refmatch" "$coordinator_pid" "$kill_attempt" >> "$obs"',
     'rm -f "$tmp"',
     'exit 0',
   ].join('\n') + '\n';
@@ -169,11 +192,14 @@ function installPromotionHook(primary, sandbox, branch) {
 }
 
 export async function makeWaveFixture(options = {}) {
-  const targets = Array.isArray(options.targets) && options.targets.length ? options.targets : ['repo'];
-  const repos = Array.isArray(options.repos) && options.repos.length ? options.repos : [...new Set(targets)];
+  const targets =
+    Array.isArray(options.targets) && options.targets.length ? options.targets : ['repo'];
+  const repos =
+    Array.isArray(options.repos) && options.repos.length ? options.repos : [...new Set(targets)];
   const targetId = targets[0];
   const requestedMembers = Number(options.members);
-  const memberCount = Number.isInteger(requestedMembers) && requestedMembers > 0 ? requestedMembers : 5;
+  const memberCount =
+    Number.isInteger(requestedMembers) && requestedMembers > 0 ? requestedMembers : 5;
   const defectStep = Number.isInteger(options.defectStep) ? options.defectStep : null;
   const chain = options.chain === true;
   const useDeps = options.deps === true || options.setup === 'deps';
@@ -299,10 +325,13 @@ export async function makeWaveFixture(options = {}) {
 
   // The integration checkout is the prepared target worktree; spec-location's
   // own prepare API persists the metadata, so locations.json is never hand-edited.
-  const prepared = await prepareSpecWorktree(base.locations, base.locations.targets[0], { ...base.location });
+  const prepared =
+    await prepareSpecWorktree(base.locations, base.locations.targets[0], { ...base.location });
   const integrationCheckout = prepared.worktree;
 
-  if (promotionKill) installPromotionHook(base.paths[targetId], base.dir, base.locations.targets[0].branch);
+  if (promotionKill) {
+    installPromotionHook(base.paths[targetId], base.dir, base.locations.targets[0].branch);
+  }
 
   // Real steps lint with the fixture environment: ready single-target packages
   // report concurrency_ready; a multi-target package reports the serial reason.
@@ -314,7 +343,11 @@ export async function makeWaveFixture(options = {}) {
   const report = JSON.parse(lint.stdout);
   assert.equal(report.ok, true, `steps lint invalid: ${report.errors.join('; ')}`);
   if (targets.length > 1) assert.ok(report.reasons.includes('multiple-targets'), 'multi-target lint reports multiple-targets');
-  else assert.equal(report.concurrency_ready, true, `steps lint not concurrency ready: ${report.reasons.join('; ')}`);
+  else {
+    assert.equal(
+      report.concurrency_ready, true, `steps lint not concurrency ready: ${report.reasons.join('; ')}`
+    );
+  }
 
   const expected = new Map([
     ['.gitignore', GITIGNORE],
@@ -327,7 +360,9 @@ export async function makeWaveFixture(options = {}) {
   if (useDeps) expected.set('fixture.lock', LOCK_CONTENT);
   for (const entry of steps) {
     const nn = String(entry.step).padStart(2, '0');
-    expected.set(writePath(entry.step), entry.step === defectStep ? `step ${nn} fixed\n` : `step ${nn} implemented\n`);
+    expected.set(
+      writePath(entry.step), entry.step === defectStep ? `step ${nn} fixed\n` : `step ${nn} implemented\n`
+    );
   }
 
   // Teardown responsibility is registered before any future operation. Shim and
@@ -341,7 +376,11 @@ export async function makeWaveFixture(options = {}) {
   const cleanup = async () => {
     if (cleaned) return;
     let failure = null;
-    try { await cleanupPortableHostShims(join(base.dir, 'shim-state')); } catch (error) { failure = error; }
+    try {
+      await cleanupPortableHostShims(join(base.dir, 'shim-state'));
+    } catch (error) {
+      failure = error;
+    }
     try { await processRegistry.cleanup(); } catch (error) { if (!failure) failure = error; }
     let removed = false;
     try { rmSync(base.dir, { recursive: true, force: true }); removed = true; }
@@ -363,7 +402,9 @@ export async function makeWaveFixture(options = {}) {
     paths: base.paths,
     location: base.location,
     locations: base.locations,
-    options: { ...options, targets, repos, members: memberCount, defectStep, chain, deps: useDeps, promotionKill },
+    options: {
+      ...options, targets, repos, members: memberCount, defectStep, chain, deps: useDeps, promotionKill
+    },
     processRegistry,
     cleanup,
   };
@@ -382,6 +423,11 @@ export {
   collectRuntimeRunDiagnostics,
   collectShimStateDiagnostics,
 } from './wave-native-diagnostics.mjs';
+// Boundary request/event/wave/checkpoint observations are diagnostic-only; the
+// native test and the linux restart case reach them through one module.
+export {
+  collectBoundaryDiagnostics, collectLinuxRestartDiagnostics
+} from './wave-boundary-diagnostics.mjs';
 // EV-14 host/service support lives in wave-linux-support.mjs. The installed-Pi
 // resolver moved there unchanged so the native and linux cases share it.
 export {

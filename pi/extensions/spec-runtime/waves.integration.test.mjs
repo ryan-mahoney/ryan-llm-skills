@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import {
   DIAG_TEXT_LIMIT,
   boundedText,
+  collectBoundaryDiagnostics,
   collectRuntimeRunDiagnostics,
   collectShimStateDiagnostics,
   installPortableHostShims,
@@ -374,6 +375,16 @@ async function startNativeRun(t, boot, { script, tag, arm } = {}) {
       console.error(`[wave-diag ${tag}] runtimeRuns=${JSON.stringify({ dir: runEvidence.dir, runs: runEvidence.runs, files: runEvidence.files })}`);
       const shimEvidence = collectShimStateDiagnostics(boot.shimStateDir);
       console.error(`[wave-diag ${tag}] shimState=${JSON.stringify(shimEvidence)}`);
+      // Diagnostic-only request/event/wave/checkpoint observations live in
+      // wave-boundary-diagnostics.mjs; each row is emitted separately so a large
+      // payload cannot interleave with the next one.
+      for (const row of collectBoundaryDiagnostics({ fixture, provider, coordinator })) {
+        try {
+          console.error(`[wave-diag ${tag}] ${row.label}=${JSON.stringify(row.value)}`);
+        } catch (error) {
+          console.error(`[wave-diag ${tag}] ${row.label} diagnostic failed: ${error?.message ?? String(error)}`);
+        }
+      }
     } catch (error) {
       console.error(`[wave-diag ${tag}] diagnostic failed: ${error?.message ?? String(error)}`);
     }

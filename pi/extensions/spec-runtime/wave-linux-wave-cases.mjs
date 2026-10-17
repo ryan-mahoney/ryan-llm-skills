@@ -19,6 +19,7 @@ import assert from 'node:assert/strict';
 import { bootLinuxWave } from './package-fixture.mjs';
 import { parseUsecProperty } from './wave-linux-duration.mjs';
 import { startCoordinator } from './wave-native-driver.mjs';
+import { collectLinuxRestartDiagnostics } from './wave-boundary-diagnostics.mjs';
 
 const GIB = 1024 ** 3;
 const WAIT_INTERVAL_MS = 50;
@@ -868,12 +869,25 @@ async function runPromotionRestart(t, facts) {
   // C: recover from the SIGKILLed driver. Replacement reviewers may only start
   // after the orphaned owned units are positively stopped and drained.
   const cStartedAt = Date.now();
-  const c = startCoordinator({
+  let cExitObservation = null;
+  let c = null;
+  boot.diagnostics.push(async () => {
+    for (const line of collectLinuxRestartDiagnostics({
+      fixture,
+      coordinator: c,
+      exitObservation: cExitObservation,
+      hookLogPath: join(fixture.dir, 'hook.log'),
+      observationsPath: join(fixture.dir, 'hook-observations.log'),
+      markerPath: join(fixture.dir, 'kill-on-promote'),
+    })) t.diagnostic(line);
+  });
+  c = startCoordinator({
     sandbox: fixture,
     env: boot.env,
     script: { port: provider.port, case: 'promotion-restart' },
     tag: 'promotion-restart-c',
   });
+  c.exited.then(result => { cExitObservation = result; }).catch(() => {});
   boot.coordinators.push(c);
   await c.ready;
   const replacementReviews = await waitFor(() => {
