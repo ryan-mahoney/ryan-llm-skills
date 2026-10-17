@@ -430,7 +430,10 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
       if (dispatchOnly(strategy)) {
         result.checks.push({ visible, implementation_error: implementation?.error ?? null });
         result.visible_accepted = visible.ok;
-        if (visible.ok || round === repairRounds) break;
+        // A visible check that passes on an unchanged candidate is not success: a failed
+        // or incomplete application also warrants the repair round.
+        const applied = !implementation?.error && implementation?.ok !== false;
+        if ((visible.ok && applied) || round === repairRounds) break;
         feedback = { visible: diffMode ? tail(visible, 20000) : visible, implementation };
         continue;
       }
