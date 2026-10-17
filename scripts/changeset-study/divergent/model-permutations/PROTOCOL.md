@@ -86,8 +86,9 @@ dependency mounts, Node hash, parser and study/engine/skill code. Selected model
 metadata is frozen from the source03 pins plus the dated public model metadata.
 Worker runtime paths are pinned internally to the snapshot, and model metadata
 uses an in-memory registry without global configuration writes. Credentials use
-existing provider authentication; only the PrimaLabs credential selector is read
-from its existing user configuration, never retained in artifacts.
+existing provider authentication. PrimaLabs forwards an existing configuration
+credential selector only when present; otherwise normal SDK credential resolution
+uses the existing provider store. Credential material is never retained in artifacts.
 
 ```sh
 node scripts/changeset-study/divergent/model-permutations/runner.mjs prepare \
@@ -113,3 +114,33 @@ from local configured metadata, not a public graded-effort guarantee. SDK-derive
 receipt costs are not independently verified invoices. Do not infer speed or
 quality from provider marketing claims. Historical native/main-route comparisons
 are descriptive unless their task, boundaries and success criteria actually match.
+
+## Separately frozen MiMo credential resume
+
+The first frozen twelve-row campaign required an explicit PrimaLabs `config.apiKey`
+field and therefore blocked that writer before inference when the key instead lived
+in the SDK credential store. Preserve those original zero-call harness outcomes.
+The reviewed fix makes that configuration field optional and leaves model metadata,
+reasoning mapping, task/source, writer prompts, limits and local retry policy unchanged.
+A boolean-only local SDK check confirmed the exact model and credential availability;
+it made no provider request and exposed no credential value.
+
+After the original campaign terminates, `prepare-resume` creates a separate freeze:
+
+```sh
+node scripts/changeset-study/divergent/model-permutations/runner.mjs prepare-resume \
+  --resume-from "$ORIGINAL_RUN" --source "$RUN03" --output "$RESUME_RUN" \
+  --ledger "$SHARED_LEDGER" --parser "$ACORN_MODULE" --sdk "$PINNED_SDK_ROOT"
+node "$RESUME_RUN/frozen/scripts/changeset-study/divergent/model-permutations/runner.mjs" \
+  run --output "$RESUME_RUN"
+```
+
+The original manifest/results and exact copied Sol preparation artifacts are pinned
+and rechecked before every cell. Only `sol-mimo` executes. Its original attempts must
+have been zero-call credential blocks; no successful vendor call is repeated. A
+missing/failed original Sol plan remains untested and cannot trigger new planning.
+All original Sol preparation artifacts, including failed preparation costs, remain
+inherited and fully allocated to the route. They are excluded from the resume's
+actual request directories and incremental spending. The shared ledger's old charges
+are never reset, copied into new reservations or counted twice as actual spending.
+Writing and grading begin from original source, not any prior writer's candidate.

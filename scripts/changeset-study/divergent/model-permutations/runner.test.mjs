@@ -74,3 +74,55 @@ test('audit rejects orphan responses and writer packet/operation identity mismat
     assert.match(auditEvidence(root, job, result).errors.join('; '), /does not belong/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test('auth resume inherits exact Sol preparations without owning their paid requests or permitting new planning', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { resolve, dirname } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const { prepare, prepareResume, verify } = await import('./runner.mjs');
+  const { hash, inventory, taskIds } = await import('../writer-control/support.mjs');
+  const { providerRegistration, mimoModel, sol, deepseek } = await import('./policy.mjs');
+  const registered = providerRegistration({ ...mimoModel, provider: 'primalabs' }, {});
+  assert.equal(Object.hasOwn(registered, 'apiKey'), false); assert.equal(registered.baseUrl, 'https://api.primalabs.ai/v1');
+  assert.equal(providerRegistration({ ...mimoModel, provider: 'primalabs' }, { apiKey: 'synthetic-config-reference' }).apiKey, 'synthetic-config-reference');
+  const root = mkdtempSync(join(tmpdir(), 'permutations-resume-'));
+  const put = (path, data) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, typeof data === 'string' ? data : JSON.stringify(data)); };
+  try {
+    const source = join(root, '03-fixture'), sdk = join(root, 'sdk/node_modules/@earendil-works'), dependency = join(root, 'dependency');
+    put(join(dependency, 'module.mjs'), 'export {};');
+    const pins = {};
+    for (const pkg of ['pi-ai', 'pi-agent-core', 'pi-coding-agent']) { put(join(sdk, pkg, 'dist/stub.js'), 'export {};'); pins[pkg] = inventory(join(sdk, pkg, 'dist')); }
+    const ledger = join(root, 'budget.json'); put(ledger, { schema_version: 1, limit_usd: 50, entries: [] });
+    const parser = join(root, 'parser.mjs'); put(parser, 'export const parse = () => ({});');
+    const tasks = taskIds.map(id => ({ id, context: 'prepared', spec: 'Fixture contract', check: 'node visible.mjs', hidden: 'export {};', protected: ['visible.mjs'], files: { 'visible.mjs': 'export {};' }, limits: { cell_ms: 1200000, grade_ms: 300000, model_calls: 96, max_output_tokens: 32000, call_ms: 300000, command_ms: 180000 } }));
+    const bytes = JSON.stringify(tasks); put(join(source, 'tasks.json'), bytes);
+    put(join(source, 'manifest.json'), { comparison: 'deepseek-owner-sol-query-deepseek-writer', schedule: taskIds, tasks_hash: hash(bytes), sdk_files: pins, dependencies_hash: hash(JSON.stringify(inventory(dependency))), models: [sol, deepseek].map(selector => ({ selector, model: { provider: selector.split('/')[0], id: selector.split('/')[1].split(':')[0] } })) });
+    for (const [index, task] of tasks.entries()) { const directory = join(source, `${String(index).padStart(3, '0')}-${task.id}`); put(join(directory, 'job.json'), { task, ledger, mounts: [[dependency, '/node_modules']] }); put(join(directory, 'result.json'), { task_hash: hash(JSON.stringify(task)) }); }
+    const codeRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
+    const options = { source, ledger, parser, sdk, codeRoot };
+    const original = prepare({ ...options, output: join(root, 'original') }).output;
+    put(join(original, 'started.json'), {}); const records = [];
+    for (const [index, task] of tasks.entries()) {
+      const name = `${String(index).padStart(3, '0')}-${task.id}`;
+      put(join(original, 'preparation/sol-delegated', name, 'plan.json'), delegated);
+      put(join(original, 'preparation/sol-delegated', name, 'result.json'), { selector: sol, task_hash: hash(JSON.stringify(task)), plan_hash: hash(JSON.stringify(delegated)), model_calls: 2, process_elapsed_ms: 100 });
+      put(join(original, 'preparation/sol-delegated', name, 'requests.jsonl'), JSON.stringify({ reservation: 'old-planning-charge', selector: sol }) + '\n');
+      for (const arm of arms) records.push({ arm: arm.id, task: task.id, allocated_preparation: JSON.parse(readFileSync(join(original, 'preparation/sol-delegated', name, 'result.json'))), result: arm.id === 'sol-mimo' ? { error: 'Existing PrimaLabs credential configuration unavailable', model_calls: 0 } : {} });
+    }
+    put(join(original, 'results.json'), { rows: records });
+    const resumed = prepareResume({ ...options, output: join(root, 'resumed'), resumeFrom: original }).output;
+    const manifest = verify(resumed);
+    assert.deepEqual(manifest.resume.active_arms, ['sol-mimo']);
+    assert.ok(manifest.request_directories.every(directory => directory.startsWith('sol-mimo/')));
+    assert.equal(manifest.resume.preparations.length, 3);
+    assert.deepEqual(readFileSync(join(resumed, 'preparation/sol-delegated/000-hard-context-calibration/plan.json')), readFileSync(join(original, 'preparation/sol-delegated/000-hard-context-calibration/plan.json')));
+    put(join(resumed, 'preparation/sol-delegated/000-hard-context-calibration/plan.json'), { ...delegated, extra: true });
+    assert.throws(() => verify(resumed), /preparation changed/);
+    const originalPrep = join(original, 'preparation/sol-delegated/000-hard-context-calibration');
+    const replacement = { ...delegated, operations: delegated.operations.map(operation => ({ ...operation, instruction: 'A different unpaid plan.' })) };
+    put(join(originalPrep, 'plan.json'), replacement);
+    const altered = JSON.parse(readFileSync(join(originalPrep, 'result.json'))); altered.plan_hash = hash(JSON.stringify(replacement)); put(join(originalPrep, 'result.json'), altered);
+    assert.throws(() => prepareResume({ ...options, output: join(root, 'drifted-resume'), resumeFrom: original }), /original retained paid plan/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

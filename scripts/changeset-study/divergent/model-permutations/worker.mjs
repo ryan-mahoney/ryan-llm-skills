@@ -10,7 +10,7 @@ import { resolveSourceRequests } from '../../query-source.mjs';
 import { changedTestCommands } from '../../candidate-checks.mjs';
 import { sandbox, grade } from '../../sandbox.mjs';
 import { parse } from '../../parser/acorn.mjs';
-import { validatePlan, routeLimits, checkLedgerState } from './policy.mjs';
+import { validatePlan, routeLimits, checkLedgerState, providerRegistration } from './policy.mjs';
 import { planningSystem, boundedContext } from './planning.mjs';
 import { read, write, rows } from '../writer-control/support.mjs';
 const job = read(process.argv[2]);
@@ -28,13 +28,8 @@ try {
   if (!selected) throw new Error('Selector metadata not frozen');
   // Keep mutable credential material outside the snapshot/transcripts; only the existing
   // provider credential selector is read. All model metadata comes from this manifest.
-  const providerConfig = { models: [selected.model] };
-  if (selected.model.provider === 'primalabs') {
-    const config = read(join(homedir(), '.pi/agent/models.json')).providers?.primalabs;
-    if (!config?.apiKey) throw new Error('Existing PrimaLabs credential configuration unavailable');
-    providerConfig.apiKey = config.apiKey; providerConfig.api = selected.model.api; providerConfig.baseUrl = selected.model.baseUrl;
-  }
-  runtime.registerProvider(selected.model.provider, providerConfig);
+  const custom = selected.model.provider === 'primalabs' ? read(join(homedir(), '.pi/agent/models.json')).providers?.primalabs : null;
+  runtime.registerProvider(selected.model.provider, providerRegistration(selected.model, custom));
   await runtime.refresh({ allowNetwork: false, providers: [selected.model.provider] });
   client = new Client({ runtime, selector, ledger, receiptPath: join(directory, 'receipts.jsonl'), signal: controller.signal,
     maxCalls: limits.model_calls, maxTokens: limits.max_output_tokens, callMs: limits.call_ms });

@@ -54,6 +54,45 @@ export function prepare({ source, output, ledger, parser, sdk, codeRoot = checko
     policy_differences: ['Muse self returns deterministic edits; delegated plans use focused bounded writers.', 'Sol output cap is requested but subscription adapter does not enforce it; conservative ledger reserve unchanged.', 'No model review or repair after dispatch; terminal grade remains separate.'] };
   write(join(output, 'manifest.json'), manifest); return { output, status: 'prepared' };
 }
+export function prepareResume({ resumeFrom, ...options }) {
+  resumeFrom = realpathSync(resumeFrom);
+  if (inside(resumeFrom, prospective(options.output))) throw new Error('Resume output must be outside the original run');
+  const original = verify(resumeFrom), oldRows = read(join(resumeFrom, 'results.json')).rows;
+  if (oldRows.length !== 12 || !existsSync(join(resumeFrom, 'started.json'))) throw new Error('Resume requires the terminal original twelve-row campaign');
+  const originalManifestHash = hash(readFileSync(join(resumeFrom, 'manifest.json')));
+  const originalResultsHash = hash(readFileSync(join(resumeFrom, 'results.json')));
+  const result = prepare(options), output = result.output, manifest = read(join(output, 'manifest.json'));
+  if (manifest.tasks_hash !== original.tasks_hash || manifest.ledger !== original.ledger || !same(manifest.models, original.models)) throw new Error('Resume source/model/ledger identity differs');
+  const preparations = [];
+  for (const [index, id] of taskIds.entries()) {
+    const relative = `preparation/sol-delegated/${cellName(index, id)}`, directory = join(resumeFrom, relative);
+    const sourceRow = oldRows.find(row => row.arm === 'sol-mimo' && row.task === id), observed = sourceRow?.result;
+    if (!sourceRow) throw new Error('Missing original MiMo observation');
+    if (sourceRow.preparation_failed) {
+      if (!same(read(join(directory, 'result.json')), sourceRow.preparation)) throw new Error('Failed preparation differs from original retained observation');
+      const files = inventory(directory), destination = join(output, relative); mkdirSync(dirname(destination), { recursive: true }); cpSync(directory, destination, { recursive: true });
+      if (!same(inventory(destination), files)) throw new Error('Inherited failed preparation changed during copy');
+      preparations.push({ task: id, directory: relative, eligible: false, files, reason: 'Original shared Sol preparation failed; no new planning authorized' }); continue;
+    }
+    const prep = read(join(directory, 'result.json')), plan = read(join(directory, 'plan.json'));
+    const museRow = oldRows.find(row => row.arm === 'sol-muse' && row.task === id);
+    if (!same(prep, sourceRow.allocated_preparation) || (museRow?.result?.plan_hash && museRow.result.plan_hash !== prep.plan_hash)) throw new Error('Sol preparation differs from original retained paid plan');
+    if (observed?.error !== 'Existing PrimaLabs credential configuration unavailable' || observed.model_calls !== 0 ||
+        rows(join(resumeFrom, 'sol-mimo', cellName(index, id), 'requests.jsonl')).length !== 0 ||
+        rows(join(resumeFrom, 'sol-mimo', cellName(index, id), 'receipts.jsonl')).length !== 0 ||
+        rows(join(resumeFrom, 'sol-mimo', cellName(index, id), 'responses.jsonl')).length !== 0 ||
+        prep.error || prep.selector !== sol || prep.plan_hash !== hash(JSON.stringify(plan)) || prep.task_hash !== original.task_hashes[index]) throw new Error('Resume is restricted to zero-call credential blocks with exact Sol preparations');
+    const files = inventory(directory), destination = join(output, relative); mkdirSync(dirname(destination), { recursive: true }); cpSync(directory, destination, { recursive: true });
+    if (!same(inventory(destination), files) || !same(inventory(directory), files)) throw new Error('Inherited preparation changed during copy');
+    preparations.push({ task: id, directory: relative, eligible: true, files, plan_hash: prep.plan_hash, model_calls: prep.model_calls, process_elapsed_ms: prep.process_elapsed_ms });
+  }
+  manifest.resume = { source: resumeFrom, original_manifest_hash: originalManifestHash, original_results_hash: originalResultsHash,
+    original_revision: original.revision, active_arms: ['sol-mimo'], preparations,
+    accounting: 'Copied Sol preparation is inherited, paid once in the original campaign; fully allocated to this route but excluded from new actual campaign requests.' };
+  manifest.request_directories = taskIds.map((id, index) => `sol-mimo/${cellName(index, id)}`);
+  if (hash(readFileSync(join(resumeFrom, 'manifest.json'))) !== originalManifestHash || hash(readFileSync(join(resumeFrom, 'results.json'))) !== originalResultsHash) throw new Error('Original campaign changed during resume preparation');
+  write(join(output, 'manifest.json'), manifest); return { output, status: 'prepared-resume' };
+}
 export function verify(output) {
   const manifest = read(join(output, 'manifest.json'));
   checkLedgerState(validateLedger(manifest.ledger).state);
@@ -66,6 +105,13 @@ export function verify(output) {
       hash(readFileSync(join(output, 'tasks.json'))) !== manifest.tasks_hash || !same(inventory(join(output, 'frozen')), manifest.frozen_files) ||
       !same(inventory(join(output, 'sdk/node_modules')), manifest.sdk_files) || manifest.mounts.some(([path], index) => !inside(output, realpathSync(path)) || !same(inventory(path), manifest.dependency_files[index])) ||
       validateLedger(manifest.ledger).path !== manifest.ledger) throw new Error('Frozen snapshot or shared ledger identity changed');
+  if (manifest.resume) {
+    const inherited = manifest.resume;
+    if (!same(inherited.active_arms, ['sol-mimo']) || hash(readFileSync(join(inherited.source, 'manifest.json'))) !== inherited.original_manifest_hash ||
+        hash(readFileSync(join(inherited.source, 'results.json'))) !== inherited.original_results_hash) throw new Error('Original resume provenance changed');
+    for (const prep of inherited.preparations.filter(row => row.files)) if (!same(inventory(join(output, prep.directory)), prep.files) ||
+      !same(inventory(join(inherited.source, prep.directory)), prep.files)) throw new Error('Exact inherited Sol preparation changed');
+  }
   return manifest;
 }
 async function child(args, env, timeoutMs) {
@@ -91,9 +137,14 @@ export async function run(output) {
   for (const [index, original] of tasks.entries()) {
     const task = structuredClone(original); delete task.gold;
     const preparations = new Map();
-    for (const arm of m.arms) {
+    for (const arm of m.arms.filter(arm => !m.resume || m.resume.active_arms.includes(arm.id))) {
       if (arm.blocked) { summary.push({ arm: arm.id, task: task.id, blocked: arm.blocked }); continue; }
       let preparation = preparations.get(arm.prep), prepDirectory = join(output, 'preparation', arm.prep, cellName(index, task.id));
+      if (!preparation && m.resume) {
+        const inherited = m.resume.preparations.find(row => row.task === task.id);
+        if (!inherited?.eligible) { summary.push({ arm: arm.id, task: task.id, preparation_failed: true, blocked: inherited?.reason ?? 'Missing inherited preparation' }); continue; }
+        preparation = read(join(prepDirectory, 'result.json')); preparations.set(arm.prep, preparation);
+      }
       if (!preparation) {
         preparation = await invoke({ mode: 'plan', directory: prepDirectory, task, selector: arm.planner, representation: arm.representation, ledger: m.ledger, mounts: m.mounts, campaign: output }, task.limits.cell_ms);
         preparations.set(arm.prep, preparation);
@@ -119,7 +170,7 @@ export async function run(output) {
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try { const [command, ...args] = process.argv.slice(2); const options = {};
-    for (let index = 0; index < args.length; index += 2) { const key = args[index]; if (!['--source', '--output', '--ledger', '--parser', '--sdk'].includes(key) || options[key.slice(2)] || !args[index + 1]) throw new Error('Unique named options required'); options[key.slice(2)] = args[index + 1]; }
-    const result = command === 'prepare' ? prepare(options) : command === 'verify' ? verify(realpathSync(options.output)) : command === 'run' ? await run(options.output) : (() => { throw new Error('Use prepare/verify/run'); })(); console.log(JSON.stringify(result));
+    for (let index = 0; index < args.length; index += 2) { const key = args[index], name = key === '--resume-from' ? 'resumeFrom' : key.slice(2); if (!['--source', '--output', '--ledger', '--parser', '--sdk', '--resume-from'].includes(key) || options[name] || !args[index + 1]) throw new Error('Unique named options required'); options[name] = args[index + 1]; }
+    const result = command === 'prepare-resume' ? prepareResume(options) : command === 'prepare' ? prepare(options) : command === 'verify' ? verify(realpathSync(options.output)) : command === 'run' ? await run(options.output) : (() => { throw new Error('Use prepare/verify/run'); })(); console.log(JSON.stringify(result));
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

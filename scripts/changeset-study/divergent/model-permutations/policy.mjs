@@ -47,3 +47,7 @@ export function checkLedgerState(state) {
     throw new Error('Shared ledger status/charge integrity is invalid');
   return state;
 }
+
+export function providerRegistration(model, custom = null) {
+  return { models: [model], ...(model.provider === 'primalabs' ? { api: model.api, baseUrl: model.baseUrl, ...(custom?.apiKey ? { apiKey: custom.apiKey } : {}) } : {}) };
+}
