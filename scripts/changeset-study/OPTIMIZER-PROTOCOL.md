@@ -545,3 +545,28 @@ The new query plan together with optimization none is an exploratory treatment; 
 comparison with a deterministically grouped prior run does not isolate granularity
 as the cause of any difference. This offline implementation establishes no
 performance or reliability benefit.
+
+## Protocol 18: smaller assignments from the same owner briefs
+
+After the ungrouped recovery control finishes, run the three original cases once
+with the reviewed smaller-regions treatment. Reuse the exact run-11 owner briefs
+and original source, retaining native DeepSeek off-first/low-local-retry writers,
+optimization none, all existing limits and outer checks. Sol generates fresh query
+plans before dispatch from those briefs and the bounded catalog/lookup interface.
+Do not reuse a prior query plan or supply downstream failures. Freeze this treatment
+at a new revision and retain its plans for any later unchanged replay.
+
+Offline preflight verified unchanged default query prompts, matching run-11 brief
+and source bytes, and the derived cap of 46 assignments. The initial complete Client
+contexts measure 27,461, 106,648 and 86,603 bytes; the retained handoff lookup-followup
+shape measures 129,369 bytes. All fit 163,840 bytes. These measurements do not certify
+future generated lookups or correction packets; the runtime continues to enforce
+the full request limit for every actual call.
+
+Compare with run 17 using application completion, local retries, operation count,
+writer time and usage, total newly incurred query-plus-writer time/cost, and inherited
+owner allocation. Both use ungrouped writes and the same writer settings; fresh query
+generation remains a source of variation. Keep downstream delivery separate and
+preserve failed plans or writes as measured outcomes. No source-splice prototype or
+other executor change enters this treatment. A complete application result must be
+repeated on the exact frozen plans before selecting a configuration.
