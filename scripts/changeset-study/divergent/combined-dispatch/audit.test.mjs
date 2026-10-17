@@ -5,6 +5,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } f
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Workspace } from '../../../changeset/workspace.mjs';
 import { Client } from '../../client.mjs';
 import { v4aEditor } from '../../v4a-editor.mjs';
 import { routeContext } from '../../context-router.mjs';
@@ -33,6 +34,9 @@ export const ask=async()=>({ok:true,model:'jev-latest',answers:{context_0:{choic
   save(join(root, 'manifest.json'), { jev_entry: 'jev/node_modules/pi-typesafe/dist/index.js' });
   const task = { id: 'offline', files: { 'answer.mjs': 'export const answer = 1;\nfunction keep() { return "private unseen body"; }\n', 'keep.txt': 'protected\n' },
     protected: ['keep.txt'], limits: { model_calls: 8, max_output_tokens: 32000, cell_ms: 1200000 } };
+  if (mode === 'order') task.files = { 'z.txt': 'z', 'a.txt': 'a file', 'a/z.txt': 'nested z', 'a/B.txt': 'nested B', 'a/A/z.txt': 'deeper', ...task.files, 'README.md': 'readme' };
+  const sourceDirectory = join(root, 'source'); new Workspace(task.files).materialize(sourceDirectory);
+  const workspaceSource = Workspace.load(sourceDirectory).snapshot();
   const raw = { schema_version: 1, operations: [{ id: 'answer', executor: 'simple', reads: [], writes: ['answer.mjs'], depends_on: [],
     objective: 'Set the answer to two.', instruction: 'Change the answer constant from one to two.', requirements: ['Preserve unrelated source.'],
     context: [{ path: 'answer.mjs', start: null, end: 'function keep' }] }] };
@@ -40,7 +44,7 @@ export const ask=async()=>({ok:true,model:'jev-latest',answers:{context_0:{choic
     strategy: 'owner-query-writer', queryMode: 'catalog-lookup', queryGranularity: 'smaller-regions', optimization: 'contextual', dispatchProfile: 'optimized-v4a',
     preparedPlan: raw, preparedBrief: 'Exact settled brief\n', ledger };
   const prior = process.env.JEV_TYPESAFE_MODULE; let routing;
-  try { process.env.JEV_TYPESAFE_MODULE = entry; routing = await routeContext(raw, task.files, { ledger, artifactDirectory: join(directory, 'routing') }); }
+  try { process.env.JEV_TYPESAFE_MODULE = entry; routing = await routeContext(raw, workspaceSource, { ledger, artifactDirectory: join(directory, 'routing') }); }
   finally { if (prior === undefined) delete process.env.JEV_TYPESAFE_MODULE; else process.env.JEV_TYPESAFE_MODULE = prior; }
   const dispatched = optimizePlan(raw, task.files, { mode: 'contextual', ...routing }).plan;
   let call = 0;
@@ -108,4 +112,20 @@ test('missing brief or receipt is invalid retained evidence rather than a thrown
 test('successful owned deletion replays a null output hash without inventing file bytes', async t => {
   const report = await auditTrial(await fixture(t, 'delete'));
   assert.deepEqual(report.failures, []); assert.equal(report.integrity_valid, true); assert.equal(report.application_complete, true);
+});
+
+
+test('routing source identity follows componentwise workspace traversal while preserving every original byte', async t => {
+  const input = await fixture(t, 'order'), routing = read(join(input.directory, 'routing.json'));
+  const files = input.expectedJob.task.files;
+  assert.deepEqual(Object.keys(files), ['z.txt', 'a.txt', 'a/z.txt', 'a/B.txt', 'a/A/z.txt', 'answer.mjs', 'keep.txt', 'README.md']);
+  const traversal = ['README.md', 'a/A/z.txt', 'a/B.txt', 'a/z.txt', 'a.txt', 'answer.mjs', 'keep.txt', 'z.txt'];
+  assert.equal(routing.source_hash, hash(JSON.stringify(Object.fromEntries(traversal.map(path => [path, files[path]])))));
+  assert.notEqual(routing.source_hash, hash(JSON.stringify(files)));
+  assert.notEqual(routing.source_hash, hash(JSON.stringify(Object.fromEntries(Object.keys(files).sort().map(path => [path, files[path]])))));
+  const report = await auditTrial(input); assert.deepEqual(report.failures, []); assert.equal(report.integrity_valid, true);
+  // A changed byte still fails the strict identity; ordering is the sole adaptation.
+  input.expectedJob.task.files['a/z.txt'] += '!';
+  const changed = await auditTrial(input);
+  assert.ok(changed.failures.includes('Jev plan/source/config/request/answer identity'));
 });

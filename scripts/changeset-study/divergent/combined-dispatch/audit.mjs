@@ -9,6 +9,16 @@ const tokenKeys=['input','output','cacheRead','cacheWrite','totalTokens'];
 const total=(items,fn)=>items.reduce((n,item)=>n+(fn(item)??0),0);
 const finite=n=>Number.isFinite(n)&&n>=0;
 const load=async(root,path)=>import(pathToFileURL(join(root,'scripts',path)).href);
+// Workspace.load recursively visits each directory's readdirSync(...).sort().
+// Sort components, not whole paths: a/z precedes a.txt in that traversal.
+function workspaceSnapshot(files) {
+  const paths=Object.keys(files).sort((left,right)=>{
+    const a=left.split('/'),b=right.split('/');
+    for(let i=0;i<Math.min(a.length,b.length);i++)if(a[i]!==b[i])return a[i]<b[i]?-1:1;
+    return a.length-b.length;
+  });
+  return Object.fromEntries(paths.map(path=>[path,files[path]]));
+}
 
 /** Read-only retained-evidence audit. No model construction, inference or ledger mutation. */
 export async function auditTrial({directory,expectedJob,frozenRoot,ledger,expectedPlan}) {
@@ -51,7 +61,7 @@ export async function auditTrial({directory,expectedJob,frozenRoot,ledger,expect
     routing=get('routing.json');const rr=get('routing/receipt.json'),rq=get('routing/request.json'),ra=get('routing/answer.json');
     check(routing&&same(result.routing,routing)&&same(rr,routing),'retained Jev result/receipt identity');
     if(routing) {
-      check(routing.plan_hash===hash(JSON.stringify(raw))&&routing.source_hash===hash(JSON.stringify(source))&&
+      check(routing.plan_hash===hash(JSON.stringify(raw))&&routing.source_hash===hash(JSON.stringify(workspaceSnapshot(source)))&&
         routing.config?.backend==='typesafe'&&routing.config?.model==='jev-latest'&&routing.config?.maxRequests===1&&
         routing.config_hash===hash(JSON.stringify(routing.config))&&same(rq?.config,routing.config)&&rq?.config_hash===routing.config_hash&&
         rq?.plan_hash===routing.plan_hash&&rq?.source_hash===routing.source_hash&&same(rq?.library_identity,routing.library_identity)&&
