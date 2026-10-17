@@ -32,10 +32,15 @@ export function recipeLiterals(operation, files = {}) {
   return literals;
 }
 
+// A quoted snippet may carry template placeholders such as `${stop_reason ?? 'error'}`
+// that name a field, not a binding the writer can reproduce verbatim; any expression
+// inside `${...}` satisfies the placeholder while the literal text around it must match.
+const snippetPattern = snippet => new RegExp(snippet.split(/(\$\{[^}]*\})/).map((part, index) => index % 2 ? '\\$\\{[^}]*\\}' : part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join(''));
+
 export function recipeFidelity(operation, output, files = {}) {
   const text = collapse(String(output ?? '')), missing = [];
   for (const literal of recipeLiterals(operation, files)) {
-    if (literal.kind === 'snippet') { if (!text.includes(literal.text)) missing.push(`snippet "${literal.text.slice(0, 120)}"`); continue; }
+    if (literal.kind === 'snippet') { if (!text.includes(literal.text) && !snippetPattern(literal.text).test(text)) missing.push(`snippet "${literal.text.slice(0, 120)}"`); continue; }
     // Each member must be present as shorthand (`name,` or `name }`), not `name: other`.
     const rebound = literal.names.filter(name => !new RegExp(`(?:^|[{,]\\s*)${name.replace(/\$/g, '\\$')}\\s*[,}]`).test(text));
     if (rebound.length && rebound.length < literal.names.length) missing.push(`shorthand members ${rebound.slice(0, 6).join(', ')} of { ${literal.names.join(', ')} }`);

@@ -21,6 +21,9 @@ test('quoted insert text and shorthand objects are expectations; anchors and rem
   assert.deepEqual(recipeLiterals(register), [{ kind: 'snippet', text: "pi.on('session_start', (event, ctx) => { seedCalibration(ctx); return apply(event, ctx); });" }]);
   assert.deepEqual(recipeFidelity(register, "pi.on('session_start', (event, ctx) => {\n  seedCalibration(ctx);\n  return apply(event, ctx);\n});\n"), []);
   assert.equal(recipeFidelity(register, "pi.on('session_start', apply);\n").length, 1);
+  const guard = op('Guard throws exactly `Latest editor packet stopped incomplete (${stop_reason ?? \'error\'}); assign a bounded continuation.`');
+  assert.deepEqual(recipeFidelity(guard, "throw new Error(`Latest editor packet stopped incomplete (${outcome.stop_reason ?? 'error'}); assign a bounded continuation.`);"), [], 'a template placeholder admits any expression');
+  assert.equal(recipeFidelity(guard, "throw new Error(`Latest editor packet stopped (${outcome.stop_reason ?? 'error'}); assign a bounded continuation.`);").length, 1, 'literal text around a placeholder must match');
   const anchors = op('Delete range `// The top-level setup declaration` through `export async function resolveInput(`. Copy `// A contained wave root reserves capacity` through `// Side-`.');
   assert.deepEqual(recipeLiterals(anchors), []);
 });
