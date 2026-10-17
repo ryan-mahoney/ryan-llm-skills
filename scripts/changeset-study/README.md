@@ -32,7 +32,9 @@ Delivery still varies. The [writer-boundary comparison](writer-control-results.m
 ([visual](writer-control-results.html)) found no clear speed winner from two
 sequential observations per route: DeepSeek 73.55/124.22 seconds, Sol 102.32/108.18.
 Normalized cost, receipt charges and provider-policy limits remain separate. The
-prespecified bounded diagnostic pair is next; configuration selection is provisional.
+bounded diagnostic pair 20/21 also completed application 3/3 twice, but delivery
+remained 1/3 and its single diagnostic exposure establishes no improvement. The
+prespecified fixed-off pair is next; configuration selection is provisional.
 See the [three-role visual](optimized-results.html), [measurements](optimized-results.md),
 [JSON evidence](optimized-results.json) and [comparison protocol](OPTIMIZER-PROTOCOL.md).
 The study remains active.

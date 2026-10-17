@@ -21,6 +21,8 @@ Actual incurred model usage excludes reused planning. plans_from adds original o
 | 17-ungrouped-recovery-control | none/catalog-lookup | 1/3 | 0 | 351.04 | 862.16 | 321.04 | 321.04 |
 | 18-smaller-regions | none/catalog-lookup | 3/3 | 0 | 331.56 | 742.95 | 73.55 | 73.55 |
 | 19-smaller-regions-repeat | none/catalog-lookup | 3/3 | 0 | 248.13 | 795.48 | 124.22 | 124.22 |
+| 20-application-diagnostic | none/catalog-lookup | 3/3 | 0 | 201.96 | 749.31 | 110.07 | 110.07 |
+| 21-application-diagnostic-repeat | none/catalog-lookup | 3/3 | 0 | 409.80 | 957.14 | 136.81 | 136.81 |
 
 | Run | Calls actual / allocated | Tokens actual / allocated | Equivalent USD actual / allocated | Jev calls | Jev tokens | Jev est. USD |
 |---|---:|---:|---:|---:|---:|---:|
@@ -41,6 +43,8 @@ Actual incurred model usage excludes reused planning. plans_from adds original o
 | 17-ungrouped-recovery-control | 23 / 93 | 210590 / 3597892 | 0.126303 / 0.311070 | 0 | 0 | 0.000000 |
 | 18-smaller-regions | 33 / 99 | 247760 / 3548689 | 0.109410 / 0.260918 | 0 | 0 | 0.000000 |
 | 19-smaller-regions-repeat | 28 / 99 | 161072 / 3567273 | 0.080249 / 0.271749 | 0 | 0 | 0.000000 |
+| 20-application-diagnostic | 27 / 98 | 123397 / 3529598 | 0.048620 / 0.240120 | 0 | 0 | 0.000000 |
+| 21-application-diagnostic-repeat | 29 / 100 | 154719 / 3560920 | 0.068687 / 0.260187 | 0 | 0 | 0.000000 |
 
 | Cell | Valid | Applied | Visible base | Candidate failures | External | Owner s* | Query s* | Routing s | Optimization s | Writing s | Checks s |
 |---|---|---|---|---:|---|---:|---:|---:|---:|---:|---:|
@@ -95,6 +99,12 @@ Actual incurred model usage excludes reused planning. plans_from adds original o
 | 19-smaller-regions-repeat/000-hard-context-calibration | true | true | true | 0/1 | true | 54.36 | 17.21 | 0.00 | 0.00 | 3.02 | 0.26 |
 | 19-smaller-regions-repeat/001-hard-dependency-handoff | true | true | false | 1/1 | false | 205.22 | 90.18 | 0.00 | 0.00 | 108.46 | 71.46 |
 | 19-smaller-regions-repeat/002-hard-lifecycle-extract | true | true | false | 0/0 | false | 151.80 | 28.58 | 0.00 | 0.00 | 12.73 | 51.44 |
+| 20-application-diagnostic/000-hard-context-calibration | true | true | true | 0/1 | true | 54.36 | 17.21 | 0.00 | 0.00 | 3.51 | 0.25 |
+| 20-application-diagnostic/001-hard-dependency-handoff | true | true | false | 1/1 | false | 205.22 | 90.18 | 0.00 | 0.00 | 98.09 | 64.27 |
+| 20-application-diagnostic/002-hard-lifecycle-extract | true | true | false | 0/0 | false | 151.80 | 28.58 | 0.00 | 0.00 | 8.47 | 26.62 |
+| 21-application-diagnostic-repeat/000-hard-context-calibration | true | true | true | 0/1 | true | 54.36 | 17.21 | 0.00 | 0.00 | 3.04 | 0.25 |
+| 21-application-diagnostic-repeat/001-hard-dependency-handoff | true | true | true | 1/1 | false | 205.22 | 90.18 | 0.00 | 0.00 | 111.24 | 246.02 |
+| 21-application-diagnostic-repeat/002-hard-lifecycle-extract | true | true | false | 0/0 | false | 151.80 | 28.58 | 0.00 | 0.00 | 22.53 | 25.98 |
 
 *Owner and query seconds include allocated original planning for replays. JSON retains actual phase time and all stage calls/tokens separately. Application completion means execute returned ok, independently of downstream checks.
 
@@ -102,6 +112,11 @@ Observed writer, optimizer and routing elapsed performance among application-com
 
 matched observations available.
 - 18-smaller-regions: 73.55 writer + optimizer + routing seconds; 19-smaller-regions-repeat: 124.22. Faster observed pipeline: 18-smaller-regions.
+- 18-smaller-regions: 73.55 writer + optimizer + routing seconds; 20-application-diagnostic: 110.07. Faster observed pipeline: 18-smaller-regions.
+- 18-smaller-regions: 73.55 writer + optimizer + routing seconds; 21-application-diagnostic-repeat: 136.81. Faster observed pipeline: 18-smaller-regions.
+- 19-smaller-regions-repeat: 124.22 writer + optimizer + routing seconds; 20-application-diagnostic: 110.07. Faster observed pipeline: 20-application-diagnostic.
+- 19-smaller-regions-repeat: 124.22 writer + optimizer + routing seconds; 21-application-diagnostic-repeat: 136.81. Faster observed pipeline: 19-smaller-regions-repeat.
+- 20-application-diagnostic: 110.07 writer + optimizer + routing seconds; 21-application-diagnostic-repeat: 136.81. Faster observed pipeline: 20-application-diagnostic.
 
 | Historical control (unmatched) | Seconds | Calls | Tokens | Equivalent USD |
 |---|---:|---:|---:|---:|
