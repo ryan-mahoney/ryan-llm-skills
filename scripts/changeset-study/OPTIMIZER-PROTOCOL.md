@@ -405,3 +405,20 @@ as allocation, not new spending. This is a new exploratory treatment; it is neit
 successful repeat nor an isolated estimate of prompt effects. Complete application
 remains separate from downstream delivery. Do not select a configuration from one
 successful case or count unchanged-source checks as implemented behavior.
+
+## Protocol 14: compare ungrouped assignments on the same backend
+
+Run 13 reused every raw and dispatched plan from 12. Calibration completed writing
+and downstream checks. Handoff failed an exact replacement in an assignment that
+combined two original operations; extraction again failed composition syntax. This
+is not evidence that the syntax-context treatment made application more reliable.
+
+Replay the same three raw plans and briefs from 12 with optimization `none`, using
+the exact code freeze from 13. Keep the model selectors, source bytes, local retry,
+context limits, concurrency and outer checks unchanged. There are no new owner or
+query-planner calls. Compare writing time, calls, token usage, application completion
+and downstream outcomes against 13; allocate original owner and query work separately.
+This isolates grouping as the configured difference, but one observation per arm
+still includes model-generation variability. Do not attribute a difference solely
+to grouping or declare reliability from a single successful replay. Stop after this
+one run and retain all failed attempts and costs before selecting the next treatment.
