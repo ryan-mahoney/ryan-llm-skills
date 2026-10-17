@@ -20,7 +20,6 @@ import {
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, relative, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import {
   assertCommand,
@@ -34,7 +33,6 @@ import {
   makeLinuxServices,
 } from './package-fixture.mjs';
 import { registerLinuxWaveCases } from './wave-linux-wave-cases.mjs';
-import { bootLinuxWave } from './wave-linux-native-fixture.mjs';
 import { parseUsecProperty } from './wave-linux-duration.mjs';
 
 const OPT_IN = process.env.SPEC_WAVES_LINUX_REHEARSAL === '1';
@@ -223,44 +221,27 @@ function linuxTest(name, timeout, fn) {
 
 // Case 9 stays below the insertion point for the remaining native Linux cases
 // 6-8, so adding them does not renumber this case.
-//
-// The lifecycle policy this case exercises is fixture-owned: bootLinuxWave copies
-// the operator's real saved policy and narrows only the lifecycle block inside the
-// sandbox configHome, so the sandbox admits width 9 without any live host setup or
-// mutation. The aggregate slice remains the operator's real saved slice and is
-// still compared exactly against the live slice.
 linuxTest('wave linux: operator-installed host policy matches the live slice', 120000, async (t, facts) => {
-  const fixtureRemedy = 'run this case via the EV-14 Linux rehearsal (it writes the fixture lifecycle policy into its own sandbox configHome)';
+  const policyPath = join(homedir(), '.config', 'spec-runtime', 'host-policy.json');
+  const setupRemedy = 'run node scripts/spec-observe/cli.mjs runtime-host setup --lifecycle-memory-mib 2048 --lifecycle-tasks 448';
+  assert.ok(existsSync(policyPath), `operator setup is pending: ${setupRemedy}`);
 
-  // The boot used this sandbox (fixture lifecycle policy + copied real aggregate),
-  // so the real CLI resolves the same saved file through XDG_CONFIG_HOME.
-  const boot = await bootLinuxWave(t, facts, { members: 9 });
-  const policyPath = join(boot.sandbox.configHome, 'spec-runtime', 'host-policy.json');
-  assert.ok(existsSync(policyPath), `the fixture lifecycle policy exists at ${policyPath}; ${fixtureRemedy}`);
-
-  const checked = linuxCommand(process.execPath, [
-    fileURLToPath(new URL('../../../scripts/spec-observe/cli.mjs', import.meta.url)),
-    'runtime-host', 'check', '--probe',
-  ], { env: boot.env });
-  assert.equal(checked.error, undefined, `runtime host check could not run: ${checked.error && checked.error.message}`);
-  assert.equal(checked.status, 0,
-    `runtime host check failed (status ${checked.status}): ${checked.stderr || checked.stdout}`);
-  const hostCheck = JSON.parse(checked.stdout);
+  const hostCheck = facts.hostCheck;
   assert.equal(hostCheck.ok, true, `runtime host check is not ok: ${JSON.stringify(hostCheck)}`);
   assert.equal(hostCheck.route, 'native');
   assert.equal(hostCheck.nativeReady, true);
   const admittedWidth = hostCheck.admission && hostCheck.admission.admittedWidth;
   assert.ok(Number.isInteger(admittedWidth) && admittedWidth >= 9,
-    `the fixture lifecycle policy must admit width 9, got ${admittedWidth}; ${fixtureRemedy}`);
+    `operator setup is pending: admitted width ${admittedWidth} is below 9; ${setupRemedy}`);
 
   const saved = readJson(policyPath);
   assert.equal(saved.schema, 'spec-runtime-host-policy/v1');
-  // The fixture writes explicit lifecycle provenance, so a policy with only
-  // effective defaults cannot satisfy this case.
+  // The setup command records explicit lifecycle values. Reading only the
+  // effective defaults would not prove the operator installed this policy.
   assert.equal(saved.provenance && saved.provenance.lifecycleMemoryMib, 'explicit',
-    'fixture policy must record explicit lifecycle memory provenance');
+    'saved policy must record explicit lifecycle memory provenance');
   assert.equal(saved.provenance && saved.provenance.lifecycleTasks, 'explicit',
-    'fixture policy must record explicit lifecycle task provenance');
+    'saved policy must record explicit lifecycle task provenance');
   const aggregate = saved.aggregate;
   assert.ok(aggregate && typeof aggregate === 'object', 'saved policy has no aggregate slice values');
 
@@ -279,9 +260,7 @@ linuxTest('wave linux: operator-installed host policy matches the live slice', 1
     if (split > 0) live[line.slice(0, split)] = line.slice(split + 1).trim();
   }
 
-  // Compare the exact aggregate values, not an ordering or an inequality. The
-  // aggregate is the operator's unchanged real slice; only the fixture lifecycle
-  // block differs, and the live host is never modified by this case.
+  // Compare the exact aggregate values, not an ordering or an inequality.
   assert.equal(parseByteProperty(live.MemoryMax), aggregate.memoryMaxBytes, 'slice MemoryMax');
   assert.equal(parseByteProperty(live.MemoryHigh), aggregate.memoryHighBytes, 'slice MemoryHigh');
   assert.equal(parseByteProperty(live.MemorySwapMax), aggregate.memorySwapMaxBytes, 'slice MemorySwapMax');
@@ -289,14 +268,7 @@ linuxTest('wave linux: operator-installed host policy matches the live slice', 1
   assert.equal(parseUsecProperty(live.CPUQuotaPerSecUSec), aggregate.cpuQuotaPercent * 10000, 'slice CPUQuotaPerSecUSec');
   assert.equal(Number(live.CPUWeight), aggregate.cpuWeight, 'slice CPUWeight');
 
-  t.diagnostic(JSON.stringify({
-    ev: 'EV-14',
-    case: 'host-policy',
-    kernel_proof: hostCheck.nativeReady === true,
-    policyPath,
-    lifecycle_fixture: true,
-    aggregate_slice: 'live',
-  }));
+  t.diagnostic(JSON.stringify({ ev: 'EV-14', case: 'host-policy', kernel_proof: hostCheck.nativeReady === true, policyPath }));
 });
 
 linuxTest('wave linux: kernel overlay semantics in a contained phase', 120000, async t => {

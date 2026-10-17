@@ -9,7 +9,6 @@
 // package-fixture.mjs reexports this module, so makeWaveFixture is imported
 // from its own owner and only ever called inside bootLinuxWave (never at module
 // top level) to avoid a circular import at evaluation time.
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { makeWaveFixture } from './package-fixture.mjs';
@@ -72,62 +71,6 @@ function assignIfPresent(env, name, value) {
   env[name] = value;
 }
 
-// The fixture-owned lifecycle policy for the EV-14 width-nine cases.
-// writeSandboxHome(livePolicy: true) copies the operator's saved policy into the
-// sandbox; this narrows only the lifecycle block so the sandbox admits width 9
-// without touching the live host. The aggregate slice stays the real saved one,
-// so the case still compares it exactly against the live slice properties. This
-// is a real saved policy file read by the actual CLI and native launches through
-// the sandbox XDG_CONFIG_HOME — not an environment override and not a shim.
-const CONTROLLED_LIFECYCLE_MIB = 2048;
-const CONTROLLED_LIFECYCLE_BYTES = CONTROLLED_LIFECYCLE_MIB * 1024 * 1024;
-const CONTROLLED_LIFECYCLE_HIGH_BYTES = Math.floor(CONTROLLED_LIFECYCLE_BYTES * 0.8);
-const CONTROLLED_LIFECYCLE_TASKS = 384;
-
-export function writeControlledLinuxPolicy(configHome) {
-  if (typeof configHome !== 'string' || configHome === '') {
-    throw new Error('writeControlledLinuxPolicy requires the sandbox configHome');
-  }
-  const policyPath = join(configHome, 'spec-runtime', 'host-policy.json');
-  if (!existsSync(policyPath)) {
-    throw new Error(`the copied live host policy is required at ${policyPath}`);
-  }
-  const policy = JSON.parse(readFileSync(policyPath, 'utf8'));
-  if (!policy || typeof policy !== 'object') {
-    throw new Error(`saved host policy is not an object: ${policyPath}`);
-  }
-  if (policy.schema !== 'spec-runtime-host-policy/v1') {
-    throw new Error(`saved host policy has unexpected schema ${JSON.stringify(policy.schema)}: ${policyPath}`);
-  }
-  if (policy.owner !== 'spec-runtime') {
-    throw new Error(`saved host policy has unexpected owner ${JSON.stringify(policy.owner)}: ${policyPath}`);
-  }
-  if (!policy.aggregate || typeof policy.aggregate !== 'object') {
-    throw new Error(`saved host policy has no aggregate slice values: ${policyPath}`);
-  }
-  if (!policy.lifecycle || typeof policy.lifecycle !== 'object') {
-    throw new Error(`saved host policy has no lifecycle block: ${policyPath}`);
-  }
-  const controlled = {
-    ...policy,
-    lifecycle: {
-      ...policy.lifecycle,
-      memoryMib: CONTROLLED_LIFECYCLE_MIB,
-      memoryBytes: CONTROLLED_LIFECYCLE_BYTES,
-      memoryHighBytes: CONTROLLED_LIFECYCLE_HIGH_BYTES,
-      memorySwapMaxBytes: 0,
-      tasksMax: CONTROLLED_LIFECYCLE_TASKS,
-    },
-    provenance: {
-      ...(policy.provenance && typeof policy.provenance === 'object' ? policy.provenance : {}),
-      lifecycleMemoryMib: 'explicit',
-      lifecycleTasks: 'explicit',
-    },
-  };
-  writeFileSync(policyPath, `${JSON.stringify(controlled, null, 2)}\n`);
-  return { policyPath, policy: controlled };
-}
-
 // Boot one real Linux wave case. Every owned identity is registered for
 // teardown before the case body runs, and the fixture root is removed only
 // after every service reports a positive clean result.
@@ -147,10 +90,8 @@ export async function bootLinuxWave(t, facts, options = {}) {
     extensionPath: join(fixture.dir, 'wave-loopback-extension.mjs'),
     livePolicy: true,
   });
-  // Immediately after the copy: narrow the fixture-owned policy lifecycle so the
-  // sandbox admits width 9. The real aggregate slice is preserved untouched and
-  // the live host policy is never written.
-  writeControlledLinuxPolicy(sandbox.configHome);
+  // The sandbox holds an unmodified copy of the operator's saved policy, so the
+  // width the waves admit is the width the installed policy admits.
 
   // The sandbox and the fixture root are the only writable state: HOME, the
   // Pi agent dir, both XDG roots and the storage root all resolve inside them.
