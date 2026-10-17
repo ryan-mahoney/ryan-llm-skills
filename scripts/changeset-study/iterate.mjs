@@ -79,7 +79,8 @@ const queryGranularity = resolveQueryGranularity({ requested: requestedQueryGran
 if (replayManifest && ((replayManifest.dispatch_profile ?? null) !== dispatchProfile || replayManifest.optimization !== optimization)) throw new Error('Replay dispatch profile or optimization differs');
 if (replayManifest && (replayManifest.strategy !== strategy || replayManifest.selector !== selector || (replayManifest.editor_selector ?? null) !== editorSelector || (replayManifest.writer_recovery_selector ?? null) !== writerRecoverySelector || (replayManifest.query_mode ?? 'discovery') !== queryMode || (replayManifest.query_granularity ?? 'default') !== queryGranularity || !equal(files(codeRoot), replayManifest.frozen_files))) throw new Error('Replay strategy, selectors or frozen bytes differ');
 const runRoles = buildRunRoles({ strategy, selector, editorSelector, ownerSelector, donorManifest });
-if (original.comparison !== 'sol-native-vs-sol-nemotron-workflow' || original.models[0] !== selector) throw new Error('Use previous workflow run and identical Sol selector');
+// The reference run fixes the tasks and the native Sol baseline; the planner under test may differ.
+if (original.comparison !== 'sol-native-vs-sol-nemotron-workflow') throw new Error('Use the native Sol workflow run as the reference');
 const selected = ['hard-context-calibration', 'hard-dependency-handoff', 'hard-lifecycle-extract'];
 const tasks = read(join(source, 'tasks.json'));
 const references = selected.map(task => {

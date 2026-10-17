@@ -21,6 +21,8 @@ test('combined profile keeps explicit roles and reserves routing without relabel
   const single = resolveDispatchProfile({ ...route, strategy: 'focused-dispatch' });
   assert.equal(single.queryMode, 'discovery'); assert.equal(single.queryGranularity, null); assert.equal(single.optimization, 'contextual');
   assert.throws(() => resolveDispatchProfile({ ...route, strategy: 'focused-dispatch', queryMode: 'catalog-lookup' }), /discovery planning/);
+  assert.equal(resolveDispatchProfile({ ...route, strategy: 'focused-dispatch', selector: 'deepseek/deepseek-flash:max' }).queryMode, 'discovery');
+  assert.throws(() => resolveDispatchProfile({ ...route, selector: 'deepseek/deepseek-flash:max' }), /requires/, 'a DeepSeek planner is allowed only on the single-agent strategy');
   assert.throws(() => resolveQueryGranularity({ ...route, ...profile, requested: 'smaller-regions', inherited: 'default' }), /inherited plan/);
   const budget = queryAssignmentBudget({ maxCalls: 10, callsUsed: 0, queryCallsReserved: 3, routingCallsReserved: 1 });
   assert.equal(budget.max_operations, 3); assert.equal(budget.calls_used, 0); assert.equal(budget.routing_calls_reserved, 1);
