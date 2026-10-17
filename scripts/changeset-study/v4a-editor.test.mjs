@@ -164,6 +164,11 @@ test('seeded move pre-fills an absent destination from its declared excerpts and
     context: [{ path: 'source.mjs', start: '// helper', end: '// tail' }, { path: 'source.mjs', start: '// tail', end: null }] }), files);
   assert.equal(twoPart.files['new.mjs'], '// tail\nexport const tail = 2;\n// helper\nfunction helper() { return 1; }\n', 'recipe mention order wins over planner order');
   assert.deepEqual(twoPart.layout.map(row => [row.excerpt, row.seed_lines]), [[2, '1-2'], [1, '3-4']]);
+  const withReference = seedMove(operation({ writes: ['new.mjs'], reads: ['source.mjs'], instruction: 'Compose new.mjs with a fresh header, then copy `// helper`.',
+    context: [{ path: 'source.mjs', start: null, end: '// helper' }, { path: 'source.mjs', start: '// helper', end: '// tail' }] }), files);
+  assert.equal(withReference.files['new.mjs'], '// helper\nfunction helper() { return 1; }\n', 'only the named copy is seeded');
+  assert.deepEqual(withReference.operation.context, [{ path: 'new.mjs', start: null, end: null }, { path: 'source.mjs', start: null, end: '// helper' }], 'the unnamed excerpt stays as reference context');
+  assert.equal(withReference.files['source.mjs'], sourceText);
   assert.equal(seedMove(operation(), { 'answer.mjs': source }), null, 'existing destinations are never seeded');
   assert.equal(seedMove(op, { 'source.mjs': 'no anchors here', 'new.mjs': null }), null, 'unresolvable anchors leave the packet unseeded');
   assert.equal(seedMove({ ...op, instruction: 'Export a builder that calls validateStepIndex.' }, files), null, 'reference excerpts without copy intent are not seeded');

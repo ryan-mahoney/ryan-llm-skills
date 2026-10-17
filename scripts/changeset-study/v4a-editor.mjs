@@ -68,8 +68,13 @@ export function seedMove(operation, files) {
   // Recipes name their copies in the order the new file should read ("copy X ..., then
   // Y ..."), so an excerpt whose start anchor the recipe mentions earlier goes earlier.
   // Unmentioned excerpts keep the planner's order after the mentioned ones.
+  // Excerpts the recipe never names are reference context (an import block to consult,
+  // an interface to call), not bodies to copy; they stay as excerpts beside the seed.
+  // When the recipe names none of them, every excerpt is treated as a copy in planner order.
   const mention = ({ start }) => { const at = start === null ? -1 : operation.instruction.indexOf(start); return at < 0 ? Number.MAX_SAFE_INTEGER : at; };
-  const ordered = excerpts.map((excerpt, index) => ({ excerpt, index })).sort((a, b) => mention(a.excerpt) - mention(b.excerpt) || a.index - b.index);
+  const named = excerpts.filter(excerpt => mention(excerpt) !== Number.MAX_SAFE_INTEGER);
+  const copies = named.length ? named : excerpts, reference = named.length ? excerpts.filter(excerpt => !named.includes(excerpt)) : [];
+  const ordered = copies.map(excerpt => ({ excerpt, index: excerpts.indexOf(excerpt) })).sort((a, b) => mention(a.excerpt) - mention(b.excerpt) || a.index - b.index);
   const parts = ordered.map(({ excerpt: { path, start, end } }) => {
     const text = files[path], anchor = (value, fallback) => value === null ? fallback : text.split(value).length === 2 ? text.indexOf(value) : -1;
     const a = anchor(start, 0), b = anchor(end, text.length);
@@ -84,7 +89,9 @@ export function seedMove(operation, files) {
     layout.push({ excerpt: index + 1, source: path, start_anchor: start, end_anchor: end, seed_lines: `${line}-${line + count - 1}` });
     line += count;
   }
-  return { files: { [target]: seed }, operation: { ...operation, context: [{ path: target, start: null, end: null }] },
+  const referencePaths = new Set(reference.map(c => c.path));
+  return { files: { [target]: seed, ...Object.fromEntries([...referencePaths].map(path => [path, files[path]])) },
+    operation: { ...operation, context: [{ path: target, start: null, end: null }, ...reference] },
     note: `The owned destination has been PRE-FILLED with verbatim copies of the declared source excerpts, ordered by where the recipe first mentions each excerpt's start anchor (see layout). Treat the recipe's "copy"/"compose" steps as already done: the copied bodies are the current content of the destination. Patch only what the recipe adds or changes around them (imports, headers, wrappers, destructuring, separators, closing braces, exports, relocations). Keep copied lines as unchanged context; do not retype them. The seed order may differ from the recipe's intended order: when the recipe nests a copied block inside a function or object, every copied declaration that must stay at module scope (for example an exported function) has to be moved outside that wrapper, because export is only valid at module scope. Your single patch must leave the file complete and parseable: every wrapper you open (function, returned object) is closed in the same patch, separators are inserted between copied members, and the imports the recipe lists are present. A partial patch is rejected as a whole.`,
     layout, seeded_characters: seed.length, excerpt_count: excerpts.length };
 }
