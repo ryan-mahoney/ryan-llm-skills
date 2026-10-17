@@ -3,7 +3,7 @@
 // named dispatch variants. One sequential cell per variant and task; every result is
 // retained. This is a research loop, not the frozen matched-comparison protocol.
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawn } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
@@ -104,7 +104,7 @@ for (let repeat = 1; repeat <= repeats; repeat++) for (const [variant, config] o
   const result = existsSync(path) ? read(path) : { error: outcome.output };
   result.process_elapsed_ms ??= performance.now() - began;
   const summary = summarize(directory, result);
-  rows.push({ variant, repeat, task, directory: join(variant, task), summary, ledger_delta_usd: ledgerCharged() - before });
+  rows.push({ variant, repeat, task, directory: relative(output, directory), summary, ledger_delta_usd: ledgerCharged() - before });
   console.log(JSON.stringify({ variant, repeat, task, applied: summary.application_complete, visible: summary.visible, hidden: summary.accepted, writing_s: Number(summary.writing_s.toFixed(3)), calls: summary.calls_including_routing, tokens: summary.tokens, usd: summary.usd, error: summary.error }));
   report();
 }

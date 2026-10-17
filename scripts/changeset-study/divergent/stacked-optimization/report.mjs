@@ -5,7 +5,10 @@ import { readFileSync, existsSync } from 'node:fs';
 import { basename, join } from 'node:path';
 const dirs = process.argv.slice(2).filter(a => !a.startsWith('--'));
 // Second writer attempts are counted from the request log: it is exact under concurrency.
-const retries = (dir, row) => { const file = join(dir, row.directory, 'requests.jsonl'); return existsSync(file) ? readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter(r => r.writer_attempt === 1).length : 0; };
+const retries = (dir, row) => {
+  // Earlier rounds recorded `variant/task` even for repeated passes.
+  const candidates = [join(dir, row.directory, 'requests.jsonl'), join(dir, row.variant, `r${row.repeat}`, row.task, 'requests.jsonl')];
+  const file = candidates.find(existsSync); return file ? readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter(r => r.writer_attempt === 1).length : 0; };
 const rows = dirs.flatMap(dir => JSON.parse(readFileSync(join(dir, 'results.json'), 'utf8')).rows.map(row => ({ ...row, round: basename(dir), summary: { ...row.summary, writer: { ...row.summary.writer, fallbacks: retries(dir, row) } } })));
 const groups = new Map();
 for (const row of rows) { const key = `${row.variant}\u0000${row.task}`; (groups.get(key) ?? groups.set(key, []).get(key)).push(row); }

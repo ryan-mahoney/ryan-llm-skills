@@ -119,7 +119,7 @@ export function seedIntegrity(seed, output, { parse } = {}) {
 }
 
 /** One focused V4A attempt, then at most one same-client JSON fallback after a local failure. */
-export async function v4aEditor(model, stage, { operation, files }, { contextParse, promptOrder = 'target-first', seed = null } = {}) {
+export async function v4aEditor(model, stage, { operation, files }, { contextParse, promptOrder = 'target-first', seed = null, seamRetryModel = null } = {}) {
   const input = v4aInput(operation, files);
   if (seed) input.seeded_destination = { note: seed.note, layout: seed.layout, excerpt_count: seed.excerpt_count, characters: seed.seeded_characters };
   const target = safePath(operation.writes[0]);
@@ -149,10 +149,10 @@ export async function v4aEditor(model, stage, { operation, files }, { contextPar
   };
   // Client.begin reserves synchronously before its first await. Count this request
   // immediately, avoiding other concurrent operations using the same Client.
-  const request = (method, system, payload, row) => {
-    const before = Number.isFinite(model.calls) ? model.calls : null;
-    try { return model[method](system, payload, stage, { operation_id: operation.id, writer_attempt: row.writer_attempt }); }
-    finally { row.model_calls = before === null ? 1 : model.calls - before; }
+  const request = (method, system, payload, row, client = model) => {
+    const before = Number.isFinite(client.calls) ? client.calls : null;
+    try { return client[method](system, payload, stage, { operation_id: operation.id, writer_attempt: row.writer_attempt }); }
+    finally { row.model_calls = before === null ? 1 : client.calls - before; }
   };
   const first = record(0, 'v4a'), began = performance.now();
   // Request failures cannot enter the local application fallback path.
@@ -188,8 +188,9 @@ export async function v4aEditor(model, stage, { operation, files }, { contextPar
   // path this seeding exists to avoid, while a second seam patch costs a few seconds.
   if (seed) {
     const second = record(1, 'v4a'), retryBegan = performance.now();
+    if (seamRetryModel) second.selector = seamRetryModel.selector ?? 'retry';
     try { patch = await request('text', system(primaryContract), { ...input, ...diagnostics,
-      instruction_on_retry: 'Your previous patch was rejected locally and changed nothing. Correct the specific failure above: every context/removal line must be a complete, byte-exact line of the pre-filled destination, hunks in ascending order, one envelope.' }, second); }
+      instruction_on_retry: 'Your previous patch was rejected locally and changed nothing. Correct the specific failure above: every context/removal line must be a complete, byte-exact line of the pre-filled destination, hunks in ascending order, one envelope.' }, second, seamRetryModel ?? model); }
     catch (error) { second.elapsed_ms = performance.now() - retryBegan; fail(error); }
     try {
       const existing = Object.fromEntries(Object.entries(files).filter(([, text]) => text !== null));

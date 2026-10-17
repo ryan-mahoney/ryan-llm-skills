@@ -42,6 +42,7 @@ Both optimized profiles accept `dispatchOptions` (validated in [`dispatch-profil
 | `prompt_order` | `target-first` (v4a default), `static-first` (lean) | Put the shared writer contract before the per-packet ownership sentence so DeepSeek's prefix cache applies across packets |
 | `concurrency` | 1..32 (4 v4a default, 8 lean) | Executor width |
 | `anti_dependencies` | `serialize` (both defaults), `snapshot` | Let a writer start once the reader of its file has started; readers snapshot their inputs at start |
+| `seam_retry_reasoning` | `off` (v4a default), `low` (lean) | Run the second seam attempt on a seeded move with the same DeepSeek model at low reasoning; in the replay rounds it recovered both seeds the `:off` retry had missed, at about 30 s and 8,500 output tokens per use |
 | `seed_moves` | `false` (v4a default), `true` (lean) | Pre-fill an absent destination with its declared source excerpts when the recipe says compose/copy/move/extract, and hand the writer an `Update` on that seed; a rejected seam patch gets one more seam attempt carrying the applier diagnostic instead of the JSON fallback |
 
 The V4A applier runs in its declared `lenient-wrapper` envelope: outer blank lines, one whole fence or heredoc, and repeated consecutive trailing `*** End Patch` markers are tolerated; nested envelopes, prose and partial lines are still rejected. Each attempt records whether the strict envelope would also have parsed.

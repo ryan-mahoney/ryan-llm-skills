@@ -189,7 +189,9 @@ test('seeded move pre-fills an absent destination from its declared excerpts and
       ? '*** Begin Patch\n*** Update File: new.mjs\n@@\n-absent\n+x\n*** End Patch'
       : '*** Begin Patch\n*** Update File: new.mjs\n@@\n-function helper() { return 1; }\n+export function helper() { return 1; }\n*** End Patch'; },
     json: async () => { throw new Error('JSON fallback must not run for a seeded move'); } };
-  const recovered = await v4aEditor(failing, 'editor', seed, { seed });
+  const retryClient = { selector: 'deepseek/deepseek-flash:low', calls: 0, text: async (...args) => { retryClient.calls++; return failing.text(...args); } };
+  const recovered = await v4aEditor(failing, 'editor', seed, { seed, seamRetryModel: retryClient });
+  assert.equal(retryClient.calls, 1); assert.equal(recovered.writer_attempts[1].selector, 'deepseek/deepseek-flash:low');
   assert.equal(recovered.files['new.mjs'], '// helper\nexport function helper() { return 1; }\n');
   assert.deepEqual(recovered.writer_attempts.map(row => [row.format, row.applied, row.local_failure_kind]), [['v4a', false, 'application'], ['v4a', true, null]]);
   assert.equal(recovered.writer_fallback, true); assert.match(retryPayloads[1].application_failure, /locate|match|source lines/i); assert.ok(retryPayloads[1].instruction_on_retry);

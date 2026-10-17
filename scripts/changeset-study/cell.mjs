@@ -83,7 +83,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
     ...(dispatchProfile ? { dispatch_profile: dispatchProfile, dispatch_options: dispatch.options, writer_format: dispatch.writerFormat, writer_attempts: [] } : {}),
     ...(dispatchOnly(strategy) ? { review_mode: 'executable-checks-only', checks: [] } : {}),
   };
-  let client, agent, simpleClient, recoveryClient, contextParse;
+  let client, agent, simpleClient, recoveryClient, seamRetryClient, contextParse;
   const stage = async (name, fn) => { const start = performance.now(); try { return await fn(); } finally { stages.push({ name, elapsed_ms: performance.now() - start }); } };
   const check = async () => {
     const files = Workspace.load(root).snapshot();
@@ -117,6 +117,8 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
       client.shared = { calls: 0 };
       simpleClient = await stage('initialize', () => Client.create({ selector: editorSelector, ...clientOptions, shared: client.shared }));
       if (writerRecoverySelector) recoveryClient = await stage('initialize', () => Client.create({ selector: writerRecoverySelector, ...clientOptions, shared: client.shared }));
+      // Same model, low reasoning, used only for the second seam attempt on a seeded move.
+      if (dispatch.options?.seam_retry_reasoning === 'low') seamRetryClient = await stage('initialize', () => Client.create({ selector: editorSelector.replace(/:off$/, ':low'), ...clientOptions, shared: client.shared }));
     } else if (arm === 'changeset-mixed') {
       if (!simpleSelector) throw new Error('changeset-mixed requires a simple-leaf selector');
       client.shared = { calls: 0 };
@@ -368,7 +370,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
             writeFileSync(join(directory, 'writer-attempts.json'), JSON.stringify(result.writer_attempts, null, 2));
           };
           if (format === 'v4a') {
-            try { const value = await v4aEditor(model, stageName, seed ?? { operation, files }, { contextParse, promptOrder, seed }); retain(value); return value; }
+            try { const value = await v4aEditor(model, stageName, seed ?? { operation, files }, { contextParse, promptOrder, seed, seamRetryModel: seed ? seamRetryClient : null }); retain(value); return value; }
             catch (error) { retain(error); throw error; }
           }
           // Executable JSON edits with the focused writer's existing one local retry.
@@ -446,7 +448,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
   const cap = timeoutMs + (limits.grade_ms ?? 0);
   result.capped_time_to_success_ms = result.accepted ? Math.min(cap, result.total_ms) : cap;
   result.stages = stages; result.reviews = reviews; result.executions = executions; result.tool_calls = toolCalls;
-  const receipts = [...(client?.receipts ?? []), ...(simpleClient?.receipts ?? []), ...(recoveryClient?.receipts ?? [])];
+  const receipts = [...(client?.receipts ?? []), ...(simpleClient?.receipts ?? []), ...(recoveryClient?.receipts ?? []), ...(seamRetryClient?.receipts ?? [])];
   result.model_calls = receipts.length; result.equivalent_usd = equivalentCost(receipts);
   result.catalog_usd = receipts.length && receipts.every(r => r.usage?.cost?.total > 0) ? receipts.reduce((n, r) => n + r.usage.cost.total, 0) : null;
   result.tokens = Object.fromEntries(['input', 'output', 'cacheRead', 'cacheWrite', 'totalTokens'].map(key => [key, receipts.reduce((n, r) => n + (r.usage?.[key] ?? 0), 0)]));
