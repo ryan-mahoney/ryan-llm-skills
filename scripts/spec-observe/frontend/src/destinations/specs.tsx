@@ -1,3 +1,5 @@
+import { executionCounts, executionSummary, packageMatchesKey, resolvePackageRecord } from '../execution-state';
+import { packageSummaries } from '../model';
 import { For, Show, createEffect, createSignal, onCleanup } from 'solid-js';
 import { postJson } from '../api';
 import { activeRun, attention, base, esc, inlineMarkdown, runningUnconfirmed, serverNow, str, time } from '../format';
@@ -23,12 +25,12 @@ type Filter = 'active' | 'attention' | 'completed' | 'ready';
 // and readiness (not just presence) decides the row order and actions.
 const FILTERS: SectionTab[] = [
   { key: 'active', label: 'Active' },
-  { key: 'attention', label: 'Blocked' },
+  { key: 'attention', label: 'Needs attention' },
   { key: 'ready', label: 'Ready' },
   { key: 'completed', label: 'Done' },
 ];
 
-const FILTER_LABELS: Record<Filter, string> = { active: 'Active', attention: 'Blocked', completed: 'Done', ready: 'Ready' };
+const FILTER_LABELS: Record<Filter, string> = { active: 'Active', attention: 'Needs attention', completed: 'Done', ready: 'Ready' };
 
 const filterOf = (route: RouteState): Filter => {
   const value = route.filter;
@@ -64,7 +66,7 @@ function SpecsRow(props: { record: WireRecord; selected: boolean; context: Obser
     return `${span} ${live ? 'since activity' : 'before observation'}`;
   };
   const small = (): string => {
-    if (!props.record.planned) return `${specProgress(props.record).label} · ${age()}`;
+    if (!props.record.planned) return `${executionSummary(props.record) ? executionCounts(props.record) : specProgress(props.record).label} · ${age()}`;
     const steps = planningFactsFor(props.record)?.steps ?? null;
     return `${steps === null ? 'Prepared steps unknown' : `${steps} steps prepared`} · ${age()}`;
   };
@@ -210,7 +212,7 @@ function SpecsList(props: DestinationProps) {
               </Show>
             </>}
           >
-            <For each={rows()}>{record => <SpecsRow record={record} selected={record.key === props.route.id} context={context()} assignments={props.assignments} epics={props.epics} onSelect={props.onSelect} />}</For>
+            <For each={rows()}>{record => <SpecsRow record={record} selected={packageMatchesKey(record, props.route.id)} context={context()} assignments={props.assignments} epics={props.epics} onSelect={props.onSelect} />}</For>
           </Show>
         </Show>
       </div>
@@ -234,7 +236,7 @@ const headLabel = (record: WireRecord, epics: WireRecord[], assignments: WireRec
   record.planned || record.implementation_starting === true ? observedSpecReadiness(record, epics, assignments).readiness.label : runState(record, runningUnconfirmed);
 
 export default function SpecsDestination(props: DestinationProps) {
-  const record = () => props.records.find(item => item.key === props.route.id) ?? null;
+  const record = () => resolvePackageRecord(packageSummaries(props.records, filterOf(props.route)), props.route.id);
   // The most recent spec-end-to-end assignment for the selected package is
   // offered as a relaunch (with the ordinary Planned form as the fallback when
   // no prior assignment exists). RelaunchAssignment owns review/launch state for
@@ -281,7 +283,8 @@ export default function SpecsDestination(props: DestinationProps) {
   let completionUnmounted = false;
   onCleanup(() => { completionUnmounted = true; });
   const completionEligible = (item: WireRecord): boolean =>
-    !item.recent_completion && !item.planned && item.is_current_assignment === true;
+    !item.recent_completion && !item.planned && (item.is_current_assignment === true
+      || item.package_aggregate === true && item.aggregate_active === true && executionSummary(item) !== null);
   const completionHelp = (): string => props.completionToken
     ? 'Move this package to Recently completed.'
     : !props.live
@@ -524,7 +527,7 @@ export default function SpecsDestination(props: DestinationProps) {
                 <Show when={!activityTab()}>
                   <Show
                     when={item().implementation_starting === true}
-                    fallback={<SpecOverview record={item()} assignments={props.assignments} context={context()} ws={linkWorkspaceId()} workspace={props.workspace} onNavigate={props.onNavigate} onOpenAgent={openAgent} onOpenEpic={openEpic} />}
+                    fallback={<SpecOverview record={item()} assignments={props.assignments} context={context()} onOpenFile={openFile} ws={linkWorkspaceId()} workspace={props.workspace} onNavigate={props.onNavigate} onOpenAgent={openAgent} onOpenEpic={openEpic} />}
                   >
                     <SpecReadiness
                       record={item()}
@@ -586,7 +589,7 @@ export default function SpecsDestination(props: DestinationProps) {
                     </Show>
                   </StateNotice>
                 </Show>
-                <SpecActivity record={item()} context={context()} onOpenFile={openFile} recoveryPrimary={recovery() !== null} />
+                <SpecActivity record={item()} context={context()} onOpenFile={openFile} recoveryPrimary={recovery() !== null} onOpenAgent={assignmentId => { const assignment = props.assignments.find(row=>row.assignment_id===assignmentId && row.workspace===item().workspace); props.onNavigate({dest:'agents',ws:linkWorkspaceId(),...(assignment ? {id:assignment.key} : {q:assignmentId})}); }} />
               </Show>
             </>}
           </Show>

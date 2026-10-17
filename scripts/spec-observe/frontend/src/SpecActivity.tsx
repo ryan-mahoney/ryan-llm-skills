@@ -1,3 +1,5 @@
+import ExecutionOutline from './ExecutionOutline';
+import { executionSummary, recordedRuns, packageAttempts } from './execution-state';
 import { For, Show } from 'solid-js';
 import { inlineMarkdown, rows, statusMarkdown, str, terminal, time } from './format';
 import { duration } from './observation-format';
@@ -30,7 +32,7 @@ const hasEvidenceFacts = (value: unknown): boolean => {
 // The empty-activity branch is owned here so the destination can keep one
 // primary action when the EmptyState already carries it.
 export function hasActivityFacts(record: WireRecord): boolean {
-  return list(record?.timing?.attempts).length > 0
+  return Boolean(executionSummary(record)) || list(record?.run_records).some(run => list(run.timing?.attempts).length > 0) || list(record?.timing?.attempts).length > 0
     || list(record?.workflow_workers).length > 0
     || hasEvidenceFacts(record?.evidence)
     || list(record?.conditions).length > 0
@@ -43,11 +45,12 @@ export type SpecActivityProps = {
   context: ObservationContext;
   onOpenFile: (path: string) => void;
   recoveryPrimary?: boolean;
+  onOpenAgent?: (assignmentId: string) => void;
 };
 
 export default function SpecActivity(props: SpecActivityProps) {
   const record = () => props.record;
-  const attempts = () => list(record().timing?.attempts);
+  const attempts = () => packageAttempts(record());
   const workers = () => list(record().workflow_workers);
   const evidence = () => record().evidence && typeof record().evidence === 'object' ? record().evidence : null;
   const runCoverage = () => record().coverage;
@@ -94,6 +97,7 @@ export default function SpecActivity(props: SpecActivityProps) {
   };
   const full = () => (
     <>
+      <Show when={executionSummary(record())} fallback={<>
       <section class="section">
         <div class="section-heading"><h3>Step attempts</h3></div>
         <Show when={attempts().length} fallback={<p class="small muted">Step timing has not been observed yet.</p>}>
@@ -121,6 +125,10 @@ export default function SpecActivity(props: SpecActivityProps) {
           <p class="small muted" style={{ 'margin-top': '12px' }}>From first recorded dispatch; includes waits and verification. Each assignment is shown separately; completed execution does not imply accepted work. Missing timing stays unknown.</p>
         </Show>
       </section>
+      </>}>
+        <ExecutionOutline record={record()} context={props.context} activity onOpenFile={props.onOpenFile} onOpenAgent={props.onOpenAgent} />
+      </Show>
+      <Show when={record().package_aggregate}><section class="section"><div class="section-heading"><h3>Run history</h3></div><For each={recordedRuns(record())}>{run => <details class="execution-run-history"><summary><span class="mono">{run.run_id || run.assignment_id || 'Run identity unknown'}</span> · {str(run.execution) || 'Unknown'}</summary><p class="small muted">{str(run.activity || run.obligation) || 'No activity summary recorded.'}</p><For each={packageAttempts(record()).filter(attempt => attempt.assignment_id ? attempt.assignment_id === run.assignment_id : attempt.run_id ? attempt.run_id === run.run_id : recordedRuns(record())[0] === run)}>{attempt => <p class="small">{attempt.step != null ? `Step ${attempt.step}` : 'Package activity'} · {text(attempt.attempt_kind, 'Phase unknown')} · {text(attempt.state)} · {attemptDuration(attempt)} worker duration</p>}</For></details>}</For></section></Show>
       <section class="section">
         <div class="section-heading"><h3>Unfinished worker</h3></div>
         <Show when={workers().length} fallback={<p class="small muted">No unfinished workers recorded in this snapshot.</p>}>

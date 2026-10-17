@@ -41,20 +41,46 @@ export async function writeManualCompletion(root, ref) {
 
 // Reflect confirmed disk writes immediately, without editing observer exports.
 export async function applyManualCompletions(state) {
-  const packages = [...new Set(state.observers.flatMap(o => (o.snapshot?.runs ?? []).map(r => r.package)))].slice(0, 200);
+  const packages = [...new Set(state.observers.flatMap(o => [...(o.snapshot?.runs ?? []), ...(o.snapshot?.package_executions ?? [])].map(r => r.package)))].slice(0, 200);
   const records = new Map();
   for (const root of packages) if (typeof root === 'string') records.set(root, await readManualCompletion(root));
   for (const observer of state.observers) {
     const snapshot = observer.snapshot;
     if (!snapshot) continue;
     const completed = new Map();
-    for (const run of snapshot.runs) {
+    const dispatches = new Map();
+    for (const row of [...(snapshot.runs ?? []), ...(snapshot.package_executions ?? [])]) {
+      const values = dispatches.get(row.package) ?? [];
+      values.push(...(row.timing?.attempts ?? []).map(attempt => attempt.started_at));
+      dispatches.set(row.package, values);
+    }
+    for (const run of [...(snapshot.runs ?? []), ...(snapshot.package_executions ?? [])]) {
       const completion = manualCompletion(records.get(run.package), { ref: run.package_ref, root: run.package }, run.completion_revision, Date.now(),
-        (run.timing?.attempts ?? []).map(attempt => attempt.started_at));
-      if (completion && run.is_current_assignment === true) completed.set(run.package,
+        dispatches.get(run.package) ?? []);
+      if (completion && !completed.has(run.package) && (run.is_current_assignment === true || run.execution_summary && run.execution_summary.phase !== 'planned')) completed.set(run.package,
         { ...run, ...completion, workflow_state: 'complete', is_current_assignment: false });
     }
-    snapshot.runs = snapshot.runs.filter(run => !completed.has(run.package));
+    snapshot.runs = (snapshot.runs ?? []).filter(run => !completed.has(run.package));
+    for (const row of snapshot.package_executions ?? []) if (completed.has(row.package)) {
+      const completion = completed.get(row.package);
+      row.completed_at = completion.completed_at; row.completion_basis = completion.completion_basis;
+      row.visibility = 'recently_completed';
+      row.execution_summary = { ...row.execution_summary, phase: 'complete', attention: false };
+    }
+    for (const epic of snapshot.epics ?? []) {
+      for (const member of epic.members ?? []) if (completed.has(member.package)) {
+        const old = member.status === 'in-progress' ? 'in_progress' : member.status;
+        if (epic.summary && member.status !== 'complete') {
+          if (typeof epic.summary[old] === 'number') epic.summary[old]--;
+          epic.summary.complete++;
+          if (member.attention) epic.summary.attention--;
+        }
+        member.status = 'complete'; member.attention = false; member.waiting_on = []; member.completed_at = completed.get(member.package).completed_at;
+        if (member.execution_summary) member.execution_summary = { ...member.execution_summary, phase: 'complete', attention: false };
+      }
+      for (const member of epic.members ?? []) member.waiting_on = (member.waiting_on ?? []).filter(name => !epic.members.some(other => other.name === name && ['complete', 'merged'].includes(other.status)));
+      epic.next = epic.members?.find(member => ['proposed', 'prepared'].includes(member.status) && !member.waiting_on.length)?.name ?? null;
+    }
     const history = [...(snapshot.recently_completed ?? []).filter(run => !completed.has(run.package)), ...completed.values()]
       .filter(run => Date.parse(run.completed_at) >= Date.now() - 7 * 24 * 60 * 60 * 1000)
       .sort((a,b) => Date.parse(b.completed_at) - Date.parse(a.completed_at));

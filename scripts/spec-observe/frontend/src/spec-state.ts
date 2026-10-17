@@ -1,5 +1,6 @@
 import { HttpError } from './api';
 import { attention, compareReadiness, packageFilterMatches, stale, str } from './format';
+import { packageSummaries } from './model';
 import type { Envelope, Observer, WireRecord } from './model';
 
 export type SpecFilter = 'active' | 'attention' | 'completed' | 'planned' | 'ready';
@@ -38,7 +39,7 @@ const newestScopedObservation = (observers: Observer[]): string | null => {
 // predicate stays in format.packageFilterMatches; sorting differs by filter.
 export function visibleSpecs(records: WireRecord[], filter: SpecFilter, query: string): WireRecord[] {
   const q = str(query).trim().toLowerCase();
-  const matched = list(records).filter(record =>
+  const matched = packageSummaries(list(records), filter).filter(record =>
     (!q || [record.workspace, record.package_ref, record.package, record.activity, record.obligation, record.execution, record.workflow_state].some(value => str(value).toLowerCase().includes(q)))
     && packageFilterMatches(record, filter));
   return matched.sort((a, b) => {

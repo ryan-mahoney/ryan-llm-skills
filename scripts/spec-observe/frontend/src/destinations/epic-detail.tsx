@@ -1,3 +1,4 @@
+import { executionCounts, executionSummary, phaseLabel } from '../execution-state';
 import { For, Show, createSignal, type JSX } from 'solid-js';
 import { ActionBar, StateNotice, StatusText } from '../primitives';
 import type { WireRecord } from '../model';
@@ -242,6 +243,7 @@ export function EpicMembersTable(props: {
                     <td>
                       <StatusText tone={observed().status.tone}>{observed().status.label}</StatusText>
                       <Show when={observed().note}><span class="muted">{observed().note}</span></Show>
+                      <Show when={executionSummary(observed().record ?? member)}>{summary => <span class="small execution-member-summary">{phaseLabel(summary().phase)}{summary().attention ? ' · Needs attention' : ''} · {executionCounts(observed().record ?? member)}</span>}</Show>
                     </td>
                     <td class="col-action">
                       <Show when={observed().action.kind === 'plan'}>

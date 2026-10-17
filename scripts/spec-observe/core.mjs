@@ -308,7 +308,9 @@ export function projectWaveRecord(value, recordPath) {
   const repair = value.target?.repair;
   const integration = value.target?.integration;
   const candidate = repair || integration ? {
-    n: repair?.n ?? null, phase: repair?.phase ?? null, run_id: repair?.run_id ?? null,
+    n: repair?.n ?? null, phase: repair?.phase ?? integration?.status ?? null, run_id: repair?.run_id ?? integration?.phase?.run_id ?? null,
+    blocking_reason: repair?.recovery_blocking_reason ?? integration?.blocked_reason ?? null,
+    transitions: Array.isArray(repair?.transitions) ? repair.transitions.map(x => ({ phase: x.phase, at: x.at, reason: x.reason ?? null })) : [],
     backend: integration?.backend ?? null,
     fallback_reason: integration?.workspace?.backendReason ?? null,
     checkout: integration?.workspace ? (integration.workspace.merged ?? integration.workspace.worktree ?? null) : null }
@@ -316,8 +318,11 @@ export function projectWaveRecord(value, recordPath) {
   return { ok: true, wave: {
     record_path: recordPath,
     wave_id: value.wave_id,
+    ordinal: positiveStep(value.ordinal),
+    index_sha256: typeof value.inputs?.index_sha256 === 'string' ? value.inputs.index_sha256 : null,
     generation: Number.isInteger(value.generation) ? value.generation : null,
     state: value.state,
+    blocking_reason: value.blocking_reason ?? null,
     requested_width: value.requested_width ?? null,
     admitted_width: value.admitted_width ?? null,
     effective_limits: value.effective_limits ?? null,

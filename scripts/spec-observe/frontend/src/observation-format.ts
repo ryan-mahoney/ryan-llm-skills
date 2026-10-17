@@ -15,6 +15,7 @@ export const completionLabel = (r: any) => r?.completion_basis === 'manual' ? 'M
 export const runState = (r: any, isRunningUnconfirmed: (record: any) => boolean) => {
   if (r?.recent_completion) return 'Done';
   if (r?.planned) return 'Planned';
+  if (r?.execution_summary) return String(r.execution_summary.phase || 'Unknown').replace(/[_-]/g, ' ') + (r.aggregate_attention ? ' · Needs attention' : '');
   if (isRunningUnconfirmed(r)) return 'Running unconfirmed';
   const workflow: Record<string, string> = { ready: 'Ready for next action', 'waiting-worker': 'Waiting for worker', 'waiting-external': 'Waiting externally', 'decision-required': 'Decision needed', blocked: 'Blocked', 'user-held': 'On hold' };
   if (r?.is_current_assignment === true && ['ready', 'waiting-worker', 'waiting-external', 'decision-required', 'blocked', 'user-held'].includes(r.workflow_state) && ['completed', 'complete', 'failed', 'cancelled', 'stale', 'stopped', 'closed', 'aborted', 'done'].includes(r.execution)) return workflow[r.workflow_state];
