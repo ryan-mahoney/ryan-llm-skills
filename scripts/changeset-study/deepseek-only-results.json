@@ -1,0 +1,361 @@
+{
+  "schema_version": 1,
+  "label": "DeepSeek-only changesets",
+  "comparison": "deepseek-only-changesets-boundary-review-v1",
+  "paths_relative_to": "adjacent runtime root",
+  "observed_at": "2026-10-17T02:31:05.485110+00:00",
+  "run": "divergent-deepseek/01-direct",
+  "model": "deepseek/deepseek-flash:off",
+  "roles": {
+    "planner": "deepseek/deepseek-flash:off",
+    "boundary_reviewer": "deepseek/deepseek-flash:off",
+    "repair_planner": "deepseek/deepseek-flash:off"
+  },
+  "strategy": "boundary-review",
+  "source_run": "03-owner-query-writer",
+  "manifest_hash": "f465e02c1019cea11faf64ef677415bb20298b6644aa8a5c45f4504149cbe56a",
+  "prepared_harness_revision": "bb2b6dd",
+  "node": "v22.23.3",
+  "frozen_inventory_hash": "a4724ed2a4a3d1bc3940816e82f120cc223b51c26f20c48d86bf1d71dbdad75b",
+  "sdk_inventory_hash": "fa74885fd108ce0ba2577113288886ceb499c202124e875114d07adc22b0eabc",
+  "dependency_inventory_hash": "dc678604452bb0822577167f91f65fdbaab3ac6f2a25479c17b6db40fb30a404",
+  "tasks_hash": "09b6c830064193cb03212d362640bf99a7384bbcfbcd6966a87e0876eeeffbeb",
+  "parser_hash": "a8524d1734aecc543068d3c801aba2b6ad8f68dd7d751bace79d783f8ecd9e55",
+  "overlay": {
+    "schema_version": 1,
+    "adapter": "deepseek-direct-json-format-retry-v1",
+    "original_hash": "cb707c0fd5d1f4b3271e18742be02ca77e7e8bbb7f5f2b9f7ac66e5f172d8715",
+    "overlaid_hash": "c5cc4768090c76f79ea9ed6d98398ae1cc5b68284c4bdec7958ecb9fbbfe3685",
+    "exact_target": "plan = parseJson(await stage(feedback ? 'repair-planning' : 'discovery-planning', () => scout.prompt(JSON.stringify(planningInput))));",
+    "exact_replacement": "plan = await stage(feedback ? 'repair-planning' : 'discovery-planning', () => retryPlanningJson(scout, planningInput, { parseJson }));",
+    "prepended_import": "import { retryPlanningJson } from './divergent/deepseek-direct/format-retry.mjs';\n"
+  },
+  "frozen_inputs_verified_after_run": true,
+  "accounting_note": "Native DeepSeek receipt/catalog exposure; provider invoices not independently verified. All calls, cached tokens and failed attempts included. No inherited planning allocation; this is a separate end-to-end changeset/review/one-repair treatment.",
+  "cells": [
+    {
+      "task": "hard-context-calibration",
+      "cell": "divergent-deepseek/01-direct/000-hard-context-calibration",
+      "task_hash": "53a7b4559f4db02a586dda721ec592e6bf4a3e90f8f671b69a50f92621536b49",
+      "limits": {
+        "cell_ms": 1200000,
+        "model_calls": 96,
+        "max_output_tokens": 32000,
+        "call_ms": 300000,
+        "command_ms": 180000,
+        "grade_ms": 300000,
+        "review_input": "diff"
+      },
+      "process_seconds": 16.324920792,
+      "audited_elapsed_seconds": 16.325450196,
+      "recorded_capped_time_to_success_seconds": 16.324920792,
+      "audited_capped_time_to_success_seconds": 1500.0,
+      "recorded_external_acceptance": true,
+      "recorded_delivery": false,
+      "audited_delivery": false,
+      "final_application_complete": false,
+      "execution_attempts": [
+        {
+          "ok": true,
+          "operations": [
+            {
+              "id": "seed-calibration-on-resume",
+              "status": "passed",
+              "error": null
+            },
+            {
+              "id": "seed-calibration-regression",
+              "status": "passed",
+              "error": null
+            }
+          ]
+        },
+        {
+          "ok": false,
+          "operations": [
+            {
+              "id": "seed-calibration-resume",
+              "status": "failed",
+              "error": "Replacement count mismatch: pi/extensions/context-budget/policy.mjs"
+            },
+            {
+              "id": "seed-calibration-regression",
+              "status": "passed",
+              "error": null
+            }
+          ]
+        }
+      ],
+      "visible_accepted": false,
+      "review_accepted": false,
+      "review_rounds": 2,
+      "repairs": 1,
+      "error": null,
+      "path_audit": {
+        "required": false,
+        "passed": null,
+        "candidate_hash_bound": null,
+        "error": null
+      },
+      "calls": 4,
+      "calls_by_stage": {
+        "planning": 2,
+        "review": 2
+      },
+      "tool_calls": {},
+      "tokens": {
+        "input": 25507,
+        "output": 3917,
+        "cacheRead": 2432,
+        "cacheWrite": 0,
+        "totalTokens": 31856
+      },
+      "receipt_usd": 0.012367092,
+      "accounting_complete": true,
+      "recorded_phase_seconds": {
+        "initialize": 0.145565662,
+        "planning": 5.3755331040000005,
+        "execution": 0.0570665029999991,
+        "visible-check": 0.3401879229999995,
+        "impact-review": 5.238219029000001,
+        "repair-planning": 4.970807672,
+        "terminal-grading": 0.10205112799999916
+      },
+      "request_receipt_identity_valid": true,
+      "terminal_oracle_not_in_model_context": true,
+      "candidate_hash": "8a0ed7b4294813d26798aa3c80c36ecfdc7071dd61c3e4a0d265bd497bed46c6",
+      "artifacts": {
+        "responses.jsonl": "e89400a3e6fc6f573a38b1e936b3efbd30d8bef4c43d35f93ef7d1eb39fdebd5",
+        "plan-0.json": "7e4f47a951220ec6f742964d7470f5ef4c4ff77c08021ab57cc54a5f5ec5ee1a",
+        "receipts.jsonl": "d3390b563be366370f3774025522e899d249fa30f7f918e8d38c1866cfda3bd2",
+        "result.json": "f44b40c6078de820d41e5e43e353d1c213a2cfef7e6df8cb784ed3384b209083",
+        "requests.jsonl": "953efa7d3b2509a5d193132553bf3cc5ca0e011503637ff14e15d487db21b1b0",
+        "plan-1.json": "302ef9af80f9266e63a7556d590ca01c7dd94ceae2d09a95a6279cbc7361b75a",
+        "job.json": "0d834cc3d62713697d9b3f28267a7770e4a1f4c431a9ff93c2ebc561f4d720ea",
+        "candidate.json": "8a0ed7b4294813d26798aa3c80c36ecfdc7071dd61c3e4a0d265bd497bed46c6"
+      }
+    },
+    {
+      "task": "hard-dependency-handoff",
+      "cell": "divergent-deepseek/01-direct/001-hard-dependency-handoff",
+      "task_hash": "d979407d0e1fdf935a7c2b994c98c634b5f11a8e044d12a307ca468880b0fb30",
+      "limits": {
+        "cell_ms": 1200000,
+        "model_calls": 96,
+        "max_output_tokens": 32000,
+        "call_ms": 300000,
+        "command_ms": 180000,
+        "grade_ms": 300000,
+        "review_input": "diff"
+      },
+      "process_seconds": 221.55807463000002,
+      "audited_elapsed_seconds": 221.734510934,
+      "recorded_capped_time_to_success_seconds": 1500.0,
+      "audited_capped_time_to_success_seconds": 1500.0,
+      "recorded_external_acceptance": false,
+      "recorded_delivery": false,
+      "audited_delivery": false,
+      "final_application_complete": false,
+      "execution_attempts": [],
+      "visible_accepted": null,
+      "review_accepted": null,
+      "review_rounds": 0,
+      "repairs": 0,
+      "error": "Cell model-call limit exceeded",
+      "path_audit": {
+        "required": true,
+        "passed": false,
+        "candidate_hash_bound": false,
+        "error": "Diagnostic requires one identifiable dirty-state block or function; inspect candidate before adapting diagnostic"
+      },
+      "calls": 96,
+      "calls_by_stage": {
+        "discovery-planning": 96
+      },
+      "tool_calls": {
+        "bash": 101,
+        "read": 1
+      },
+      "tokens": {
+        "input": 64895,
+        "output": 36461,
+        "cacheRead": 6314240,
+        "cacheWrite": 0,
+        "totalTokens": 6415596
+      },
+      "receipt_usd": 0.10110713999999996,
+      "accounting_complete": true,
+      "recorded_phase_seconds": {
+        "initialize": 0.130249692,
+        "discovery-planning": 219.326630841,
+        "visible-check": 1.7303905760000053,
+        "impact-review": 0.00019914199999766425,
+        "terminal-grading": 0.11650493500000449
+      },
+      "request_receipt_identity_valid": true,
+      "terminal_oracle_not_in_model_context": true,
+      "candidate_hash": "bb6fa004e7e8393778e7c173048de7a48e2811b15faa64395d09cf191eab887e",
+      "artifacts": {
+        "responses.jsonl": "efc115e1e31ee256cd05d7e3c0486945e37bb5afe11ca92cd529e51ebfb4680e",
+        "receipts.jsonl": "e9555697fb119556a60a282849c77b6abe8e5d9b1d892ed722e508f8dcac961e",
+        "result.json": "a52018e8a70692fa5eea5b87cd5c7af395c0fa7e807cbc076467e30d5ad44268",
+        "requests.jsonl": "9e97a483e1e67d6350d20a56dc4af8dca35409592aab956378e55046f91b4c93",
+        "job.json": "f1e9a57ca0cef7e3f8f4c030dfc1d23f8aa6523bf87ecd057c8210599257f51e",
+        "candidate.json": "bb6fa004e7e8393778e7c173048de7a48e2811b15faa64395d09cf191eab887e"
+      }
+    },
+    {
+      "task": "hard-lifecycle-extract",
+      "cell": "divergent-deepseek/01-direct/002-hard-lifecycle-extract",
+      "task_hash": "c6365120c768dec61e14fed5c2adc988444879b14063cb06ca72aafab59a71cb",
+      "limits": {
+        "cell_ms": 1200000,
+        "model_calls": 96,
+        "max_output_tokens": 32000,
+        "call_ms": 300000,
+        "command_ms": 180000,
+        "grade_ms": 300000,
+        "review_input": "diff"
+      },
+      "process_seconds": 287.549406737,
+      "audited_elapsed_seconds": 287.64989168299996,
+      "recorded_capped_time_to_success_seconds": 1500.0,
+      "audited_capped_time_to_success_seconds": 1500.0,
+      "recorded_external_acceptance": false,
+      "recorded_delivery": false,
+      "audited_delivery": false,
+      "final_application_complete": false,
+      "execution_attempts": [],
+      "visible_accepted": null,
+      "review_accepted": null,
+      "review_rounds": 0,
+      "repairs": 0,
+      "error": "Cell model-call limit exceeded",
+      "path_audit": {
+        "required": false,
+        "passed": null,
+        "candidate_hash_bound": null,
+        "error": null
+      },
+      "calls": 96,
+      "calls_by_stage": {
+        "discovery-planning": 96
+      },
+      "tool_calls": {
+        "bash": 94,
+        "read": 4
+      },
+      "tokens": {
+        "input": 71262,
+        "output": 50165,
+        "cacheRead": 6713984,
+        "cacheWrite": 0,
+        "totalTokens": 6835411
+      },
+      "receipt_usd": 0.12186050399999995,
+      "accounting_complete": true,
+      "recorded_phase_seconds": {
+        "initialize": 0.134060158,
+        "discovery-planning": 258.162725083,
+        "visible-check": 28.969047687000014,
+        "impact-review": 0.00016800800000783055,
+        "terminal-grading": 0.027417980999976863
+      },
+      "request_receipt_identity_valid": true,
+      "terminal_oracle_not_in_model_context": true,
+      "candidate_hash": "048c3f6d4bb0f0c8a53a49ecd478714155a44a11e7414a1c06ad87dff821026c",
+      "artifacts": {
+        "responses.jsonl": "d7378dcef3dd15cf65e0a565db7c80d6df9fbe2e354e0426c01757970170bd32",
+        "receipts.jsonl": "11b2e73324a5465f626b27db3ba87b31f6562b4aff2745549c4bf518e7c4ef76",
+        "result.json": "9183c14309587a2a9418cecaacb7ae6333f395e951389cbb8ed3cea68ed0cb1a",
+        "requests.jsonl": "d94e2b641ab5036e28f5a5a7e7a8f3b832fd95eb93b4d3b10eccdc85676f980d",
+        "job.json": "16dd0782009a8e375bea2f5cff929967b2a834cd15183b4b39e3286bd1164eff",
+        "candidate.json": "048c3f6d4bb0f0c8a53a49ecd478714155a44a11e7414a1c06ad87dff821026c"
+      }
+    }
+  ],
+  "model_usage_by_stage": {
+    "planning": {
+      "calls": 2,
+      "request_seconds": 10.34,
+      "tokens": {
+        "input": 13069,
+        "output": 3177,
+        "cacheRead": 1280,
+        "cacheWrite": 0,
+        "totalTokens": 17526
+      },
+      "receipt_usd": 0.007740779999999999
+    },
+    "review": {
+      "calls": 2,
+      "request_seconds": 5.234,
+      "tokens": {
+        "input": 12438,
+        "output": 740,
+        "cacheRead": 1152,
+        "cacheWrite": 0,
+        "totalTokens": 14330
+      },
+      "receipt_usd": 0.004626312
+    },
+    "discovery-planning": {
+      "calls": 192,
+      "request_seconds": 471.38000000000005,
+      "tokens": {
+        "input": 136157,
+        "output": 86626,
+        "cacheRead": 13028224,
+        "cacheWrite": 0,
+        "totalTokens": 13251007
+      },
+      "receipt_usd": 0.22296764399999994
+    }
+  },
+  "totals": {
+    "cases": 3,
+    "external_accepted": 1,
+    "final_application_complete": 0,
+    "recorded_delivery": 0,
+    "audited_delivery": 0,
+    "calls": 196,
+    "tokens": {
+      "input": 161664,
+      "output": 90543,
+      "cacheRead": 13030656,
+      "cacheWrite": 0,
+      "totalTokens": 13282863
+    },
+    "receipt_usd": 0.235334736,
+    "process_seconds": 525.432402159,
+    "audited_elapsed_seconds": 525.709852813,
+    "audited_capped_time_to_success_seconds": 4500.0
+  },
+  "budget_snapshot": {
+    "limit_usd": 50,
+    "settled_entries": 780,
+    "settled_usd": 4.231698378,
+    "holds": 0,
+    "prior_through23_and_controls": {
+      "entries": 582,
+      "settled_usd": 3.995906392
+    },
+    "this_run": {
+      "entries": 196,
+      "settled_usd": 0.235334736
+    },
+    "separate_specialized_integration_probes": {
+      "entries": 2,
+      "settled_usd": 0.00045725
+    }
+  },
+  "qualification_note": "Recorded external acceptance and recorded capped time-to-success do not establish delivered application. Audited failures receive the original cell+grade cap:1500s each,4500s total. Actual elapsed and the frozen recorded field remain separate.",
+  "limitations": [
+    "One exposed-development-case run; no repeated successful treatment.",
+    "Both larger cases exhausted discovery calls before emitting a JSON plan; the deterministic executor was not evaluated on their proposed edits.",
+    "Read-only planning is intentional: embedded skill requires final executable JSON and executor applies it later. Generic coding-agent preamble/tool descriptions may conflict with the planner role; causal explanation is unproven.",
+    "Calibration initial two-operation plan applied, but failed generated regression; one repair failed an exact replacement and final review rejected. External acceptance alone is insufficient.",
+    "No matched three-task native DeepSeek baseline exists. The historical336-second native lifecycle result is unmatched in scope.",
+    "No performance win, general model incapability or missing-write-tool executor blocker established. No further run or code correction included."
+  ]
+}

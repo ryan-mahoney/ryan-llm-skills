@@ -6,8 +6,13 @@ candidate test execution, a boundary review and at most one batch repair. It is 
 separate experiment from the writing-only owner/query/writer route: its DeepSeek
 review and repair calls belong to this campaign and cannot be credited to that route.
 
-No live trial has been run for this arm. Offline fixtures establish runner mechanics,
-not task delivery, provider behavior, actual spending or comparative speed.
+**Measured status:** One frozen three-case run is complete: audited delivery 0/3,
+196 DeepSeek calls and $0.235334736 receipt exposure. See the
+[results](../../deepseek-only-results.md) and [JSON evidence](../../deepseek-only-results.json).
+Calibration applied its initial plan but failed repair qualification; both larger
+cases exhausted discovery calls before a plan. No repeat or performance win is
+claimed. The prospective treatment and instructions below describe the original
+freeze; its runtime copy remains unchanged.
 
 ## Frozen treatment
 

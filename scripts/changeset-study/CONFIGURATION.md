@@ -83,9 +83,9 @@ No run here measures a fresh end-to-end workflow. Runs 20–23 reuse run 18's pl
 and brief and make no fresh owner/query calls; run 18 also reused an earlier owner
 brief. Fresh owner, query, writer, required-check and outer-review time must be
 measured together in the managed workflow before adoption. No further writer
-selector runs are planned. The next experiment is one prepared DeepSeek-only
-changeset run, which removes Sol as query planner while retaining the changeset
-executor; it is not a native-agent editing comparison.
+selector runs are planned. The separate DeepSeek-only changeset experiment below
+removes Sol as query planner while retaining the changeset executor; it is not a
+native-agent editing comparison.
 
 The [specialized file writer](divergent/specialized-writer/README.md) is a separate
 alternative architecture, not a writer swap inside the changeset IR. It connects
@@ -94,3 +94,13 @@ update snippets. Its integration checks do not constitute a workload comparison.
 The earlier bounded apply-writer prototype is an optional range-verification
 variant, not a prerequisite for this route. Keep both distinct from the
 provisional changeset configuration and the DeepSeek-only changeset experiment.
+
+## Separate DeepSeek-only changesets observation
+
+The [single frozen run](deepseek-only-results.md) ([JSON](deepseek-only-results.json))
+completed with audited delivery 0/3. Calibration applied its initial plan, then
+failed final repair qualification; both larger cases exhausted discovery calls
+before emitting a plan. The possible prompt/tool-role conflict is unproven. This
+includes DeepSeek planning/review/repair and does not change the provisional
+writer-boundary selection above. No matched three-task native DeepSeek baseline
+or performance win is established, and no further trial has started.

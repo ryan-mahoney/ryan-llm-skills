@@ -37,13 +37,14 @@ remained 1/3 and its single diagnostic exposure establishes no improvement. The 
 fixed-off pair 22/23 completed application 3/3 twice, delivery 1/3 twice,
 with a 42.69-second mean writing plus optimizer time. It exercised no retries, so
 fixed-off recovery remains untested. Main tuning is complete with a
-[provisional configuration](CONFIGURATION.md);
-DeepSeek-only changesets is the next separate architecture comparison.
+[provisional configuration](CONFIGURATION.md).
+The separate [DeepSeek-only changesets run](deepseek-only-results.md) is now complete:
+audited delivery 0/3, with both larger cases stopping at discovery call limits.
 See the [three-role visual](optimized-results.html), [measurements](optimized-results.md),
 [JSON evidence](optimized-results.json) and [comparison protocol](OPTIMIZER-PROTOCOL.md).
-The study remains active.
+The retained experiments are complete; no further live trial is running.
 
-Four divergent approaches are prepared separately for later experiments:
+Four divergent approaches have separate implementations:
 
 - [DeepSeek-only executable changesets](divergent/deepseek-direct/PROTOCOL.md)
   remove the Sol query and delegated-writer stages, retaining a separate DeepSeek
