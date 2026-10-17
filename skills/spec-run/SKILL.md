@@ -313,6 +313,10 @@ made since the previous review. The reviewer needs to read files, run `git`, and
 `scope=step step=<NNN> since=<pinned base sha> head=<pinned head sha>`. Pass the target checkout, `package_dir`, and the model assigned to step review. Don't wait for it: it reads fixed commits,
 so the next step worker can edit the checkout while it runs. Reviews may overlap.
 
+Every review that closes a fix (a delta or re-review of fix commits) is independent in the same
+way: launch a fresh reviewer with the review model, never a continuation of the owner or fixer session
+that wrote the commits. An authoring session correctly declines to review its own work.
+
 In the same turn, when undispatched steps remain, launch one background card refresher for the
 same pinned range with the review model, following [Card Refresh](references/card-refresh.md). It
 writes only to `package_dir`: the cards of undispatched steps and `reviews/step-<NNN>-consumer-review.md`.
