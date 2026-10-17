@@ -87,8 +87,10 @@ selector runs are planned. The next experiment is one prepared DeepSeek-only
 changeset run, which removes Sol as query planner while retaining the changeset
 executor; it is not a native-agent editing comparison.
 
-The specialized-file-writer route is a separate, unmeasured alternative
-architecture, not a writer swap inside the changeset IR. The bounded apply-writer
-prototype does not constitute that comparison and is not ruled out by these
-results. Keep it distinct from both the provisional changeset configuration and
-the next DeepSeek-only changeset experiment.
+The [specialized file writer](divergent/specialized-writer/README.md) is a separate
+alternative architecture, not a writer swap inside the changeset IR. It connects
+Morph and Relace through OpenRouter using complete source and owner-produced
+update snippets. Its integration checks do not constitute a workload comparison.
+The earlier bounded apply-writer prototype is an optional range-verification
+variant, not a prerequisite for this route. Keep both distinct from the
+provisional changeset configuration and the DeepSeek-only changeset experiment.

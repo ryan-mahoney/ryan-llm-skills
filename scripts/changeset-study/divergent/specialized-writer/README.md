@@ -10,7 +10,9 @@ The owner must prepare the instruction and snippet. Their model calls, elapsed t
 and charges belong in a complete route comparison; this adapter does not create
 those inputs or claim that they are free. Whole-workflow comparison still requires
 the same candidate tests, terminal checks and separately declared outer review.
-This integration has no task runner and has made no paid inference calls.
+This integration has no task runner. A separate two-call synthetic live integration
+probe passed for both models; see [probe results](integration-probe-results.md).
+That probe does not establish task delivery or whole-workflow performance.
 
 ## Pinned public model metadata
 

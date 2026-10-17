@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-10-17T02:22:36.805827+00:00",
+  "purpose": "Credential/provider-wire/full-file integration only; not a performance or whole-workflow benchmark.",
+  "artifact_base": "Declared adjacent workspace runtime root",
+  "artifact_path": "specialized-writer/01-integration-probe",
+  "adapter_revision": "01e0820832439274fc83d5666d0d30fc5c30092e",
+  "script_hash": "5ff60984f3287dc2f9545219020b2cd31883f314d2d179cb730ed584a59d14c0",
+  "metadata_hash": "b60f623323ba090bc5813295ebc5961713c4f7c17f9af5ab6f5158c12e26f814",
+  "input_hash": "5d219b0ceaf16ab2664e534b1efe426027a11878565e29fcfb63dc5dfbb848f7",
+  "node_hash": "fde6a4bf8d0562f7751d1a2d6cb9b417c4cfe107bbcb0aa3e9a24e125e348f48",
+  "sdk_hashes": {
+    "pi-ai/dist/api/openai-completions.js": "5a79cc5aa41dee180692695e65771720d1ea556e9a978649dc2040278be51753",
+    "pi-coding-agent/dist/core/model-runtime.js": "578b742bea061fed029b8e139c6c0bcfe31e60665e9c0c6a08769761ef169dfd",
+    "pi-ai/package.json": "3838d036bbb844ea6d4d08ef199423a0335022e34b5d5c8833257f64e4cae625",
+    "pi-coding-agent/package.json": "d4231a02b6a2ccb357a8e9e420fab9c217490137ade958d4a45a12e169daad0c",
+    "pi-agent-core/package.json": "541f131cd43832f75a9c64ee886c367c219c0772da7047c66053d7cc80db98b9"
+  },
+  "input_preparation": "Hand-authored synthetic settled instruction and snippet. Preparation time is unmeasured; no free-owner-cost claim.",
+  "same_exact_tagged_input_verified": true,
+  "request_response_receipt_reservations_and_usage_joined": true,
+  "max_calls_per_model": 1,
+  "call_ms_per_model": 30000,
+  "retries": 0,
+  "model_calls": 2,
+  "receipt_cost_usd": 0.00045725,
+  "cost_basis": "SDK-calculated receipt costs using pinned catalog prices and provider token usage; shared ledger settlements verified; not independently verified provider invoices. No cache discount assumed.",
+  "all_integration_checks_pass": true,
+  "rows": [
+    {
+      "selector": "openrouter/morph/morph-v3-fast",
+      "elapsed_ms": 925.294221,
+      "model_calls": 1,
+      "routing_valid": true,
+      "full_file_accepted": true,
+      "oracle": {
+        "passed": true,
+        "checks": {
+          "three_exports_only": true,
+          "greeting_update": true,
+          "limit_update": true,
+          "unrelated_function_exact": true
+        }
+      },
+      "failure": null,
+      "source_hash": "fe239cb2af8f080f48bd3efaba6ef64baac3e5f9e320819e9b7a1cc4637d25dc",
+      "output_hash": "2e3f441517124b834c822fd84557818abbc6844eff0a4bb13ee02d7758ca4b94",
+      "input_bytes": 620,
+      "max_output_tokens": 2048,
+      "usage": {
+        "input": 190,
+        "output": 44,
+        "cacheRead": 80,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 314,
+        "cost": {
+          "input": 0.00015199999999999998,
+          "output": 5.2799999999999996e-05,
+          "cacheRead": 6.4e-05,
+          "cacheWrite": 0,
+          "total": 0.0002688
+        }
+      },
+      "reported_cost_usd": 0.0002688,
+      "artifacts": "000-morph-v3-fast"
+    },
+    {
+      "selector": "openrouter/relace/relace-apply-3",
+      "elapsed_ms": 1049.3670209999998,
+      "model_calls": 1,
+      "routing_valid": true,
+      "full_file_accepted": true,
+      "oracle": {
+        "passed": true,
+        "checks": {
+          "three_exports_only": true,
+          "greeting_update": true,
+          "limit_update": true,
+          "unrelated_function_exact": true
+        }
+      },
+      "failure": null,
+      "source_hash": "fe239cb2af8f080f48bd3efaba6ef64baac3e5f9e320819e9b7a1cc4637d25dc",
+      "output_hash": "fd2bd42cd9fb7a69d93643e4350409a43eecf932662bbf65c9d073c27856aa5d",
+      "input_bytes": 620,
+      "max_output_tokens": 2048,
+      "usage": {
+        "input": 157,
+        "output": 44,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 201,
+        "cost": {
+          "input": 0.00013345,
+          "output": 5.5e-05,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0.00018845
+        }
+      },
+      "reported_cost_usd": 0.00018845,
+      "artifacts": "001-relace-apply-3"
+    }
+  ],
+  "artifact_hashes": {
+    "manifest.json": "8d92fafcf59660bc50c6c221c3e9c4d83648a786c36a5de71d8523927d9a0b8c",
+    "input.json": "5d219b0ceaf16ab2664e534b1efe426027a11878565e29fcfb63dc5dfbb848f7",
+    "update.mjs": "8ff6cc07473a4e76f388d1be8558c3d51e7a68e0453632584bb31549274e1338",
+    "instruction.txt": "4da03c064e25eac17e2756d8266ea6297b59d1bd14e5fe86b392673cbd871232",
+    "probe.mjs": "5ff60984f3287dc2f9545219020b2cd31883f314d2d179cb730ed584a59d14c0",
+    "PROTOCOL.md": "a245972c9845efac70d4654c70a26b7a2047eeb4a176fec5ab7853bb73069167",
+    "source.mjs": "fe239cb2af8f080f48bd3efaba6ef64baac3e5f9e320819e9b7a1cc4637d25dc",
+    "results.json": "4c6ba2b5c87e2440c2eff5e067fce40df0a5c040a9b7609588b57763a386273e",
+    "started.json": "40a93ad4e35c5a6b217d901b1d1f1f6896a2d6bd871af33ad89396ad567d1302",
+    "001-relace-apply-3/candidate.mjs": "fd2bd42cd9fb7a69d93643e4350409a43eecf932662bbf65c9d073c27856aa5d",
+    "001-relace-apply-3/responses.jsonl": "4c0e2697599fa957f701facaef02c7587277fba6dd48c7a96d7367434a18f561",
+    "001-relace-apply-3/receipts.jsonl": "bc78c66c955165b57f8e9eb4140e9dbf4c62a6062f9327d94c4837f61026db8c",
+    "001-relace-apply-3/result.json": "959a1a5409331e1c1afe51de7367b37c1d1a59c58ffa7a1b83f9962b30b84d0b",
+    "001-relace-apply-3/requests.jsonl": "e6587c4b3a04e501512632be2d3038bda2c75a96794eb6d01082ac09310d7dea",
+    "001-relace-apply-3/oracle.json": "4b8389af9ade601cb8c107e9b18dfd845953c73fc3b7e1648f452bd638fe7080",
+    "001-relace-apply-3/candidate.json": "053b4c4550797ae431760325a5336cd06ed259498703b4a34ac0fbdabc4ffce5",
+    "000-morph-v3-fast/candidate.mjs": "2e3f441517124b834c822fd84557818abbc6844eff0a4bb13ee02d7758ca4b94",
+    "000-morph-v3-fast/responses.jsonl": "911a96d9ef820a6f259fadc345368687b963ee698ffbbf546982880ecc129888",
+    "000-morph-v3-fast/receipts.jsonl": "082790e7894c20b3148ceee6271172768b2c2c6cd9a3bee370f9cf5341840c4b",
+    "000-morph-v3-fast/result.json": "ac6e2419154ed17ede05bbf4e95b103b5a4afc8ed2746666de61d6de75af7960",
+    "000-morph-v3-fast/requests.jsonl": "d971c74959eafad13b2e85e83eb974f0251077a5995678fd3ebc59a03c5d48d5",
+    "000-morph-v3-fast/oracle.json": "4b8389af9ade601cb8c107e9b18dfd845953c73fc3b7e1648f452bd638fe7080",
+    "000-morph-v3-fast/candidate.json": "f2aaae25c32bd13d2c2d3a10f8e3dfc70a1a58b42aa5634fbf11efffe8664ea6"
+  }
+}
