@@ -30,6 +30,7 @@ import {
   elapsedWaveMs,
   elapsedWaveSetMs,
   integratedWaveAt,
+  startupWindowStart,
   waveWorkerRuns,
 } from './package-fixture.mjs';
 import { HOST_REMEDIES } from './linux-resources.mjs';
@@ -642,12 +643,12 @@ test('wave native: width five implements, reviews, repairs and promotes through 
     }
   }
   for (const id of startupResultIds) startupCallIds.add(id);
-  const carriesStartupResult = request => (requestBody(request).messages ?? []).some(message => {
-    if (message?.role !== 'tool' && message?.role !== 'tool_result') return false;
-    const id = message.tool_call_id ?? message.toolCallId ?? message.call_id;
-    return typeof id === 'string' && startupCallIds.has(id);
-  });
-  const windowStart = coordinatorRequests.findIndex(carriesStartupResult);
+  // The window opens at the request that replays the startup result. A killed
+  // idle coordinator can end at the request whose response carried the
+  // successful startup call, so the helper falls back to strictly after that
+  // request; its message and response-call accessors are the existing locals.
+  const windowStart = startupWindowStart(coordinatorRequests, startupCallIds,
+    { messagesFor: request => requestBody(request).messages ?? [], callsFor: responseToolCalls });
   assert.ok(windowStart >= 0, 'a coordinator request carries the startup tool result');
   const seenAttention = new Set();
   let obligationWhileNonterminal = 0;
@@ -843,11 +844,21 @@ test('wave native: width nine overlaps and survives coordinator restart without 
       const id = event?.toolCallId ?? event?.tool_call_id;
       if (typeof id === 'string') resultIds.add(id);
     }
-    const windowStart = requests.findIndex(request => (requestBody(request).messages ?? []).some(message => {
-      if (message?.role !== 'tool' && message?.role !== 'tool_result') return false;
-      const id = message.tool_call_id ?? message.toolCallId ?? message.call_id;
-      return typeof id === 'string' && resultIds.has(id);
-    }));
+    const startupCallIds = new Set();
+    for (const request of requests) {
+      for (const call of responseToolCalls(request)) {
+        if ((call.function?.name ?? call.name) !== 'spec_dispatch') continue;
+        if (typeof call.id !== 'string') continue;
+        if (!resultIds.has(call.id)) continue;
+        startupCallIds.add(call.id);
+      }
+    }
+    for (const id of resultIds) startupCallIds.add(id);
+    // The window opens at the replayed startup result; a killed idle coordinator
+    // may instead end at the request whose response carried the successful
+    // startup call, so the helper then opens strictly after it.
+    const windowStart = startupWindowStart(requests, startupCallIds,
+      { messagesFor: request => requestBody(request).messages ?? [], callsFor: responseToolCalls });
     assert.ok(windowStart >= 0, `${label} request history carries its startup result`);
     for (const request of requests.slice(windowStart)) {
       assert.equal(responseToolCalls(request).length, 0, `${label} issues no tool call after startup`);

@@ -16,7 +16,7 @@ import { totalmem } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
 
-import { bootLinuxWave } from './package-fixture.mjs';
+import { bootLinuxWave, startupWindowStart } from './package-fixture.mjs';
 import { parseUsecProperty } from './wave-linux-duration.mjs';
 import { startCoordinator } from './wave-native-driver.mjs';
 import { collectLinuxRestartDiagnostics } from './wave-boundary-diagnostics.mjs';
@@ -760,6 +760,9 @@ function startupDiagnostics(coordinator, provider, label) {
 // every later model turn is a passive attention/report turn. The window opens
 // at the request that replays the successful startup tool result, correlated by
 // the outer event's tool call id, so a failed or retried startup cannot open it.
+// A killed idle coordinator's history can instead end at the request whose
+// response carried the successful startup call, so the shared oracle then opens
+// the window strictly after that request.
 function assertNoCallsAfterStartup(coordinator, provider, label) {
   const resultIds = new Set();
   for (const event of toolResultEnds(coordinator, 'spec_dispatch')) {
@@ -780,11 +783,16 @@ function assertNoCallsAfterStartup(coordinator, provider, label) {
   }
   const requests = (provider.requests ?? []).filter(request => request?.route?.role === 'coordinator'
     && request?.route?.pid === coordinator.pid);
-  const windowStart = requests.findIndex(request => (request.body?.messages ?? []).some(message => {
-    if (message?.role !== 'tool' && message?.role !== 'tool_result') return false;
-    const id = message.tool_call_id ?? message.toolCallId ?? message.call_id;
-    return typeof id === 'string' && resultIds.has(id);
-  }));
+  const startupCallIds = new Set(resultIds);
+  for (const request of requests) {
+    for (const call of responseToolCalls(request)) {
+      if ((call?.function?.name ?? call?.name) !== 'spec_dispatch') continue;
+      if (typeof call.id !== 'string' || !resultIds.has(call.id)) continue;
+      startupCallIds.add(call.id);
+    }
+  }
+  const windowStart = startupWindowStart(requests, startupCallIds,
+    { messagesFor: request => request.body?.messages ?? [], callsFor: responseToolCalls });
   assert.ok(windowStart >= 0, `${label} coordinator request history carries its startup result\n${startupDiagnostics(coordinator, provider, label)}`);
   for (const request of requests.slice(windowStart)) {
     assert.equal(responseToolCalls(request).length, 0, `${label} issues no coordinator tool call after startup\n${startupDiagnostics(coordinator, provider, label)}`);

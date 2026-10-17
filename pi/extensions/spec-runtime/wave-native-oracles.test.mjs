@@ -7,7 +7,7 @@
 // `command_phase` records and records bound to other waves.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { integratedWaveAt, waveWorkerRuns } from './wave-native-oracles.mjs';
+import { integratedWaveAt, startupWindowStart, waveWorkerRuns } from './wave-native-oracles.mjs';
 
 function waveRecord(transitions, extra = {}) {
   return { wave_id: 'wave-1', state: 'integrated', transitions, ...extra };
@@ -105,4 +105,69 @@ test('waveWorkerRuns keeps a third actual reviewer in the selection', () => {
 test('waveWorkerRuns rejects non-array input and a missing wave id', () => {
   assert.throws(() => waveWorkerRuns(null, 'wave-1'), /needs an array of run records/);
   assert.throws(() => waveWorkerRuns([], ''), /needs a wave id/);
+});
+
+// D-12 zero-call window (card step-013-subspec.md line 37): the window opens at
+// the replayed startup result, and only for a killed idle coordinator whose
+// history never replays it at the request strictly after the successful call.
+const requestMessages = request => request.messages ?? [];
+const requestCalls = request => request.calls ?? [];
+const windowAccessors = { messagesFor: requestMessages, callsFor: requestCalls };
+
+function dispatchCall(id) {
+  return { id, function: { name: 'spec_dispatch' } };
+}
+
+function startupResultMessage(id) {
+  return { role: 'tool', tool_call_id: id, content: '{"state":"running"}' };
+}
+
+test('startupWindowStart prefers the replayed result even when the call is earlier', () => {
+  const requests = [
+    { messages: [{ role: 'user', content: 'checkpoint' }], calls: [dispatchCall('call_a')] },
+    { messages: [{ role: 'user', content: 'workflow' }], calls: [] },
+    { messages: [startupResultMessage('call_a')], calls: [] },
+    { messages: [startupResultMessage('call_a')], calls: [] },
+  ];
+  assert.equal(startupWindowStart(requests, new Set(['call_a']), windowAccessors), 2,
+    'the replayed startup result opens the window, not the earlier startup call');
+});
+
+test('startupWindowStart falls back to strictly after the successful call request', () => {
+  const requests = [
+    { messages: [{ role: 'user', content: 'checkpoint' }], calls: [] },
+    { messages: [{ role: 'user', content: 'startup' }], calls: [dispatchCall('call_start')] },
+    { messages: [{ role: 'user', content: 'idle' }], calls: [dispatchCall('call_late')] },
+  ];
+  const start = startupWindowStart(requests, new Set(['call_start']), windowAccessors);
+  assert.equal(start, 2, 'the startup request is excluded from its own window');
+  assert.equal(requests.slice(start).filter(request => requestCalls(request).length > 0).length, 1,
+    'a later unexpected call is exposed inside the window');
+});
+
+test('startupWindowStart gives an empty window for a terminal successful call', () => {
+  const requests = [
+    { messages: [{ role: 'user', content: 'startup' }], calls: [dispatchCall('call_start')] },
+  ];
+  const start = startupWindowStart(requests, new Set(['call_start']), windowAccessors);
+  assert.equal(start, requests.length, 'the fallback window starts after the last request');
+  assert.deepEqual(requests.slice(start), [], 'the later window is empty');
+});
+
+test('startupWindowStart cannot anchor on a failed or retried startup id', () => {
+  const requests = [
+    { messages: [{ role: 'user', content: 'startup' }], calls: [dispatchCall('call_failed')] },
+    { messages: [startupResultMessage('call_failed')], calls: [dispatchCall('call_retry')] },
+  ];
+  // Only the successful startup id is supplied; the failed and retried ids are
+  // excluded upstream by the caller's successful startup event filter.
+  assert.equal(startupWindowStart(requests, new Set(['call_success']), windowAccessors), -1);
+});
+
+test('startupWindowStart returns -1 without a matching call or result', () => {
+  const requests = [
+    { messages: [{ role: 'user', content: 'checkpoint' }], calls: [dispatchCall('call_other')] },
+  ];
+  assert.equal(startupWindowStart(requests, new Set(['call_start']), windowAccessors), -1);
+  assert.equal(startupWindowStart([], new Set(['call_start']), windowAccessors), -1);
 });

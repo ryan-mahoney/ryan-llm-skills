@@ -49,6 +49,48 @@ export function integratedWaveAt(record) {
   return ms;
 }
 
+// Start index of the D-12 zero-call window for a coordinator request history.
+//
+// Card step-013-subspec.md line 37 states the window: after the startup call
+// returns the coordinator issues zero tool calls, so the window opens at the
+// first request that replays the successful startup tool result. A killed idle
+// coordinator may leave no request that replays it — its history can end at the
+// response that carried the successful startup call, whose later requests never
+// happened. For that case the window falls back to the request *after* the one
+// whose response carried the startup call (index + 1, which may equal
+// requests.length for an empty later window), so a call in the startup request
+// itself is excluded and later unexpected calls are exposed.
+//
+// The order is fixed: the replayed result wins even when a matching response
+// call appears earlier in the history. `startupCallIds` accepts both result ids
+// and response call ids because the caller gates membership on the successful
+// startup event filter; this helper never infers success from a call alone.
+// Returns -1 when neither a replayed result nor a matching response call exists.
+export function startupWindowStart(requests, startupCallIds, { messagesFor, callsFor }) {
+  if (!Array.isArray(requests)) {
+    throw new Error('wave oracle: startupWindowStart needs an array of requests');
+  }
+  if (typeof messagesFor !== 'function' || typeof callsFor !== 'function') {
+    throw new Error('wave oracle: startupWindowStart needs message and response-call accessors');
+  }
+  const ids = startupCallIds instanceof Set ? startupCallIds : new Set(startupCallIds ?? []);
+  if (ids.size === 0) return -1;
+  const replayedResult = requests.findIndex(request => (messagesFor(request) ?? [])
+    .some(message => {
+      if (message?.role !== 'tool' && message?.role !== 'tool_result') return false;
+      const id = message.tool_call_id ?? message.toolCallId ?? message.call_id;
+      return typeof id === 'string' && ids.has(id);
+    }));
+  if (replayedResult >= 0) return replayedResult;
+  const startupCall = requests.findIndex(request => (callsFor(request) ?? [])
+    .some(call => {
+      if ((call?.function?.name ?? call?.name) !== 'spec_dispatch') return false;
+      return typeof call.id === 'string' && ids.has(call.id);
+    }));
+  if (startupCall >= 0) return startupCall + 1;
+  return -1;
+}
+
 // Durable records bound to `waveId` that are stage worker runs. `command_phase`
 // is the explicit production discriminator (runtime.mjs writes it on bound
 // command records): such a record stays bound for drain authority but is not a

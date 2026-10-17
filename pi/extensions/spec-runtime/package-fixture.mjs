@@ -403,10 +403,10 @@ export { importSealedHead } from './step-workspaces.mjs';
 export { memberCheckouts, memberWorkspace } from './wave-native-workspaces.mjs';
 // EV-13 native wave elapsed timing reads durable open/integrated transitions.
 export { elapsedWaveMs, elapsedWaveSetMs } from './wave-native-timing.mjs';
-// EV-13 native proof oracles read the durable integrated transition and select
-// stage worker runs; reexported so the native cases keep static imports inside
-// the card's allowed set.
-export { integratedWaveAt, waveWorkerRuns } from './wave-native-oracles.mjs';
+// EV-13 native proof oracles read the durable integrated transition, select
+// stage worker runs and locate the post-startup zero-call window; reexported so
+// the native cases keep static imports inside the card's allowed set.
+export { integratedWaveAt, startupWindowStart, waveWorkerRuns } from './wave-native-oracles.mjs';
 // EV-14 native Linux wave fixture: sandbox HOME, real environment and the
 // actual loopback provider/coordinator pair, with no host modification.
 export { bootLinuxWave } from './wave-linux-native-fixture.mjs';
