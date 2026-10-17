@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
-  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync
+  existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync
 } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -13,6 +13,7 @@ import { newPackage } from '../../../scripts/spec-location/index.mjs';
 import { put } from '../../../scripts/spec-location/fixture.mjs';
 import { prepareSpecWorktree } from '../../../scripts/spec-location/worktree.mjs';
 import { createProcessRegistry } from './waves-fixture-processes.mjs';
+import { installPromotionHook } from './wave-promotion-hook-fixture.mjs';
 import {
   cleanupPortableHostShims, installPortableHostShims, setShimMode, writeSandboxHome
 } from './wave-native-fixture.mjs';
@@ -139,56 +140,6 @@ function waveCard(step) {
     '```',
     '',
   ].join('\n');
-}
-
-// D-19 promotion interruption seam: a reference-transaction hook on the canonical
-// repo records committed lines for the package branch and, when the marker file
-// exists, kills the coordinator after the ref commit. Production sets no
-// core.hooksPath, so this hook fires without any internal seam.
-function installPromotionHook(primary, sandbox, branch) {
-  const hooksDir = join(primary, '.git', 'hooks');
-  mkdirSync(hooksDir, { recursive: true });
-  const hookPath = join(hooksDir, 'reference-transaction');
-  const script = [
-    '#!/bin/sh',
-    `sandbox=${JSON.stringify(sandbox)}`,
-    `branch=${JSON.stringify(branch)}`,
-    'phase="$1"',
-    'hook_pid=$$',
-    'hook_ppid=$PPID',
-    'coordinator_pid=""',
-    'if [ -f "$sandbox/coordinator.pid" ]; then coordinator_pid="$(cat "$sandbox/coordinator.pid")"; fi',
-    'obs="$sandbox/hook-observations.log"',
-    'if [ "$phase" != "committed" ]; then',
-    '  printf \'phase=%s pid=%s ppid=%s refmatch=no coordinator_pid=%s kill_attempt=none\\n\' "$phase" "$hook_pid" "$hook_ppid" "$coordinator_pid" >> "$obs"',
-    '  exit 0',
-    'fi',
-    'tmp="$sandbox/hook.tmp"',
-    ': > "$tmp"',
-    'refmatch=no',
-    'while IFS= read -r line; do',
-    '  case "$line" in',
-    '    *"$branch"*) refmatch=yes; printf \'%s\\n\' "$line" >> "$tmp" ;;',
-    '  esac',
-    'done',
-    'kill_attempt=none',
-    'if [ -s "$tmp" ]; then',
-    '  cat "$tmp" >> "$sandbox/hook.log"',
-    '  if [ -e "$sandbox/kill-on-promote" ]; then',
-    '    rm -f "$sandbox/kill-on-promote"',
-    '    if [ -f "$sandbox/coordinator.pid" ]; then',
-    '      coordinator_pid="$(cat "$sandbox/coordinator.pid")"',
-    '      kill_attempt="kill -9 $coordinator_pid"',
-    '      kill -9 "$(cat "$sandbox/coordinator.pid")" 2>/dev/null || true',
-    '    fi',
-    '  fi',
-    'fi',
-    'printf \'phase=%s pid=%s ppid=%s refmatch=%s coordinator_pid=%s kill_attempt=%s\\n\' "$phase" "$hook_pid" "$hook_ppid" "$refmatch" "$coordinator_pid" "$kill_attempt" >> "$obs"',
-    'rm -f "$tmp"',
-    'exit 0',
-  ].join('\n') + '\n';
-  writeFileSync(hookPath, script);
-  chmodSync(hookPath, 0o755);
 }
 
 export async function makeWaveFixture(options = {}) {
@@ -329,9 +280,11 @@ export async function makeWaveFixture(options = {}) {
     await prepareSpecWorktree(base.locations, base.locations.targets[0], { ...base.location });
   const integrationCheckout = prepared.worktree;
 
-  if (promotionKill) {
-    installPromotionHook(base.paths[targetId], base.dir, base.locations.targets[0].branch);
-  }
+  const promotionBin = promotionKill
+    ? installPromotionHook(
+      base.paths[targetId], base.dir, base.locations.targets[0].branch, packagePath, integrationCheckout
+    )
+    : null;
 
   // Real steps lint with the fixture environment: ready single-target packages
   // report concurrency_ready; a multi-target package reports the serial reason.
@@ -395,6 +348,7 @@ export async function makeWaveFixture(options = {}) {
     ref: base.ref,
     packagePath,
     integrationCheckout,
+    ...(promotionBin ? { promotionBin } : {}),
     baseCommit,
     expected,
     home: base.location.home,
@@ -449,6 +403,10 @@ export { importSealedHead } from './step-workspaces.mjs';
 export { memberCheckouts, memberWorkspace } from './wave-native-workspaces.mjs';
 // EV-13 native wave elapsed timing reads durable open/integrated transitions.
 export { elapsedWaveMs, elapsedWaveSetMs } from './wave-native-timing.mjs';
+// EV-13 native proof oracles read the durable integrated transition and select
+// stage worker runs; reexported so the native cases keep static imports inside
+// the card's allowed set.
+export { integratedWaveAt, waveWorkerRuns } from './wave-native-oracles.mjs';
 // EV-14 native Linux wave fixture: sandbox HOME, real environment and the
 // actual loopback provider/coordinator pair, with no host modification.
 export { bootLinuxWave } from './wave-linux-native-fixture.mjs';

@@ -337,6 +337,14 @@ function collectWaveSummaryDiagnostics(packagePath) {
         state: transition?.state ?? null,
         at: transition?.at ?? null,
         reason: transition?.reason ?? null,
+        // Transition identity: which stage/step attempt produced the state and
+        // which effect it applied. Identity scalars only, never credentials.
+        stage_attempt: transition?.stage_attempt ?? null,
+        resume: transition?.resume ?? null,
+        step: transition?.step ?? null,
+        assignment_id: typeof transition?.assignment_id === 'string'
+          ? boundedText(transition.assignment_id, 400) : null,
+        effect: collectTransitionEffectDiagnostic(transition?.effect),
       })),
       coordinator: record?.coordinator?.session ?? null,
       members: members.slice(0, DIAG_GROUP_LIMIT).map(member => ({
@@ -346,6 +354,15 @@ function collectWaveSummaryDiagnostics(packagePath) {
         blocking_detail: member?.blocking_detail ?? null,
         run_id: member?.run_id ?? null,
         implementation_run_id: member?.implementation_run_id ?? null,
+        // Weakness/stage identity: which stage attempt a member reached and
+        // whether it is a resumed entry. Scalars only; claim tokens and other
+        // credentials on the member never leave the record.
+        stage_attempt: member?.stage_attempt ?? null,
+        resume: member?.resume ?? null,
+        retry: member?.retry ?? null,
+        review_run_id: member?.review_run_id ?? null,
+        repair_assignment_id: member?.repair?.assignment_id ?? null,
+        effect: collectTransitionEffectDiagnostic(member?.effect),
       })),
       integration: integration ? {
         status: integration.status ?? null,
@@ -392,6 +409,15 @@ function collectRuntimeRunDiagnostics(fixture) {
           service: record.service ?? null,
           command_service: record.command_service ?? null,
           owner_session: record.owner_session ?? null,
+          // Reviewer identity proof: which stage/attempt/resume this run
+          // belonged to. Only identity and outcome scalars are copied; env,
+          // claim tokens and other credentials never leave the record.
+          assignment_id: record.assignment_id ?? null,
+          stage: record.stage ?? null,
+          stage_attempt: record.stage_attempt ?? null,
+          resume: record.resume ?? null,
+          wave_bindings: collectWaveBindingsDiagnostic(record.wave_bindings),
+          receipt: collectRunReceiptDiagnostic(record.receipt),
           // Launch-shape proof for a failing review: the recorded argv the child
           // was launched with. Arrays are bounded copies; env/secrets never appear.
           child_extensions: collectChildExtensionsDiagnostic(record.child_extensions),
@@ -426,6 +452,51 @@ function collectRuntimeRunDiagnostics(fixture) {
   // Durable wave summaries are collected last and only read, so a stuck child's
   // run evidence above is never displaced by wave-record inspection.
   return { dir, runs, files, waves: collectWaveSummaryDiagnostics(fixture.packagePath) };
+}
+
+// The wave binding an owner run carries: the wave/step/phase identity used to
+// attribute a launch. claim_token, epoch and other credentials are excluded.
+function collectWaveBindingsDiagnostic(bindings) {
+  if (bindings === null || typeof bindings !== 'object') return null;
+  return {
+    wave_id: typeof bindings.wave_id === 'string' ? boundedText(bindings.wave_id, 200) : null,
+    generation: bindings.generation ?? null,
+    step_number: bindings.step_number ?? null,
+    attempt_id: typeof bindings.attempt_id === 'string' ? boundedText(bindings.attempt_id, 200) : null,
+    phase: typeof bindings.phase === 'string' ? boundedText(bindings.phase, 200) : null,
+    candidate: bindings.candidate ?? null,
+  };
+}
+
+// The stage receipt a run recorded: acceptance verdict and result identity only.
+// Nested reasons are bounded to a code/detail pair like seal receipts.
+function collectRunReceiptDiagnostic(receipt) {
+  if (receipt === null || typeof receipt !== 'object') return null;
+  const reasons = Array.isArray(receipt.reasons) ? receipt.reasons : [];
+  return {
+    state: typeof receipt.state === 'string' ? boundedText(receipt.state, 200) : null,
+    accepted: typeof receipt.accepted === 'boolean' ? receipt.accepted : null,
+    result: typeof receipt.result === 'string' ? boundedText(receipt.result, 500) : null,
+    result_state: typeof receipt.result_state === 'string' ? boundedText(receipt.result_state, 200) : null,
+    stage: typeof receipt.stage === 'string' ? boundedText(receipt.stage, 200) : null,
+    stage_attempt: receipt.stage_attempt ?? null,
+    assignment_id: typeof receipt.assignment_id === 'string' ? boundedText(receipt.assignment_id, 400) : null,
+    reasons: reasons.slice(0, DIAG_GROUP_LIMIT).map(reason => (reason && typeof reason === 'object'
+      ? { code: reason.code ?? null, detail: boundedText(reason.detail ?? null, 500) }
+      : { code: null, detail: typeof reason === 'string' ? boundedText(reason, 500) : null })),
+  };
+}
+
+// A member's recorded effect identity: what the transition asked for, without
+// paths outside the package or any credential material.
+function collectTransitionEffectDiagnostic(effect) {
+  if (effect === null || typeof effect !== 'object') return null;
+  return {
+    kind: typeof effect.kind === 'string' ? boundedText(effect.kind, 200) : null,
+    state: typeof effect.state === 'string' ? boundedText(effect.state, 200) : null,
+    reason: typeof effect.reason === 'string' ? boundedText(effect.reason, 500) : null,
+    attempt: effect.attempt ?? null,
+  };
 }
 
 // Only the fields that attribute a failure to a phase are copied; layers,

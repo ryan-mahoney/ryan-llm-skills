@@ -29,6 +29,8 @@ import {
   memberWorkspace,
   elapsedWaveMs,
   elapsedWaveSetMs,
+  integratedWaveAt,
+  waveWorkerRuns,
 } from './package-fixture.mjs';
 import { HOST_REMEDIES } from './linux-resources.mjs';
 
@@ -440,8 +442,15 @@ test('wave native: width five implements, reviews, repairs and promotes through 
   provider.release('implementing');
   t.diagnostic(`implementing barrier released url pids=${JSON.stringify(heldPids)} live=${JSON.stringify(heldPids.filter(pidAlive))}`);
   await waitForWaveState(() => readWaveRecord(fixture), record => record.state === 'integrated', { label: 'integrated' });
-  const integratedAt = Date.now();
   const record = readWaveRecord(fixture);
+  // Card 36 orders coordinator requests against the RECORD reaching integrated,
+  // not against this test noticing it. Production persists the integrated
+  // transition and only then delivers the final promotion-result attention, so a
+  // `Date.now()` stamp here would be an observation time that trails the real
+  // transition and could misclassify an arrival. The oracle is the persisted
+  // timestamp on the record just read.
+  const integratedAt = integratedWaveAt(record);
+  t.diagnostic(`integrated transition at=${integratedAt} (record state=${record.state})`);
 
   // Integration tree and file contents.
   const tree = git(fixture.integrationCheckout, 'ls-tree', '-r', '--name-only', 'HEAD').trim().split('\n').filter(Boolean);
@@ -584,6 +593,21 @@ test('wave native: width five implements, reviews, repairs and promotes through 
   // successful startup result, so a retried or failed startup cannot open it.
   // Checkpoint and workflow requests before that boundary are outside the window
   // and cannot satisfy its attention expectations.
+  // Production persists the integrated record before delivering the final
+  // promotion-result attention asynchronously, so the snapshot below must wait
+  // for that genuine delivery to land instead of racing it. This polls the
+  // request log only; it adds no request, synthesizes no attention, and a missing
+  // promotion-result delivery is a timeout failure, not a pass.
+  const waveId = record.wave_id;
+  const carriesPromotionResult = request => attentionIn(request).some(payload =>
+    payload.kind === 'promotion-result'
+    && payload.wave_id === waveId);
+  await waitForWaveState(
+    () => provider.requests.find(request => requestRoute(request).role === 'coordinator'
+      && carriesPromotionResult(request)),
+    found => Boolean(found),
+    { label: `coordinator promotion-result attention for wave ${waveId}` },
+  );
   const coordinatorRequests = provider.requests.filter(request => requestRoute(request).role === 'coordinator');
   // Each outer tool event is retained; its structured reply is parsed separately
   // so the correlation id comes from the event, never from the reply's details.
@@ -646,6 +670,10 @@ test('wave native: width five implements, reviews, repairs and promotes through 
     }
   }
   assert.ok(postStartupRequests >= 1, 'the post-startup window holds at least one coordinator request');
+  // Compact boundary diagnostic: the persisted integrated transition alongside
+  // the arrival times of the post-startup coordinator requests it was ordered
+  // against, so a misread boundary is visible without another run.
+  t.diagnostic(`integratedAt=${integratedAt} requestArrivals=${JSON.stringify(coordinatorRequests.slice(windowStart).map(request => request.at ?? request.timestamp ?? null))}`);
   t.diagnostic(`post-startup coordinator requests=${postStartupRequests} attention identities=${JSON.stringify([...seenAttention])}`);
   assert.equal(obligationWhileNonterminal, 0, 'no Current obligation message while the wave is non-terminal');
 
@@ -717,6 +745,23 @@ test('wave native: width nine overlaps and survives coordinator restart without 
   await waitForWaveState(() => readWaveRecord(fixture), record => record.state === 'integrated',
     { timeoutMs: 240000, label: 'restarted integrated' });
 
+  // Production persists the integrated record before delivering the final
+  // promotion-result attention asynchronously, so the coordinator request
+  // snapshot below must wait for that genuine delivery to land instead of
+  // racing it. This polls the request log only; it adds no request, synthesizes
+  // no attention, and a missing promotion-result delivery is a timeout failure,
+  // not a pass.
+  const integratedRecord = readWaveRecord(fixture);
+  const carriesRestartPromotionResult = request => attentionIn(request).some(payload =>
+    payload.kind === 'promotion-result'
+    && payload.wave_id === integratedRecord.wave_id);
+  await waitForWaveState(
+    () => provider.requests.find(request => requestRoute(request).role === 'coordinator'
+      && carriesRestartPromotionResult(request)),
+    found => Boolean(found),
+    { timeoutMs: 240000, label: `coordinator promotion-result attention for wave ${integratedRecord.wave_id}` },
+  );
+
   const replacementReviewers = provider.requests.filter(request => request.at >= replacementAt
     && requestRoute(request).role === 'reviewer' && request.turn === 0
     && requestRoute(request).record?.phase === 'reviewing');
@@ -732,7 +777,11 @@ test('wave native: width nine overlaps and survives coordinator restart without 
   }
 
   const record = readWaveRecord(fixture);
-  const runs = readRunRecords(fixture).filter(run => run.wave_bindings?.wave_id === record.wave_id);
+  // Durable `command_phase` records stay bound to the wave for drain authority
+  // but are not stage worker launches (the real seal command has
+  // purpose='seal', stage=null, assignment_id=null), so the selector drops them
+  // before the per-step worker assertions instead of hiding them there.
+  const runs = waveWorkerRuns(readRunRecords(fixture), record.wave_id);
   for (let step = 1; step <= 9; step += 1) {
     const stepRuns = runs.filter(run => run.wave_bindings?.step_number === step);
     assert.equal(stepRuns.filter(run => run.wave_bindings.phase === 'implementing').length, 1,

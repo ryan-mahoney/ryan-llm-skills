@@ -973,7 +973,20 @@ export default function (pi: any) {
           }
           receipt.checkpoint_revision = revision;
         }
-        return result(receipt);
+        // A successful dispatch into a still-running native wave hands control
+        // back to the wave itself. The installed SDK's AgentToolResult.terminate
+        // stops the automatic post-tool model request for the rest of this
+        // batch, so the coordinator issues no extra tool calls while members
+        // work; genuine spec-wave attention (barrier/promotion) still arrives
+        // as a triggerTurn message and drives later requests. The SDK
+        // wrapToolDefinition forwards this object verbatim and agent-loop stops
+        // a batch when every tool result terminates. Serial routes, refusals,
+        // terminal/native status/cancel receipts and error returns keep their
+        // existing continuation because they still need a follow-up turn.
+        const waveHoldsTurn = nativeAction !== null
+          && ['startup', 'advance', 'recover'].includes(nativeAction)
+          && receipt.execution === 'waves' && receipt.state === 'running';
+        return waveHoldsTurn ? { ...result(receipt), terminate: true } : result(receipt);
       } catch (error: any) {
         if (receipt?.run_id) return result({ ...receipt, bookkeeping_error: error.message,
           next: 'The existing run is identified above; dispatch was not refused. Reconcile checkpoint bookkeeping for this run, await it if active, and never launch a replacement because of this warning.' });

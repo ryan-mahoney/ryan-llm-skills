@@ -167,7 +167,11 @@ export async function bootLinuxWave(t, facts, options = {}) {
   const nodeDir = dirname(process.execPath);
   const piBin = facts?.pi?.bin ?? null;
   const realPath = typeof process.env.PATH === 'string' ? process.env.PATH : '';
-  const pathParts = [nodeDir];
+  const pathParts = [];
+  if (typeof fixture.promotionBin === 'string' && fixture.promotionBin !== '') {
+    pathParts.push(fixture.promotionBin);
+  }
+  pathParts.push(nodeDir);
   if (piBin !== null) pathParts.push(dirname(piBin));
   if (realPath !== '') pathParts.push(realPath);
   env.PATH = [...new Set(pathParts)].join(':');
