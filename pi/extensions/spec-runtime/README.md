@@ -675,6 +675,34 @@ port. The server log path is returned separately from the capture log. The examp
 selects no production data or fixture setup for the caller. Readiness and capture have
 separate finite deadlines; the whole assignment deadline remains in force.
 
+### Native wave proof
+
+Two commands record the native evidence, and each maps to one expectation prefix.
+Run the host-native suite (EV13, prefix `wave native`):
+
+```
+node --test pi/extensions/spec-runtime/waves.integration.test.mjs
+```
+
+Run the Linux rehearsal (EV14, prefix `wave linux`) from `~/.agents`:
+
+```
+SPEC_WAVES_LINUX_REHEARSAL=1 PI_WARDEN_ENABLED=1 node --test --test-name-pattern='^wave linux:' pi/extensions/spec-runtime/waves.linux.test.mjs
+```
+
+EV13 uses external executable shims and loopback, but the real SDK and `pi` are
+required; a shim standing in for either is not native evidence. EV14 requires a
+real user manager and kernel opt-in, and its blocking authority is
+[Required native rehearsal before activation](../../../docs/linux-host-setup.md#required-native-rehearsal-before-activation);
+that section also supplies the exact environment, the quiesced-writer
+precondition and the restore step. Neither command may be skipped to accept a
+wave: a skip is not a pass.
+
+Both artifacts carry the same header fields (command, observed commit, worktree
+cleanliness, Node, `pi`, host) and the same TAP count rule. EV13 requires 6
+passing, 0 failing, 0 skipped, 0 todo with exit status 0; EV14 requires 9. A
+lower count, a non-zero exit or a skipped expectation leaves the evidence
+unproven rather than accepted.
 
 ## Structured handoffs and durable progress
 

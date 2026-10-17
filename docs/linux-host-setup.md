@@ -237,8 +237,38 @@ indeterminate probe execution stay blocked.
 ### Required native rehearsal before activation
 
 Before activation, the operator runs the real native rehearsal on the target host.
-It is required and is not evidence already passed. This guide does not run it. The
-rehearsal records actual observations:
+It is required and is not evidence already passed. This guide does not run it, and
+nothing written here claims a rehearsal has passed. The procedure is exact; the
+observations it produces are the only evidence.
+
+Prerequisites for the rehearsal, all satisfied before the first command:
+
+- Intended host writers are quiesced. No other wave, spec run or owner/editor
+  process writes to the checkout or the runtime directory while the rehearsal
+  runs.
+- The checkout is at the current revision, its dependencies are materialized, and
+  Node >= 22.19 is first on `PATH` together with the intended `pi` executable.
+- The lifecycle resource limit is known and recorded before it is changed.
+
+Operator-authorized setup: with the host quiesced, run the lifecycle-memory
+command from the checkout root. It is an authorized host-setup step, not a probe,
+and this guide does not execute it:
+
+```
+node scripts/spec-observe/cli.mjs runtime-host setup --lifecycle-memory-mib 2048 --lifecycle-tasks 448
+```
+
+Record the `runtime-host check` output for the setup command and require its
+admission count to be at least 9 before continuing. A smaller admission count is a
+blocked rehearsal, not a pass.
+
+Then run the rehearsal from `~/.agents`:
+
+```
+SPEC_WAVES_LINUX_REHEARSAL=1 PI_WARDEN_ENABLED=1 node --test --test-name-pattern='^wave linux:' pi/extensions/spec-runtime/waves.linux.test.mjs
+```
+
+The rehearsal records actual observations:
 
 1. Run `runtime-host setup` and record its check output: user manager version,
    utilities, delegated controllers, required unit properties, bubblewrap
@@ -255,6 +285,30 @@ rehearsal records actual observations:
    until a positive drain is observed.
 5. Clean up the rehearsal's units, gates and transient files, and record the
    observed revision with the evidence artifact.
+
+What the rehearsal may do without further approval: install the live resource
+policy and reload the user daemon, as the explicit, bounded authority the operator
+granted for this collection. It may touch only its own units and its own
+`spec-runtime.slice` subtree, and it may seek a 256 MiB OOM only on those units.
+Its test timeouts are finite; the namespace mounts it exercises are its own.
+Retained backing state is kept when the outcome is unknown rather than being
+discarded. It does not use `sudo`, change security policy, install packages,
+reboot, publish anything or perform a real activation.
+
+The evidence artifact must open with a header recording the exact command run,
+the observed commit, whether the worktree was clean, and the observed Node, `pi`
+and host identity. Its TAP summary must read 9 pass, 0 fail, 0 skip, 0 todo with
+exit status 0.
+
+A fixture peak label is a fixture measurement: it is not representative of
+production memory use and must not be reported as production RAM. Synthetic
+kernel evidence carries `kernel_proof=false` and is not kernel proof. A pending
+result means the rehearsal has not met the deploy acceptance condition, and stays
+pending until the observation is made.
+
+After the last gate, restore the prior limit with
+`--lifecycle-memory-mib 3072 --lifecycle-tasks 512`, run `runtime-host check`
+again, and retain that receipt even if the rehearsal gate failed.
 
 ## 5. Repositories
 
