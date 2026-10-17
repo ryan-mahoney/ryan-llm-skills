@@ -2413,7 +2413,9 @@ export function createSystemdServiceAdapter(options = {}) {
     const args = buildServiceRunArgs({ unit, cwd: request.cwd, limits: effectiveLimits, runtimeMaxSec, setenv, argv });
     let child;
     try {
-      child = spawnTransport({ command: 'systemd-run', args, env: clientEnv, cwd: request.cwd, stdio: request.stdio ?? ['pipe', 'pipe', 'pipe'] });
+      // Default stdin to /dev/null: noninteractive service workers receive EOF by default
+      // (Pi print mode waits for EOF). An explicit caller-provided stdio is preserved.
+      child = spawnTransport({ command: 'systemd-run', args, env: clientEnv, cwd: request.cwd, stdio: request.stdio ?? ['ignore', 'pipe', 'pipe'] });
     } catch (error) {
       cleanupServiceGate({ gate_dir: gateDir, gate_root: effectiveGateRoot }, createdGates);
       return { ok: false, status: 'refused', reason: 'launch-failed', detail: error && error.code ? String(error.code) : null, record: null };
