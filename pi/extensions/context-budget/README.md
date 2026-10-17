@@ -36,19 +36,36 @@ duplicate installation. This uses Pi 1.2.0 and pi-subagents 0.78.0 APIs.
 
 | Control | Value | Purpose |
 | --- | ---: | --- |
-| Session working context window | 88,000 tokens maximum | Trigger native compaction early |
+| Session working context window | By role: owner 200,000; reviewer 160,000; fixer 120,000; editor 88,000; other 120,000 | Trigger native compaction well before very large contexts |
+| Minimum working room after compaction | 32,000 tokens | Grow the window when a compaction returns nearly full |
+| Window ceiling | 240,000 tokens | Stay below Sol's 272k long-context price tier |
 | Response and thinking allowance | Selected model/settings | Preserve provider-specific generation semantics |
-| Native default compaction reserve | 16,384 tokens | Starts compaction around 71,616 reported tokens with the working window |
+| Native default compaction reserve | 16,384 tokens | Compaction starts at the window minus the reserve |
 | Native default recent context | 20,000 tokens | Keep recent exact messages alongside the summary |
-| Request estimate stop | 90,000 projected tokens | Leave headroom below the desired 100k input ceiling |
+| Request estimate stop | Window + 2,000 projected tokens | Stop only a request that compaction could not prevent |
 | Tool text threshold | 12,000 characters | Archive large outputs and return head/tail excerpts |
+
+The role comes from `SPEC_RUNTIME_ROLE`, which the managed spec runtime sets for each
+worker it launches. Owners hold a step's state across rounds and get the largest window;
+editors start a fresh session for every packet and keep the smallest. Sessions without a
+runtime role, including coordinators and pi-subagents profiles, use the default.
+
+After each compaction the policy reads the first reported input, which is what the
+compaction retained. When less than 32,000 tokens remain before the next compaction, the
+session's window grows to restore that room, up to the ceiling or the model's own limit.
+Sol compacts remotely and keeps up to 64k tokens of recent user messages, so on
+2026-10-17 a Sol owner at the former fixed 88k window returned from every compaction at
+about 62k and compacted again within a minute, five times, without editing. If the
+window cannot grow enough, the next compaction is refused and the run stops with a
+handoff message instead of looping. Telemetry records `compaction_retained`,
+`window_grown` and `compaction_loop` entries.
 
 The working model is a session-local copy. Smaller native limits stay smaller; provider,
 model identity, registry capabilities, credentials, rates, selected thinking effort
 and output allowance are unchanged. There is no blanket output cap: reasoning and
 visible output share budgets on some providers and have different controls on others.
 Without a cap, one very long response can push the next projected context past the
-summarizer's own 90k estimate, so the compaction preflight refuses and the run stops
+summarizer's request stop, so the compaction preflight refuses and the run stops
 instead of compacting. This is rare but possible; recover with a bounded handoff.
 The managed owner/editor launcher classifies a final `length` response as a failed,
 incomplete packet even if it contains text and the process exits zero. It retains the
@@ -85,11 +102,11 @@ It does not automatically resume a stopped coordinator.
 
 The provider hook estimates the entire serialized payload, including tools, system
 instructions and cached/replayed conversation. It uses UTF-8 bytes / 3 plus 1,024 tokens
-and 4,096 per recognized image; this is **not an exact tokenizer or a guaranteed 100k
+and 4,096 per recognized image; this is **not an exact tokenizer or a guaranteed
 provider ceiling**. Content, image detail and provider serialization can change error.
 Validate estimates against actual reported input on real runs before tightening limits.
 
-The request guard and compaction preflight compare a projected value with the 90k stop:
+The request guard and compaction preflight compare a projected value with the request stop:
 the estimate times the latest reported/estimated input ratio, clamped to 0.5-2. The raw
 estimate applies until a response reports usage. Native compaction triggers on reported
 input, so an uncalibrated guard can fire first. On 2026-10-15 the estimate ran 1.3x high
@@ -144,7 +161,7 @@ separately. Fresh editors may lower retained input but increase rereading; total
 rise or fall. A fresh session does not necessarily invalidate a provider's identical-prefix
 cache. Compare actual billed usage by provider/model; do not import another endpoint's rates.
 
-The native boundary fixture reports 62k input and 12k output with reasoning replay plus
+The native boundary fixture runs as an editor (88k window) and reports 62k input and 12k output with reasoning replay plus
 a near-12k-character tool result. The next uncompressed payload would exceed the 90k
 estimate guard; native compaction completes and the continuation stays below it. This
 covers that transition, not every tokenizer, image or tool burst. Keep the conservative
