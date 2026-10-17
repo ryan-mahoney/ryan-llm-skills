@@ -64,16 +64,31 @@ export function validateFocusedPlan(plan) {
   }
 }
 
-export function focusedInput(operation, files, { parse } = {}) {
+// An anchor the planner bound against the original file can become ambiguous once an
+// earlier packet has edited that file. When the original holds the anchor exactly once,
+// the staged occurrence whose surrounding text matches the original's is the intended
+// one; any other ambiguity still fails.
+export function resolveAnchor(text, value, path, original = null) {
+  const count = text.split(value).length - 1;
+  if (count === 1) return text.indexOf(value);
+  if (count > 1 && typeof original === 'string' && original.split(value).length === 2) {
+    const at = original.indexOf(value), after = original.slice(at + value.length, at + value.length + 40), before = original.slice(Math.max(0, at - 40), at);
+    const positions = []; let found = text.indexOf(value);
+    while (found >= 0) { positions.push(found); found = text.indexOf(value, found + 1); }
+    for (const window of [p => text.startsWith(after, p + value.length) && text.slice(Math.max(0, p - before.length), p) === before, p => text.startsWith(after, p + value.length)]) {
+      const matches = positions.filter(window);
+      if (matches.length === 1) return matches[0];
+    }
+  }
+  throw new Error(`Excerpt anchor must be unique: ${ambiguousAnchorMessage(path, value, text)}`);
+}
+
+export function focusedInput(operation, files, { parse, original = null } = {}) {
   validateFocusedPlan({ operations: [operation] });
   let excerpts = operation.context.map(({ path, start, end }) => {
     const text = files[path];
     if (typeof text !== 'string') throw new Error(`Excerpt file missing: ${path}`);
-    const anchor = (value, fallback) => {
-      if (value === null) return fallback;
-      if (text.split(value).length !== 2) throw new Error(`Excerpt anchor must be unique: ${ambiguousAnchorMessage(path, value, text)}`);
-      return text.indexOf(value);
-    };
+    const anchor = (value, fallback) => value === null ? fallback : resolveAnchor(text, value, path, original?.[path] ?? null);
     const a = anchor(start, 0), b = anchor(end, text.length);
     if (b <= a) throw new Error(`Invalid excerpt ordering: ${path}`);
     return { path, start, end, source_start: a, source_end: b, text: text.slice(a, b) };

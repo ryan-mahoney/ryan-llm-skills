@@ -1,21 +1,16 @@
-import { validateFocusedPlan } from './focused-editors.mjs';
-import { ambiguousAnchorMessage } from '../changeset/workspace.mjs';
+import { validateFocusedPlan, resolveAnchor } from './focused-editors.mjs';
 
 export const V4A_SOURCE_LIMIT = 64000;
 
 // V4A consumes physical lines and cannot reference omitted bodies. Keep the
 // planner's selections, expand their boundary lines, and deduplicate overlaps.
-export function v4aInput(operation, files) {
+export function v4aInput(operation, files, { original = null } = {}) {
   validateFocusedPlan({ operations: [operation] });
   const byPath = new Map(), sourceRanges = [];
   for (const [selection_index, { path, start, end }] of operation.context.entries()) {
     const text = files[path];
     if (typeof text !== 'string') throw new Error(`Excerpt file missing: ${path}`);
-    const anchor = (value, fallback) => {
-      if (value === null) return fallback;
-      if (text.split(value).length !== 2) throw new Error(`Excerpt anchor must be unique: ${ambiguousAnchorMessage(path, value, text)}`);
-      return text.indexOf(value);
-    };
+    const anchor = (value, fallback) => value === null ? fallback : resolveAnchor(text, value, path, original?.[path] ?? null);
     const a = anchor(start, 0), b = anchor(end, text.length);
     if (b <= a) throw new Error(`Invalid excerpt ordering: ${path}`);
     sourceRanges.push({ selection_index, path, start, end, source_start: a, source_end: b });

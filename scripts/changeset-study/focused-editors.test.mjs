@@ -1,7 +1,7 @@
 // node --test scripts/changeset-study/focused-editors.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { focusedInput, preflightFocusedPlan } from './focused-editors.mjs';
+import { focusedInput, resolveAnchor, preflightFocusedPlan } from './focused-editors.mjs';
 import { patchEditor, validateStrategyPlan } from './strategies.mjs';
 import { ModelJsonParseError } from './client.mjs';
 
@@ -241,4 +241,15 @@ test('request budget, deadline and cancellation failures stop without a second m
     assert.equal(calls, 1, failure.message);
     assert.equal(recoveries, 0, failure.message);
   }
+});
+
+// node --test --test-name-pattern='original context' scripts/changeset-study/focused-editors.test.mjs
+test('an anchor made ambiguous by an earlier edit resolves to the occurrence that matches the original context', () => {
+  const original = 'function a() {\n  return 1;\n}\n// marker\nfunction b() {}\n';
+  const staged = 'function a() {\n  return 1;\n}\n// marker\nfunction b() {}\n// marker\nfunction c() {}\n';
+  assert.equal(resolveAnchor(staged, '// marker', 'f.mjs', original), original.indexOf('// marker'));
+  assert.throws(() => resolveAnchor(staged, '// marker', 'f.mjs', null), /matches 2 times/);
+  assert.throws(() => resolveAnchor(staged, '// marker', 'f.mjs', staged), /matches 2 times/, 'an original that is itself ambiguous does not disambiguate');
+  const op = { id: 'x', executor: 'simple', reads: [], writes: ['f.mjs'], depends_on: [], objective: 'o', instruction: 'i', requirements: ['r'], context: [{ path: 'f.mjs', start: '// marker', end: null }] };
+  assert.equal(focusedInput(op, { 'f.mjs': staged }, { original: { 'f.mjs': original } }).excerpts[0].text, staged.slice(original.indexOf('// marker')));
 });

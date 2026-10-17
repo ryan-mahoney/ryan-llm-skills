@@ -178,10 +178,10 @@ const terminalEditorMessages = new Set([
 const terminalEditorFailure = error => ['AbortError', 'TimeoutError'].includes(error.name) ||
   terminalEditorMessages.has(error.message) || /^Model stopped: aborted(?::|$)/i.test(error.message);
 
-export async function patchEditor(model, stage, task, { operation, files }, { ranges = false, focused = false, contextParse, recoveryModel = null, promptOrder = 'target-first', fidelityRetryModel = null } = {}) {
+export async function patchEditor(model, stage, task, { operation, files }, { ranges = false, focused = false, contextParse, recoveryModel = null, promptOrder = 'target-first', fidelityRetryModel = null, original = null } = {}) {
   if (recoveryModel && !focused) throw new Error('Writer recovery is supported only for focused dispatch');
   if (focused) {
-    const input = focusedInput(operation, files, { parse: contextParse });
+    const input = focusedInput(operation, files, { parse: contextParse, original });
     input.file_state = Object.entries(files).map(([path, text]) => ({ path, writable: operation.writes.includes(path), exists: text !== null }));
     const target = operation.writes[0];
     const targetRule = `Your only writable destination is ${JSON.stringify(target)}. Every edit.path must equal it; source paths may occur only inside compose.parts. ` +

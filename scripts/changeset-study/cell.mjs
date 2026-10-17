@@ -392,11 +392,11 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
             writeFileSync(join(directory, 'writer-attempts.json'), JSON.stringify(result.writer_attempts, null, 2));
           };
           if (format === 'v4a') {
-            try { const value = await v4aEditor(model, stageName, seed ?? { operation, files }, { contextParse, promptOrder, seed, seamRetryModel: seed ? seamRetryClient : null }); retain(value); return value; }
+            try { const value = await v4aEditor(model, stageName, seed ?? { operation, files }, { contextParse, promptOrder, seed, seamRetryModel: seed ? seamRetryClient : null, original: task.files }); retain(value); return value; }
             catch (error) { retain(error); throw error; }
           }
           // Executable JSON edits with the focused writer's existing one local retry.
-          try { const value = await patchEditor(model, stageName, task.spec, { operation, files }, { ranges: true, focused: true, contextParse, promptOrder, fidelityRetryModel: seamRetryClient ?? null }); retain(value); return value; }
+          try { const value = await patchEditor(model, stageName, task.spec, { operation, files }, { ranges: true, focused: true, contextParse, promptOrder, fidelityRetryModel: seamRetryClient ?? null, original: task.files }); retain(value); return value; }
           catch (error) { retain(error); throw error; }
         }
         return strategy

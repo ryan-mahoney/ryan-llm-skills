@@ -123,8 +123,8 @@ export function seedIntegrity(seed, output, { parse } = {}) {
 }
 
 /** One focused V4A attempt, then at most one same-client JSON fallback after a local failure. */
-export async function v4aEditor(model, stage, { operation, files }, { contextParse, promptOrder = 'target-first', seed = null, seamRetryModel = null } = {}) {
-  const input = v4aInput(operation, files);
+export async function v4aEditor(model, stage, { operation, files }, { contextParse, promptOrder = 'target-first', seed = null, seamRetryModel = null, original = null } = {}) {
+  const input = v4aInput(operation, files, { original });
   if (seed) input.seeded_destination = { note: seed.note, layout: seed.layout, excerpt_count: seed.excerpt_count, characters: seed.seeded_characters };
   const target = safePath(operation.writes[0]);
   for (const [path, text] of Object.entries(files)) {
