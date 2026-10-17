@@ -1,0 +1,3005 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-10-17T03:27:19.163204+00:00",
+  "protocol": "model-permutations-v1",
+  "artifact_base": "Declared adjacent workspace runtime root",
+  "runs": [
+    {
+      "path": "model-permutations/01-four-arms",
+      "revision": "6284c83b2bb99bcfc51607076757a5266279f698",
+      "manifest_hash": "7ee54222b72feb365664d6f64037480d144a52f1fc1f1378102330a097c12124",
+      "results_hash": "1d91ad0293090e35bda18032bda54abbcbc0b2ab22b8482f80eff655d147af05",
+      "actual_accounting": {
+        "model_calls": 21,
+        "receipt_cost_usd": 0.15835120800000002,
+        "subscription_normalized_cost_usd": 0.046686708,
+        "known_charged_usd": 0.15835120800000002,
+        "total_charged_usd": 0.15835120800000002,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 173209,
+          "output": 73596,
+          "cacheRead": 768,
+          "cacheWrite": 0,
+          "reasoning": 61852,
+          "totalTokens": 247573
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high",
+          "openai-codex/gpt-6.1-sol:low",
+          "deepseek/deepseek-flash:off"
+        ]
+      }
+    },
+    {
+      "path": "model-permutations/02-mimo-auth-resume",
+      "revision": "c47826b502c2f6ab9f6242b76d47977a83ec1e25",
+      "manifest_hash": "aa28836083390585fd8ee937af4fa340386d7f63e4228a26ac12a34c5feccedb",
+      "results_hash": "7ab6a4f94f273d3f777c42a0cc53d63cd2d64214c3d14d47b160554f35bec56e",
+      "actual_accounting": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.013348845000000002,
+        "subscription_normalized_cost_usd": 0.013348845000000002,
+        "known_charged_usd": 0.013348845000000002,
+        "total_charged_usd": 0.013348845000000002,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 3157,
+          "output": 13765,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 12365,
+          "totalTokens": 16922
+        },
+        "selectors": [
+          "primalabs/primalabs-ai/MiMo-V2.6-Pro:medium"
+        ]
+      }
+    }
+  ],
+  "source": {
+    "run": "03-owner-query-writer",
+    "manifest_hash": "8b3dfb0ab76467896844018d3b0dd38e9424e21be9b9c5b9b4a39752f40d35a0",
+    "tasks_hash": "09b6c830064193cb03212d362640bf99a7384bbcfbcd6966a87e0876eeeffbeb",
+    "task_hashes": {
+      "hard-context-calibration": "53a7b4559f4db02a586dda721ec592e6bf4a3e90f8f671b69a50f92621536b49",
+      "hard-dependency-handoff": "d979407d0e1fdf935a7c2b994c98c634b5f11a8e044d12a307ca468880b0fb30",
+      "hard-lifecycle-extract": "c6365120c768dec61e14fed5c2adc988444879b14063cb06ca72aafab59a71cb"
+    }
+  },
+  "actual_combined": {
+    "model_calls": 23,
+    "receipt_cost_usd": 0.17170005300000002,
+    "ledger_charged_usd": 0.171700053,
+    "subscription_normalized_cost_usd": 0.060035553000000005,
+    "tokens": {
+      "input": 176366,
+      "output": 87361,
+      "cacheRead": 768,
+      "cacheWrite": 0,
+      "reasoning": 74217,
+      "totalTokens": 264495
+    },
+    "unknown_charge_count": 0,
+    "retained_unknown_reservation_usd": 0
+  },
+  "normalization": {
+    "openai_codex_usd_per_million": {
+      "input": 0.3,
+      "output": 1.2,
+      "cacheRead": 0.006,
+      "cacheWrite": 0.3
+    },
+    "other_models": "Retained SDK receipt prices. Actual ledger settlements remain separate and unchanged.",
+    "reasoning_tokens": "Informational subset of output tokens; do not add to output again."
+  },
+  "arm_summaries": [
+    {
+      "arm": "muse-self",
+      "tasks": 3,
+      "writer_cases_dispatched": 0,
+      "application_complete": 0,
+      "terminal_accepted": 0,
+      "audited_delivered": 0,
+      "allocated_route_process_ms": 201401.82974900006,
+      "allocated_route_accounting": {
+        "model_calls": 6,
+        "receipt_cost_usd": 0.0086224,
+        "subscription_normalized_cost_usd": 0.0086224,
+        "known_charged_usd": 0.0086224,
+        "total_charged_usd": 0.0086224,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 49192,
+          "output": 18516,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 17336,
+          "totalTokens": 67708
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      }
+    },
+    {
+      "arm": "muse-deepseek",
+      "tasks": 3,
+      "writer_cases_dispatched": 1,
+      "application_complete": 1,
+      "terminal_accepted": 1,
+      "audited_delivered": 0,
+      "allocated_route_process_ms": 475067.17915599997,
+      "allocated_route_accounting": {
+        "model_calls": 8,
+        "receipt_cost_usd": 0.014998008000000002,
+        "subscription_normalized_cost_usd": 0.014998008000000002,
+        "known_charged_usd": 0.014998008000000002,
+        "total_charged_usd": 0.014998008000000002,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 61934,
+          "output": 36247,
+          "cacheRead": 768,
+          "cacheWrite": 0,
+          "reasoning": 28698,
+          "totalTokens": 98949
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high",
+          "deepseek/deepseek-flash:off"
+        ]
+      }
+    },
+    {
+      "arm": "sol-muse",
+      "tasks": 3,
+      "writer_cases_dispatched": 1,
+      "application_complete": 1,
+      "terminal_accepted": 1,
+      "audited_delivered": 1,
+      "allocated_route_process_ms": 145704.91689000017,
+      "allocated_route_accounting": {
+        "model_calls": 7,
+        "receipt_cost_usd": 0.13473079999999998,
+        "subscription_normalized_cost_usd": 0.0230663,
+        "known_charged_usd": 0.13473079999999998,
+        "total_charged_usd": 0.13473079999999998,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 62083,
+          "output": 18833,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 15818,
+          "totalTokens": 80916
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low",
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      }
+    },
+    {
+      "arm": "sol-mimo",
+      "tasks": 3,
+      "writer_cases_dispatched": 1,
+      "application_complete": 1,
+      "terminal_accepted": 1,
+      "audited_delivered": 1,
+      "allocated_route_process_ms": 82151.24770900019,
+      "allocated_route_accounting": {
+        "model_calls": 7,
+        "receipt_cost_usd": 0.144262845,
+        "subscription_normalized_cost_usd": 0.032598345,
+        "known_charged_usd": 0.144262845,
+        "total_charged_usd": 0.144262845,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 62154,
+          "output": 15057,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 12510,
+          "totalTokens": 77211
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low",
+          "primalabs/primalabs-ai/MiMo-V2.6-Pro:medium"
+        ]
+      }
+    }
+  ],
+  "original_observations": [
+    {
+      "arm": "muse-self",
+      "task": "hard-context-calibration",
+      "planner": "openrouter/meta/muse-spark-1.3-contributor:high",
+      "writer": null,
+      "representation": "executable",
+      "reasoning_requested": null,
+      "reasoning_effective": null,
+      "preparation_directory": "preparation/muse-executable/000-hard-context-calibration",
+      "preparation_plan_hash": null,
+      "execution_plan_hash": null,
+      "preparation_failed": true,
+      "error": "Only one initial source-request envelope is permitted",
+      "application_complete": false,
+      "terminal_accepted": false,
+      "audited_delivered": false,
+      "evidence_valid": true,
+      "checks": null,
+      "path_audit": null,
+      "candidate_hash": null,
+      "timings_ms": {
+        "allocated_preparation_process": 11625.100192000002,
+        "allocated_preparation_worker": 11557.521937,
+        "writing": null,
+        "checks": null,
+        "hidden": null,
+        "execution_process": null,
+        "path_audit": null,
+        "allocated_route_process": 11625.100192000002
+      },
+      "allocated_preparation": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.0004964000000000001,
+        "subscription_normalized_cost_usd": 0.0004964000000000001,
+        "known_charged_usd": 0.0004964000000000001,
+        "total_charged_usd": 0.0004964000000000001,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 4658,
+          "output": 153,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 28,
+          "totalTokens": 4811
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      },
+      "execution": {
+        "model_calls": 0,
+        "receipt_cost_usd": 0,
+        "subscription_normalized_cost_usd": 0,
+        "known_charged_usd": 0,
+        "total_charged_usd": 0,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 0
+        },
+        "selectors": []
+      },
+      "allocated_route": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.0004964000000000001,
+        "subscription_normalized_cost_usd": 0.0004964000000000001,
+        "known_charged_usd": 0.0004964000000000001,
+        "total_charged_usd": 0.0004964000000000001,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 4658,
+          "output": 153,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 28,
+          "totalTokens": 4811
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      }
+    },
+    {
+      "arm": "muse-deepseek",
+      "task": "hard-context-calibration",
+      "planner": "openrouter/meta/muse-spark-1.3-contributor:high",
+      "writer": "deepseek/deepseek-flash:off",
+      "representation": "delegated",
+      "reasoning_requested": null,
+      "reasoning_effective": null,
+      "preparation_directory": "preparation/muse-delegated/000-hard-context-calibration",
+      "preparation_plan_hash": "35bfc6acd8fe4cb990cdc324adfd63245b69c9b9a290b61387f125c388e9e7ab",
+      "execution_plan_hash": "35bfc6acd8fe4cb990cdc324adfd63245b69c9b9a290b61387f125c388e9e7ab",
+      "preparation_failed": false,
+      "error": null,
+      "application_complete": true,
+      "terminal_accepted": true,
+      "audited_delivered": false,
+      "evidence_valid": true,
+      "checks": {
+        "protected_intact": true,
+        "visible": false,
+        "candidate_tests": false
+      },
+      "path_audit": null,
+      "candidate_hash": "17d9d9e9885e80134b50f6ee62540d69bc0037d74b84677f121b99c630d38cd9",
+      "timings_ms": {
+        "allocated_preparation_process": 108041.04800400001,
+        "allocated_preparation_worker": 107980.384542,
+        "writing": 2893.558689,
+        "checks": 162.97050499999978,
+        "hidden": 99.25872600000002,
+        "execution_process": 3336.0580090000003,
+        "path_audit": null,
+        "allocated_route_process": 111377.10601300001
+      },
+      "allocated_preparation": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.0027621,
+        "subscription_normalized_cost_usd": 0.0027621,
+        "known_charged_usd": 0.0027621,
+        "total_charged_usd": 0.0027621,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 12205,
+          "output": 7708,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 6787,
+          "totalTokens": 19913
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      },
+      "execution": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.001999308,
+        "subscription_normalized_cost_usd": 0.001999308,
+        "known_charged_usd": 0.001999308,
+        "total_charged_usd": 0.001999308,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 2233,
+          "output": 1104,
+          "cacheRead": 768,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 4105
+        },
+        "selectors": [
+          "deepseek/deepseek-flash:off"
+        ]
+      },
+      "allocated_route": {
+        "model_calls": 4,
+        "receipt_cost_usd": 0.004761408,
+        "subscription_normalized_cost_usd": 0.004761408,
+        "known_charged_usd": 0.004761408,
+        "total_charged_usd": 0.004761408,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 14438,
+          "output": 8812,
+          "cacheRead": 768,
+          "cacheWrite": 0,
+          "reasoning": 6787,
+          "totalTokens": 24018
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high",
+          "deepseek/deepseek-flash:off"
+        ]
+      }
+    },
+    {
+      "arm": "sol-muse",
+      "task": "hard-context-calibration",
+      "planner": "openai-codex/gpt-6.1-sol:low",
+      "writer": "openrouter/meta/muse-spark-1.3-contributor:high",
+      "representation": "delegated",
+      "reasoning_requested": null,
+      "reasoning_effective": null,
+      "preparation_directory": "preparation/sol-delegated/000-hard-context-calibration",
+      "preparation_plan_hash": "e15c1d4ae393fdb42dc303e4e6b3bed8fca48f2f41c1c61a2b0f9ecf3748a650",
+      "execution_plan_hash": "e15c1d4ae393fdb42dc303e4e6b3bed8fca48f2f41c1c61a2b0f9ecf3748a650",
+      "preparation_failed": false,
+      "error": null,
+      "application_complete": true,
+      "terminal_accepted": true,
+      "audited_delivered": true,
+      "evidence_valid": true,
+      "checks": {
+        "protected_intact": true,
+        "visible": true,
+        "candidate_tests": true
+      },
+      "path_audit": null,
+      "candidate_hash": "64d581ce9f023c65548e8a6f387cb997aae7e347ad51992af60656905aba592f",
+      "timings_ms": {
+        "allocated_preparation_process": 16141.332986000009,
+        "allocated_preparation_worker": 13030.432289,
+        "writing": 107752.339225,
+        "checks": 167.58101700000407,
+        "hidden": 103.51607500000682,
+        "execution_process": 108205.56837599998,
+        "path_audit": null,
+        "allocated_route_process": 124346.90136199999
+      },
+      "allocated_preparation": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.031846,
+        "subscription_normalized_cost_usd": 0.0045567,
+        "known_charged_usd": 0.031846,
+        "total_charged_usd": 0.031846,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 12253,
+          "output": 734,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 12987
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      },
+      "execution": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.0038168000000000004,
+        "subscription_normalized_cost_usd": 0.0038168000000000004,
+        "known_charged_usd": 0.0038168000000000004,
+        "total_charged_usd": 0.0038168000000000004,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 3086,
+          "output": 17541,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 15673,
+          "totalTokens": 20627
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      },
+      "allocated_route": {
+        "model_calls": 4,
+        "receipt_cost_usd": 0.0356628,
+        "subscription_normalized_cost_usd": 0.0083735,
+        "known_charged_usd": 0.0356628,
+        "total_charged_usd": 0.0356628,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 15339,
+          "output": 18275,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 15673,
+          "totalTokens": 33614
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low",
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      }
+    },
+    {
+      "arm": "sol-mimo",
+      "task": "hard-context-calibration",
+      "planner": "openai-codex/gpt-6.1-sol:low",
+      "writer": "primalabs/primalabs-ai/MiMo-V2.6-Pro:medium",
+      "representation": "delegated",
+      "reasoning_requested": "medium",
+      "reasoning_effective": "thinking enabled; no distinct medium wire setting",
+      "preparation_directory": "preparation/sol-delegated/000-hard-context-calibration",
+      "preparation_plan_hash": "e15c1d4ae393fdb42dc303e4e6b3bed8fca48f2f41c1c61a2b0f9ecf3748a650",
+      "execution_plan_hash": null,
+      "preparation_failed": false,
+      "error": "Existing PrimaLabs credential configuration unavailable",
+      "application_complete": false,
+      "terminal_accepted": false,
+      "audited_delivered": false,
+      "evidence_valid": false,
+      "checks": null,
+      "path_audit": null,
+      "candidate_hash": null,
+      "timings_ms": {
+        "allocated_preparation_process": 16141.332986000009,
+        "allocated_preparation_worker": 13030.432289,
+        "writing": null,
+        "checks": null,
+        "hidden": null,
+        "execution_process": 184.38338500002283,
+        "path_audit": null,
+        "allocated_route_process": 16325.716371000031
+      },
+      "allocated_preparation": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.031846,
+        "subscription_normalized_cost_usd": 0.0045567,
+        "known_charged_usd": 0.031846,
+        "total_charged_usd": 0.031846,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 12253,
+          "output": 734,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 12987
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      },
+      "execution": {
+        "model_calls": 0,
+        "receipt_cost_usd": 0,
+        "subscription_normalized_cost_usd": 0,
+        "known_charged_usd": 0,
+        "total_charged_usd": 0,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 0
+        },
+        "selectors": []
+      },
+      "allocated_route": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.031846,
+        "subscription_normalized_cost_usd": 0.0045567,
+        "known_charged_usd": 0.031846,
+        "total_charged_usd": 0.031846,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 12253,
+          "output": 734,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 12987
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      }
+    },
+    {
+      "arm": "muse-self",
+      "task": "hard-dependency-handoff",
+      "planner": "openrouter/meta/muse-spark-1.3-contributor:high",
+      "writer": null,
+      "representation": "executable",
+      "reasoning_requested": null,
+      "reasoning_effective": null,
+      "preparation_directory": "preparation/muse-executable/001-hard-dependency-handoff",
+      "preparation_plan_hash": null,
+      "execution_plan_hash": null,
+      "preparation_failed": true,
+      "error": "Only one initial source-request envelope is permitted",
+      "application_complete": false,
+      "terminal_accepted": false,
+      "audited_delivered": false,
+      "evidence_valid": true,
+      "checks": null,
+      "path_audit": null,
+      "candidate_hash": null,
+      "timings_ms": {
+        "allocated_preparation_process": 38924.25681500003,
+        "allocated_preparation_worker": 38829.807983000006,
+        "writing": null,
+        "checks": null,
+        "hidden": null,
+        "execution_process": null,
+        "path_audit": null,
+        "allocated_route_process": 38924.25681500003
+      },
+      "allocated_preparation": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.0038780000000000004,
+        "subscription_normalized_cost_usd": 0.0038780000000000004,
+        "known_charged_usd": 0.0038780000000000004,
+        "total_charged_usd": 0.0038780000000000004,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 31658,
+          "output": 3561,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 3109,
+          "totalTokens": 35219
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      },
+      "execution": {
+        "model_calls": 0,
+        "receipt_cost_usd": 0,
+        "subscription_normalized_cost_usd": 0,
+        "known_charged_usd": 0,
+        "total_charged_usd": 0,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 0
+        },
+        "selectors": []
+      },
+      "allocated_route": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.0038780000000000004,
+        "subscription_normalized_cost_usd": 0.0038780000000000004,
+        "known_charged_usd": 0.0038780000000000004,
+        "total_charged_usd": 0.0038780000000000004,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 31658,
+          "output": 3561,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 3109,
+          "totalTokens": 35219
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      }
+    },
+    {
+      "arm": "muse-deepseek",
+      "task": "hard-dependency-handoff",
+      "planner": "openrouter/meta/muse-spark-1.3-contributor:high",
+      "writer": "deepseek/deepseek-flash:off",
+      "representation": "delegated",
+      "reasoning_requested": null,
+      "reasoning_effective": null,
+      "preparation_directory": "preparation/muse-delegated/001-hard-dependency-handoff",
+      "preparation_plan_hash": null,
+      "execution_plan_hash": null,
+      "preparation_failed": true,
+      "error": "test-handoff-1: Excerpt anchor must be unique: pi/extensions/spec-runtime/runtime.test.mjs",
+      "application_complete": false,
+      "terminal_accepted": false,
+      "audited_delivered": false,
+      "evidence_valid": true,
+      "checks": null,
+      "path_audit": null,
+      "candidate_hash": null,
+      "timings_ms": {
+        "allocated_preparation_process": 308157.379347,
+        "allocated_preparation_worker": 308073.43432899995,
+        "writing": null,
+        "checks": null,
+        "hidden": null,
+        "execution_process": null,
+        "path_audit": null,
+        "allocated_route_process": 308157.379347
+      },
+      "allocated_preparation": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.008064400000000001,
+        "subscription_normalized_cost_usd": 0.008064400000000001,
+        "known_charged_usd": 0.008064400000000001,
+        "total_charged_usd": 0.008064400000000001,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 33140,
+          "output": 23752,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 18708,
+          "totalTokens": 56892
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      },
+      "execution": {
+        "model_calls": 0,
+        "receipt_cost_usd": 0,
+        "subscription_normalized_cost_usd": 0,
+        "known_charged_usd": 0,
+        "total_charged_usd": 0,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 0
+        },
+        "selectors": []
+      },
+      "allocated_route": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.008064400000000001,
+        "subscription_normalized_cost_usd": 0.008064400000000001,
+        "known_charged_usd": 0.008064400000000001,
+        "total_charged_usd": 0.008064400000000001,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 33140,
+          "output": 23752,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 18708,
+          "totalTokens": 56892
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      }
+    },
+    {
+      "arm": "sol-muse",
+      "task": "hard-dependency-handoff",
+      "planner": "openai-codex/gpt-6.1-sol:low",
+      "writer": "openrouter/meta/muse-spark-1.3-contributor:high",
+      "representation": "delegated",
+      "reasoning_requested": null,
+      "reasoning_effective": null,
+      "preparation_directory": "preparation/sol-delegated/001-hard-dependency-handoff",
+      "preparation_plan_hash": null,
+      "execution_plan_hash": null,
+      "preparation_failed": true,
+      "error": "needs discovery: requested source exceeds 64000 characters at pi/extensions/spec-runtime/runtime.mjs",
+      "application_complete": false,
+      "terminal_accepted": false,
+      "audited_delivered": false,
+      "evidence_valid": true,
+      "checks": null,
+      "path_audit": null,
+      "candidate_hash": null,
+      "timings_ms": {
+        "allocated_preparation_process": 6346.251879000105,
+        "allocated_preparation_worker": 3236.1725309999997,
+        "writing": null,
+        "checks": null,
+        "hidden": null,
+        "execution_process": null,
+        "path_audit": null,
+        "allocated_route_process": 6346.251879000105
+      },
+      "allocated_preparation": {
+        "model_calls": 1,
+        "receipt_cost_usd": 0.034992,
+        "subscription_normalized_cost_usd": 0.005203800000000001,
+        "known_charged_usd": 0.034992,
+        "total_charged_usd": 0.034992,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 16746,
+          "output": 150,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 16896
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      },
+      "execution": {
+        "model_calls": 0,
+        "receipt_cost_usd": 0,
+        "subscription_normalized_cost_usd": 0,
+        "known_charged_usd": 0,
+        "total_charged_usd": 0,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 0
+        },
+        "selectors": []
+      },
+      "allocated_route": {
+        "model_calls": 1,
+        "receipt_cost_usd": 0.034992,
+        "subscription_normalized_cost_usd": 0.005203800000000001,
+        "known_charged_usd": 0.034992,
+        "total_charged_usd": 0.034992,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 16746,
+          "output": 150,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 16896
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      }
+    },
+    {
+      "arm": "sol-mimo",
+      "task": "hard-dependency-handoff",
+      "planner": "openai-codex/gpt-6.1-sol:low",
+      "writer": "primalabs/primalabs-ai/MiMo-V2.6-Pro:medium",
+      "representation": "delegated",
+      "reasoning_requested": "medium",
+      "reasoning_effective": "thinking enabled; no distinct medium wire setting",
+      "preparation_directory": "preparation/sol-delegated/001-hard-dependency-handoff",
+      "preparation_plan_hash": null,
+      "execution_plan_hash": null,
+      "preparation_failed": true,
+      "error": "needs discovery: requested source exceeds 64000 characters at pi/extensions/spec-runtime/runtime.mjs",
+      "application_complete": false,
+      "terminal_accepted": false,
+      "audited_delivered": false,
+      "evidence_valid": true,
+      "checks": null,
+      "path_audit": null,
+      "candidate_hash": null,
+      "timings_ms": {
+        "allocated_preparation_process": 6346.251879000105,
+        "allocated_preparation_worker": 3236.1725309999997,
+        "writing": null,
+        "checks": null,
+        "hidden": null,
+        "execution_process": null,
+        "path_audit": null,
+        "allocated_route_process": 6346.251879000105
+      },
+      "allocated_preparation": {
+        "model_calls": 1,
+        "receipt_cost_usd": 0.034992,
+        "subscription_normalized_cost_usd": 0.005203800000000001,
+        "known_charged_usd": 0.034992,
+        "total_charged_usd": 0.034992,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 16746,
+          "output": 150,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 16896
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      },
+      "execution": {
+        "model_calls": 0,
+        "receipt_cost_usd": 0,
+        "subscription_normalized_cost_usd": 0,
+        "known_charged_usd": 0,
+        "total_charged_usd": 0,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 0
+        },
+        "selectors": []
+      },
+      "allocated_route": {
+        "model_calls": 1,
+        "receipt_cost_usd": 0.034992,
+        "subscription_normalized_cost_usd": 0.005203800000000001,
+        "known_charged_usd": 0.034992,
+        "total_charged_usd": 0.034992,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 16746,
+          "output": 150,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 16896
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      }
+    },
+    {
+      "arm": "muse-self",
+      "task": "hard-lifecycle-extract",
+      "planner": "openrouter/meta/muse-spark-1.3-contributor:high",
+      "writer": null,
+      "representation": "executable",
+      "reasoning_requested": null,
+      "reasoning_effective": null,
+      "preparation_directory": "preparation/muse-executable/002-hard-lifecycle-extract",
+      "preparation_plan_hash": null,
+      "execution_plan_hash": null,
+      "preparation_failed": true,
+      "error": "Only one initial source-request envelope is permitted",
+      "application_complete": false,
+      "terminal_accepted": false,
+      "audited_delivered": false,
+      "evidence_valid": true,
+      "checks": null,
+      "path_audit": null,
+      "candidate_hash": null,
+      "timings_ms": {
+        "allocated_preparation_process": 150852.472742,
+        "allocated_preparation_worker": 150778.60065799998,
+        "writing": null,
+        "checks": null,
+        "hidden": null,
+        "execution_process": null,
+        "path_audit": null,
+        "allocated_route_process": 150852.472742
+      },
+      "allocated_preparation": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.004248,
+        "subscription_normalized_cost_usd": 0.004248,
+        "known_charged_usd": 0.004248,
+        "total_charged_usd": 0.004248,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 12876,
+          "output": 14802,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 14199,
+          "totalTokens": 27678
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      },
+      "execution": {
+        "model_calls": 0,
+        "receipt_cost_usd": 0,
+        "subscription_normalized_cost_usd": 0,
+        "known_charged_usd": 0,
+        "total_charged_usd": 0,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 0
+        },
+        "selectors": []
+      },
+      "allocated_route": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.004248,
+        "subscription_normalized_cost_usd": 0.004248,
+        "known_charged_usd": 0.004248,
+        "total_charged_usd": 0.004248,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 12876,
+          "output": 14802,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 14199,
+          "totalTokens": 27678
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      }
+    },
+    {
+      "arm": "muse-deepseek",
+      "task": "hard-lifecycle-extract",
+      "planner": "openrouter/meta/muse-spark-1.3-contributor:high",
+      "writer": "deepseek/deepseek-flash:off",
+      "representation": "delegated",
+      "reasoning_requested": null,
+      "reasoning_effective": null,
+      "preparation_directory": "preparation/muse-delegated/002-hard-lifecycle-extract",
+      "preparation_plan_hash": null,
+      "execution_plan_hash": null,
+      "preparation_failed": true,
+      "error": "Only one initial source-request envelope is permitted",
+      "application_complete": false,
+      "terminal_accepted": false,
+      "audited_delivered": false,
+      "evidence_valid": true,
+      "checks": null,
+      "path_audit": null,
+      "candidate_hash": null,
+      "timings_ms": {
+        "allocated_preparation_process": 55532.69379599998,
+        "allocated_preparation_worker": 55450.353578,
+        "writing": null,
+        "checks": null,
+        "hidden": null,
+        "execution_process": null,
+        "path_audit": null,
+        "allocated_route_process": 55532.69379599998
+      },
+      "allocated_preparation": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.0021722,
+        "subscription_normalized_cost_usd": 0.0021722,
+        "known_charged_usd": 0.0021722,
+        "total_charged_usd": 0.0021722,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 14356,
+          "output": 3683,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 3203,
+          "totalTokens": 18039
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      },
+      "execution": {
+        "model_calls": 0,
+        "receipt_cost_usd": 0,
+        "subscription_normalized_cost_usd": 0,
+        "known_charged_usd": 0,
+        "total_charged_usd": 0,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 0
+        },
+        "selectors": []
+      },
+      "allocated_route": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.0021722,
+        "subscription_normalized_cost_usd": 0.0021722,
+        "known_charged_usd": 0.0021722,
+        "total_charged_usd": 0.0021722,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 14356,
+          "output": 3683,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 3203,
+          "totalTokens": 18039
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      }
+    },
+    {
+      "arm": "sol-muse",
+      "task": "hard-lifecycle-extract",
+      "planner": "openai-codex/gpt-6.1-sol:low",
+      "writer": "openrouter/meta/muse-spark-1.3-contributor:high",
+      "representation": "delegated",
+      "reasoning_requested": null,
+      "reasoning_effective": null,
+      "preparation_directory": "preparation/sol-delegated/002-hard-lifecycle-extract",
+      "preparation_plan_hash": null,
+      "execution_plan_hash": null,
+      "preparation_failed": true,
+      "error": "Only one initial source-request envelope is permitted",
+      "application_complete": false,
+      "terminal_accepted": false,
+      "audited_delivered": false,
+      "evidence_valid": true,
+      "checks": null,
+      "path_audit": null,
+      "candidate_hash": null,
+      "timings_ms": {
+        "allocated_preparation_process": 15011.763649000088,
+        "allocated_preparation_worker": 11913.84992,
+        "writing": null,
+        "checks": null,
+        "hidden": null,
+        "execution_process": null,
+        "path_audit": null,
+        "allocated_route_process": 15011.763649000088
+      },
+      "allocated_preparation": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.064076,
+        "subscription_normalized_cost_usd": 0.009489000000000001,
+        "known_charged_usd": 0.064076,
+        "total_charged_usd": 0.064076,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 29998,
+          "output": 408,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 145,
+          "totalTokens": 30406
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      },
+      "execution": {
+        "model_calls": 0,
+        "receipt_cost_usd": 0,
+        "subscription_normalized_cost_usd": 0,
+        "known_charged_usd": 0,
+        "total_charged_usd": 0,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 0
+        },
+        "selectors": []
+      },
+      "allocated_route": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.064076,
+        "subscription_normalized_cost_usd": 0.009489000000000001,
+        "known_charged_usd": 0.064076,
+        "total_charged_usd": 0.064076,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 29998,
+          "output": 408,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 145,
+          "totalTokens": 30406
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      }
+    },
+    {
+      "arm": "sol-mimo",
+      "task": "hard-lifecycle-extract",
+      "planner": "openai-codex/gpt-6.1-sol:low",
+      "writer": "primalabs/primalabs-ai/MiMo-V2.6-Pro:medium",
+      "representation": "delegated",
+      "reasoning_requested": "medium",
+      "reasoning_effective": "thinking enabled; no distinct medium wire setting",
+      "preparation_directory": "preparation/sol-delegated/002-hard-lifecycle-extract",
+      "preparation_plan_hash": null,
+      "execution_plan_hash": null,
+      "preparation_failed": true,
+      "error": "Only one initial source-request envelope is permitted",
+      "application_complete": false,
+      "terminal_accepted": false,
+      "audited_delivered": false,
+      "evidence_valid": true,
+      "checks": null,
+      "path_audit": null,
+      "candidate_hash": null,
+      "timings_ms": {
+        "allocated_preparation_process": 15011.763649000088,
+        "allocated_preparation_worker": 11913.84992,
+        "writing": null,
+        "checks": null,
+        "hidden": null,
+        "execution_process": null,
+        "path_audit": null,
+        "allocated_route_process": 15011.763649000088
+      },
+      "allocated_preparation": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.064076,
+        "subscription_normalized_cost_usd": 0.009489000000000001,
+        "known_charged_usd": 0.064076,
+        "total_charged_usd": 0.064076,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 29998,
+          "output": 408,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 145,
+          "totalTokens": 30406
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      },
+      "execution": {
+        "model_calls": 0,
+        "receipt_cost_usd": 0,
+        "subscription_normalized_cost_usd": 0,
+        "known_charged_usd": 0,
+        "total_charged_usd": 0,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 0
+        },
+        "selectors": []
+      },
+      "allocated_route": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.064076,
+        "subscription_normalized_cost_usd": 0.009489000000000001,
+        "known_charged_usd": 0.064076,
+        "total_charged_usd": 0.064076,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 29998,
+          "output": 408,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 145,
+          "totalTokens": 30406
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      }
+    }
+  ],
+  "resume_observations": [
+    {
+      "arm": "sol-mimo",
+      "task": "hard-context-calibration",
+      "planner": "openai-codex/gpt-6.1-sol:low",
+      "writer": "primalabs/primalabs-ai/MiMo-V2.6-Pro:medium",
+      "representation": "delegated",
+      "reasoning_requested": "medium",
+      "reasoning_effective": "thinking enabled; no distinct medium wire setting",
+      "preparation_directory": "preparation/sol-delegated/000-hard-context-calibration",
+      "preparation_plan_hash": "e15c1d4ae393fdb42dc303e4e6b3bed8fca48f2f41c1c61a2b0f9ecf3748a650",
+      "execution_plan_hash": "e15c1d4ae393fdb42dc303e4e6b3bed8fca48f2f41c1c61a2b0f9ecf3748a650",
+      "preparation_failed": false,
+      "error": null,
+      "application_complete": true,
+      "terminal_accepted": true,
+      "audited_delivered": true,
+      "evidence_valid": true,
+      "checks": {
+        "protected_intact": true,
+        "visible": true,
+        "candidate_tests": true
+      },
+      "path_audit": null,
+      "candidate_hash": "555cda40f71d32ad9670e95f37629f0e35bfccf2a5633f67466c028829a7d9af",
+      "timings_ms": {
+        "allocated_preparation_process": 16141.332986000009,
+        "allocated_preparation_worker": 13030.432289,
+        "writing": 44217.096155,
+        "checks": 153.7341329999981,
+        "hidden": 93.55085099999997,
+        "execution_process": 44651.899195,
+        "path_audit": null,
+        "allocated_route_process": 60793.23218100001
+      },
+      "allocated_preparation": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.031846,
+        "subscription_normalized_cost_usd": 0.0045567,
+        "known_charged_usd": 0.031846,
+        "total_charged_usd": 0.031846,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 12253,
+          "output": 734,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 12987
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      },
+      "execution": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.013348845000000002,
+        "subscription_normalized_cost_usd": 0.013348845000000002,
+        "known_charged_usd": 0.013348845000000002,
+        "total_charged_usd": 0.013348845000000002,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 3157,
+          "output": 13765,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 12365,
+          "totalTokens": 16922
+        },
+        "selectors": [
+          "primalabs/primalabs-ai/MiMo-V2.6-Pro:medium"
+        ]
+      },
+      "allocated_route": {
+        "model_calls": 4,
+        "receipt_cost_usd": 0.045194845,
+        "subscription_normalized_cost_usd": 0.017905545000000002,
+        "known_charged_usd": 0.045194845,
+        "total_charged_usd": 0.045194845,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 15410,
+          "output": 14499,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 12365,
+          "totalTokens": 29909
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low",
+          "primalabs/primalabs-ai/MiMo-V2.6-Pro:medium"
+        ]
+      }
+    },
+    {
+      "arm": "sol-mimo",
+      "task": "hard-dependency-handoff",
+      "planner": "openai-codex/gpt-6.1-sol:low",
+      "writer": "primalabs/primalabs-ai/MiMo-V2.6-Pro:medium",
+      "representation": "delegated",
+      "reasoning_requested": "medium",
+      "reasoning_effective": "thinking enabled; no distinct medium wire setting",
+      "preparation_directory": "preparation/sol-delegated/001-hard-dependency-handoff",
+      "preparation_plan_hash": null,
+      "execution_plan_hash": null,
+      "preparation_failed": true,
+      "error": "needs discovery: requested source exceeds 64000 characters at pi/extensions/spec-runtime/runtime.mjs",
+      "application_complete": false,
+      "terminal_accepted": false,
+      "audited_delivered": false,
+      "evidence_valid": true,
+      "checks": null,
+      "path_audit": null,
+      "candidate_hash": null,
+      "timings_ms": {
+        "allocated_preparation_process": 6346.251879000105,
+        "allocated_preparation_worker": 3236.1725309999997,
+        "writing": null,
+        "checks": null,
+        "hidden": null,
+        "execution_process": null,
+        "path_audit": null,
+        "allocated_route_process": 6346.251879000105
+      },
+      "allocated_preparation": {
+        "model_calls": 1,
+        "receipt_cost_usd": 0.034992,
+        "subscription_normalized_cost_usd": 0.005203800000000001,
+        "known_charged_usd": 0.034992,
+        "total_charged_usd": 0.034992,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 16746,
+          "output": 150,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 16896
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      },
+      "execution": {
+        "model_calls": 0,
+        "receipt_cost_usd": 0,
+        "subscription_normalized_cost_usd": 0,
+        "known_charged_usd": 0,
+        "total_charged_usd": 0,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 0
+        },
+        "selectors": []
+      },
+      "allocated_route": {
+        "model_calls": 1,
+        "receipt_cost_usd": 0.034992,
+        "subscription_normalized_cost_usd": 0.005203800000000001,
+        "known_charged_usd": 0.034992,
+        "total_charged_usd": 0.034992,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 16746,
+          "output": 150,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 16896
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      }
+    },
+    {
+      "arm": "sol-mimo",
+      "task": "hard-lifecycle-extract",
+      "planner": "openai-codex/gpt-6.1-sol:low",
+      "writer": "primalabs/primalabs-ai/MiMo-V2.6-Pro:medium",
+      "representation": "delegated",
+      "reasoning_requested": "medium",
+      "reasoning_effective": "thinking enabled; no distinct medium wire setting",
+      "preparation_directory": "preparation/sol-delegated/002-hard-lifecycle-extract",
+      "preparation_plan_hash": null,
+      "execution_plan_hash": null,
+      "preparation_failed": true,
+      "error": "Only one initial source-request envelope is permitted",
+      "application_complete": false,
+      "terminal_accepted": false,
+      "audited_delivered": false,
+      "evidence_valid": true,
+      "checks": null,
+      "path_audit": null,
+      "candidate_hash": null,
+      "timings_ms": {
+        "allocated_preparation_process": 15011.763649000088,
+        "allocated_preparation_worker": 11913.84992,
+        "writing": null,
+        "checks": null,
+        "hidden": null,
+        "execution_process": null,
+        "path_audit": null,
+        "allocated_route_process": 15011.763649000088
+      },
+      "allocated_preparation": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.064076,
+        "subscription_normalized_cost_usd": 0.009489000000000001,
+        "known_charged_usd": 0.064076,
+        "total_charged_usd": 0.064076,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 29998,
+          "output": 408,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 145,
+          "totalTokens": 30406
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      },
+      "execution": {
+        "model_calls": 0,
+        "receipt_cost_usd": 0,
+        "subscription_normalized_cost_usd": 0,
+        "known_charged_usd": 0,
+        "total_charged_usd": 0,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 0
+        },
+        "selectors": []
+      },
+      "allocated_route": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.064076,
+        "subscription_normalized_cost_usd": 0.009489000000000001,
+        "known_charged_usd": 0.064076,
+        "total_charged_usd": 0.064076,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 29998,
+          "output": 408,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 145,
+          "totalTokens": 30406
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      }
+    }
+  ],
+  "effective_routes": [
+    {
+      "arm": "muse-self",
+      "task": "hard-context-calibration",
+      "planner": "openrouter/meta/muse-spark-1.3-contributor:high",
+      "writer": null,
+      "representation": "executable",
+      "reasoning_requested": null,
+      "reasoning_effective": null,
+      "preparation_directory": "preparation/muse-executable/000-hard-context-calibration",
+      "preparation_plan_hash": null,
+      "execution_plan_hash": null,
+      "preparation_failed": true,
+      "error": "Only one initial source-request envelope is permitted",
+      "application_complete": false,
+      "terminal_accepted": false,
+      "audited_delivered": false,
+      "evidence_valid": true,
+      "checks": null,
+      "path_audit": null,
+      "candidate_hash": null,
+      "timings_ms": {
+        "allocated_preparation_process": 11625.100192000002,
+        "allocated_preparation_worker": 11557.521937,
+        "writing": null,
+        "checks": null,
+        "hidden": null,
+        "execution_process": null,
+        "path_audit": null,
+        "allocated_route_process": 11625.100192000002
+      },
+      "allocated_preparation": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.0004964000000000001,
+        "subscription_normalized_cost_usd": 0.0004964000000000001,
+        "known_charged_usd": 0.0004964000000000001,
+        "total_charged_usd": 0.0004964000000000001,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 4658,
+          "output": 153,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 28,
+          "totalTokens": 4811
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      },
+      "execution": {
+        "model_calls": 0,
+        "receipt_cost_usd": 0,
+        "subscription_normalized_cost_usd": 0,
+        "known_charged_usd": 0,
+        "total_charged_usd": 0,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 0
+        },
+        "selectors": []
+      },
+      "allocated_route": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.0004964000000000001,
+        "subscription_normalized_cost_usd": 0.0004964000000000001,
+        "known_charged_usd": 0.0004964000000000001,
+        "total_charged_usd": 0.0004964000000000001,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 4658,
+          "output": 153,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 28,
+          "totalTokens": 4811
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      }
+    },
+    {
+      "arm": "muse-deepseek",
+      "task": "hard-context-calibration",
+      "planner": "openrouter/meta/muse-spark-1.3-contributor:high",
+      "writer": "deepseek/deepseek-flash:off",
+      "representation": "delegated",
+      "reasoning_requested": null,
+      "reasoning_effective": null,
+      "preparation_directory": "preparation/muse-delegated/000-hard-context-calibration",
+      "preparation_plan_hash": "35bfc6acd8fe4cb990cdc324adfd63245b69c9b9a290b61387f125c388e9e7ab",
+      "execution_plan_hash": "35bfc6acd8fe4cb990cdc324adfd63245b69c9b9a290b61387f125c388e9e7ab",
+      "preparation_failed": false,
+      "error": null,
+      "application_complete": true,
+      "terminal_accepted": true,
+      "audited_delivered": false,
+      "evidence_valid": true,
+      "checks": {
+        "protected_intact": true,
+        "visible": false,
+        "candidate_tests": false
+      },
+      "path_audit": null,
+      "candidate_hash": "17d9d9e9885e80134b50f6ee62540d69bc0037d74b84677f121b99c630d38cd9",
+      "timings_ms": {
+        "allocated_preparation_process": 108041.04800400001,
+        "allocated_preparation_worker": 107980.384542,
+        "writing": 2893.558689,
+        "checks": 162.97050499999978,
+        "hidden": 99.25872600000002,
+        "execution_process": 3336.0580090000003,
+        "path_audit": null,
+        "allocated_route_process": 111377.10601300001
+      },
+      "allocated_preparation": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.0027621,
+        "subscription_normalized_cost_usd": 0.0027621,
+        "known_charged_usd": 0.0027621,
+        "total_charged_usd": 0.0027621,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 12205,
+          "output": 7708,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 6787,
+          "totalTokens": 19913
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      },
+      "execution": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.001999308,
+        "subscription_normalized_cost_usd": 0.001999308,
+        "known_charged_usd": 0.001999308,
+        "total_charged_usd": 0.001999308,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 2233,
+          "output": 1104,
+          "cacheRead": 768,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 4105
+        },
+        "selectors": [
+          "deepseek/deepseek-flash:off"
+        ]
+      },
+      "allocated_route": {
+        "model_calls": 4,
+        "receipt_cost_usd": 0.004761408,
+        "subscription_normalized_cost_usd": 0.004761408,
+        "known_charged_usd": 0.004761408,
+        "total_charged_usd": 0.004761408,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 14438,
+          "output": 8812,
+          "cacheRead": 768,
+          "cacheWrite": 0,
+          "reasoning": 6787,
+          "totalTokens": 24018
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high",
+          "deepseek/deepseek-flash:off"
+        ]
+      }
+    },
+    {
+      "arm": "sol-muse",
+      "task": "hard-context-calibration",
+      "planner": "openai-codex/gpt-6.1-sol:low",
+      "writer": "openrouter/meta/muse-spark-1.3-contributor:high",
+      "representation": "delegated",
+      "reasoning_requested": null,
+      "reasoning_effective": null,
+      "preparation_directory": "preparation/sol-delegated/000-hard-context-calibration",
+      "preparation_plan_hash": "e15c1d4ae393fdb42dc303e4e6b3bed8fca48f2f41c1c61a2b0f9ecf3748a650",
+      "execution_plan_hash": "e15c1d4ae393fdb42dc303e4e6b3bed8fca48f2f41c1c61a2b0f9ecf3748a650",
+      "preparation_failed": false,
+      "error": null,
+      "application_complete": true,
+      "terminal_accepted": true,
+      "audited_delivered": true,
+      "evidence_valid": true,
+      "checks": {
+        "protected_intact": true,
+        "visible": true,
+        "candidate_tests": true
+      },
+      "path_audit": null,
+      "candidate_hash": "64d581ce9f023c65548e8a6f387cb997aae7e347ad51992af60656905aba592f",
+      "timings_ms": {
+        "allocated_preparation_process": 16141.332986000009,
+        "allocated_preparation_worker": 13030.432289,
+        "writing": 107752.339225,
+        "checks": 167.58101700000407,
+        "hidden": 103.51607500000682,
+        "execution_process": 108205.56837599998,
+        "path_audit": null,
+        "allocated_route_process": 124346.90136199999
+      },
+      "allocated_preparation": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.031846,
+        "subscription_normalized_cost_usd": 0.0045567,
+        "known_charged_usd": 0.031846,
+        "total_charged_usd": 0.031846,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 12253,
+          "output": 734,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 12987
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      },
+      "execution": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.0038168000000000004,
+        "subscription_normalized_cost_usd": 0.0038168000000000004,
+        "known_charged_usd": 0.0038168000000000004,
+        "total_charged_usd": 0.0038168000000000004,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 3086,
+          "output": 17541,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 15673,
+          "totalTokens": 20627
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      },
+      "allocated_route": {
+        "model_calls": 4,
+        "receipt_cost_usd": 0.0356628,
+        "subscription_normalized_cost_usd": 0.0083735,
+        "known_charged_usd": 0.0356628,
+        "total_charged_usd": 0.0356628,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 15339,
+          "output": 18275,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 15673,
+          "totalTokens": 33614
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low",
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      }
+    },
+    {
+      "arm": "muse-self",
+      "task": "hard-dependency-handoff",
+      "planner": "openrouter/meta/muse-spark-1.3-contributor:high",
+      "writer": null,
+      "representation": "executable",
+      "reasoning_requested": null,
+      "reasoning_effective": null,
+      "preparation_directory": "preparation/muse-executable/001-hard-dependency-handoff",
+      "preparation_plan_hash": null,
+      "execution_plan_hash": null,
+      "preparation_failed": true,
+      "error": "Only one initial source-request envelope is permitted",
+      "application_complete": false,
+      "terminal_accepted": false,
+      "audited_delivered": false,
+      "evidence_valid": true,
+      "checks": null,
+      "path_audit": null,
+      "candidate_hash": null,
+      "timings_ms": {
+        "allocated_preparation_process": 38924.25681500003,
+        "allocated_preparation_worker": 38829.807983000006,
+        "writing": null,
+        "checks": null,
+        "hidden": null,
+        "execution_process": null,
+        "path_audit": null,
+        "allocated_route_process": 38924.25681500003
+      },
+      "allocated_preparation": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.0038780000000000004,
+        "subscription_normalized_cost_usd": 0.0038780000000000004,
+        "known_charged_usd": 0.0038780000000000004,
+        "total_charged_usd": 0.0038780000000000004,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 31658,
+          "output": 3561,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 3109,
+          "totalTokens": 35219
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      },
+      "execution": {
+        "model_calls": 0,
+        "receipt_cost_usd": 0,
+        "subscription_normalized_cost_usd": 0,
+        "known_charged_usd": 0,
+        "total_charged_usd": 0,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 0
+        },
+        "selectors": []
+      },
+      "allocated_route": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.0038780000000000004,
+        "subscription_normalized_cost_usd": 0.0038780000000000004,
+        "known_charged_usd": 0.0038780000000000004,
+        "total_charged_usd": 0.0038780000000000004,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 31658,
+          "output": 3561,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 3109,
+          "totalTokens": 35219
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      }
+    },
+    {
+      "arm": "muse-deepseek",
+      "task": "hard-dependency-handoff",
+      "planner": "openrouter/meta/muse-spark-1.3-contributor:high",
+      "writer": "deepseek/deepseek-flash:off",
+      "representation": "delegated",
+      "reasoning_requested": null,
+      "reasoning_effective": null,
+      "preparation_directory": "preparation/muse-delegated/001-hard-dependency-handoff",
+      "preparation_plan_hash": null,
+      "execution_plan_hash": null,
+      "preparation_failed": true,
+      "error": "test-handoff-1: Excerpt anchor must be unique: pi/extensions/spec-runtime/runtime.test.mjs",
+      "application_complete": false,
+      "terminal_accepted": false,
+      "audited_delivered": false,
+      "evidence_valid": true,
+      "checks": null,
+      "path_audit": null,
+      "candidate_hash": null,
+      "timings_ms": {
+        "allocated_preparation_process": 308157.379347,
+        "allocated_preparation_worker": 308073.43432899995,
+        "writing": null,
+        "checks": null,
+        "hidden": null,
+        "execution_process": null,
+        "path_audit": null,
+        "allocated_route_process": 308157.379347
+      },
+      "allocated_preparation": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.008064400000000001,
+        "subscription_normalized_cost_usd": 0.008064400000000001,
+        "known_charged_usd": 0.008064400000000001,
+        "total_charged_usd": 0.008064400000000001,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 33140,
+          "output": 23752,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 18708,
+          "totalTokens": 56892
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      },
+      "execution": {
+        "model_calls": 0,
+        "receipt_cost_usd": 0,
+        "subscription_normalized_cost_usd": 0,
+        "known_charged_usd": 0,
+        "total_charged_usd": 0,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 0
+        },
+        "selectors": []
+      },
+      "allocated_route": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.008064400000000001,
+        "subscription_normalized_cost_usd": 0.008064400000000001,
+        "known_charged_usd": 0.008064400000000001,
+        "total_charged_usd": 0.008064400000000001,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 33140,
+          "output": 23752,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 18708,
+          "totalTokens": 56892
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      }
+    },
+    {
+      "arm": "sol-muse",
+      "task": "hard-dependency-handoff",
+      "planner": "openai-codex/gpt-6.1-sol:low",
+      "writer": "openrouter/meta/muse-spark-1.3-contributor:high",
+      "representation": "delegated",
+      "reasoning_requested": null,
+      "reasoning_effective": null,
+      "preparation_directory": "preparation/sol-delegated/001-hard-dependency-handoff",
+      "preparation_plan_hash": null,
+      "execution_plan_hash": null,
+      "preparation_failed": true,
+      "error": "needs discovery: requested source exceeds 64000 characters at pi/extensions/spec-runtime/runtime.mjs",
+      "application_complete": false,
+      "terminal_accepted": false,
+      "audited_delivered": false,
+      "evidence_valid": true,
+      "checks": null,
+      "path_audit": null,
+      "candidate_hash": null,
+      "timings_ms": {
+        "allocated_preparation_process": 6346.251879000105,
+        "allocated_preparation_worker": 3236.1725309999997,
+        "writing": null,
+        "checks": null,
+        "hidden": null,
+        "execution_process": null,
+        "path_audit": null,
+        "allocated_route_process": 6346.251879000105
+      },
+      "allocated_preparation": {
+        "model_calls": 1,
+        "receipt_cost_usd": 0.034992,
+        "subscription_normalized_cost_usd": 0.005203800000000001,
+        "known_charged_usd": 0.034992,
+        "total_charged_usd": 0.034992,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 16746,
+          "output": 150,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 16896
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      },
+      "execution": {
+        "model_calls": 0,
+        "receipt_cost_usd": 0,
+        "subscription_normalized_cost_usd": 0,
+        "known_charged_usd": 0,
+        "total_charged_usd": 0,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 0
+        },
+        "selectors": []
+      },
+      "allocated_route": {
+        "model_calls": 1,
+        "receipt_cost_usd": 0.034992,
+        "subscription_normalized_cost_usd": 0.005203800000000001,
+        "known_charged_usd": 0.034992,
+        "total_charged_usd": 0.034992,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 16746,
+          "output": 150,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 16896
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      }
+    },
+    {
+      "arm": "muse-self",
+      "task": "hard-lifecycle-extract",
+      "planner": "openrouter/meta/muse-spark-1.3-contributor:high",
+      "writer": null,
+      "representation": "executable",
+      "reasoning_requested": null,
+      "reasoning_effective": null,
+      "preparation_directory": "preparation/muse-executable/002-hard-lifecycle-extract",
+      "preparation_plan_hash": null,
+      "execution_plan_hash": null,
+      "preparation_failed": true,
+      "error": "Only one initial source-request envelope is permitted",
+      "application_complete": false,
+      "terminal_accepted": false,
+      "audited_delivered": false,
+      "evidence_valid": true,
+      "checks": null,
+      "path_audit": null,
+      "candidate_hash": null,
+      "timings_ms": {
+        "allocated_preparation_process": 150852.472742,
+        "allocated_preparation_worker": 150778.60065799998,
+        "writing": null,
+        "checks": null,
+        "hidden": null,
+        "execution_process": null,
+        "path_audit": null,
+        "allocated_route_process": 150852.472742
+      },
+      "allocated_preparation": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.004248,
+        "subscription_normalized_cost_usd": 0.004248,
+        "known_charged_usd": 0.004248,
+        "total_charged_usd": 0.004248,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 12876,
+          "output": 14802,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 14199,
+          "totalTokens": 27678
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      },
+      "execution": {
+        "model_calls": 0,
+        "receipt_cost_usd": 0,
+        "subscription_normalized_cost_usd": 0,
+        "known_charged_usd": 0,
+        "total_charged_usd": 0,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 0
+        },
+        "selectors": []
+      },
+      "allocated_route": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.004248,
+        "subscription_normalized_cost_usd": 0.004248,
+        "known_charged_usd": 0.004248,
+        "total_charged_usd": 0.004248,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 12876,
+          "output": 14802,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 14199,
+          "totalTokens": 27678
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      }
+    },
+    {
+      "arm": "muse-deepseek",
+      "task": "hard-lifecycle-extract",
+      "planner": "openrouter/meta/muse-spark-1.3-contributor:high",
+      "writer": "deepseek/deepseek-flash:off",
+      "representation": "delegated",
+      "reasoning_requested": null,
+      "reasoning_effective": null,
+      "preparation_directory": "preparation/muse-delegated/002-hard-lifecycle-extract",
+      "preparation_plan_hash": null,
+      "execution_plan_hash": null,
+      "preparation_failed": true,
+      "error": "Only one initial source-request envelope is permitted",
+      "application_complete": false,
+      "terminal_accepted": false,
+      "audited_delivered": false,
+      "evidence_valid": true,
+      "checks": null,
+      "path_audit": null,
+      "candidate_hash": null,
+      "timings_ms": {
+        "allocated_preparation_process": 55532.69379599998,
+        "allocated_preparation_worker": 55450.353578,
+        "writing": null,
+        "checks": null,
+        "hidden": null,
+        "execution_process": null,
+        "path_audit": null,
+        "allocated_route_process": 55532.69379599998
+      },
+      "allocated_preparation": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.0021722,
+        "subscription_normalized_cost_usd": 0.0021722,
+        "known_charged_usd": 0.0021722,
+        "total_charged_usd": 0.0021722,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 14356,
+          "output": 3683,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 3203,
+          "totalTokens": 18039
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      },
+      "execution": {
+        "model_calls": 0,
+        "receipt_cost_usd": 0,
+        "subscription_normalized_cost_usd": 0,
+        "known_charged_usd": 0,
+        "total_charged_usd": 0,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 0
+        },
+        "selectors": []
+      },
+      "allocated_route": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.0021722,
+        "subscription_normalized_cost_usd": 0.0021722,
+        "known_charged_usd": 0.0021722,
+        "total_charged_usd": 0.0021722,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 14356,
+          "output": 3683,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 3203,
+          "totalTokens": 18039
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      }
+    },
+    {
+      "arm": "sol-muse",
+      "task": "hard-lifecycle-extract",
+      "planner": "openai-codex/gpt-6.1-sol:low",
+      "writer": "openrouter/meta/muse-spark-1.3-contributor:high",
+      "representation": "delegated",
+      "reasoning_requested": null,
+      "reasoning_effective": null,
+      "preparation_directory": "preparation/sol-delegated/002-hard-lifecycle-extract",
+      "preparation_plan_hash": null,
+      "execution_plan_hash": null,
+      "preparation_failed": true,
+      "error": "Only one initial source-request envelope is permitted",
+      "application_complete": false,
+      "terminal_accepted": false,
+      "audited_delivered": false,
+      "evidence_valid": true,
+      "checks": null,
+      "path_audit": null,
+      "candidate_hash": null,
+      "timings_ms": {
+        "allocated_preparation_process": 15011.763649000088,
+        "allocated_preparation_worker": 11913.84992,
+        "writing": null,
+        "checks": null,
+        "hidden": null,
+        "execution_process": null,
+        "path_audit": null,
+        "allocated_route_process": 15011.763649000088
+      },
+      "allocated_preparation": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.064076,
+        "subscription_normalized_cost_usd": 0.009489000000000001,
+        "known_charged_usd": 0.064076,
+        "total_charged_usd": 0.064076,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 29998,
+          "output": 408,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 145,
+          "totalTokens": 30406
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      },
+      "execution": {
+        "model_calls": 0,
+        "receipt_cost_usd": 0,
+        "subscription_normalized_cost_usd": 0,
+        "known_charged_usd": 0,
+        "total_charged_usd": 0,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 0
+        },
+        "selectors": []
+      },
+      "allocated_route": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.064076,
+        "subscription_normalized_cost_usd": 0.009489000000000001,
+        "known_charged_usd": 0.064076,
+        "total_charged_usd": 0.064076,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 29998,
+          "output": 408,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 145,
+          "totalTokens": 30406
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      }
+    },
+    {
+      "arm": "sol-mimo",
+      "task": "hard-context-calibration",
+      "planner": "openai-codex/gpt-6.1-sol:low",
+      "writer": "primalabs/primalabs-ai/MiMo-V2.6-Pro:medium",
+      "representation": "delegated",
+      "reasoning_requested": "medium",
+      "reasoning_effective": "thinking enabled; no distinct medium wire setting",
+      "preparation_directory": "preparation/sol-delegated/000-hard-context-calibration",
+      "preparation_plan_hash": "e15c1d4ae393fdb42dc303e4e6b3bed8fca48f2f41c1c61a2b0f9ecf3748a650",
+      "execution_plan_hash": "e15c1d4ae393fdb42dc303e4e6b3bed8fca48f2f41c1c61a2b0f9ecf3748a650",
+      "preparation_failed": false,
+      "error": null,
+      "application_complete": true,
+      "terminal_accepted": true,
+      "audited_delivered": true,
+      "evidence_valid": true,
+      "checks": {
+        "protected_intact": true,
+        "visible": true,
+        "candidate_tests": true
+      },
+      "path_audit": null,
+      "candidate_hash": "555cda40f71d32ad9670e95f37629f0e35bfccf2a5633f67466c028829a7d9af",
+      "timings_ms": {
+        "allocated_preparation_process": 16141.332986000009,
+        "allocated_preparation_worker": 13030.432289,
+        "writing": 44217.096155,
+        "checks": 153.7341329999981,
+        "hidden": 93.55085099999997,
+        "execution_process": 44651.899195,
+        "path_audit": null,
+        "allocated_route_process": 60793.23218100001
+      },
+      "allocated_preparation": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.031846,
+        "subscription_normalized_cost_usd": 0.0045567,
+        "known_charged_usd": 0.031846,
+        "total_charged_usd": 0.031846,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 12253,
+          "output": 734,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 12987
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      },
+      "execution": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.013348845000000002,
+        "subscription_normalized_cost_usd": 0.013348845000000002,
+        "known_charged_usd": 0.013348845000000002,
+        "total_charged_usd": 0.013348845000000002,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 3157,
+          "output": 13765,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 12365,
+          "totalTokens": 16922
+        },
+        "selectors": [
+          "primalabs/primalabs-ai/MiMo-V2.6-Pro:medium"
+        ]
+      },
+      "allocated_route": {
+        "model_calls": 4,
+        "receipt_cost_usd": 0.045194845,
+        "subscription_normalized_cost_usd": 0.017905545000000002,
+        "known_charged_usd": 0.045194845,
+        "total_charged_usd": 0.045194845,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 15410,
+          "output": 14499,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 12365,
+          "totalTokens": 29909
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low",
+          "primalabs/primalabs-ai/MiMo-V2.6-Pro:medium"
+        ]
+      }
+    },
+    {
+      "arm": "sol-mimo",
+      "task": "hard-dependency-handoff",
+      "planner": "openai-codex/gpt-6.1-sol:low",
+      "writer": "primalabs/primalabs-ai/MiMo-V2.6-Pro:medium",
+      "representation": "delegated",
+      "reasoning_requested": "medium",
+      "reasoning_effective": "thinking enabled; no distinct medium wire setting",
+      "preparation_directory": "preparation/sol-delegated/001-hard-dependency-handoff",
+      "preparation_plan_hash": null,
+      "execution_plan_hash": null,
+      "preparation_failed": true,
+      "error": "needs discovery: requested source exceeds 64000 characters at pi/extensions/spec-runtime/runtime.mjs",
+      "application_complete": false,
+      "terminal_accepted": false,
+      "audited_delivered": false,
+      "evidence_valid": true,
+      "checks": null,
+      "path_audit": null,
+      "candidate_hash": null,
+      "timings_ms": {
+        "allocated_preparation_process": 6346.251879000105,
+        "allocated_preparation_worker": 3236.1725309999997,
+        "writing": null,
+        "checks": null,
+        "hidden": null,
+        "execution_process": null,
+        "path_audit": null,
+        "allocated_route_process": 6346.251879000105
+      },
+      "allocated_preparation": {
+        "model_calls": 1,
+        "receipt_cost_usd": 0.034992,
+        "subscription_normalized_cost_usd": 0.005203800000000001,
+        "known_charged_usd": 0.034992,
+        "total_charged_usd": 0.034992,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 16746,
+          "output": 150,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 16896
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      },
+      "execution": {
+        "model_calls": 0,
+        "receipt_cost_usd": 0,
+        "subscription_normalized_cost_usd": 0,
+        "known_charged_usd": 0,
+        "total_charged_usd": 0,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 0
+        },
+        "selectors": []
+      },
+      "allocated_route": {
+        "model_calls": 1,
+        "receipt_cost_usd": 0.034992,
+        "subscription_normalized_cost_usd": 0.005203800000000001,
+        "known_charged_usd": 0.034992,
+        "total_charged_usd": 0.034992,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 16746,
+          "output": 150,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 16896
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      }
+    },
+    {
+      "arm": "sol-mimo",
+      "task": "hard-lifecycle-extract",
+      "planner": "openai-codex/gpt-6.1-sol:low",
+      "writer": "primalabs/primalabs-ai/MiMo-V2.6-Pro:medium",
+      "representation": "delegated",
+      "reasoning_requested": "medium",
+      "reasoning_effective": "thinking enabled; no distinct medium wire setting",
+      "preparation_directory": "preparation/sol-delegated/002-hard-lifecycle-extract",
+      "preparation_plan_hash": null,
+      "execution_plan_hash": null,
+      "preparation_failed": true,
+      "error": "Only one initial source-request envelope is permitted",
+      "application_complete": false,
+      "terminal_accepted": false,
+      "audited_delivered": false,
+      "evidence_valid": true,
+      "checks": null,
+      "path_audit": null,
+      "candidate_hash": null,
+      "timings_ms": {
+        "allocated_preparation_process": 15011.763649000088,
+        "allocated_preparation_worker": 11913.84992,
+        "writing": null,
+        "checks": null,
+        "hidden": null,
+        "execution_process": null,
+        "path_audit": null,
+        "allocated_route_process": 15011.763649000088
+      },
+      "allocated_preparation": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.064076,
+        "subscription_normalized_cost_usd": 0.009489000000000001,
+        "known_charged_usd": 0.064076,
+        "total_charged_usd": 0.064076,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 29998,
+          "output": 408,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 145,
+          "totalTokens": 30406
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      },
+      "execution": {
+        "model_calls": 0,
+        "receipt_cost_usd": 0,
+        "subscription_normalized_cost_usd": 0,
+        "known_charged_usd": 0,
+        "total_charged_usd": 0,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 0
+        },
+        "selectors": []
+      },
+      "allocated_route": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.064076,
+        "subscription_normalized_cost_usd": 0.009489000000000001,
+        "known_charged_usd": 0.064076,
+        "total_charged_usd": 0.064076,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 29998,
+          "output": 408,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 145,
+          "totalTokens": 30406
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      }
+    }
+  ],
+  "matched_calibration_writers": {
+    "task": "hard-context-calibration",
+    "plan_hash": "e15c1d4ae393fdb42dc303e4e6b3bed8fca48f2f41c1c61a2b0f9ecf3748a650",
+    "initial_packets_identical": true,
+    "initial_packet_hashes": {
+      "seed-resumed-calibration": {
+        "system_hash": "be6197e39adb9c76562495530322954ee15c35873a55ad70124f3859b2375af5",
+        "input_hash": "1f68d13ba410a208fa9c788e4f8dc8a22c0d719f9eb659476c9df1c0d906cec1"
+      },
+      "test-resumed-calibration": {
+        "system_hash": "9c2103d01024d0ee9c5efcea1bdcf55eb6e01166b1a50fb679d8a4c0daca9335",
+        "input_hash": "427ab9d7cf7910e73f54fdbc0c4fd9f9a6fb94a6124a47bff5cabbabb52aa320"
+      }
+    },
+    "execution_backend_sources_identical": true,
+    "backend_hashes": {
+      "scripts/changeset/engine.mjs": "ad23b48bde6407cbdcd9ab9089d75344ff52b963e727a3875db2eed10106df49",
+      "scripts/changeset-study/strategies.mjs": "056ff2b8e8161fb0547f2090d3be30bf3ace6260687d006d3602e3aef5f21062",
+      "scripts/changeset-study/focused-editors.mjs": "0e4053c5037e3841c58984af33c777d900b0a315c36f4ab835b266392b1a9f47",
+      "scripts/changeset-study/context-compact.mjs": "ddec2dd8fd753bd03c6e9a61ff9a6f1f1c49ccb184c54fb64548002782e796af",
+      "scripts/changeset-study/application-diagnostic.mjs": "c051e840f024b25e5c883a02b29fb41af68c87bc3a70ab545f0d3a59faa6fb82",
+      "scripts/changeset-study/sandbox.mjs": "0a286e8272c939d50f9684ef4c2407c6262a5d48b8989377b6f25aaa05c3dfbd",
+      "scripts/changeset-study/candidate-checks.mjs": "a6401265eb06966bdbd9ee8837a2e72dcca35666758c6c3b6b29861ac2fba515",
+      "scripts/changeset-study/client.mjs": "f978608379e5f7ca5b3f69bb4a24a714991da00e36b4d2d779d0f2126feadee3"
+    },
+    "sdk_inventory_hash": "fa74885fd108ce0ba2577113288886ceb499c202124e875114d07adc22b0eabc",
+    "sol_muse": {
+      "arm": "sol-muse",
+      "task": "hard-context-calibration",
+      "planner": "openai-codex/gpt-6.1-sol:low",
+      "writer": "openrouter/meta/muse-spark-1.3-contributor:high",
+      "representation": "delegated",
+      "reasoning_requested": null,
+      "reasoning_effective": null,
+      "preparation_directory": "preparation/sol-delegated/000-hard-context-calibration",
+      "preparation_plan_hash": "e15c1d4ae393fdb42dc303e4e6b3bed8fca48f2f41c1c61a2b0f9ecf3748a650",
+      "execution_plan_hash": "e15c1d4ae393fdb42dc303e4e6b3bed8fca48f2f41c1c61a2b0f9ecf3748a650",
+      "preparation_failed": false,
+      "error": null,
+      "application_complete": true,
+      "terminal_accepted": true,
+      "audited_delivered": true,
+      "evidence_valid": true,
+      "checks": {
+        "protected_intact": true,
+        "visible": true,
+        "candidate_tests": true
+      },
+      "path_audit": null,
+      "candidate_hash": "64d581ce9f023c65548e8a6f387cb997aae7e347ad51992af60656905aba592f",
+      "timings_ms": {
+        "allocated_preparation_process": 16141.332986000009,
+        "allocated_preparation_worker": 13030.432289,
+        "writing": 107752.339225,
+        "checks": 167.58101700000407,
+        "hidden": 103.51607500000682,
+        "execution_process": 108205.56837599998,
+        "path_audit": null,
+        "allocated_route_process": 124346.90136199999
+      },
+      "allocated_preparation": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.031846,
+        "subscription_normalized_cost_usd": 0.0045567,
+        "known_charged_usd": 0.031846,
+        "total_charged_usd": 0.031846,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 12253,
+          "output": 734,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 12987
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      },
+      "execution": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.0038168000000000004,
+        "subscription_normalized_cost_usd": 0.0038168000000000004,
+        "known_charged_usd": 0.0038168000000000004,
+        "total_charged_usd": 0.0038168000000000004,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 3086,
+          "output": 17541,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 15673,
+          "totalTokens": 20627
+        },
+        "selectors": [
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      },
+      "allocated_route": {
+        "model_calls": 4,
+        "receipt_cost_usd": 0.0356628,
+        "subscription_normalized_cost_usd": 0.0083735,
+        "known_charged_usd": 0.0356628,
+        "total_charged_usd": 0.0356628,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 15339,
+          "output": 18275,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 15673,
+          "totalTokens": 33614
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low",
+          "openrouter/meta/muse-spark-1.3-contributor:high"
+        ]
+      }
+    },
+    "sol_mimo": {
+      "arm": "sol-mimo",
+      "task": "hard-context-calibration",
+      "planner": "openai-codex/gpt-6.1-sol:low",
+      "writer": "primalabs/primalabs-ai/MiMo-V2.6-Pro:medium",
+      "representation": "delegated",
+      "reasoning_requested": "medium",
+      "reasoning_effective": "thinking enabled; no distinct medium wire setting",
+      "preparation_directory": "preparation/sol-delegated/000-hard-context-calibration",
+      "preparation_plan_hash": "e15c1d4ae393fdb42dc303e4e6b3bed8fca48f2f41c1c61a2b0f9ecf3748a650",
+      "execution_plan_hash": "e15c1d4ae393fdb42dc303e4e6b3bed8fca48f2f41c1c61a2b0f9ecf3748a650",
+      "preparation_failed": false,
+      "error": null,
+      "application_complete": true,
+      "terminal_accepted": true,
+      "audited_delivered": true,
+      "evidence_valid": true,
+      "checks": {
+        "protected_intact": true,
+        "visible": true,
+        "candidate_tests": true
+      },
+      "path_audit": null,
+      "candidate_hash": "555cda40f71d32ad9670e95f37629f0e35bfccf2a5633f67466c028829a7d9af",
+      "timings_ms": {
+        "allocated_preparation_process": 16141.332986000009,
+        "allocated_preparation_worker": 13030.432289,
+        "writing": 44217.096155,
+        "checks": 153.7341329999981,
+        "hidden": 93.55085099999997,
+        "execution_process": 44651.899195,
+        "path_audit": null,
+        "allocated_route_process": 60793.23218100001
+      },
+      "allocated_preparation": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.031846,
+        "subscription_normalized_cost_usd": 0.0045567,
+        "known_charged_usd": 0.031846,
+        "total_charged_usd": 0.031846,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 12253,
+          "output": 734,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 12987
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low"
+        ]
+      },
+      "execution": {
+        "model_calls": 2,
+        "receipt_cost_usd": 0.013348845000000002,
+        "subscription_normalized_cost_usd": 0.013348845000000002,
+        "known_charged_usd": 0.013348845000000002,
+        "total_charged_usd": 0.013348845000000002,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 3157,
+          "output": 13765,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 12365,
+          "totalTokens": 16922
+        },
+        "selectors": [
+          "primalabs/primalabs-ai/MiMo-V2.6-Pro:medium"
+        ]
+      },
+      "allocated_route": {
+        "model_calls": 4,
+        "receipt_cost_usd": 0.045194845,
+        "subscription_normalized_cost_usd": 0.017905545000000002,
+        "known_charged_usd": 0.045194845,
+        "total_charged_usd": 0.045194845,
+        "unknown_charge_count": 0,
+        "retained_unknown_reservation_usd": 0,
+        "tokens": {
+          "input": 15410,
+          "output": 14499,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 12365,
+          "totalTokens": 29909
+        },
+        "selectors": [
+          "openai-codex/gpt-6.1-sol:low",
+          "primalabs/primalabs-ai/MiMo-V2.6-Pro:medium"
+        ]
+      }
+    }
+  },
+  "shared_ledger_snapshot": {
+    "limit_usd": 50,
+    "entries": 820,
+    "known_charged_usd": 4.772242187,
+    "unknown_or_pending_entries": 0,
+    "retained_exposure_usd": 4.772242187,
+    "campaign_charges_verified_by_reservation": true
+  },
+  "handoff_source_boundary": {
+    "task": "hard-dependency-handoff",
+    "phase": "implementation-planning source lookup",
+    "source_requests": [
+      {
+        "path": "pi/extensions/spec-runtime/runtime.mjs",
+        "whole": true
+      },
+      {
+        "path": "pi/extensions/spec-runtime/runtime.test.mjs",
+        "symbol": "fixture"
+      },
+      {
+        "path": "pi/extensions/spec-runtime/runtime.test.mjs",
+        "tail": true
+      },
+      {
+        "path": "pi/extensions/spec-runtime/package-fixture.mjs",
+        "whole": true
+      },
+      {
+        "path": "scripts/spec-observe/steps.mjs",
+        "symbol": "validateStepIndex"
+      },
+      {
+        "path": "pi/agents/spec-step-owner.md",
+        "search": "Read missing source facts directly before deciding."
+      },
+      {
+        "path": "pi/agents/spec-step-editor.md",
+        "search": "Lead each return with outcome"
+      },
+      {
+        "path": "pi/extensions/spec-runtime/runtime.test.mjs",
+        "search": "editor packets use separate durable sessions while preserving checkout changes"
+      }
+    ],
+    "file_sizes": [
+      {
+        "path": "pi/extensions/spec-runtime/runtime.mjs",
+        "source_characters_utf16": 108558,
+        "source_bytes_utf8": 108560,
+        "source_hash": "6dd64d9b67f11d0af5756145da795111aa3bb318239afe9a28b1deac8ac1e2ae"
+      },
+      {
+        "path": "pi/extensions/spec-runtime/runtime.test.mjs",
+        "source_characters_utf16": 117348,
+        "source_bytes_utf8": 117350,
+        "source_hash": "a1229087ac5385d9bfe1508f51c061fa9d57d1747250b5cfee1ca30a81aabf37"
+      },
+      {
+        "path": "pi/extensions/spec-runtime/runtime.test.mjs",
+        "source_characters_utf16": 117348,
+        "source_bytes_utf8": 117350,
+        "source_hash": "a1229087ac5385d9bfe1508f51c061fa9d57d1747250b5cfee1ca30a81aabf37"
+      },
+      {
+        "path": "pi/extensions/spec-runtime/package-fixture.mjs",
+        "source_characters_utf16": 1990,
+        "source_bytes_utf8": 1990,
+        "source_hash": "899da80c1c68fa177363040b6b581893c67c79d363e431414f494ccfcd6c4b82"
+      },
+      {
+        "path": "scripts/spec-observe/steps.mjs",
+        "source_characters_utf16": 20074,
+        "source_bytes_utf8": 20074,
+        "source_hash": "1d1015b2d470d9210de686ea0e4666188c81a508713ac97472084f531ba7511f"
+      },
+      {
+        "path": "pi/agents/spec-step-owner.md",
+        "source_characters_utf16": 15391,
+        "source_bytes_utf8": 15391,
+        "source_hash": "8b142a2256882c3d1c08b52d43963136fe5dd153647de34aa1816930f0df1a38"
+      },
+      {
+        "path": "pi/agents/spec-step-editor.md",
+        "source_characters_utf16": 8488,
+        "source_bytes_utf8": 8488,
+        "source_hash": "9b7722391dedf41f54358907e6e12647793f650f904ee2e1845e74d770c229e6"
+      },
+      {
+        "path": "pi/extensions/spec-runtime/runtime.test.mjs",
+        "source_characters_utf16": 117348,
+        "source_bytes_utf8": 117350,
+        "source_hash": "a1229087ac5385d9bfe1508f51c061fa9d57d1747250b5cfee1ca30a81aabf37"
+      }
+    ],
+    "source_lookup_max_characters": 64000,
+    "result_error": "needs discovery: requested source exceeds 64000 characters at pi/extensions/spec-runtime/runtime.mjs",
+    "no_writers_dispatched": true,
+    "interpretation": "This is a retained bounded-planning-interface failure; it does not measure handoff writer ability. No tuning or replay is performed."
+  },
+  "limitations": [
+    "One trial per arm/task on three exposed development cases; no general superiority or statistical reliability claim.",
+    "Actual preparation charges occur once; each Sol-led route is allocated the full identical Sol preparation cost/time/calls.",
+    "PrimaLabs requested medium maps to thinking enabled; no distinct medium effort value is sent.",
+    "Sol subscription output cap is requested but not enforced by its SDK adapter; ledger reservation remains conservative.",
+    "Writing wall time excludes planning/checks/grade; whole-route process time includes allocated preparation and path audit.",
+    "SDK calculated receipt prices and retained ledger settlements are not independently verified provider invoices.",
+    "Subscription-normalized Sol costs use USD/M input0.3, output1.2, cacheRead0.006, cacheWrite0.3; other models retain their receipt costs. Ledger settlements are preserved separately.",
+    "Reasoning token counts are informational subsets of model output usage and must not be added to output tokens again.",
+    "No later model review or behavioral-feedback repair; application and downstream audited delivery differ.",
+    "Bounded lookup/plan-contract failures are route outcomes; they do not establish failed writer capability when no writer was dispatched.",
+    "No handoff or lifecycle writer ran in any arm. Muse-self produced no dispatched executable plan.",
+    "Only calibration supports a matched Muse-versus-MiMo writer comparison; each has one observation and both passed delivery.",
+    "The original zero-call MiMo credential block remains preserved. The separate resume adds no new planning and does not re-charge inherited preparation.",
+    "No arm achieved three-case audited delivery; these observations do not justify a new optimal whole-workflow configuration."
+  ]
+}
