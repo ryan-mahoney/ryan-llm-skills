@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-10-17T02:57:16.847892+00:00",
+  "catalog_url": "https://openrouter.ai/api/v1/models",
+  "catalog_response_sha256": "72ea68478c59d26f47766d55b2d75966c5f470b0b3f779e450476b840d786ab8",
+  "model": {
+    "id": "meta/muse-spark-1.3-contributor",
+    "name": "Meta: Muse Spark 1.3 Contributor",
+    "context_length": 1048576,
+    "pricing": {
+      "prompt": "0.0000001",
+      "completion": "0.0000002",
+      "web_search": "0.0025",
+      "input_cache_read": "0.000000002"
+    },
+    "top_provider": {
+      "context_length": 1048576,
+      "max_completion_tokens": 943718,
+      "is_moderated": true
+    },
+    "supported_parameters": [
+      "include_reasoning",
+      "max_tokens",
+      "reasoning",
+      "reasoning_effort",
+      "repetition_penalty",
+      "response_format",
+      "structured_outputs",
+      "temperature",
+      "tool_choice",
+      "tools",
+      "top_k",
+      "top_p"
+    ]
+  },
+  "endpoint_url": "https://openrouter.ai/api/v1/models/meta/muse-spark-1.3-contributor/endpoints",
+  "endpoint_response_sha256": "66856b84ff3029c18b3a27e7658550b7a11d0e91e06fb0c2260e5580d0d4269a",
+  "endpoints": [
+    {
+      "name": "Meta | meta/muse-spark-1.3-contributor-20260902",
+      "provider_name": "Meta",
+      "tag": "meta",
+      "context_length": 1048576,
+      "max_completion_tokens": 943718,
+      "pricing": {
+        "prompt": "0.0000001",
+        "completion": "0.0000002",
+        "web_search": "0.0025",
+        "input_cache_read": "0.000000002",
+        "discount": 0
+      },
+      "supported_parameters": [
+        "reasoning",
+        "include_reasoning",
+        "max_tokens",
+        "repetition_penalty",
+        "top_k",
+        "temperature",
+        "top_p",
+        "tools",
+        "tool_choice",
+        "structured_outputs",
+        "response_format",
+        "reasoning_effort"
+      ],
+      "status": 0
+    }
+  ],
+  "primalabs": {
+    "selector": "primalabs/primalabs-ai/MiMo-V2.6-Pro:medium",
+    "api": "openai-completions",
+    "baseUrl": "https://api.primalabs.ai/v1",
+    "contextWindow": 1048576,
+    "locally_configured_maxTokens": 65536,
+    "cost_per_million": {
+      "input": 0.435,
+      "output": 0.87,
+      "cacheRead": 0.0036
+    },
+    "source": "https://docs.primalabs.ai/inference/models.md",
+    "rate_card_date": "2026-10-05",
+    "reasoning_status": "User authorized configured medium -> thinking enabled mapping; no distinct medium wire setting. Public API does not document graded effort.",
+    "public_models_api_status": 401
+  }
+}
