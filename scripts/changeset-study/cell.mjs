@@ -374,7 +374,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
             catch (error) { retain(error); throw error; }
           }
           // Executable JSON edits with the focused writer's existing one local retry.
-          try { const value = await patchEditor(model, stageName, task.spec, { operation, files }, { ranges: true, focused: true, contextParse, promptOrder }); retain(value); return value; }
+          try { const value = await patchEditor(model, stageName, task.spec, { operation, files }, { ranges: true, focused: true, contextParse, promptOrder, fidelityRetryModel: seamRetryClient ?? null }); retain(value); return value; }
           catch (error) { retain(error); throw error; }
         }
         return strategy

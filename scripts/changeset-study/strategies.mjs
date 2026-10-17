@@ -178,7 +178,7 @@ const terminalEditorMessages = new Set([
 const terminalEditorFailure = error => ['AbortError', 'TimeoutError'].includes(error.name) ||
   terminalEditorMessages.has(error.message) || /^Model stopped: aborted(?::|$)/i.test(error.message);
 
-export async function patchEditor(model, stage, task, { operation, files }, { ranges = false, focused = false, contextParse, recoveryModel = null, promptOrder = 'target-first' } = {}) {
+export async function patchEditor(model, stage, task, { operation, files }, { ranges = false, focused = false, contextParse, recoveryModel = null, promptOrder = 'target-first', fidelityRetryModel = null } = {}) {
   if (recoveryModel && !focused) throw new Error('Writer recovery is supported only for focused dispatch');
   if (focused) {
     const input = focusedInput(operation, files, { parse: contextParse });
@@ -193,14 +193,17 @@ export async function patchEditor(model, stage, task, { operation, files }, { ra
     // Static-first keeps the shared contract as a cacheable prefix; the per-packet
     // target rule then varies only at the end of the system prompt.
     const system = promptOrder === 'static-first' ? shared + '\n' + compaction + targetRule : targetRule + compaction + shared;
-    let failure, response;
+    let failure, response, lastFidelity = false;
     const writerAttempts = [];
     for (let attempt = 0; attempt < 2; attempt++) {
       let attemptedEdits, attemptedFiles, formatFailure = false;
       const row = { writer_attempt: attempt, format: 'json', applied: false, syntax_valid: null, local_failure_kind: null, elapsed_ms: 0, model_calls: 1 };
       writerAttempts.push(row); const began = performance.now();
       try {
-        const requestModel = attempt === 1 && recoveryModel ? recoveryModel : model;
+        // A paraphrased literal is a comprehension failure, so its retry may go to the
+        // same model's reasoning tier when the caller supplies one.
+        const requestModel = attempt === 1 && recoveryModel ? recoveryModel : attempt === 1 && lastFidelity && fidelityRetryModel ? fidelityRetryModel : model;
+        if (requestModel !== model) row.selector = requestModel.selector ?? 'retry';
         response = await requestModel.json(system, { ...input, ...(failure ? { application_failure: failure,
           rejected_edit_summary: Array.isArray(response?.edits) ? response.edits.map((edit, index) => ({ index, kind: edit?.kind, path: edit?.path, to: edit?.to })) : null,
           rejected_response_excerpt: JSON.stringify(response ?? null).slice(0, 12000) } : {}) }, stage,
@@ -221,6 +224,7 @@ export async function patchEditor(model, stage, task, { operation, files }, { ra
       } catch (error) {
         row.elapsed_ms = performance.now() - began; row.failure = error.message.slice(0, 2000);
         row.local_failure_kind = formatFailure || error instanceof ModelJsonParseError ? 'format' : error.recipe_fidelity ? 'application' : attemptedFiles ? 'syntax' : Array.isArray(attemptedEdits) ? 'application' : null;
+        lastFidelity = Boolean(error.recipe_fidelity);
         if (attemptedFiles) row.syntax_valid = false;
         Object.assign(error, { writer_attempts: writerAttempts, writer_fallback: attempt > 0 });
         const retryable = formatFailure || Array.isArray(attemptedEdits) || error instanceof ModelJsonParseError || Boolean(error.recipe_fidelity);
