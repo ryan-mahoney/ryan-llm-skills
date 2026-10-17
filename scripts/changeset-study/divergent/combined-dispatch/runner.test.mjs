@@ -6,7 +6,8 @@ import { join } from 'node:path';
 import { Budget } from '../../../changeset/models.mjs';
 import { Client } from '../../client.mjs';
 import { installReservationGuard, readLedger } from './guard.mjs';
-import { schedule, trialJob } from './runner.mjs';
+import { schedule, trialJob, requestCeilings, referenceIdentity } from './runner.mjs';
+import { hash, inventory } from '../writer-control/support.mjs';
 
 // node --test --test-name-pattern='reservation guard' scripts/changeset-study/divergent/combined-dispatch/runner.test.mjs
 test('reservation guard counts unknown exposure and registry failure blocks transport while retaining the global hold', async () => {
@@ -63,5 +64,43 @@ test('ledger schema rejects fake free unknown holds but accepts explicitly price
     assert.throws(() => readLedger(ledger), /integrity/);
     entry.status = 'priced'; writeFileSync(ledger, JSON.stringify({ schema_version: 1, limit_usd: 50, entries: [entry] }));
     assert.equal(readLedger(ledger).state.entries[0].charged_usd, 0);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// node --test --test-name-pattern='combined-only' scripts/changeset-study/divergent/combined-dispatch/runner.test.mjs
+test('combined-only covers all three original cases with a fifty-two writer and three Jev request ceiling', () => {
+  const cells = schedule().filter(row => row.arm === 'combined').map((row, index) => ({ name: row.source_cell, operations: [3, 19, 4][index] }));
+  assert.deepEqual(schedule('combined-only'), schedule().filter(row => row.arm === 'combined'));
+  assert.deepEqual(schedule('paired'), schedule());
+  assert.deepEqual(requestCeilings(cells, 'combined-only'), { writers: 52, jev: 3 });
+  assert.deepEqual(requestCeilings(cells, 'paired'), { writers: 104, jev: 3 });
+  assert.throws(() => schedule('baseline-only'), /mode/);
+});
+
+// node --test --test-name-pattern='reference identity' scripts/changeset-study/divergent/combined-dispatch/runner.test.mjs
+test('reference identity binds copied task, plan and brief bytes to the original donor even if reference metadata drifts with them', () => {
+  const root = mkdtempSync(join(tmpdir(), 'combined-reference-')), reference = join(root, '01-matched'), ledger = join(root, 'budget.json');
+  try {
+    mkdirSync(join(reference, 'frozen'), { recursive: true }); writeFileSync(join(reference, 'frozen/worker.mjs'), 'original frozen worker');
+    writeFileSync(ledger, JSON.stringify({ schema_version: 1, limit_usd: 50, entries: [] }));
+    const cells = schedule('combined-only').map((trial, index) => {
+      const directory = join(reference, 'inputs', trial.source_cell); mkdirSync(directory, { recursive: true });
+      const artifacts = {};
+      for (const name of ['job.json', 'result.json', 'raw-plan.json', 'plan-0.json', 'implementation-brief.md']) {
+        const bytes = name + ' exact donor bytes\n'; writeFileSync(join(directory, name), bytes); artifacts[name] = hash(bytes);
+      }
+      return { name: trial.source_cell, artifacts, operations: [3, 19, 4][index] };
+    });
+    const donor = { cells: structuredClone(cells), source_manifest_hash: 'a'.repeat(64), writer_model: { id: 'deepseek-flash' } };
+    const prior = { protocol: 'matched-combined-dispatch-v1', schedule: schedule(), source_manifest_hash: donor.source_manifest_hash,
+      cells, writer_model: donor.writer_model, ledger, frozen_files: inventory(join(reference, 'frozen')), revision: 'b'.repeat(40) };
+    const path = join(reference, 'manifest.json'); writeFileSync(path, JSON.stringify(prior));
+    const identity = referenceIdentity(reference, donor, ledger);
+    assert.equal(identity.path, reference); assert.equal(identity.source_manifest_hash, donor.source_manifest_hash);
+    assert.match(identity.manifest_hash, /^[a-f0-9]{64}$/);
+    const plan = join(reference, 'inputs', cells[0].name, 'raw-plan.json'); writeFileSync(plan, 'replacement plan');
+    assert.throws(() => referenceIdentity(reference, donor, ledger), /artifacts changed/);
+    prior.cells[0].artifacts['raw-plan.json'] = hash('replacement plan'); writeFileSync(path, JSON.stringify(prior));
+    assert.throws(() => referenceIdentity(reference, donor, ledger), /identical donor/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

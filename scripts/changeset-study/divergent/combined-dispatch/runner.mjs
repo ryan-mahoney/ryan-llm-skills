@@ -11,9 +11,15 @@ const writer = 'deepseek/deepseek-flash:off', planner = 'openai-codex/gpt-6.1-so
 const retained = ['job.json', 'result.json', 'raw-plan.json', 'plan-0.json', 'implementation-brief.md'];
 const artifactHashes = path => Object.fromEntries(retained.map(name => [name, hash(readFileSync(join(path, name)))]));
 const sdkDist = sdk => Object.fromEntries(['pi-agent-core', 'pi-coding-agent', 'pi-ai'].map(name => [name, inventory(join(sdk, name, 'dist'))]));
-export function schedule() {
-  return taskIds.flatMap((task, index) => (index % 2 ? ['combined', 'baseline'] : ['baseline', 'combined'])
+export function schedule(mode = 'paired') {
+  if (!['paired', 'combined-only'].includes(mode)) throw new Error('Use paired or combined-only mode');
+  return taskIds.flatMap((task, index) => (mode === 'combined-only' ? ['combined'] : index % 2 ? ['combined', 'baseline'] : ['baseline', 'combined'])
     .map(arm => ({ id: `${index}-${task}-${arm}`, task, source_cell: `${String(index).padStart(3, '0')}-${task}`, arm })));
+}
+export function requestCeilings(cells, mode) {
+  const trials = schedule(mode);
+  const writers = 2 * trials.reduce((sum, trial) => sum + cells.find(cell => cell.name === trial.source_cell).operations, 0);
+  return { writers, jev: trials.filter(trial => trial.arm === 'combined').length };
 }
 export function donorInputs(source) {
   const manifest = read(join(source, 'manifest.json')), tasksBytes = readFileSync(join(source, 'tasks.json')), tasks = JSON.parse(tasksBytes);
@@ -38,25 +44,41 @@ export function donorInputs(source) {
   return { manifest, tasksBytes, cells, writer_model: selected[0].model };
 }
 
-function retainedReservationEstimate(source, donor) {
+export function referenceIdentity(reference, donor, ledger) {
+  reference = realpathSync(reference); const prior = read(join(reference, 'manifest.json'));
+  const cells = donor.cells.map(({ name, artifacts, operations }) => ({ name, artifacts, operations }));
+  if (basename(reference) !== '01-matched' || prior.protocol !== 'matched-combined-dispatch-v1' || (prior.mode ?? 'paired') !== 'paired' ||
+    !same(prior.schedule, schedule()) || prior.source_manifest_hash !== donor.source_manifest_hash || !same(prior.cells, cells) ||
+    !same(prior.writer_model, donor.writer_model) || realpathSync(prior.ledger) !== ledger || !same(inventory(join(reference, 'frozen')), prior.frozen_files))
+    throw new Error('Reference must be the original paired01 campaign with identical donor/source/task/plan/brief identities');
+  for (const cell of cells) if (!same(artifactHashes(join(reference, 'inputs', cell.name)), cell.artifacts)) throw new Error('Reference donor artifacts changed');
+  return { path: reference, manifest_hash: hash(readFileSync(join(reference, 'manifest.json'))), revision: prior.revision,
+    source_manifest_hash: prior.source_manifest_hash, cells_hash: hash(JSON.stringify(cells)) };
+}
+
+function retainedReservationEstimate(source, donor, mode) {
   const packets = donor.cells.flatMap(cell => rows(join(source, cell.name, 'requests.jsonl')).filter(row => row.stage === 'editor'));
   const largest = Math.max(...packets.map(row => Buffer.byteLength(JSON.stringify(row.context)) + 8192));
   const rates = [donor.writer_model.cost, ...(donor.writer_model.cost.tiers ?? [])];
   const perCall = (largest * Math.max(...rates.flatMap(rate => [rate.input, rate.cacheRead ?? 0, rate.cacheWrite ?? 0])) +
     Math.max(...donor.cells.map(cell => cell.job.task.limits.max_output_tokens)) * Math.max(...rates.map(rate => rate.output))) / 1e6 * 1.25;
   return { largest_retained_context_plus_overhead_bytes: largest, per_request_usd: perCall,
-    all_writer_requests_usd: perCall * 4 * donor.cells.reduce((sum, cell) => sum + cell.operations, 0),
+    all_writer_requests_usd: perCall * requestCeilings(donor.cells, mode).writers,
     qualification: 'Retained packet estimate, not a hard bound on future staged inputs; the actual two-dollar charge+hold+proposed guard is authoritative.' };
 }
 
-export function prepare({ source, output, ledger, sdk, parser, jev, codeRoot = checkout }) {
+export function prepare({ source, output, ledger, sdk, parser, jev, mode = 'paired', reference = null, codeRoot = checkout }) {
   for (const value of [source, output, ledger, sdk, parser, jev, codeRoot]) if (typeof value !== 'string' || !value) throw new Error('Explicit source/output/ledger/sdk/parser/jev paths required');
   source = realpathSync(source); sdk = realpathSync(sdk); parser = realpathSync(parser); jev = realpathSync(jev); codeRoot = realpathSync(codeRoot);
   output = prospective(output); const canonical = readLedger(ledger); ledger = canonical.path;
+  schedule(mode);
+  if (mode === 'combined-only' && !reference || mode === 'paired' && reference !== null) throw new Error('combined-only requires an original01 --reference; paired mode does not use one');
   if (execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: codeRoot, encoding: 'utf8' }).trim()) throw new Error('Freeze committed clean code only');
   const donor = donorInputs(source), sdkModules = dirname(sdk), jevModules = resolve(jev, '../../..'), mounts = donor.cells[0].job.mounts;
+  const referencePin = mode === 'combined-only' ? referenceIdentity(reference, { ...donor, source_manifest_hash: hash(readFileSync(join(source, 'manifest.json'))) }, ledger) : null;
+  const ceilings = requestCeilings(donor.cells, mode);
   if (donor.cells.some(cell => realpathSync(cell.job.ledger) !== ledger)) throw new Error('Reuse canonical donor ledger');
-  if (existsSync(output) || [codeRoot, dirname(source), sdkModules, jevModules, ...mounts.map(([path]) => realpathSync(path))].some(path => inside(path, output) || inside(output, path)) || inside(output, ledger)) throw new Error('New adjacent output must be outside source/code/dependencies');
+  if (existsSync(output) || [codeRoot, dirname(source), sdkModules, jevModules, ...(referencePin ? [referencePin.path] : []), ...mounts.map(([path]) => realpathSync(path))].some(path => inside(path, output) || inside(output, path)) || inside(output, ledger)) throw new Error('New adjacent output must be outside source/code/dependencies/reference');
   const sdkPins = inventory(sdkModules), dependencies = inventory(mounts[0][0]), jevPins = inventory(jevModules);
   if (!same(sdkDist(sdk), donor.manifest.sdk_files) || hash(JSON.stringify(dependencies)) !== donor.manifest.dependencies_hash ||
     hash(readFileSync(parser)) !== hash(readFileSync(join(source, 'frozen/scripts/changeset-study/parser/acorn.mjs')))) throw new Error('SDK/dependency/parser pins differ from donor');
@@ -77,25 +99,30 @@ export function prepare({ source, output, ledger, sdk, parser, jev, codeRoot = c
   const manifest = { schema_version: 1, protocol: 'matched-combined-dispatch-v1', created_at: new Date().toISOString(),
     revision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: codeRoot, encoding: 'utf8' }).trim(), source, source_run: basename(source),
     source_manifest_hash: hash(readFileSync(join(source, 'manifest.json'))), source_revision: donor.manifest.revision,
-    cells: donor.cells.map(({ name, artifacts, operations }) => ({ name, artifacts, operations })), schedule: schedule(), ledger,
-    additional_exposure_usd: 2, max_writer_requests: 4 * donor.cells.reduce((sum, cell) => sum + cell.operations, 0), max_jev_requests: 3,
-    retained_reservation_estimate: retainedReservationEstimate(source, donor),
-    max_reservations: 4 * donor.cells.reduce((sum, cell) => sum + cell.operations, 0) + 3,
+    cells: donor.cells.map(({ name, artifacts, operations }) => ({ name, artifacts, operations })), schedule: schedule(mode), ledger,
+    ...(referencePin ? { mode, reference: referencePin } : {}),
+    additional_exposure_usd: 2, max_writer_requests: ceilings.writers, max_jev_requests: ceilings.jev,
+    retained_reservation_estimate: retainedReservationEstimate(source, donor, mode),
+    max_reservations: ceilings.writers + ceilings.jev,
     node: process.version, node_hash: hash(readFileSync(process.execPath)), writer_model: donor.writer_model,
     frozen_files: inventory(join(output, 'frozen')), sdk_root: 'sdk/node_modules/@earendil-works', sdk_files: sdkPins,
     jev_entry: 'jev/node_modules/pi-typesafe/dist/index.js', jev_files: jevPins,
     dependencies: { path: 'dependencies/0', target: mounts[0][1], files: dependencies }, parser_hash: hash(readFileSync(parser)),
     baseline_ledger: { entries: canonical.state.entries.length, charged_usd: canonical.state.entries.reduce((sum, row) => sum + (row.charged_usd ?? 0), 0) },
-    scope: 'Six sequential fixed-plan observations; combined optimization/context/format treatment, not an isolated format comparison. No new owner/query/review calls.' };
+    scope: mode === 'paired' ? 'Six sequential fixed-plan observations; combined optimization/context/format treatment, not an isolated format comparison. No new owner/query/review calls.'
+      : 'Three revised combined-only sequential fixed-plan observations; prior observations are historical references, not new matched controls. No new owner/query/review calls.' };
   write(join(output, 'manifest.json'), manifest); write(join(output, 'reservations.json'), []); verify(output);
-  return { output, revision: manifest.revision, trials: 6, writer_request_ceiling: manifest.max_writer_requests, jev_request_ceiling: 3, additional_exposure_cap_usd: 2 };
+  return { output, revision: manifest.revision, trials: manifest.schedule.length, writer_request_ceiling: manifest.max_writer_requests, jev_request_ceiling: manifest.max_jev_requests, additional_exposure_cap_usd: 2 };
 }
 
 export function verify(output) {
   output = realpathSync(output); const manifest = read(join(output, 'manifest.json')), donor = donorInputs(manifest.source);
-  if (manifest.protocol !== 'matched-combined-dispatch-v1' || !same(manifest.schedule, schedule()) || manifest.additional_exposure_usd !== 2 ||
+  const mode = manifest.mode ?? 'paired', ceilings = requestCeilings(donor.cells, mode);
+  if (mode === 'combined-only' && (!manifest.reference || !same(manifest.reference, referenceIdentity(manifest.reference.path,
+    { ...donor, source_manifest_hash: hash(readFileSync(join(manifest.source, 'manifest.json'))) }, manifest.ledger))) || mode === 'paired' && manifest.reference !== undefined) throw new Error('Reference provenance changed');
+  if (manifest.protocol !== 'matched-combined-dispatch-v1' || !same(manifest.schedule, schedule(mode)) || manifest.additional_exposure_usd !== 2 ||
     manifest.sdk_root !== 'sdk/node_modules/@earendil-works' || manifest.jev_entry !== 'jev/node_modules/pi-typesafe/dist/index.js' || manifest.dependencies.path !== 'dependencies/0' ||
-    manifest.max_writer_requests !== 4 * donor.cells.reduce((sum, cell) => sum + cell.operations, 0) || manifest.max_jev_requests !== 3 || manifest.max_reservations !== manifest.max_writer_requests + 3 ||
+    manifest.max_writer_requests !== ceilings.writers || manifest.max_jev_requests !== ceilings.jev || manifest.max_reservations !== ceilings.writers + ceilings.jev ||
     manifest.source_manifest_hash !== hash(readFileSync(join(manifest.source, 'manifest.json'))) || manifest.node_hash !== hash(readFileSync(process.execPath)) ||
     !same(inventory(join(output, 'frozen')), manifest.frozen_files) || !same(inventory(join(output, 'sdk/node_modules')), manifest.sdk_files) ||
     !same(inventory(join(output, 'jev/node_modules')), manifest.jev_files) || !same(inventory(join(output, manifest.dependencies.path)), manifest.dependencies.files) ||
@@ -156,7 +183,7 @@ export async function run(output) {
     const unexpected = registered.filter(entry => !evidence.referenced.has(entry.id)).map(entry => entry.id);
     if (unexpected.length) { audit.integrity_valid = false; audit.audited_delivered = false; audit.unattributed_reservations = unexpected; }
     write(join(job.directory, 'audit.json'), audit); observed.push({ ...trial, ...audit });
-    write(join(output, 'results.json'), { protocol: manifest.protocol, revision: manifest.revision, completed: observed.length, planned: 6, stopped, rows: observed });
+    write(join(output, 'results.json'), { protocol: manifest.protocol, revision: manifest.revision, ...(manifest.mode ? { mode: manifest.mode, reference: manifest.reference } : {}), completed: observed.length, planned: manifest.schedule.length, stopped, rows: observed });
     const result = existsSync(join(job.directory, 'result.json')) ? read(join(job.directory, 'result.json')) : {};
     if (executed.code !== 0 || !audit.integrity_valid || /COMPARISON_|Budget ledger|Campaign budget/.test(JSON.stringify(result))) { stopped = 'Worker, integrity or budget boundary stopped comparison'; break; }
   }
@@ -165,7 +192,7 @@ export async function run(output) {
   const { orphaned, referenced } = reservationEvidence(output, manifest.schedule);
   const registry = [...new Map([...registered, ...orphaned].map(entry => [entry.id, entry])).values()];
   const accounting = registry.map(entry => state.entries.find(row => row.id === entry.id) ?? { ...entry, status: 'missing', charged_usd: null });
-  const report = { protocol: manifest.protocol, revision: manifest.revision, completed: observed.length, planned: 6, stopped,
+  const report = { protocol: manifest.protocol, revision: manifest.revision, ...(manifest.mode ? { mode: manifest.mode, reference: manifest.reference } : {}), completed: observed.length, planned: manifest.schedule.length, stopped,
     reservations: registry.length, orphaned_reservations: orphaned, unattributed_reservations: registered.filter(entry => !referenced.has(entry.id)).map(entry => entry.id),
     missing_ledger_reservations: accounting.filter(row => row.status === 'missing').map(row => row.id),
     known_charged_usd: accounting.reduce((sum, row) => sum + (row?.charged_usd ?? 0), 0),
@@ -176,7 +203,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   try {
     const [command, ...args] = process.argv.slice(2), options = {};
     for (let index = 0; index < args.length; index += 2) {
-      const key = args[index]?.slice(2); if (!['source', 'output', 'ledger', 'sdk', 'parser', 'jev'].includes(key) || options[key] || !args[index + 1]) throw new Error('Use unique named comparison paths'); options[key] = args[index + 1];
+      const key = args[index]?.slice(2); if (!['source', 'output', 'ledger', 'sdk', 'parser', 'jev', 'mode', 'reference'].includes(key) || options[key] || !args[index + 1]) throw new Error('Use unique named comparison options'); options[key] = args[index + 1];
     }
     const value = command === 'prepare' ? prepare(options) : command === 'verify' ? { verified: Boolean(verify(options.output)) } : command === 'run' ? await run(options.output) : (() => { throw new Error('Use prepare/verify/run'); })();
     console.log(JSON.stringify(value));
