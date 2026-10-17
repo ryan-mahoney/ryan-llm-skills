@@ -3,19 +3,34 @@ import { compile } from '../changeset/engine.mjs';
 import { focusedInput, validateFocusedPlan } from './focused-editors.mjs';
 
 const unique = values => [...new Set(values)];
-const contexts = values => [...new Map(values.map(c => [JSON.stringify(c), c])).values()];
+// Key on the three fields so key order in planner JSON cannot defeat deduplication.
+// start/end are null or nonempty strings, so the empty string is unambiguous for null.
+const contextKey = c => `${c.path}\u0000${c.start ?? ''}\u0000${c.end ?? ''}`;
+const contexts = values => [...new Map(values.map(c => [contextKey(c), c])).values()];
+const clip = (text, max) => text.length <= max ? text : text.slice(0, max - 3).trimEnd() + '...';
 export function planMetrics(plan) {
   const ops = compile(plan), depths = new Map();
   for (const op of ops) depths.set(op.id, 1 + Math.max(0, ...op.depends_on.map(id => depths.get(id))));
   return { assignments: ops.length, dependency_depth: Math.max(...depths.values()),
     context_selections: ops.reduce((n, op) => n + op.context.length, 0) };
 }
-function mergedPair(ops, index, files) {
-  const a = ops[index], b = ops[index + 1];
-  if (!b || a.writes[0] !== b.writes[0] || a.preconditions || b.preconditions ||
+// Files some operation before `index` has written, excluding the pair itself. Their
+// staged text is unknown here, so excerpt anchors on them are checked at preflight and
+// execution rather than against the initial snapshot.
+function dirtyBefore(ops, index, exclude) {
+  const dirty = new Set();
+  for (let i = 0; i < index; i++) if (!exclude.has(ops[i].id)) ops[i].writes.forEach(path => dirty.add(path));
+  return dirty;
+}
+function mergedPair(ops, i, j, files) {
+  const a = ops[i], b = ops[j];
+  // OPTIMIZER-PROTOCOL.md: at most two original assignments combine. The size
+  // constraint is the focused packet bound, which validateFocusedPlan enforces below.
+  if (a.writes[0] !== b.writes[0] || a.preconditions || b.preconditions ||
       (a.members?.length ?? 1) + (b.members?.length ?? 1) > 2) return null;
   // A consumer needing A's intermediate state must still run before B. Contract
-  // only when every other descendant of A is already a descendant of B.
+  // only when every other descendant of A is already a descendant of B. This also
+  // refuses any operation between A and B that reads or writes their file.
   const descendants = id => {
     const found = new Set([id]);
     for (const op of ops) if (op.depends_on.some(d => found.has(d))) found.add(op.id);
@@ -23,35 +38,51 @@ function mergedPair(ops, index, files) {
   };
   const da = descendants(a.id), db = descendants(b.id);
   if ([...da].some(id => id !== a.id && !db.has(id))) return null;
-  const merged = { ...a, objective: 'Apply the following related edits in order.',
+  const merged = { ...a, objective: clip(`${a.objective}; then ${b.objective}`, 240),
     instruction: `${a.objective}\n${a.instruction}\n\nThen: ${b.objective}\n${b.instruction}`,
     requirements: [`${a.objective}:\n${a.requirements.join('\n')}`, `${b.objective}:\n${b.requirements.join('\n')}`], reads: unique([...a.reads, ...b.reads]),
     depends_on: unique([...a.depends_on, ...b.depends_on]).filter(id => id !== a.id),
     context: contexts([...a.context, ...b.context]), members: [...(a.members ?? [a.id]), ...(b.members ?? [b.id])] };
+  // Same rule as preflightFocusedPlan: validate excerpts only on files no earlier
+  // operation has written. Checking a dirty file against the initial snapshot could
+  // pass on text that will not exist when the merged packet runs.
+  const dirty = dirtyBefore(ops, j, new Set([a.id, b.id]));
+  const context = merged.context.filter(c => !dirty.has(c.path));
+  const current = Object.fromEntries(unique([...merged.reads, ...merged.writes]).filter(p => !dirty.has(p)).map(p => [p, files[p] ?? null]));
   try {
     validateFocusedPlan({ operations: [merged] });
-    focusedInput(merged, Object.fromEntries(unique([...merged.reads, ...merged.writes]).map(p => [p, files[p] ?? null])));
+    focusedInput({ ...merged, context }, current);
   } catch { return null; }
-  return merged;
+  return { merged, deferred: unique(merged.context.filter(c => dirty.has(c.path)).map(c => c.path)) };
+}
+// Each operation pairs with the next writer of its file in compiled order, whatever
+// sits between them; the descendant check above decides whether that is safe.
+function candidatePairs(ops, files) {
+  const rows = [];
+  for (let i = 0; i < ops.length; i++) {
+    const j = ops.findIndex((op, k) => k > i && op.writes[0] === ops[i].writes[0]);
+    if (j < 0) continue;
+    const result = mergedPair(ops, i, j, files);
+    if (result) rows.push({ key: `${ops[i].id}+${ops[j].id}`, first: ops[i], second: ops[j], ...result });
+  }
+  return rows;
 }
 export function mergeCandidates(plan, files) {
-  const ops = compile(plan), rows = [];
-  for (let i = 0; i < ops.length - 1; i++) if (mergedPair(ops, i, files)) rows.push({
-    key: `${ops[i].id}+${ops[i + 1].id}`, first: ops[i], second: ops[i + 1] });
-  return rows;
+  return candidatePairs(compile(plan), files).map(({ key, first, second }) => ({ key, first, second }));
 }
 export function optimizePlan(plan, files, { mode = 'deterministic', mergeChoices = {}, contextChoices = {} } = {}) {
   const before = planMetrics(plan), changes = [];
   let ops = compile(plan).map(op => ({ ...op, context: contexts(op.context) }));
   if (mode !== 'none') {
-    for (let i = 0; i < ops.length - 1;) {
-      const a = ops[i], b = ops[i + 1], key = `${a.id}+${b.id}`;
-      const merged = mergedPair(ops, i, files);
-      if (!merged || (mode === 'contextual' && mergeChoices[key] === 'separate')) { i++; continue; }
-      changes.push({ kind: 'merge', members: merged.members, into: a.id });
-      ops.splice(i, 2, merged);
-      ops = ops.map(op => ({ ...op, depends_on: unique(op.depends_on.map(id => id === b.id ? a.id : id)).filter(id => id !== op.id) }));
-      // Recompile before considering another contraction; all original conflicts remain.
+    // Recompiling after a merge can reorder operations, so recompute candidates from
+    // the current plan each round instead of scanning by index.
+    for (;;) {
+      const pick = candidatePairs(ops, files).find(c => !(mode === 'contextual' && mergeChoices[c.key] === 'separate'));
+      if (!pick) break;
+      const { first: a, second: b, merged, deferred } = pick;
+      changes.push({ kind: 'merge', members: merged.members, into: a.id, ...(deferred.length ? { deferred_excerpt_validation: deferred } : {}) });
+      ops = ops.filter(op => op.id !== b.id).map(op => op.id === a.id ? merged
+        : { ...op, depends_on: unique(op.depends_on.map(id => id === b.id ? a.id : id)).filter(id => id !== op.id) });
       ops = compile({ schema_version: 1, operations: ops });
     }
     if (mode === 'contextual') for (const op of ops) {
