@@ -18,7 +18,12 @@ const args = process.argv.slice(2);
 const option = name => { const i = args.indexOf(name); if (i < 0 || !args[i + 1]) throw new Error(`${name} required`); return args[i + 1]; };
 const repo = fileURLToPath(new URL('../..', import.meta.url));
 const source = resolve(option('--source')), run = resolve(option('--output')), ledger = resolve(option('--ledger'));
-const strategy = option('--strategy'), selector = option('--model');
+const strategy = option('--strategy');
+// spec-end-to-end names: the query planner is the strong owner (hard steps route to it),
+// the writer is the editor model, and an explicit owner model owns the brief for other steps.
+// --model remains the historical alias of --strong-owner-model.
+if (args.includes('--model') && args.includes('--strong-owner-model')) throw new Error('Use --model or --strong-owner-model, not both');
+const selector = args.includes('--strong-owner-model') ? option('--strong-owner-model') : option('--model');
 let optimization = args.includes('--optimization') ? option('--optimization') : null;
 const plansFrom = args.includes('--plans-from') ? resolve(option('--plans-from')) : null;
 const briefsFrom = args.includes('--briefs-from') ? resolve(option('--briefs-from')) : null;
@@ -29,6 +34,9 @@ const editorSelector = args.includes('--editor-model') ? option('--editor-model'
 if (usesEditor(strategy) !== Boolean(editorSelector)) throw new Error('Use --editor-model only and always with an owner-editor strategy');
 const writerRecoverySelector = args.includes('--writer-recovery-model') ? option('--writer-recovery-model') : null;
 const dispatchProfile = args.includes('--dispatch-profile') ? option('--dispatch-profile') : null;
+const ownerSelector = args.includes('--owner-model') ? option('--owner-model') : null;
+const specRoles = { owner_model: ownerSelector ?? editorSelector, strong_owner_model: selector, editor_model: editorSelector };
+if (ownerSelector && (strategy !== 'owner-query-writer' || plansFrom || briefsFrom)) throw new Error('--owner-model requires owner-query-writer with fresh briefs');
 const dispatch = resolveDispatchProfile({ dispatchProfile, strategy, selector, editorSelector, writerRecoverySelector,
   optimization, queryMode, queryGranularity: requestedQueryGranularity });
 ({ optimization, queryMode, queryGranularity: requestedQueryGranularity } = dispatch);
@@ -70,7 +78,7 @@ const queryGranularity = resolveQueryGranularity({ requested: requestedQueryGran
   inherited: plansFrom ? donorManifest.query_granularity ?? 'default' : null, strategy, queryMode, optimization, dispatchProfile });
 if (replayManifest && ((replayManifest.dispatch_profile ?? null) !== dispatchProfile || replayManifest.optimization !== optimization)) throw new Error('Replay dispatch profile or optimization differs');
 if (replayManifest && (replayManifest.strategy !== strategy || replayManifest.selector !== selector || (replayManifest.editor_selector ?? null) !== editorSelector || (replayManifest.writer_recovery_selector ?? null) !== writerRecoverySelector || (replayManifest.query_mode ?? 'discovery') !== queryMode || (replayManifest.query_granularity ?? 'default') !== queryGranularity || !equal(files(codeRoot), replayManifest.frozen_files))) throw new Error('Replay strategy, selectors or frozen bytes differ');
-const runRoles = buildRunRoles({ strategy, selector, editorSelector, donorManifest });
+const runRoles = buildRunRoles({ strategy, selector, editorSelector, ownerSelector, donorManifest });
 if (original.comparison !== 'sol-native-vs-sol-nemotron-workflow' || original.models[0] !== selector) throw new Error('Use previous workflow run and identical Sol selector');
 const selected = ['hard-context-calibration', 'hard-dependency-handoff', 'hard-lifecycle-extract'];
 const tasks = read(join(source, 'tasks.json'));
@@ -111,7 +119,7 @@ if (plansFrom || briefsFrom) {
 }
 if (!equal(sdkFiles(), original.sdk_files) || !equal(files(original.mounts[0][0]), original.dependency_files)) throw new Error('SDK or dependencies differ from reference');
 const runtime = await modelRuntime();
-const models = [...new Set([selector, editorSelector, writerRecoverySelector].filter(Boolean))].map(selected => {
+const models = [...new Set([selector, editorSelector, writerRecoverySelector, ownerSelector].filter(Boolean))].map(selected => {
   const { provider, id } = parseSelector(selected), model = runtime.getModel(provider, id);
   if (!model || !runtime.hasConfiguredAuth(provider)) throw new Error(`Unavailable model: ${selected}`);
   return { selector: selected, model };
@@ -131,7 +139,7 @@ if (replayManifest && !equal(frozen, replayManifest.frozen_files)) throw new Err
 write(join(run, 'tasks.json'), selected.map(id => tasks.find(t => t.id === id)));
 write(join(run, 'references.json'), references);
 const manifest = { schema_version: 1, comparison: strategy === 'owner-query-writer' ? 'deepseek-owner-sol-query-deepseek-writer' : editorSelector ? 'sol-owner-deepseek-editor' : 'adaptive-sol-only-development', exploratory: true, strategy, selector,
-  editor_selector: editorSelector, writer_recovery_selector: writerRecoverySelector, models, optimization, query_mode: queryMode, query_granularity: queryGranularity,
+  editor_selector: editorSelector, writer_recovery_selector: writerRecoverySelector, owner_selector: ownerSelector, spec_roles: specRoles, models, optimization, query_mode: queryMode, query_granularity: queryGranularity,
   ...(dispatchProfile ? { dispatch_profile: dispatchProfile, writer_format: dispatch.writerFormat } : {}),
   plans_from: plansFrom ? basename(plansFrom) : null, briefs_from: briefsFrom ? basename(briefsFrom) : null,
   ...(runRoles ? { roles: runRoles } : {}),
@@ -149,7 +157,7 @@ for (const id of selected) {
   const directory = join(run, `${String(index++).padStart(3, '0')}-${id}`); mkdirSync(directory);
   const task = structuredClone(tasks.find(t => t.id === id)); delete task.gold;
   const { preparedPlan = null, preparedBrief = null, planningSource = null, briefSource = null } = inherited.get(id) ?? {};
-  const job = { task, optimization, queryMode, queryGranularity, dispatchProfile, preparedPlan, preparedBrief, planningSource, briefSource, arm: 'changeset', strategy, selector, editorSelector, writerRecoverySelector, ledger, directory, mounts: original.mounts,
+  const job = { task, optimization, queryMode, queryGranularity, dispatchProfile, ownerSelector, specRoles, preparedPlan, preparedBrief, planningSource, briefSource, arm: 'changeset', strategy, selector, editorSelector, writerRecoverySelector, ledger, directory, mounts: original.mounts,
     plannerPrompt: readFileSync(join(run, 'frozen/skills/spec-changeset-plan/SKILL.md'), 'utf8') };
   write(join(directory, 'job.json'), job);
   const began = performance.now(), cap = task.limits.cell_ms + task.limits.grade_ms;

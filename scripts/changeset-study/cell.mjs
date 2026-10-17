@@ -48,7 +48,7 @@ function diffs(before, after, limit = 200000) {
 const tail = (visible, chars) => visible?.output?.length > chars ? { ...visible, output: '[earlier output omitted]\n' + visible.output.slice(-chars) } : visible;
 function materialize(files, root) { rmSync(root, { recursive: true, force: true }); mkdirSync(root, { recursive: true }); new Workspace(files).materialize(root); }
 
-export async function runCell({ task, arm, selector, ledger, directory, plannerPrompt, timeoutMs, mounts = [], simpleSelector = null, editorSelector = null, writerRecoverySelector = null, strategy = null, optimization = null, preparedPlan = null, preparedBrief = null, planningSource = null, queryMode = null, briefSource = null, queryGranularity = null, dispatchProfile = null, dispatchOptions = null }) {
+export async function runCell({ task, arm, selector, ledger, directory, plannerPrompt, timeoutMs, mounts = [], simpleSelector = null, editorSelector = null, writerRecoverySelector = null, strategy = null, optimization = null, preparedPlan = null, preparedBrief = null, planningSource = null, queryMode = null, briefSource = null, queryGranularity = null, dispatchProfile = null, dispatchOptions = null, ownerSelector = null, specRoles = null }) {
   const dispatch = resolveDispatchProfile({ dispatchProfile, dispatchOptions, strategy, selector, editorSelector, writerRecoverySelector, optimization, queryMode, queryGranularity });
   ({ optimization, queryMode, queryGranularity } = dispatch);
   if (!['discovery', 'catalog', 'catalog-lookup'].includes(queryMode)) throw new Error('Unknown query mode');
@@ -81,9 +81,10 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
     ...(strategy ? { strategy, exploratory: true } : {}),
     optimization, planning_source: planningSource, query_mode: queryMode, query_granularity: queryGranularity, brief_source: briefSource,
     ...(dispatchProfile ? { dispatch_profile: dispatchProfile, dispatch_options: dispatch.options, writer_format: dispatch.writerFormat, writer_attempts: [] } : {}),
+    ...(specRoles ? { spec_roles: specRoles } : {}),
     ...(dispatchOnly(strategy) ? { review_mode: 'executable-checks-only', checks: [] } : {}),
   };
-  let client, agent, ownerAgent, simpleClient, recoveryClient, seamRetryClient, contextParse;
+  let client, agent, ownerAgent, ownerClient, simpleClient, recoveryClient, seamRetryClient, contextParse;
   const stage = async (name, fn) => { const start = performance.now(); try { return await fn(); } finally { stages.push({ name, elapsed_ms: performance.now() - start }); } };
   const check = async () => {
     const files = Workspace.load(root).snapshot();
@@ -119,6 +120,8 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
       if (writerRecoverySelector) recoveryClient = await stage('initialize', () => Client.create({ selector: writerRecoverySelector, ...clientOptions, shared: client.shared }));
       // Same model, low reasoning, used only for the second seam attempt on a seeded move.
       if (dispatch.options?.seam_retry_reasoning === 'low') seamRetryClient = await stage('initialize', () => Client.create({ selector: editorSelector.replace(/:off$/, ':low'), ...clientOptions, shared: client.shared }));
+      // An explicit owner selector lets a stronger model write the brief while the writer stays cheap.
+      if (ownerSelector && ownerSelector !== editorSelector) ownerClient = await stage('initialize', () => Client.create({ selector: ownerSelector, ...clientOptions, shared: client.shared }));
     } else if (arm === 'changeset-mixed') {
       if (!simpleSelector) throw new Error('changeset-mixed requires a simple-leaf selector');
       client.shared = { calls: 0 };
@@ -132,7 +135,8 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
     }
     let reviseBrief = null;
     if (strategy === 'owner-query-writer' && !preparedPlan && preparedBrief === null) {
-      ownerAgent = await nativeAgent({ root, client: simpleClient, transcript: join(directory, 'implementation-owner-transcript.jsonl'),
+      result.owner_selector = ownerSelector ?? editorSelector;
+      ownerAgent = await nativeAgent({ root, client: ownerClient ?? simpleClient, transcript: join(directory, 'implementation-owner-transcript.jsonl'),
         signal: controller.signal, readOnly: true, stage: 'implementation-planning', ...toolOptions, extraPrompt: dependencyNote + implementationOwnerPrompt });
       const checkBrief = text => { if (!text.trim() || text.length > 64000) throw new Error('Implementation brief must contain 1..64000 characters'); return text; };
       implementationBrief = checkBrief(await stage('implementation-planning', () => ownerAgent.prompt(prompt)));
@@ -351,10 +355,10 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
         plan = await stage(feedback ? 'repair-planning' : 'planning', () => client.json(plannerPrompt, planningInput, 'planning'));
         plan = await beforeDispatch(plan, correction => stage('planning', () => client.json(plannerPrompt, { ...planningInput, ...correction, previous_plan: plan }, 'planning')));
       }
-      if (strategy === 'owner-query-writer') {
+      if (strategy === 'owner-query-writer' || (dispatchProfile && dispatchOnly(strategy))) {
         writeFileSync(join(directory, 'raw-plan.json'), JSON.stringify(plan, null, 2));
         if (dispatchProfile) {
-          const optimized = await preprocessChangeset(plan, current.snapshot(), { ledger, signal: controller.signal, options: dispatch.options,
+          const optimized = await preprocessChangeset(plan, current.snapshot(), { ledger, signal: controller.signal, options: dispatch.options, strategy,
             parse: contextParse, protectedPaths: task.protected ?? ['visible.mjs'], stage, artifactDirectory: join(directory, 'routing'),
             beforeRouting: () => { if (client.shared.calls >= limits.model_calls) throw new Error('Cell model-call limit exceeded'); },
             onRouting: routing => {
@@ -467,7 +471,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
   const cap = timeoutMs + (limits.grade_ms ?? 0);
   result.capped_time_to_success_ms = result.accepted ? Math.min(cap, result.total_ms) : cap;
   result.stages = stages; result.reviews = reviews; result.executions = executions; result.tool_calls = toolCalls;
-  const receipts = [...(client?.receipts ?? []), ...(simpleClient?.receipts ?? []), ...(recoveryClient?.receipts ?? []), ...(seamRetryClient?.receipts ?? [])];
+  const receipts = [...(client?.receipts ?? []), ...(simpleClient?.receipts ?? []), ...(recoveryClient?.receipts ?? []), ...(seamRetryClient?.receipts ?? []), ...(ownerClient?.receipts ?? [])];
   result.model_calls = receipts.length; result.equivalent_usd = equivalentCost(receipts);
   result.catalog_usd = receipts.length && receipts.every(r => r.usage?.cost?.total > 0) ? receipts.reduce((n, r) => n + r.usage.cost.total, 0) : null;
   result.tokens = Object.fromEntries(['input', 'output', 'cacheRead', 'cacheWrite', 'totalTokens'].map(key => [key, receipts.reduce((n, r) => n + (r.usage?.[key] ?? 0), 0)]));

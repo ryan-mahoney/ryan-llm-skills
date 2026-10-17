@@ -16,8 +16,11 @@ test('combined profile keeps explicit roles and reserves routing without relabel
   assert.equal(resolveQueryGranularity({ ...route, ...profile, requested: profile.queryGranularity }), 'smaller-regions');
   assert.equal(resolveDispatchProfile({}).optimization, 'none');
   for (const change of [{ editorSelector: 'openrouter/deepseek' }, { writerRecoverySelector: 'deepseek/deepseek-flash:low' },
-    { optimization: 'none' }, { queryMode: 'discovery' }, { strategy: 'focused-dispatch' }])
+    { optimization: 'none' }, { queryMode: 'discovery' }, { strategy: 'boundary-review' }])
     assert.throws(() => resolveDispatchProfile({ ...route, ...change }), /requires/);
+  const single = resolveDispatchProfile({ ...route, strategy: 'focused-dispatch' });
+  assert.equal(single.queryMode, 'discovery'); assert.equal(single.queryGranularity, null); assert.equal(single.optimization, 'contextual');
+  assert.throws(() => resolveDispatchProfile({ ...route, strategy: 'focused-dispatch', queryMode: 'catalog-lookup' }), /discovery planning/);
   assert.throws(() => resolveQueryGranularity({ ...route, ...profile, requested: 'smaller-regions', inherited: 'default' }), /inherited plan/);
   const budget = queryAssignmentBudget({ maxCalls: 10, callsUsed: 0, queryCallsReserved: 3, routingCallsReserved: 1 });
   assert.equal(budget.max_operations, 3); assert.equal(budget.calls_used, 0); assert.equal(budget.routing_calls_reserved, 1);

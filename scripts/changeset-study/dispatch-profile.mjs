@@ -43,13 +43,16 @@ export function resolveDispatchProfile({ dispatchProfile = null, dispatchOptions
   }
   if (!Object.hasOwn(profiles, dispatchProfile)) throw new Error('Unknown dispatch profile');
   const planner = parseSelector(selector ?? ''), writer = parseSelector(editorSelector ?? '');
-  if (strategy !== 'owner-query-writer' || planner.provider !== 'openai-codex' || planner.id !== 'gpt-6.1-sol' ||
+  // focused-dispatch: one Sol discovery agent plans the writer packets directly, with
+  // no separate owner brief or catalog query; the same preprocessing and writers apply.
+  const single = strategy === 'focused-dispatch';
+  if (!['owner-query-writer', 'focused-dispatch'].includes(strategy) || planner.provider !== 'openai-codex' || planner.id !== 'gpt-6.1-sol' ||
       writer.provider !== 'deepseek' || writer.id !== 'deepseek-flash' || writer.reasoning !== 'off' || writerRecoverySelector !== null)
     throw new Error('An optimized dispatch profile requires Sol 6.1 query planning and native DeepSeek Flash :off writing with same-selector fallback');
-  if ((optimization !== null && optimization !== 'contextual') || (queryMode !== null && queryMode !== 'catalog-lookup') ||
-      (queryGranularity !== null && queryGranularity !== 'smaller-regions'))
-    throw new Error('An optimized dispatch profile requires contextual optimization, catalog-lookup and smaller-regions');
+  if ((optimization !== null && optimization !== 'contextual') || (queryMode !== null && queryMode !== (single ? 'discovery' : 'catalog-lookup')) ||
+      (queryGranularity !== null && queryGranularity !== (single ? 'default' : 'smaller-regions')))
+    throw new Error(single ? 'An optimized focused-dispatch profile requires contextual optimization and discovery planning' : 'An optimized dispatch profile requires contextual optimization, catalog-lookup and smaller-regions');
   const options = resolveDispatchOptions({ ...profiles[dispatchProfile], ...(dispatchOptions ?? {}) });
   const writerFormat = options.writer_routing === 'v4a' ? 'v4a-fallback' : options.writer_routing === 'json' ? 'json-focused' : options.writer_routing;
-  return { dispatchProfile, optimization: 'contextual', queryMode: 'catalog-lookup', queryGranularity: 'smaller-regions', writerFormat, options };
+  return { dispatchProfile, optimization: 'contextual', queryMode: single ? 'discovery' : 'catalog-lookup', queryGranularity: single ? null : 'smaller-regions', writerFormat, options };
 }

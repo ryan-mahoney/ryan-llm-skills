@@ -9,11 +9,11 @@ import { resolveDispatchOptions } from './dispatch-profile.mjs';
 
 // Callable preprocessing boundary for a DeepSeek owner submitting Sol's settled
 // packets. This returns a plan; it does not execute writers or modify files.
-export async function preprocessChangeset(plan, files, { ledger, signal, library, parse, artifactDirectory, options = null,
+export async function preprocessChangeset(plan, files, { ledger, signal, library, parse, artifactDirectory, options = null, strategy = 'owner-query-writer',
   protectedPaths = [], stage = async (_name, run) => run(), beforeRouting = () => {}, onRouting = () => {} } = {}) {
   const start = performance.now(), inputHash = hash(JSON.stringify(plan)), resolved = resolveDispatchOptions(options);
   const check = candidate => {
-    validateStrategyPlan('owner-query-writer', candidate);
+    validateStrategyPlan(strategy, candidate);
     for (const operation of compile(candidate)) if (operation.writes.some(path => protectedPaths.includes(path)))
       throw new Error(`Changeset writes a protected path: ${operation.id}`);
     const errors = preflightFocusedPlan(candidate, files, { parse });

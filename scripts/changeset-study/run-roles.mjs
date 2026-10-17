@@ -7,12 +7,12 @@ function checkedSelector(value, label) {
   return value;
 }
 
-export function buildRunRoles({ strategy, selector, editorSelector, donorManifest = null }) {
+export function buildRunRoles({ strategy, selector, editorSelector, ownerSelector = null, donorManifest = null }) {
   if (strategy !== 'owner-query-writer') return null;
   const queryPlanner = checkedSelector(selector, 'query planner');
   const writer = checkedSelector(editorSelector, 'writer');
   const implementationOwner = donorManifest
     ? checkedSelector(donorManifest.roles?.implementation_owner ?? donorManifest.editor_selector, 'inherited implementation owner')
-    : writer;
+    : ownerSelector ? checkedSelector(ownerSelector, 'implementation owner') : writer;
   return { implementation_owner: implementationOwner, query_planner: queryPlanner, writer };
 }
