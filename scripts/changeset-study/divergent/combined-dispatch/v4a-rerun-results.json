@@ -1,0 +1,1048 @@
+{
+  "schema_version": 1,
+  "protocol": "revised-combined-v4a-rerun",
+  "artifact_base": "spec-package runtime directory",
+  "artifact_path": "combined-dispatch/02-revised-combined",
+  "revision": "cbb3380c76297fafe321cfebe5b14261001a7d92",
+  "node": "v22.23.3",
+  "identities": {
+    "manifest_sha256": "e607945e333cda238d62744e7f28cc4297266f2190e3a851a0949bb468b77853",
+    "results_sha256": "632f303e8a3c490cf7bbec7fa1a74bce21b7929fdccc153043de1b70b989bc62",
+    "node_sha256": "fde6a4bf8d0562f7751d1a2d6cb9b417c4cfe107bbcb0aa3e9a24e125e348f48",
+    "reference_manifest_sha256": "e778db9e40537933ba041026dde44363d99b2df05f0a75f9dd3f42f50275ff0e"
+  },
+  "scope": "Three new combined-only observations with exact prior tasks, plans and owner briefs; old baseline and old combined are historical, not fresh controls. Zero new owner/Sol/review calls.",
+  "change": "Line-complete V4A source selections with complete bodies within 64,000 UTF-16 code units, one strict patch envelope and forward source order instructions. Existing strict applier unchanged.",
+  "application_complete": 3,
+  "audited_delivered": 2,
+  "planned_packets": 17,
+  "dispatched_packets": 17,
+  "v4a_primary_accepted": 15,
+  "fallbacks": 2,
+  "fallback_recovered": 2,
+  "completed_packets": 17,
+  "calls": {
+    "writer": 19,
+    "jev": 3,
+    "total": 22
+  },
+  "writer_tokens": {
+    "input": 88961,
+    "output": 40418,
+    "cacheRead": 1920,
+    "cacheWrite": 0,
+    "totalTokens": 131299
+  },
+  "jev_tokens": {
+    "input": 7356,
+    "output": 579
+  },
+  "cost": {
+    "writer_catalog_receipt_usd": 0.07520142,
+    "jev_input_estimated_usd": 0.00030895200000000003,
+    "mixed_total_usd": 0.075510372,
+    "caveat": "Frozen catalog-priced DS receipts plus input-only Jev estimate; no invoice verification."
+  },
+  "timing": {
+    "definition": "writing=preprocessing.elapsed_ms/1000+execution wall; routing and optimization already included in preprocessing. Provider latency sums overlap under concurrency. Outer checks separate.",
+    "writing_wall_seconds": 96.17935956699999,
+    "preprocessing_wall_seconds": 0.987013818,
+    "execution_wall_seconds": 95.192345749,
+    "routing_stage_wall_seconds": 0.9543160350000002,
+    "optimization_stage_wall_seconds": 0.0041764420000000085,
+    "provider_latency_sum_seconds": 118.674,
+    "visible_candidate_wall_seconds": 36.420234131,
+    "hidden_wall_seconds": 94.13184661800001,
+    "process_wall_seconds": 226.968433828
+  },
+  "source_context": {
+    "limit_utf16_code_units": 64000,
+    "max_delivered_utf16_code_units": 41636,
+    "body_omission": false,
+    "units": "UTF-16 code units, not bytes",
+    "max_serialized_context_bytes": 49484
+  },
+  "historical_references": {
+    "report": "results.json",
+    "baseline": {
+      "application_complete": 3,
+      "audited_delivered": 1,
+      "writer_calls": 27,
+      "writer_tokens": 121865,
+      "writing_wall_seconds": 47.872396481,
+      "receipt_usd": 0.037664028
+    },
+    "initial_combined": {
+      "application_complete": 2,
+      "audited_delivered": 1,
+      "dispatched_packets": 15,
+      "v4a_primary_accepted": 8,
+      "fallbacks": 7,
+      "fallback_recovered": 6,
+      "writing_wall_seconds": 42.243681892,
+      "mixed_total_usd": 0.054308196
+    },
+    "limitation": "No randomized repeat or fresh baseline. Old extraction combined duration4.606s is early failed work and is not a completed-work comparator."
+  },
+  "ledger": {
+    "campaign_reservations": 22,
+    "campaign_mixed_charged_usd": 0.07551037199999999,
+    "campaign_exposure_usd": 0.07551037199999999,
+    "unknown": 0,
+    "orphaned": [],
+    "unattributed": [],
+    "missing": [],
+    "global_snapshot_entries": 982,
+    "global_snapshot_charged_usd": 4.9834742442,
+    "global_unresolved": 0,
+    "limit_usd": 50,
+    "scope": "Prior campaigns retained separately, never attributed as rerun cost."
+  },
+  "rows": [
+    {
+      "id": "0-hard-context-calibration-combined",
+      "task": "hard-context-calibration",
+      "source_cell": "000-hard-context-calibration",
+      "arm": "combined",
+      "integrity_valid": true,
+      "application_complete": true,
+      "source_replay_performed": true,
+      "audited_delivered": true,
+      "writer_calls": 2,
+      "jev_requests_started": 1,
+      "jev_call_count_exact": true,
+      "calls": 3,
+      "writer_catalog_usd": 0.0036375,
+      "writer_tokens": {
+        "input": 7633,
+        "output": 1123,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 8756
+      },
+      "jev_estimated_usd": 2.9946e-05,
+      "jev_usage": {
+        "inputTokens": 713,
+        "outputTokens": 43
+      },
+      "accounting_complete": true,
+      "mixed_estimated_total_usd": 0.003667446,
+      "known_charged_usd": 0.003667446,
+      "retained_budget_exposure_usd": 0.003667446,
+      "unknown_reservations": 0,
+      "retries": 0,
+      "fallbacks": 0,
+      "execution_seconds": 2.9252204649999998,
+      "optimization_seconds": 0.0003963249999999903,
+      "jev_seconds": 0.22476584100000002,
+      "preprocessing_seconds": 0.22557228099999999,
+      "writing_seconds": 3.1507927459999996,
+      "provider_latency_seconds": 4.888,
+      "visible_seconds": 0.15959823000000006,
+      "hidden_seconds": 0.09923102400000017,
+      "process_elapsed_seconds": 3.454114567,
+      "downstream": {
+        "visible_base_ok": true,
+        "visible_ok": true,
+        "candidate_checks": [
+          {
+            "path": "pi/extensions/context-budget/policy.test.mjs",
+            "ok": true,
+            "timedOut": false
+          }
+        ],
+        "hidden_ok": true,
+        "hidden_completed": true,
+        "hidden_timed_out": false,
+        "hidden_signal": null,
+        "protected_intact": true,
+        "paths_intact": true
+      },
+      "failures": [],
+      "artifacts": {
+        "job.json_sha256": "ef1f2182e4a21116079b9cb1e817724ab4854da21d168271dae5cffcc1b3f960",
+        "result.json_sha256": "b0cc7aa6799a1150b17660784f27b0ba51d4abaed0fb76d482cd0a7860230fb9",
+        "raw-plan.json_sha256": "b3ab64d416d9749b312f2e20e959cc19ff2b3cc655ea4064d689e9ca1761028b",
+        "plan-0.json_sha256": "84d94ccfbdbc514d21e3abb06e818616f6c3065122a97a92af1b4ff336f2937c",
+        "candidate.json_sha256": "cc77e302470432bfa3bb87578ad73ee4ccfb89ead7d48d0e78282eb6ca943b01",
+        "routing.json_sha256": "205aba9213e7ff6e74fc77bdbacfd3efadc9c78b0228e1aa6a49352ddd92f0ac"
+      },
+      "attempts": [
+        {
+          "operation_id": "factor-calibration",
+          "writer_fallback": false,
+          "attempts": [
+            {
+              "writer_attempt": 0,
+              "format": "v4a",
+              "applied": true,
+              "syntax_valid": true,
+              "local_failure_kind": null,
+              "elapsed_ms": 2037.689558,
+              "model_calls": 1,
+              "matchclass": "exact",
+              "ambiguity": false
+            }
+          ]
+        },
+        {
+          "operation_id": "resume-regression",
+          "writer_fallback": false,
+          "attempts": [
+            {
+              "writer_attempt": 0,
+              "format": "v4a",
+              "applied": true,
+              "syntax_valid": true,
+              "local_failure_kind": null,
+              "elapsed_ms": 2901.2413189999997,
+              "model_calls": 1,
+              "matchclass": "exact",
+              "ambiguity": false
+            }
+          ]
+        }
+      ],
+      "hidden_raw": {
+        "ok": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "signal": null,
+        "completed": true
+      },
+      "hidden_tap_counts": {
+        "tests": 6,
+        "pass": 6,
+        "fail": 0
+      },
+      "metrics": {
+        "before": {
+          "assignments": 3,
+          "dependency_depth": 2,
+          "context_selections": 3
+        },
+        "after": {
+          "assignments": 2,
+          "dependency_depth": 1,
+          "context_selections": 2
+        },
+        "changes": [
+          {
+            "kind": "merge",
+            "members": [
+              "factor-calibration",
+              "seed-session-calibration"
+            ],
+            "into": "factor-calibration"
+          }
+        ]
+      },
+      "routing": {
+        "actual_model": "jev-1.13.0",
+        "mergeChoices": {},
+        "contextChoices": {},
+        "decision_count": 1,
+        "usage": {
+          "inputTokens": 713,
+          "outputTokens": 43
+        },
+        "estimated_usd": 2.9946e-05,
+        "cost_basis": "estimated-input-tokens",
+        "elapsed_ms": 224.43469900000002
+      },
+      "attempt_breakdown": {
+        "primary": {
+          "calls": 2,
+          "tokens": {
+            "input": 7633,
+            "output": 1123,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "reasoning": 0,
+            "totalTokens": 8756
+          },
+          "receipt_usd": 0.0036375
+        },
+        "fallback": {
+          "calls": 0,
+          "tokens": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "reasoning": 0,
+            "totalTokens": 0
+          },
+          "receipt_usd": 0
+        }
+      },
+      "source_packets": [
+        {
+          "operation": "factor-calibration",
+          "attempt": 0,
+          "source_characters_utf16": 10662,
+          "serialized_context_bytes": 16347
+        },
+        {
+          "operation": "resume-regression",
+          "attempt": 0,
+          "source_characters_utf16": 8035,
+          "serialized_context_bytes": 13697
+        }
+      ]
+    },
+    {
+      "id": "1-hard-dependency-handoff-combined",
+      "task": "hard-dependency-handoff",
+      "source_cell": "001-hard-dependency-handoff",
+      "arm": "combined",
+      "integrity_valid": true,
+      "application_complete": true,
+      "source_replay_performed": true,
+      "audited_delivered": false,
+      "writer_calls": 14,
+      "jev_requests_started": 1,
+      "jev_call_count_exact": true,
+      "calls": 15,
+      "writer_catalog_usd": 0.036712248,
+      "writer_tokens": {
+        "input": 55298,
+        "output": 16762,
+        "cacheRead": 1408,
+        "cacheWrite": 0,
+        "totalTokens": 73468
+      },
+      "jev_estimated_usd": 0.000249732,
+      "jev_usage": {
+        "inputTokens": 5946,
+        "outputTokens": 493
+      },
+      "accounting_complete": true,
+      "mixed_estimated_total_usd": 0.036961980000000005,
+      "known_charged_usd": 0.03696198,
+      "retained_budget_exposure_usd": 0.03696198,
+      "unknown_reservations": 0,
+      "retries": 2,
+      "fallbacks": 2,
+      "execution_seconds": 34.548064391,
+      "optimization_seconds": 0.0027585880000000314,
+      "jev_seconds": 0.38643026700000005,
+      "preprocessing_seconds": 0.390616489,
+      "writing_seconds": 34.93868088,
+      "provider_latency_seconds": 56.22,
+      "visible_seconds": 7.468296184999999,
+      "hidden_seconds": 65.13504207300001,
+      "process_elapsed_seconds": 107.623481882,
+      "downstream": {
+        "visible_base_ok": true,
+        "visible_ok": false,
+        "candidate_checks": [
+          {
+            "path": "pi/extensions/spec-runtime/runtime.test.mjs",
+            "ok": false,
+            "timedOut": false
+          }
+        ],
+        "hidden_ok": false,
+        "hidden_completed": false,
+        "hidden_timed_out": false,
+        "hidden_signal": null,
+        "protected_intact": true,
+        "paths_intact": true
+      },
+      "failures": [],
+      "artifacts": {
+        "job.json_sha256": "3ac15936e13f7873a7edd49d1f7d754a5234299e0976bb63e94f687c4709205a",
+        "result.json_sha256": "06a66c8d6cebcd284d01846cba5a21b1058049bc722861053110329201d9860d",
+        "raw-plan.json_sha256": "f2d2503bb8befc95d25e2c85b8713d499314f1d81af854634a51cc13b671ac56",
+        "plan-0.json_sha256": "a3ae8637bbd24bf4748b725ff25b7a4a2b820910522fe59940be35b999d0ce56",
+        "candidate.json_sha256": "b716f2105997db3a1c185a48a216abb82da373a8f08c90095aeb9b4577bf9ddd",
+        "routing.json_sha256": "fb040569168223ad702a8a1cf4e44f381d1b36463d1b64fd7db024e20da38a07"
+      },
+      "attempts": [
+        {
+          "operation_id": "export-complete-outcomes",
+          "writer_fallback": false,
+          "attempts": [
+            {
+              "writer_attempt": 0,
+              "format": "v4a",
+              "applied": true,
+              "syntax_valid": true,
+              "local_failure_kind": null,
+              "elapsed_ms": 1075.8542419999999,
+              "model_calls": 1,
+              "matchclass": "exact",
+              "ambiguity": false
+            }
+          ]
+        },
+        {
+          "operation_id": "handoff-foundation",
+          "writer_fallback": false,
+          "attempts": [
+            {
+              "writer_attempt": 0,
+              "format": "v4a",
+              "applied": true,
+              "syntax_valid": true,
+              "local_failure_kind": null,
+              "elapsed_ms": 1690.102158,
+              "model_calls": 1,
+              "matchclass": null,
+              "ambiguity": false
+            }
+          ]
+        },
+        {
+          "operation_id": "editor-profile",
+          "writer_fallback": false,
+          "attempts": [
+            {
+              "writer_attempt": 0,
+              "format": "v4a",
+              "applied": true,
+              "syntax_valid": true,
+              "local_failure_kind": null,
+              "elapsed_ms": 1763.7727250000003,
+              "model_calls": 1,
+              "matchclass": "exact",
+              "ambiguity": false
+            }
+          ]
+        },
+        {
+          "operation_id": "owner-profile",
+          "writer_fallback": false,
+          "attempts": [
+            {
+              "writer_attempt": 0,
+              "format": "v4a",
+              "applied": true,
+              "syntax_valid": true,
+              "local_failure_kind": null,
+              "elapsed_ms": 2806.471634,
+              "model_calls": 1,
+              "matchclass": "exact",
+              "ambiguity": false
+            }
+          ]
+        },
+        {
+          "operation_id": "test-foundation",
+          "writer_fallback": false,
+          "attempts": [
+            {
+              "writer_attempt": 0,
+              "format": "v4a",
+              "applied": true,
+              "syntax_valid": true,
+              "local_failure_kind": null,
+              "elapsed_ms": 3774.4009610000003,
+              "model_calls": 1,
+              "matchclass": "exact",
+              "ambiguity": false
+            }
+          ]
+        },
+        {
+          "operation_id": "handoff-wave-classification",
+          "writer_fallback": false,
+          "attempts": [
+            {
+              "writer_attempt": 0,
+              "format": "v4a",
+              "applied": true,
+              "syntax_valid": true,
+              "local_failure_kind": null,
+              "elapsed_ms": 6552.710452000001,
+              "model_calls": 1,
+              "matchclass": "exact",
+              "ambiguity": false
+            }
+          ]
+        },
+        {
+          "operation_id": "test-detail-budget",
+          "writer_fallback": false,
+          "attempts": [
+            {
+              "writer_attempt": 0,
+              "format": "v4a",
+              "applied": true,
+              "syntax_valid": true,
+              "local_failure_kind": null,
+              "elapsed_ms": 5669.429642,
+              "model_calls": 1,
+              "matchclass": "trim",
+              "ambiguity": false
+            }
+          ]
+        },
+        {
+          "operation_id": "handoff-builder",
+          "writer_fallback": false,
+          "attempts": [
+            {
+              "writer_attempt": 0,
+              "format": "v4a",
+              "applied": true,
+              "syntax_valid": true,
+              "local_failure_kind": null,
+              "elapsed_ms": 4648.229027000001,
+              "model_calls": 1,
+              "matchclass": "exact",
+              "ambiguity": false
+            }
+          ]
+        },
+        {
+          "operation_id": "test-wave-acceptance",
+          "writer_fallback": false,
+          "attempts": [
+            {
+              "writer_attempt": 0,
+              "format": "v4a",
+              "applied": true,
+              "syntax_valid": true,
+              "local_failure_kind": null,
+              "elapsed_ms": 7006.154038000001,
+              "model_calls": 1,
+              "matchclass": "exact",
+              "ambiguity": false
+            }
+          ]
+        },
+        {
+          "operation_id": "runtime-imports",
+          "writer_fallback": true,
+          "attempts": [
+            {
+              "writer_attempt": 0,
+              "format": "v4a",
+              "applied": false,
+              "syntax_valid": null,
+              "local_failure_kind": "application",
+              "elapsed_ms": 3256.4905279999984,
+              "model_calls": 1,
+              "matchclass": "exact",
+              "ambiguity": false,
+              "failure": "Could not locate expected source lines; overlapping/backward chunks are not accepted"
+            },
+            {
+              "writer_attempt": 1,
+              "format": "json",
+              "applied": true,
+              "syntax_valid": true,
+              "local_failure_kind": null,
+              "elapsed_ms": 3814.873652000002,
+              "model_calls": 1
+            }
+          ]
+        },
+        {
+          "operation_id": "runtime-target-config",
+          "writer_fallback": false,
+          "attempts": [
+            {
+              "writer_attempt": 0,
+              "format": "v4a",
+              "applied": true,
+              "syntax_valid": true,
+              "local_failure_kind": null,
+              "elapsed_ms": 4523.3885219999975,
+              "model_calls": 1,
+              "matchclass": "exact",
+              "ambiguity": false
+            }
+          ]
+        },
+        {
+          "operation_id": "runtime-editor-outcome",
+          "writer_fallback": true,
+          "attempts": [
+            {
+              "writer_attempt": 0,
+              "format": "v4a",
+              "applied": false,
+              "syntax_valid": null,
+              "local_failure_kind": "application",
+              "elapsed_ms": 5996.814477,
+              "model_calls": 1,
+              "matchclass": "exact",
+              "ambiguity": false,
+              "failure": "Could not locate expected source lines; overlapping/backward chunks are not accepted"
+            },
+            {
+              "writer_attempt": 1,
+              "format": "json",
+              "applied": true,
+              "syntax_valid": true,
+              "local_failure_kind": null,
+              "elapsed_ms": 3940.0481949999994,
+              "model_calls": 1
+            }
+          ]
+        }
+      ],
+      "hidden_raw": {
+        "ok": false,
+        "exitCode": 1,
+        "timedOut": false,
+        "signal": null,
+        "completed": false
+      },
+      "hidden_tap_counts": {
+        "tests": 101,
+        "pass": 98,
+        "fail": 3
+      },
+      "metrics": {
+        "before": {
+          "assignments": 19,
+          "dependency_depth": 10,
+          "context_selections": 30
+        },
+        "after": {
+          "assignments": 12,
+          "dependency_depth": 6,
+          "context_selections": 23
+        },
+        "changes": [
+          {
+            "kind": "merge",
+            "members": [
+              "handoff-wave-classification",
+              "handoff-receipt-artifacts"
+            ],
+            "into": "handoff-wave-classification",
+            "deferred_excerpt_validation": [
+              "pi/extensions/spec-runtime/dependency-handoff.mjs"
+            ]
+          },
+          {
+            "kind": "merge",
+            "members": [
+              "runtime-imports",
+              "runtime-current-context"
+            ],
+            "into": "runtime-imports"
+          },
+          {
+            "kind": "merge",
+            "members": [
+              "runtime-target-config",
+              "runtime-owner-prompt"
+            ],
+            "into": "runtime-target-config",
+            "deferred_excerpt_validation": [
+              "pi/extensions/spec-runtime/runtime.mjs"
+            ]
+          },
+          {
+            "kind": "merge",
+            "members": [
+              "runtime-editor-outcome",
+              "runtime-completion-guard"
+            ],
+            "into": "runtime-editor-outcome",
+            "deferred_excerpt_validation": [
+              "pi/extensions/spec-runtime/runtime.mjs"
+            ]
+          },
+          {
+            "kind": "merge",
+            "members": [
+              "test-foundation",
+              "test-owner-dependency"
+            ],
+            "into": "test-foundation"
+          },
+          {
+            "kind": "merge",
+            "members": [
+              "test-detail-budget",
+              "test-incomplete-editor"
+            ],
+            "into": "test-detail-budget",
+            "deferred_excerpt_validation": [
+              "pi/extensions/spec-runtime/runtime.test.mjs"
+            ]
+          },
+          {
+            "kind": "merge",
+            "members": [
+              "test-wave-acceptance",
+              "test-profile-guidance"
+            ],
+            "into": "test-wave-acceptance",
+            "deferred_excerpt_validation": [
+              "pi/extensions/spec-runtime/runtime.test.mjs"
+            ]
+          }
+        ]
+      },
+      "routing": {
+        "actual_model": "jev-1.13.0",
+        "mergeChoices": {},
+        "contextChoices": {},
+        "decision_count": 12,
+        "usage": {
+          "inputTokens": 5946,
+          "outputTokens": 493
+        },
+        "estimated_usd": 0.000249732,
+        "cost_basis": "estimated-input-tokens",
+        "elapsed_ms": 386.01497399999994
+      },
+      "attempt_breakdown": {
+        "primary": {
+          "calls": 12,
+          "tokens": {
+            "input": 45747,
+            "output": 14357,
+            "cacheRead": 1280,
+            "cacheWrite": 0,
+            "reasoning": 0,
+            "totalTokens": 61384
+          },
+          "receipt_usd": 0.030960179999999997
+        },
+        "fallback": {
+          "calls": 2,
+          "tokens": {
+            "input": 9551,
+            "output": 2405,
+            "cacheRead": 128,
+            "cacheWrite": 0,
+            "reasoning": 0,
+            "totalTokens": 12084
+          },
+          "receipt_usd": 0.005752068
+        }
+      },
+      "source_packets": [
+        {
+          "operation": "handoff-foundation",
+          "attempt": 0,
+          "source_characters_utf16": 621,
+          "serialized_context_bytes": 4818
+        },
+        {
+          "operation": "export-complete-outcomes",
+          "attempt": 0,
+          "source_characters_utf16": 78,
+          "serialized_context_bytes": 3420
+        },
+        {
+          "operation": "owner-profile",
+          "attempt": 0,
+          "source_characters_utf16": 15391,
+          "serialized_context_bytes": 20928
+        },
+        {
+          "operation": "editor-profile",
+          "attempt": 0,
+          "source_characters_utf16": 8488,
+          "serialized_context_bytes": 12858
+        },
+        {
+          "operation": "test-foundation",
+          "attempt": 0,
+          "source_characters_utf16": 11050,
+          "serialized_context_bytes": 17923
+        },
+        {
+          "operation": "handoff-wave-classification",
+          "attempt": 0,
+          "source_characters_utf16": 1208,
+          "serialized_context_bytes": 8276
+        },
+        {
+          "operation": "test-detail-budget",
+          "attempt": 0,
+          "source_characters_utf16": 15291,
+          "serialized_context_bytes": 22568
+        },
+        {
+          "operation": "handoff-builder",
+          "attempt": 0,
+          "source_characters_utf16": 17770,
+          "serialized_context_bytes": 23965
+        },
+        {
+          "operation": "test-wave-acceptance",
+          "attempt": 0,
+          "source_characters_utf16": 18781,
+          "serialized_context_bytes": 26040
+        },
+        {
+          "operation": "runtime-imports",
+          "attempt": 0,
+          "source_characters_utf16": 7661,
+          "serialized_context_bytes": 13491
+        },
+        {
+          "operation": "runtime-imports",
+          "attempt": 1,
+          "source_characters_utf16": 7661,
+          "serialized_context_bytes": 17038
+        },
+        {
+          "operation": "runtime-target-config",
+          "attempt": 0,
+          "source_characters_utf16": 17567,
+          "serialized_context_bytes": 22307
+        },
+        {
+          "operation": "runtime-editor-outcome",
+          "attempt": 0,
+          "source_characters_utf16": 5867,
+          "serialized_context_bytes": 12756
+        },
+        {
+          "operation": "runtime-editor-outcome",
+          "attempt": 1,
+          "source_characters_utf16": 5867,
+          "serialized_context_bytes": 21093
+        }
+      ]
+    },
+    {
+      "id": "2-hard-lifecycle-extract-combined",
+      "task": "hard-lifecycle-extract",
+      "source_cell": "002-hard-lifecycle-extract",
+      "arm": "combined",
+      "integrity_valid": true,
+      "application_complete": true,
+      "source_replay_performed": true,
+      "audited_delivered": true,
+      "writer_calls": 3,
+      "jev_requests_started": 1,
+      "jev_call_count_exact": true,
+      "calls": 4,
+      "writer_catalog_usd": 0.034851672,
+      "writer_tokens": {
+        "input": 26030,
+        "output": 22533,
+        "cacheRead": 512,
+        "cacheWrite": 0,
+        "totalTokens": 49075
+      },
+      "jev_estimated_usd": 2.9274e-05,
+      "jev_usage": {
+        "inputTokens": 697,
+        "outputTokens": 43
+      },
+      "accounting_complete": true,
+      "mixed_estimated_total_usd": 0.034880946,
+      "known_charged_usd": 0.034880945999999996,
+      "retained_budget_exposure_usd": 0.034880945999999996,
+      "unknown_reservations": 0,
+      "retries": 0,
+      "fallbacks": 0,
+      "execution_seconds": 57.719060893,
+      "optimization_seconds": 0.0010215289999999867,
+      "jev_seconds": 0.3431199270000001,
+      "preprocessing_seconds": 0.370825048,
+      "writing_seconds": 58.089885941,
+      "provider_latency_seconds": 57.566,
+      "visible_seconds": 28.792339716,
+      "hidden_seconds": 28.897573520999998,
+      "process_elapsed_seconds": 115.890837379,
+      "downstream": {
+        "visible_base_ok": true,
+        "visible_ok": true,
+        "candidate_checks": [],
+        "hidden_ok": true,
+        "hidden_completed": true,
+        "hidden_timed_out": false,
+        "hidden_signal": null,
+        "protected_intact": true,
+        "paths_intact": true
+      },
+      "failures": [],
+      "artifacts": {
+        "job.json_sha256": "dc4c0fb88379e0ee3896a3f14fcacc9c0b765ac2083c938c9444c523e5addfb8",
+        "result.json_sha256": "a2aee77c1b416a25f8e5ebb3fd1603fc281e44fda5acb354e6ba24e6a69a811a",
+        "raw-plan.json_sha256": "23af3021f06a8517b57392acbc4a2c5ba9718ac91074a8651d89bfb2b6acca62",
+        "plan-0.json_sha256": "d8211a7af8ea25bb1a0128b56a30cfd668763d2f2ef0873ac290ebd77183dcd7",
+        "candidate.json_sha256": "d0dabe16c925b1b0b2a7008fb5afb1681f2e44085a8f2f4e904aba38fc59c579",
+        "routing.json_sha256": "29b720465262dc56ecdbd343438b1043acf2d8e1b70fd7b68451557b62fe3a01"
+      },
+      "attempts": [
+        {
+          "operation_id": "extract-lifecycle",
+          "writer_fallback": false,
+          "attempts": [
+            {
+              "writer_attempt": 0,
+              "format": "v4a",
+              "applied": true,
+              "syntax_valid": true,
+              "local_failure_kind": null,
+              "elapsed_ms": 28132.461339,
+              "model_calls": 1,
+              "matchclass": null,
+              "ambiguity": false
+            }
+          ]
+        },
+        {
+          "operation_id": "wire-lifecycle",
+          "writer_fallback": false,
+          "attempts": [
+            {
+              "writer_attempt": 0,
+              "format": "v4a",
+              "applied": true,
+              "syntax_valid": true,
+              "local_failure_kind": null,
+              "elapsed_ms": 2986.9135739999983,
+              "model_calls": 1,
+              "matchclass": "exact",
+              "ambiguity": false
+            }
+          ]
+        },
+        {
+          "operation_id": "delegate-methods",
+          "writer_fallback": false,
+          "attempts": [
+            {
+              "writer_attempt": 0,
+              "format": "v4a",
+              "applied": true,
+              "syntax_valid": true,
+              "local_failure_kind": null,
+              "elapsed_ms": 26533.850592,
+              "model_calls": 1,
+              "matchclass": "exact",
+              "ambiguity": false
+            }
+          ]
+        }
+      ],
+      "hidden_raw": {
+        "ok": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "signal": null,
+        "completed": true
+      },
+      "hidden_tap_counts": {
+        "tests": 74,
+        "pass": 74,
+        "fail": 0
+      },
+      "metrics": {
+        "before": {
+          "assignments": 4,
+          "dependency_depth": 4,
+          "context_selections": 9
+        },
+        "after": {
+          "assignments": 3,
+          "dependency_depth": 3,
+          "context_selections": 9
+        },
+        "changes": [
+          {
+            "kind": "merge",
+            "members": [
+              "delegate-methods",
+              "remove-moved-helpers"
+            ],
+            "into": "delegate-methods",
+            "deferred_excerpt_validation": [
+              "pi/extensions/spec-runtime/runtime.mjs"
+            ]
+          }
+        ]
+      },
+      "routing": {
+        "actual_model": "jev-1.13.0",
+        "mergeChoices": {},
+        "contextChoices": {},
+        "decision_count": 1,
+        "usage": {
+          "inputTokens": 697,
+          "outputTokens": 43
+        },
+        "estimated_usd": 2.9274e-05,
+        "cost_basis": "estimated-input-tokens",
+        "elapsed_ms": 342.730877
+      },
+      "attempt_breakdown": {
+        "primary": {
+          "calls": 3,
+          "tokens": {
+            "input": 26030,
+            "output": 22533,
+            "cacheRead": 512,
+            "cacheWrite": 0,
+            "reasoning": 0,
+            "totalTokens": 49075
+          },
+          "receipt_usd": 0.034851672
+        },
+        "fallback": {
+          "calls": 0,
+          "tokens": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "reasoning": 0,
+            "totalTokens": 0
+          },
+          "receipt_usd": 0
+        }
+      },
+      "source_packets": [
+        {
+          "operation": "extract-lifecycle",
+          "attempt": 0,
+          "source_characters_utf16": 41636,
+          "serialized_context_bytes": 49484
+        },
+        {
+          "operation": "wire-lifecycle",
+          "attempt": 0,
+          "source_characters_utf16": 2807,
+          "serialized_context_bytes": 7886
+        },
+        {
+          "operation": "delegate-methods",
+          "attempt": 0,
+          "source_characters_utf16": 40834,
+          "serialized_context_bytes": 48768
+        }
+      ]
+    }
+  ],
+  "residual_failures": [
+    {
+      "operation": "runtime-imports",
+      "primary_reservation": "410503e3-3064-41b2-ab88-fcb6889dbf26",
+      "mechanism": "Hunk joins disjoint observedRuns lines28-41 with comment line52, skipping intervening promptRevision lines42-51. Packet marked separate excerpts; concatenated block absent.",
+      "json_fallback_recovered": true
+    },
+    {
+      "operation": "runtime-editor-outcome",
+      "primary_reservation": "e5008b5c-07f4-4a8b-ab63-77fa3a70567b",
+      "mechanism": "Hunk marks newly invented priorOutcome/continuation statements as unchanged context; actual visible source continues with orientation excerpts.",
+      "json_fallback_recovered": true
+    }
+  ],
+  "remaining_behavioral_failure": {
+    "task": "hard-dependency-handoff",
+    "candidate_suite_passed": 0,
+    "candidate_suite_total": 4,
+    "hidden_passed": 98,
+    "hidden_total": 101,
+    "hidden_completed": false,
+    "hidden_timed_out": false,
+    "mechanism": "Accepted prerequisites classified unknown/malformed, missing detail counts; candidate API/fixture/outcome/path expectations also fail. Not the prior undefined-helper mechanism."
+  }
+}

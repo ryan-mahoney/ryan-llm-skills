@@ -1,0 +1,1 @@
+{ "lean-low-seam": { "profile": "optimized-lean", "options": { "seam_retry_reasoning": "low" } } }

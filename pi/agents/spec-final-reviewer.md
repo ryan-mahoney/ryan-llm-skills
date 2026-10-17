@@ -10,6 +10,14 @@ allowedAgents: spec-final-editor
 tools: read, grep, find, ls, bash, edit, write, exec_command, write_stdin, apply_patch, subagent
 ---
 
+This profile is retained for active legacy runs. New managed end-to-end runs use
+STRONG_OWNER planning and tool-free writer responses through spec_editor. Optional
+final review uses spec_stage(kind: final-review), not an ordinary editing subagent.
+Do not use this legacy profile to bypass the managed writing contract.
+
+## Legacy run guidance
+
+
 Use the explicit FINAL_REVIEWER selector. Read and follow
 `~/.agents/skills/spec-final-review/SKILL.md` for the supplied checkout, primary
 repository, branch/base, canonical package, editor selector, and authority.

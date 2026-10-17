@@ -17,6 +17,8 @@ import { mkdirSync, writeFileSync, createWriteStream } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { totalmem } from 'node:os';
+import { fileURLToPath } from 'node:url';
+import { CHANGESET_ROUTE } from './changeset-runtime.mjs';
 import { calculateWaveResourcePolicy } from './wave-resource-policy.mjs';
 import { buildOverlayArgv, createOverlayPhases } from './overlay.mjs';
 import { artifactEnvironment } from '../../../scripts/spec-location/artifact-environment.mjs';
@@ -273,6 +275,8 @@ export function createWaveReviewRuntime(deps) {
         ...input,
         assignment_id: assignmentId,
         owner_model: model,
+        writing_route: implementation.writing_route,
+        strong_owner_model: implementation.strong_owner_model,
         editor_model: editorModel,
         child_extensions: childExtensions,
         review_model: role === 'reviewer' ? model : null,
@@ -434,6 +438,7 @@ export function createWaveReviewRuntime(deps) {
         package: packageDir,
         state: 'running',
         mode: 'run-only',
+        writing_route: wave.writing_route ?? null,
         checkout: workspace.merged ?? workspace.worktree,
         service: null,
         ...(waveBindings ? { wave_bindings: waveBindings } : {}),
@@ -469,7 +474,7 @@ export function createWaveReviewRuntime(deps) {
     // same overlay argv the wave root builds, pipes its output to a run log, and
     // drains it: an unconfirmed drain returns requires_cancellation so the caller
     // blocks and retains the claim.
-    async runPhaseCommand(record, command, timeoutSeconds, signal) {
+    async runPhaseCommand(record, command, timeoutSeconds, signal, options = {}) {
       if (record === null || typeof record !== 'object') throw new Error('runPhaseCommand requires a record');
       const phase = record.command_phase;
       if (!phase || typeof phase !== 'object') throw new Error('runPhaseCommand requires a command-phase record');
@@ -478,7 +483,8 @@ export function createWaveReviewRuntime(deps) {
       // cleanup; normalize its success (flag absent) to an explicit false so the
       // caller's confirmed-drain test reads the same shape for both branches.
       if (!phase.layers) {
-        const result = await runCommand(record, command, timeout, signal);
+        const result = await runCommand(record, command, timeout, signal, {
+          outputs: options.outputs, checkoutWrite: options.trustedGit === true, gitWrite: options.trustedGit === true });
         return { ...result, requires_cancellation: result.requires_cancellation === true };
       }
       // A contained command revalidates the full wave lease before the unit is
@@ -491,9 +497,16 @@ export function createWaveReviewRuntime(deps) {
         held: { memoryBytes: heldClaims.reduce((total, claim) => total + (claim.reservations?.memoryBytes || 0), 0),
           tasks: heldClaims.reduce((total, claim) => total + (claim.reservations?.tasks || 0), 0) } });
       const deadline = record.deadline;
+      let containedCommand = ['/bin/bash', '-o', 'pipefail', '-c', command];
+      if (record.writing_route === CHANGESET_ROUTE) {
+        const input = join(record.package, 'runtime/runs', `${record.id}-source-command-${randomUUID()}.json`);
+        writeFileSync(input, JSON.stringify({ record, command, options: { outputs: options.outputs,
+          checkoutWrite: options.trustedGit === true, gitWrite: options.trustedGit === true } }), { flag: 'wx', mode: 0o600 });
+        containedCommand = [process.execPath, fileURLToPath(new URL('./source-command-entry.mjs', import.meta.url)), input];
+      }
       const argv = buildOverlayArgv({ token: phase.claim_token, lower: phase.layers.lower, upper: phase.layers.upper,
         work: phase.layers.work, merged: phase.layers.merged, chdir: record.checkout,
-        command: ['/bin/bash', '-o', 'pipefail', '-c', command] }).argv;
+        command: containedCommand }).argv;
       const transport = sanitizeTransport(process.env);
       // The protocol log and the stderr log share one unique command stem so a
       // single command run is traceable across both streams, while each stream

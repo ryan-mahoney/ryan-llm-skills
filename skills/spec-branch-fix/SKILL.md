@@ -12,6 +12,8 @@ metadata:
 
 # Spec Branch Fix
 
+For new managed assignments, apply [Managed changeset writing](../spec-end-to-end/references/changeset-writing.md). STRONG_OWNER plans every code edit, including easy/medium steps and review fixes. Use the shared service for implementation, repairs, final review, formatting, and conflict resolution. Its managed tool and commit rules supersede direct-edit and ordinary-editor instructions below. Only already active legacy runs retain their recorded editing contract.
+
 Apply [Verification and Review](../../rules/verification-and-review.md) for focused-check scheduling
 and batched Jev verification/review-triage checkpoints.
 
@@ -89,7 +91,7 @@ active in the checkout. Everything below applies, with these differences:
 - The review was taken at an earlier commit. Before acting on a finding, confirm it
   still exists at HEAD. If a later commit already resolved it, record `fixed` with a
   note naming that commit and change nothing.
-- Apply fixes directly rather than through a subagent.
+- Own fix decisions yourself. In new managed runs apply edits through spec_editor, with STRONG_OWNER planning and the recorded editor writing.
 - Skip the merge-evidence reassembly after the commit. `spec-run` assembles merge
   evidence after the last step.
 - **Bounded packet.** When the task carries a packet from
@@ -98,8 +100,8 @@ active in the checkout. Everything below applies, with these differences:
   first three tool calls, with at most six bounded reads before the first edit; do not
   read whole files, other reviews or earlier fix records beyond the current fix file.
   Write each regression case first and observe it fail. Commit once for the packet. If
-  you cannot finish, `git restore` the files you touched, leave the tree clean and
-  report the failing case name instead of a partial change. Keep the decisions already
+  you cannot finish, preserve accepted changesets and report the remaining case.
+  Never restore pre-existing or accepted source to conceal unfinished work. Keep the decisions already
   in `reviews/<name>-fix.md` from earlier packets, add yours, set `commit` to this
   packet's commit (earlier packets name theirs in their notes) and set `pending` to the
   packet's remaining IDs. A fix file whose `pending` is nonempty is not complete.

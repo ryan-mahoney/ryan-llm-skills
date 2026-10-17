@@ -1,0 +1,2289 @@
+{
+  "schema_version": 1,
+  "observed_on": "2026-10-16",
+  "cost_policy": {
+    "id": "sol-at-deepseek-rates",
+    "observed_on": "2026-10-16",
+    "reference": "deepseek/deepseek-flash",
+    "usd_per_million_tokens": {
+      "input": 0.3,
+      "output": 1.2,
+      "cacheRead": 0.006,
+      "cacheWrite": 0.3
+    },
+    "note": "Comparison estimate only; subscription charges and quota are not measured."
+  },
+  "cross_file": {
+    "provenance": {
+      "candidate_sha256": "a2e8c768aefda6699c0dc21669752df840f451ae5b1d30571e549e344dca3e84",
+      "node": "v22.23.3",
+      "scenario": "cross-file-contract",
+      "version": "b6eac1843619183ee406d2c8ee30a8dc2ad77a845fcdcb35fa0e5658a7773672",
+      "source_outcome": "failed",
+      "plan_sha256": "9acd91f8bd3c59aad5ad4ed915782f2059e0201744ca031019421084a13dd667",
+      "source_sha256": "31cacf8a514a9d31b28068042f366f7ac2104b1db0d368a13ae5ce841e482d96",
+      "planner_equivalent_cost_usd": 0.0008829,
+      "planner_elapsed_ms": 10627
+    },
+    "plan": {
+      "schema_version": 1,
+      "operations": [
+        {
+          "id": "rename-parser",
+          "executor": "deterministic",
+          "reads": [],
+          "writes": [
+            "src/quantity.mjs",
+            "src/quote.mjs"
+          ],
+          "depends_on": [],
+          "edits": [
+            {
+              "kind": "replace",
+              "path": "src/quantity.mjs",
+              "search": "parseQty",
+              "text": "parseQuantity"
+            },
+            {
+              "kind": "replace",
+              "path": "src/quote.mjs",
+              "search": "parseQty",
+              "text": "parseQuantity",
+              "count": 2
+            }
+          ]
+        },
+        {
+          "id": "implement-quantity-and-quote",
+          "executor": "involved",
+          "reads": [],
+          "writes": [
+            "src/quantity.mjs",
+            "src/quote.mjs"
+          ],
+          "depends_on": [
+            "rename-parser"
+          ],
+          "instruction": "Update the renamed parseQuantity(value) export to return {units,source}. Accept numbers only when nonnegative safe integers, returning source=\"number\". Accept strings only when trimming yields a nonempty sequence of ASCII digits and its numeric value is a nonnegative safe integer, returning source=\"string\". Leading zeros, including arbitrarily many leading zeros, are valid; do not impose length restrictions. Reject all other inputs with RangeError, without coercing other input types. No parseQty export remains. Update quote(priceCents,rawQty) to validate priceCents as a nonnegative safe integer number, obtain units from parseQuantity(rawQty), and return {quantity:units,subtotalCents:priceCents*units}. Reject invalid priceCents or an unsafe product with RangeError. Preserve module interfaces except for these specified return-value changes."
+        },
+        {
+          "id": "update-receipt",
+          "executor": "simple",
+          "reads": [
+            "src/quote.mjs"
+          ],
+          "writes": [
+            "src/receipt.mjs"
+          ],
+          "depends_on": [
+            "implement-quantity-and-quote"
+          ],
+          "instruction": "Keep receipt(priceCents, rawQty) and its quote import. Call the updated quote once, consume its {quantity,subtotalCents} object, and return `${quantity} units: ${subtotalCents} cents`. For example receipt(125,\"2\") returns \"2 units: 250 cents\". Propagate quote errors."
+        },
+        {
+          "id": "update-config-version",
+          "executor": "deterministic",
+          "reads": [],
+          "writes": [
+            "config.json"
+          ],
+          "depends_on": [],
+          "edits": [
+            {
+              "kind": "json-set",
+              "path": "config.json",
+              "keys": [
+                "version"
+              ],
+              "value": 2
+            }
+          ]
+        }
+      ]
+    },
+    "measurements": [
+      {
+        "strategy": "parallel",
+        "repeat": 1,
+        "outcome": "passed",
+        "elapsed_ms": 44059,
+        "cost_usd": 0.011058412,
+        "equivalent_cost_usd": 0.011058412,
+        "model_calls": 2,
+        "receipts": [
+          {
+            "selector": "deepseek/deepseek-flash:low",
+            "elapsed_ms": 42477,
+            "usage": {
+              "input": 139,
+              "output": 9115,
+              "cacheRead": 512,
+              "cacheWrite": 0,
+              "reasoning": 8740,
+              "totalTokens": 9766,
+              "cost": {
+                "input": 4.17e-05,
+                "output": 0.010938,
+                "cacheRead": 3.072e-06,
+                "cacheWrite": 0,
+                "total": 0.010982772
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openrouter/inception/mercury-2.5:low",
+            "elapsed_ms": 1449,
+            "usage": {
+              "input": 631,
+              "output": 336,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 250,
+              "totalTokens": 967,
+              "cost": {
+                "input": 2.524e-05,
+                "output": 5.04e-05,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 7.564e-05
+              }
+            },
+            "stop_reason": "stop"
+          }
+        ]
+      },
+      {
+        "strategy": "parallel-deepseek-32k",
+        "repeat": 1,
+        "outcome": "passed",
+        "elapsed_ms": 42229,
+        "cost_usd": 0.014835672,
+        "equivalent_cost_usd": 0.014835672,
+        "model_calls": 2,
+        "receipts": [
+          {
+            "selector": "deepseek/deepseek-flash:low",
+            "elapsed_ms": 41020,
+            "usage": {
+              "input": 139,
+              "output": 12264,
+              "cacheRead": 512,
+              "cacheWrite": 0,
+              "reasoning": 11833,
+              "totalTokens": 12915,
+              "cost": {
+                "input": 4.17e-05,
+                "output": 0.014716799999999999,
+                "cacheRead": 3.072e-06,
+                "cacheWrite": 0,
+                "total": 0.014761571999999999
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openrouter/inception/mercury-2.5:low",
+            "elapsed_ms": 1083,
+            "usage": {
+              "input": 645,
+              "output": 322,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 238,
+              "totalTokens": 967,
+              "cost": {
+                "input": 2.58e-05,
+                "output": 4.8299999999999995e-05,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 7.41e-05
+              }
+            },
+            "stop_reason": "stop"
+          }
+        ]
+      },
+      {
+        "strategy": "parallel-fast",
+        "repeat": 1,
+        "outcome": "passed",
+        "elapsed_ms": 3300,
+        "cost_usd": 0.00072436,
+        "equivalent_cost_usd": 0.00072436,
+        "model_calls": 2,
+        "receipts": [
+          {
+            "selector": "deepseek/deepseek-flash:off",
+            "elapsed_ms": 2115,
+            "usage": {
+              "input": 626,
+              "output": 384,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 1010,
+              "cost": {
+                "input": 0.00018779999999999998,
+                "output": 0.0004608,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.0006485999999999999
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openrouter/inception/mercury-2.5:low",
+            "elapsed_ms": 1054,
+            "usage": {
+              "input": 634,
+              "output": 336,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 251,
+              "totalTokens": 970,
+              "cost": {
+                "input": 2.536e-05,
+                "output": 5.04e-05,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 7.575999999999999e-05
+              }
+            },
+            "stop_reason": "stop"
+          }
+        ]
+      },
+      {
+        "strategy": "parallel-sol",
+        "repeat": 1,
+        "outcome": "passed",
+        "elapsed_ms": 9807,
+        "cost_usd": 0.00517524,
+        "equivalent_cost_usd": 0.00072494,
+        "model_calls": 2,
+        "receipts": [
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 8015,
+            "usage": {
+              "input": 599,
+              "output": 390,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 62,
+              "totalTokens": 989,
+              "cost": {
+                "input": 0.0011979999999999998,
+                "output": 0.0039000000000000003,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.005098
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openrouter/inception/mercury-2.5:low",
+            "elapsed_ms": 1659,
+            "usage": {
+              "input": 641,
+              "output": 344,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 256,
+              "totalTokens": 985,
+              "cost": {
+                "input": 2.5640000000000002e-05,
+                "output": 5.16e-05,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 7.724e-05
+              }
+            },
+            "stop_reason": "stop"
+          }
+        ]
+      },
+      {
+        "strategy": "serial",
+        "repeat": 1,
+        "outcome": "passed",
+        "elapsed_ms": 20222,
+        "cost_usd": 0.004151492,
+        "equivalent_cost_usd": 0.004151492,
+        "model_calls": 2,
+        "receipts": [
+          {
+            "selector": "deepseek/deepseek-flash:low",
+            "elapsed_ms": 18819,
+            "usage": {
+              "input": 139,
+              "output": 3358,
+              "cacheRead": 512,
+              "cacheWrite": 0,
+              "reasoning": 2853,
+              "totalTokens": 4009,
+              "cost": {
+                "input": 4.17e-05,
+                "output": 0.0040295999999999995,
+                "cacheRead": 3.072e-06,
+                "cacheWrite": 0,
+                "total": 0.004074372
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openrouter/inception/mercury-2.5:low",
+            "elapsed_ms": 1273,
+            "usage": {
+              "input": 653,
+              "output": 340,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 252,
+              "totalTokens": 993,
+              "cost": {
+                "input": 2.612e-05,
+                "output": 5.1e-05,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 7.712e-05
+              }
+            },
+            "stop_reason": "stop"
+          }
+        ]
+      },
+      {
+        "strategy": "serial-model",
+        "repeat": 1,
+        "outcome": "passed",
+        "elapsed_ms": 20219,
+        "cost_usd": 0.012494,
+        "equivalent_cost_usd": 0.0016404,
+        "model_calls": 4,
+        "receipts": [
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 7069,
+            "usage": {
+              "input": 492,
+              "output": 335,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 24,
+              "totalTokens": 827,
+              "cost": {
+                "input": 0.0009839999999999998,
+                "output": 0.00335,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.004334
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 6767,
+            "usage": {
+              "input": 837,
+              "output": 346,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 35,
+              "totalTokens": 1183,
+              "cost": {
+                "input": 0.001674,
+                "output": 0.0034600000000000004,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.0051340000000000005
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 3427,
+            "usage": {
+              "input": 617,
+              "output": 76,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 693,
+              "cost": {
+                "input": 0.0012339999999999999,
+                "output": 0.00076,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.001994
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 2825,
+            "usage": {
+              "input": 406,
+              "output": 22,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 428,
+              "cost": {
+                "input": 0.000812,
+                "output": 0.00022,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.001032
+              }
+            },
+            "stop_reason": "stop"
+          }
+        ]
+      },
+      {
+        "strategy": "serial-model",
+        "repeat": 2,
+        "outcome": "passed",
+        "elapsed_ms": 20697,
+        "cost_usd": 0.012802,
+        "equivalent_cost_usd": 0.0016779,
+        "model_calls": 4,
+        "receipts": [
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 7777,
+            "usage": {
+              "input": 492,
+              "output": 365,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 46,
+              "totalTokens": 857,
+              "cost": {
+                "input": 0.0009839999999999998,
+                "output": 0.0036500000000000005,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.004634
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 6526,
+            "usage": {
+              "input": 845,
+              "output": 317,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 1162,
+              "cost": {
+                "input": 0.0016899999999999999,
+                "output": 0.00317,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.00486
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 2875,
+            "usage": {
+              "input": 618,
+              "output": 76,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 694,
+              "cost": {
+                "input": 0.001236,
+                "output": 0.00076,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.001996
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 3383,
+            "usage": {
+              "input": 406,
+              "output": 50,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 26,
+              "totalTokens": 456,
+              "cost": {
+                "input": 0.000812,
+                "output": 0.0005,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.001312
+              }
+            },
+            "stop_reason": "stop"
+          }
+        ]
+      },
+      {
+        "strategy": "serial",
+        "repeat": 2,
+        "outcome": "failed",
+        "elapsed_ms": 54109,
+        "cost_usd": 0.019244771999999997,
+        "equivalent_cost_usd": 0.019244771999999997,
+        "model_calls": 1,
+        "receipts": [
+          {
+            "selector": "deepseek/deepseek-flash:low",
+            "elapsed_ms": 54043,
+            "usage": {
+              "input": 139,
+              "output": 16000,
+              "cacheRead": 512,
+              "cacheWrite": 0,
+              "reasoning": 16000,
+              "totalTokens": 16651,
+              "cost": {
+                "input": 4.17e-05,
+                "output": 0.0192,
+                "cacheRead": 3.072e-06,
+                "cacheWrite": 0,
+                "total": 0.019244771999999997
+              }
+            },
+            "stop_reason": "length"
+          }
+        ]
+      },
+      {
+        "strategy": "parallel-sol",
+        "repeat": 2,
+        "outcome": "passed",
+        "elapsed_ms": 11736,
+        "cost_usd": 0.005361900000000001,
+        "equivalent_cost_usd": 0.0007444,
+        "model_calls": 2,
+        "receipts": [
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 9298,
+            "usage": {
+              "input": 599,
+              "output": 409,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 65,
+              "totalTokens": 1008,
+              "cost": {
+                "input": 0.0011979999999999998,
+                "output": 0.004090000000000001,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.005288000000000001
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openrouter/inception/mercury-2.5:low",
+            "elapsed_ms": 2313,
+            "usage": {
+              "input": 625,
+              "output": 326,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 242,
+              "totalTokens": 951,
+              "cost": {
+                "input": 2.5e-05,
+                "output": 4.8899999999999996e-05,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 7.39e-05
+              }
+            },
+            "stop_reason": "stop"
+          }
+        ]
+      },
+      {
+        "strategy": "parallel-fast",
+        "repeat": 2,
+        "outcome": "passed",
+        "elapsed_ms": 6335,
+        "cost_usd": 0.000584014,
+        "equivalent_cost_usd": 0.000584014,
+        "model_calls": 2,
+        "receipts": [
+          {
+            "selector": "deepseek/deepseek-flash:off",
+            "elapsed_ms": 2555,
+            "usage": {
+              "input": 242,
+              "output": 364,
+              "cacheRead": 384,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 990,
+              "cost": {
+                "input": 7.26e-05,
+                "output": 0.0004368,
+                "cacheRead": 2.304e-06,
+                "cacheWrite": 0,
+                "total": 0.000511704
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openrouter/inception/mercury-2.5:low",
+            "elapsed_ms": 3651,
+            "usage": {
+              "input": 619,
+              "output": 317,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 245,
+              "totalTokens": 936,
+              "cost": {
+                "input": 2.476e-05,
+                "output": 4.755e-05,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 7.230999999999999e-05
+              }
+            },
+            "stop_reason": "stop"
+          }
+        ]
+      },
+      {
+        "strategy": "parallel-deepseek-32k",
+        "repeat": 2,
+        "outcome": "passed",
+        "elapsed_ms": 48882,
+        "cost_usd": 0.013038301999999998,
+        "equivalent_cost_usd": 0.013038301999999998,
+        "model_calls": 2,
+        "receipts": [
+          {
+            "selector": "deepseek/deepseek-flash:low",
+            "elapsed_ms": 44951,
+            "usage": {
+              "input": 139,
+              "output": 10766,
+              "cacheRead": 512,
+              "cacheWrite": 0,
+              "reasoning": 10373,
+              "totalTokens": 11417,
+              "cost": {
+                "input": 4.17e-05,
+                "output": 0.012919199999999999,
+                "cacheRead": 3.072e-06,
+                "cacheWrite": 0,
+                "total": 0.012963971999999999
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openrouter/inception/mercury-2.5:low",
+            "elapsed_ms": 3799,
+            "usage": {
+              "input": 632,
+              "output": 327,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 255,
+              "totalTokens": 959,
+              "cost": {
+                "input": 2.5280000000000002e-05,
+                "output": 4.905e-05,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 7.433e-05
+              }
+            },
+            "stop_reason": "stop"
+          }
+        ]
+      },
+      {
+        "strategy": "parallel",
+        "repeat": 2,
+        "outcome": "passed",
+        "elapsed_ms": 29857,
+        "cost_usd": 0.006417052,
+        "equivalent_cost_usd": 0.006417052,
+        "model_calls": 2,
+        "receipts": [
+          {
+            "selector": "deepseek/deepseek-flash:low",
+            "elapsed_ms": 28017,
+            "usage": {
+              "input": 139,
+              "output": 5246,
+              "cacheRead": 512,
+              "cacheWrite": 0,
+              "reasoning": 4771,
+              "totalTokens": 5897,
+              "cost": {
+                "input": 4.17e-05,
+                "output": 0.0062952,
+                "cacheRead": 3.072e-06,
+                "cacheWrite": 0,
+                "total": 0.006339972
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openrouter/inception/mercury-2.5:low",
+            "elapsed_ms": 1708,
+            "usage": {
+              "input": 637,
+              "output": 344,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 259,
+              "totalTokens": 981,
+              "cost": {
+                "input": 2.548e-05,
+                "output": 5.16e-05,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 7.708e-05
+              }
+            },
+            "stop_reason": "stop"
+          }
+        ]
+      }
+    ]
+  },
+  "validation": {
+    "run": "20261016T130232Z-8023",
+    "candidate_sha256": "e1bd3565c6e3505460bfbfa0185c28f2a1c20a07e2610373cd0854e02e912265",
+    "skill_sha256": "6cbf54d2bec80208e26538e59facf51af41780fa20b1366b48438b659ea20410",
+    "cells": [
+      {
+        "scenario": "mechanical-migration",
+        "version": "40c4955462fe481ebcaa7aab3a1ac90b9baefb53eb16a99ef750a9edbf932eca",
+        "model": "openai-codex/gpt-6.1-sol:low",
+        "repeat": 1,
+        "outcome": "passed",
+        "elapsed_ms": 20863,
+        "cost_usd": 0.008734,
+        "first_pass": true,
+        "repairs": 0,
+        "receipts": [
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 7946,
+            "usage": {
+              "input": 854,
+              "output": 313,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 1167,
+              "cost": {
+                "input": 0.0017079999999999999,
+                "output": 0.0031300000000000004,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.004838
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 9415,
+            "usage": {
+              "input": 1858,
+              "output": 18,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 1876,
+              "cost": {
+                "input": 0.0037159999999999997,
+                "output": 0.00018,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.0038959999999999997
+              }
+            },
+            "stop_reason": "stop"
+          }
+        ]
+      },
+      {
+        "scenario": "mechanical-migration",
+        "version": "40c4955462fe481ebcaa7aab3a1ac90b9baefb53eb16a99ef750a9edbf932eca",
+        "model": "openai-codex/gpt-6.1-sol:low",
+        "repeat": 2,
+        "outcome": "passed",
+        "elapsed_ms": 12413,
+        "cost_usd": 0.008734,
+        "first_pass": true,
+        "repairs": 0,
+        "receipts": [
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 6821,
+            "usage": {
+              "input": 854,
+              "output": 313,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 1167,
+              "cost": {
+                "input": 0.0017079999999999999,
+                "output": 0.0031300000000000004,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.004838
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 2135,
+            "usage": {
+              "input": 1858,
+              "output": 18,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 1876,
+              "cost": {
+                "input": 0.0037159999999999997,
+                "output": 0.00018,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.0038959999999999997
+              }
+            },
+            "stop_reason": "stop"
+          }
+        ]
+      },
+      {
+        "scenario": "invoice-rollup",
+        "version": "0a010d43e2d407984df42af7cb599f5dd2d8018aaa17b6dc80a16e8dd684128b",
+        "model": "openai-codex/gpt-6.1-sol:low",
+        "repeat": 1,
+        "outcome": "passed",
+        "elapsed_ms": 21743,
+        "cost_usd": 0.013048210000000001,
+        "first_pass": true,
+        "repairs": 0,
+        "receipts": [
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 12306,
+            "usage": {
+              "input": 1005,
+              "output": 486,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 1491,
+              "cost": {
+                "input": 0.00201,
+                "output": 0.004860000000000001,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.006870000000000001
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openrouter/inception/mercury-2.5:low",
+            "elapsed_ms": 2395,
+            "usage": {
+              "input": 519,
+              "output": 445,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 248,
+              "totalTokens": 964,
+              "cost": {
+                "input": 2.076e-05,
+                "output": 6.675e-05,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 8.751e-05
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "deepseek/deepseek-flash:off",
+            "elapsed_ms": 3334,
+            "usage": {
+              "input": 637,
+              "output": 518,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 1155,
+              "cost": {
+                "input": 0.00019109999999999998,
+                "output": 0.0006215999999999999,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.0008127
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 2777,
+            "usage": {
+              "input": 2549,
+              "output": 18,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 2567,
+              "cost": {
+                "input": 0.005098,
+                "output": 0.00018,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.005278
+              }
+            },
+            "stop_reason": "stop"
+          }
+        ]
+      },
+      {
+        "scenario": "invoice-rollup",
+        "version": "0a010d43e2d407984df42af7cb599f5dd2d8018aaa17b6dc80a16e8dd684128b",
+        "model": "openai-codex/gpt-6.1-sol:low",
+        "repeat": 2,
+        "outcome": "passed",
+        "elapsed_ms": 21984,
+        "cost_usd": 0.013334528,
+        "first_pass": true,
+        "repairs": 0,
+        "receipts": [
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 12485,
+            "usage": {
+              "input": 1005,
+              "output": 472,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 1477,
+              "cost": {
+                "input": 0.00201,
+                "output": 0.00472,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.00673
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openrouter/inception/mercury-2.5:low",
+            "elapsed_ms": 2226,
+            "usage": {
+              "input": 514,
+              "output": 478,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 257,
+              "totalTokens": 992,
+              "cost": {
+                "input": 2.056e-05,
+                "output": 7.17e-05,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 9.225999999999999e-05
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "deepseek/deepseek-flash:off",
+            "elapsed_ms": 4058,
+            "usage": {
+              "input": 493,
+              "output": 633,
+              "cacheRead": 128,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 1254,
+              "cost": {
+                "input": 0.0001479,
+                "output": 0.0007595999999999999,
+                "cacheRead": 7.68e-07,
+                "cacheWrite": 0,
+                "total": 0.0009082679999999998
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 2159,
+            "usage": {
+              "input": 2712,
+              "output": 18,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 2730,
+              "cost": {
+                "input": 0.005424,
+                "output": 0.00018,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.005604
+              }
+            },
+            "stop_reason": "stop"
+          }
+        ]
+      },
+      {
+        "scenario": "tenant-records",
+        "version": "e3be249604584206ee468728c0143fe6f29e7aa50c68a8c5f3b89bf8a374ccab",
+        "model": "openai-codex/gpt-6.1-sol:low",
+        "repeat": 1,
+        "outcome": "passed",
+        "elapsed_ms": 19540,
+        "cost_usd": 0.011097989999999999,
+        "first_pass": true,
+        "repairs": 0,
+        "receipts": [
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 9260,
+            "usage": {
+              "input": 980,
+              "output": 379,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 1359,
+              "cost": {
+                "input": 0.00196,
+                "output": 0.0037900000000000004,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.00575
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "deepseek/deepseek-flash:off",
+            "elapsed_ms": 2568,
+            "usage": {
+              "input": 579,
+              "output": 366,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 945,
+              "cost": {
+                "input": 0.0001737,
+                "output": 0.0004392,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.0006129
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openrouter/inception/mercury-2.5:low",
+            "elapsed_ms": 4514,
+            "usage": {
+              "input": 411,
+              "output": 311,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 247,
+              "totalTokens": 722,
+              "cost": {
+                "input": 1.6440000000000002e-05,
+                "output": 4.6649999999999996e-05,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 6.309e-05
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 2387,
+            "usage": {
+              "input": 2246,
+              "output": 18,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 2264,
+              "cost": {
+                "input": 0.0044919999999999995,
+                "output": 0.00018,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.004671999999999999
+              }
+            },
+            "stop_reason": "stop"
+          }
+        ]
+      },
+      {
+        "scenario": "tenant-records",
+        "version": "e3be249604584206ee468728c0143fe6f29e7aa50c68a8c5f3b89bf8a374ccab",
+        "model": "openai-codex/gpt-6.1-sol:low",
+        "repeat": 2,
+        "outcome": "passed",
+        "elapsed_ms": 19506,
+        "cost_usd": 0.011206708,
+        "first_pass": true,
+        "repairs": 0,
+        "receipts": [
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 9328,
+            "usage": {
+              "input": 980,
+              "output": 369,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 1349,
+              "cost": {
+                "input": 0.00196,
+                "output": 0.00369,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.0056500000000000005
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "deepseek/deepseek-flash:off",
+            "elapsed_ms": 2755,
+            "usage": {
+              "input": 449,
+              "output": 410,
+              "cacheRead": 128,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 987,
+              "cost": {
+                "input": 0.0001347,
+                "output": 0.0004919999999999999,
+                "cacheRead": 7.68e-07,
+                "cacheWrite": 0,
+                "total": 0.0006274679999999998
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openrouter/inception/mercury-2.5:low",
+            "elapsed_ms": 4962,
+            "usage": {
+              "input": 406,
+              "output": 340,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 245,
+              "totalTokens": 746,
+              "cost": {
+                "input": 1.624e-05,
+                "output": 5.1e-05,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 6.724e-05
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 1911,
+            "usage": {
+              "input": 2341,
+              "output": 18,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 2359,
+              "cost": {
+                "input": 0.0046819999999999995,
+                "output": 0.00018,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.004861999999999999
+              }
+            },
+            "stop_reason": "stop"
+          }
+        ]
+      },
+      {
+        "scenario": "cross-file-contract",
+        "version": "7f7e03026d7bfb5999f5c654ff8f7c469bc6a474b197019d465e7f1bb1cbc5ff",
+        "model": "openai-codex/gpt-6.1-sol:low",
+        "repeat": 1,
+        "outcome": "passed",
+        "elapsed_ms": 23813,
+        "cost_usd": 0.013045847999999999,
+        "first_pass": true,
+        "repairs": 0,
+        "receipts": [
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 10755,
+            "usage": {
+              "input": 1051,
+              "output": 482,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 1533,
+              "cost": {
+                "input": 0.0021019999999999997,
+                "output": 0.0048200000000000005,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.006922
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "deepseek/deepseek-flash:off",
+            "elapsed_ms": 2365,
+            "usage": {
+              "input": 498,
+              "output": 437,
+              "cacheRead": 128,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 1063,
+              "cost": {
+                "input": 0.0001494,
+                "output": 0.0005244,
+                "cacheRead": 7.68e-07,
+                "cacheWrite": 0,
+                "total": 0.000674568
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openrouter/inception/mercury-2.5:low",
+            "elapsed_ms": 5325,
+            "usage": {
+              "input": 652,
+              "output": 328,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 245,
+              "totalTokens": 980,
+              "cost": {
+                "input": 2.608e-05,
+                "output": 4.9199999999999997e-05,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 7.528e-05
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 1952,
+            "usage": {
+              "input": 2597,
+              "output": 18,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 2615,
+              "cost": {
+                "input": 0.005194,
+                "output": 0.00018,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.0053739999999999994
+              }
+            },
+            "stop_reason": "stop"
+          }
+        ]
+      },
+      {
+        "scenario": "cross-file-contract",
+        "version": "7f7e03026d7bfb5999f5c654ff8f7c469bc6a474b197019d465e7f1bb1cbc5ff",
+        "model": "openai-codex/gpt-6.1-sol:low",
+        "repeat": 2,
+        "outcome": "passed",
+        "elapsed_ms": 21642,
+        "cost_usd": 0.012864436,
+        "first_pass": true,
+        "repairs": 0,
+        "receipts": [
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 10703,
+            "usage": {
+              "input": 1051,
+              "output": 469,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 1520,
+              "cost": {
+                "input": 0.0021019999999999997,
+                "output": 0.004690000000000001,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.006792
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "deepseek/deepseek-flash:off",
+            "elapsed_ms": 2541,
+            "usage": {
+              "input": 360,
+              "output": 428,
+              "cacheRead": 256,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 1044,
+              "cost": {
+                "input": 0.000108,
+                "output": 0.0005136,
+                "cacheRead": 1.536e-06,
+                "cacheWrite": 0,
+                "total": 0.000623136
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openrouter/inception/mercury-2.5:low",
+            "elapsed_ms": 2849,
+            "usage": {
+              "input": 650,
+              "output": 342,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 255,
+              "totalTokens": 992,
+              "cost": {
+                "input": 2.6000000000000002e-05,
+                "output": 5.13e-05,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 7.730000000000001e-05
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 2190,
+            "usage": {
+              "input": 2596,
+              "output": 18,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 2614,
+              "cost": {
+                "input": 0.005192,
+                "output": 0.00018,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.005371999999999999
+              }
+            },
+            "stop_reason": "stop"
+          }
+        ]
+      },
+      {
+        "scenario": "cursor-pagination",
+        "version": "92f5546c4e828fa17189232c9d2f96b1c65b29768e04043a94c8b76bab329585",
+        "model": "openai-codex/gpt-6.1-sol:low",
+        "repeat": 1,
+        "outcome": "passed",
+        "elapsed_ms": 16148,
+        "cost_usd": 0.010895950000000001,
+        "first_pass": true,
+        "repairs": 0,
+        "receipts": [
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 8341,
+            "usage": {
+              "input": 937,
+              "output": 366,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 1303,
+              "cost": {
+                "input": 0.001874,
+                "output": 0.0036600000000000005,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.005534000000000001
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openrouter/inception/mercury-2.5:low",
+            "elapsed_ms": 1993,
+            "usage": {
+              "input": 385,
+              "output": 337,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 244,
+              "totalTokens": 722,
+              "cost": {
+                "input": 1.54e-05,
+                "output": 5.0549999999999995e-05,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 6.595e-05
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "deepseek/deepseek-flash:off",
+            "elapsed_ms": 2377,
+            "usage": {
+              "input": 544,
+              "output": 369,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 913,
+              "cost": {
+                "input": 0.00016319999999999998,
+                "output": 0.0004428,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.000606
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 2035,
+            "usage": {
+              "input": 2255,
+              "output": 18,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 2273,
+              "cost": {
+                "input": 0.00451,
+                "output": 0.00018,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.00469
+              }
+            },
+            "stop_reason": "stop"
+          }
+        ]
+      },
+      {
+        "scenario": "cursor-pagination",
+        "version": "92f5546c4e828fa17189232c9d2f96b1c65b29768e04043a94c8b76bab329585",
+        "model": "openai-codex/gpt-6.1-sol:low",
+        "repeat": 2,
+        "outcome": "passed",
+        "elapsed_ms": 23499,
+        "cost_usd": 0.011303238,
+        "first_pass": true,
+        "repairs": 0,
+        "receipts": [
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 15411,
+            "usage": {
+              "input": 937,
+              "output": 362,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 1299,
+              "cost": {
+                "input": 0.001874,
+                "output": 0.0036200000000000004,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.005494000000000001
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openrouter/inception/mercury-2.5:low",
+            "elapsed_ms": 2248,
+            "usage": {
+              "input": 388,
+              "output": 345,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 251,
+              "totalTokens": 733,
+              "cost": {
+                "input": 1.552e-05,
+                "output": 5.175e-05,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 6.727e-05
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "deepseek/deepseek-flash:off",
+            "elapsed_ms": 2740,
+            "usage": {
+              "input": 408,
+              "output": 509,
+              "cacheRead": 128,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 1045,
+              "cost": {
+                "input": 0.0001224,
+                "output": 0.0006108,
+                "cacheRead": 7.68e-07,
+                "cacheWrite": 0,
+                "total": 0.000733968
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 2070,
+            "usage": {
+              "input": 2414,
+              "output": 18,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 2432,
+              "cost": {
+                "input": 0.004828,
+                "output": 0.00018,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.005007999999999999
+              }
+            },
+            "stop_reason": "stop"
+          }
+        ]
+      },
+      {
+        "scenario": "retry-policy",
+        "version": "6ca0bb86fbccf9df00d6e6f6fff462f146ee74a454e764e453e2d286754daf64",
+        "model": "openai-codex/gpt-6.1-sol:low",
+        "repeat": 1,
+        "outcome": "passed",
+        "elapsed_ms": 22064,
+        "cost_usd": 0.01216153,
+        "first_pass": true,
+        "repairs": 0,
+        "receipts": [
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 10201,
+            "usage": {
+              "input": 935,
+              "output": 359,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 1294,
+              "cost": {
+                "input": 0.00187,
+                "output": 0.0035900000000000003,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.0054600000000000004
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openrouter/inception/mercury-2.5:low",
+            "elapsed_ms": 2261,
+            "usage": {
+              "input": 427,
+              "output": 383,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 253,
+              "totalTokens": 810,
+              "cost": {
+                "input": 1.708e-05,
+                "output": 5.745e-05,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 7.453e-05
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "deepseek/deepseek-flash:off",
+            "elapsed_ms": 2881,
+            "usage": {
+              "input": 530,
+              "output": 455,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 985,
+              "cost": {
+                "input": 0.000159,
+                "output": 0.0005459999999999999,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.0007049999999999999
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 5699,
+            "usage": {
+              "input": 2356,
+              "output": 121,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 101,
+              "totalTokens": 2477,
+              "cost": {
+                "input": 0.004712,
+                "output": 0.0012100000000000001,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.005922
+              }
+            },
+            "stop_reason": "stop"
+          }
+        ]
+      },
+      {
+        "scenario": "retry-policy",
+        "version": "6ca0bb86fbccf9df00d6e6f6fff462f146ee74a454e764e453e2d286754daf64",
+        "model": "openai-codex/gpt-6.1-sol:low",
+        "repeat": 2,
+        "outcome": "passed",
+        "elapsed_ms": 47073,
+        "cost_usd": 0.031708478000000005,
+        "first_pass": false,
+        "repairs": 1,
+        "receipts": [
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 9770,
+            "usage": {
+              "input": 935,
+              "output": 388,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 1323,
+              "cost": {
+                "input": 0.00187,
+                "output": 0.00388,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.00575
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openrouter/inception/mercury-2.5:low",
+            "elapsed_ms": 1363,
+            "usage": {
+              "input": 424,
+              "output": 363,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 242,
+              "totalTokens": 787,
+              "cost": {
+                "input": 1.696e-05,
+                "output": 5.4449999999999995e-05,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 7.141e-05
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "deepseek/deepseek-flash:off",
+            "elapsed_ms": 4771,
+            "usage": {
+              "input": 413,
+              "output": 817,
+              "cacheRead": 128,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 1358,
+              "cost": {
+                "input": 0.0001239,
+                "output": 0.0009804,
+                "cacheRead": 7.68e-07,
+                "cacheWrite": 0,
+                "total": 0.0011050679999999998
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 14209,
+            "usage": {
+              "input": 2683,
+              "output": 431,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 124,
+              "totalTokens": 3114,
+              "cost": {
+                "input": 0.005366,
+                "output": 0.0043100000000000005,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.009676
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 10063,
+            "usage": {
+              "input": 1253,
+              "output": 575,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 1828,
+              "cost": {
+                "input": 0.002506,
+                "output": 0.005750000000000001,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.008256000000000001
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 4936,
+            "usage": {
+              "input": 3150,
+              "output": 55,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 35,
+              "totalTokens": 3205,
+              "cost": {
+                "input": 0.0063,
+                "output": 0.00055,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.00685
+              }
+            },
+            "stop_reason": "stop"
+          }
+        ]
+      },
+      {
+        "scenario": "independent-formatters",
+        "version": "e9dd1d0b318ef2377264190fddbccfcee8a37ee31043be597890e31d07ee138c",
+        "model": "openai-codex/gpt-6.1-sol:low",
+        "repeat": 1,
+        "outcome": "passed",
+        "elapsed_ms": 16846,
+        "cost_usd": 0.01197223,
+        "first_pass": true,
+        "repairs": 0,
+        "receipts": [
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 8806,
+            "usage": {
+              "input": 1005,
+              "output": 414,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 1419,
+              "cost": {
+                "input": 0.00201,
+                "output": 0.0041400000000000005,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.006150000000000001
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openrouter/inception/mercury-2.5:low",
+            "elapsed_ms": 1418,
+            "usage": {
+              "input": 407,
+              "output": 388,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 256,
+              "totalTokens": 795,
+              "cost": {
+                "input": 1.628e-05,
+                "output": 5.82e-05,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 7.448e-05
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openrouter/inception/mercury-2.5:low",
+            "elapsed_ms": 1606,
+            "usage": {
+              "input": 406,
+              "output": 305,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 257,
+              "totalTokens": 711,
+              "cost": {
+                "input": 1.624e-05,
+                "output": 4.575e-05,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 6.199e-05
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openrouter/inception/mercury-2.5:low",
+            "elapsed_ms": 1740,
+            "usage": {
+              "input": 441,
+              "output": 326,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 239,
+              "totalTokens": 767,
+              "cost": {
+                "input": 1.764e-05,
+                "output": 4.8899999999999996e-05,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 6.654e-05
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openrouter/inception/mercury-2.5:low",
+            "elapsed_ms": 1854,
+            "usage": {
+              "input": 423,
+              "output": 362,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 244,
+              "totalTokens": 785,
+              "cost": {
+                "input": 1.692e-05,
+                "output": 5.43e-05,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 7.122e-05
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 2899,
+            "usage": {
+              "input": 2684,
+              "output": 18,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 2702,
+              "cost": {
+                "input": 0.0053679999999999995,
+                "output": 0.00018,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.005547999999999999
+              }
+            },
+            "stop_reason": "stop"
+          }
+        ]
+      },
+      {
+        "scenario": "independent-formatters",
+        "version": "e9dd1d0b318ef2377264190fddbccfcee8a37ee31043be597890e31d07ee138c",
+        "model": "openai-codex/gpt-6.1-sol:low",
+        "repeat": 2,
+        "outcome": "passed",
+        "elapsed_ms": 16644,
+        "cost_usd": 0.011986010000000002,
+        "first_pass": true,
+        "repairs": 0,
+        "receipts": [
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 9065,
+            "usage": {
+              "input": 1005,
+              "output": 414,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 1419,
+              "cost": {
+                "input": 0.00201,
+                "output": 0.0041400000000000005,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.006150000000000001
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openrouter/inception/mercury-2.5:low",
+            "elapsed_ms": 1589,
+            "usage": {
+              "input": 456,
+              "output": 361,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 253,
+              "totalTokens": 817,
+              "cost": {
+                "input": 1.824e-05,
+                "output": 5.4149999999999995e-05,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 7.239e-05
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openrouter/inception/mercury-2.5:low",
+            "elapsed_ms": 2251,
+            "usage": {
+              "input": 429,
+              "output": 353,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 248,
+              "totalTokens": 782,
+              "cost": {
+                "input": 1.7160000000000002e-05,
+                "output": 5.295e-05,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 7.011e-05
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openrouter/inception/mercury-2.5:low",
+            "elapsed_ms": 2309,
+            "usage": {
+              "input": 398,
+              "output": 296,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 239,
+              "totalTokens": 694,
+              "cost": {
+                "input": 1.592e-05,
+                "output": 4.4399999999999995e-05,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 6.031999999999999e-05
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openrouter/inception/mercury-2.5:low",
+            "elapsed_ms": 2409,
+            "usage": {
+              "input": 421,
+              "output": 389,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 251,
+              "totalTokens": 810,
+              "cost": {
+                "input": 1.684e-05,
+                "output": 5.8349999999999995e-05,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 7.518999999999999e-05
+              }
+            },
+            "stop_reason": "stop"
+          },
+          {
+            "selector": "openai-codex/gpt-6.1-sol:low",
+            "elapsed_ms": 1814,
+            "usage": {
+              "input": 2689,
+              "output": 18,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 0,
+              "totalTokens": 2707,
+              "cost": {
+                "input": 0.005378,
+                "output": 0.00018,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.005558
+              }
+            },
+            "stop_reason": "stop"
+          }
+        ]
+      }
+    ]
+  },
+  "impact_repair_replay": {
+    "kind": "posthoc-replay-of-review-finding",
+    "input": {
+      "attempt": 1024,
+      "baseMs": "2**-1022",
+      "capMs": 10000
+    },
+    "expected": 4,
+    "observations": [
+      {
+        "round": 0,
+        "actual": 10000
+      },
+      {
+        "round": 1,
+        "actual": 4
+      }
+    ]
+  },
+  "focused_checks": {
+    "passed": 54,
+    "failed": 0,
+    "duration_ms": 264.598561,
+    "scope": [
+      "scripts/changeset/*.test.mjs",
+      "scripts/changeset-research/*.test.mjs",
+      "scripts/spec-gym/changeset.test.mjs",
+      "scripts/spec-gym/core.test.mjs",
+      "scripts/spec-gym/runner.test.mjs"
+    ],
+    "note": "Focused local checks, not CI or repository-wide testing. Includes later filename-mode correction; prior live workload evidence remains applicable because those inputs do not use prototype-property filenames.",
+    "runtime": "Node 22.23.3"
+  },
+  "fanout": {
+    "provenance": {
+      "candidate_sha256": "37fb2f3ab309bdee76b681f73c5bf2d78adf910e906108350d1114107e6ac8e3",
+      "node": "v22.23.3",
+      "scenario": "independent-formatters",
+      "version": "e9dd1d0b318ef2377264190fddbccfcee8a37ee31043be597890e31d07ee138c",
+      "source_outcome": "passed",
+      "plan_sha256": "107366cd97db2951e47c0de4a0185817350be1763a291a7c75a2007a91de9a78",
+      "source_sha256": "c39c4b13ea1272beecd9fd9b6d0e0db3b5449f3e6b96d8ed1616c21717b6e1ce"
+    },
+    "measurements": [
+      {
+        "strategy": "parallel",
+        "repeat": 1,
+        "outcome": "passed",
+        "elapsed_ms": 8578,
+        "cost_usd": 0.00028006,
+        "equivalent_cost_usd": 0.00028006,
+        "model_calls": 4,
+        "checks": [
+          {
+            "id": "behavior",
+            "ok": true
+          },
+          {
+            "id": "unrelated",
+            "ok": true
+          }
+        ]
+      },
+      {
+        "strategy": "serial",
+        "repeat": 1,
+        "outcome": "passed",
+        "elapsed_ms": 13288,
+        "cost_usd": 0.00027976,
+        "equivalent_cost_usd": 0.00027976,
+        "model_calls": 4,
+        "checks": [
+          {
+            "id": "behavior",
+            "ok": true
+          },
+          {
+            "id": "unrelated",
+            "ok": true
+          }
+        ]
+      },
+      {
+        "strategy": "serial",
+        "repeat": 2,
+        "outcome": "passed",
+        "elapsed_ms": 9085,
+        "cost_usd": 0.00027731,
+        "equivalent_cost_usd": 0.00027731,
+        "model_calls": 4,
+        "checks": [
+          {
+            "id": "behavior",
+            "ok": true
+          },
+          {
+            "id": "unrelated",
+            "ok": true
+          }
+        ]
+      },
+      {
+        "strategy": "parallel",
+        "repeat": 2,
+        "outcome": "passed",
+        "elapsed_ms": 2114,
+        "cost_usd": 0.00028023999999999996,
+        "equivalent_cost_usd": 0.00028023999999999996,
+        "model_calls": 4,
+        "checks": [
+          {
+            "id": "behavior",
+            "ok": true
+          },
+          {
+            "id": "unrelated",
+            "ok": true
+          }
+        ]
+      },
+      {
+        "strategy": "parallel",
+        "repeat": 3,
+        "outcome": "passed",
+        "elapsed_ms": 2618,
+        "cost_usd": 0.00028429,
+        "equivalent_cost_usd": 0.00028429,
+        "model_calls": 4,
+        "checks": [
+          {
+            "id": "behavior",
+            "ok": true
+          },
+          {
+            "id": "unrelated",
+            "ok": true
+          }
+        ]
+      },
+      {
+        "strategy": "serial",
+        "repeat": 3,
+        "outcome": "failed",
+        "elapsed_ms": 7597,
+        "cost_usd": 0.00027756,
+        "equivalent_cost_usd": 0.00027756,
+        "model_calls": 4,
+        "checks": [
+          {
+            "id": "behavior",
+            "ok": false
+          },
+          {
+            "id": "unrelated",
+            "ok": true
+          }
+        ],
+        "failure_observation": "countLabel(0) returned '0', expected 'No items'"
+      }
+    ]
+  }
+}

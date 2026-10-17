@@ -148,6 +148,7 @@ export function waveReceipt(record, recordPath, extra = {}) {
     execution: 'waves',
     state: record.state,
     wave_id: record.wave_id,
+    writing_route: record.writing_route ?? 'legacy',
     record_path: recordPath,
     generation: record.generation,
     requested_width: record.requested_width,

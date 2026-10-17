@@ -1,0 +1,2635 @@
+{
+  "schema_version": 1,
+  "label": "adaptive development against historical native references",
+  "references": [
+    {
+      "task": "hard-context-calibration",
+      "source_cell": "003-hard-context-calibration-agent",
+      "result_hash": "cc71abefd426b21290d07c7888cd7c88d2d7a78c622a1681b2b7acb83b4cc453",
+      "accepted": true,
+      "selector": "openai-codex/gpt-6.1-sol:low",
+      "outcome": "passed",
+      "process_elapsed_ms": 23028.862506000034,
+      "implementation_ms": 19946.062461,
+      "model_calls": 4,
+      "equivalent_usd": 0.0091824,
+      "catalog_usd": 0.063082,
+      "accounting_complete": true,
+      "tokens": {
+        "input": 26876,
+        "output": 933,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 27809
+      },
+      "repairs": 0,
+      "review_accepted": true,
+      "visible_accepted": true,
+      "candidate_hash": "047c4967f8c15157c0b293f63be766459962cf1a40f4064b9a94c3e4fcc89ef0",
+      "task_hash": "53a7b4559f4db02a586dda721ec592e6bf4a3e90f8f671b69a50f92621536b49",
+      "stages": [
+        {
+          "name": "initialize",
+          "elapsed_ms": 139.128623
+        },
+        {
+          "name": "implementation",
+          "elapsed_ms": 18034.871446999998
+        },
+        {
+          "name": "visible-check",
+          "elapsed_ms": 79.78832600000169
+        },
+        {
+          "name": "impact-review",
+          "elapsed_ms": 1620.1117919999997
+        },
+        {
+          "name": "terminal-grading",
+          "elapsed_ms": 98.15446299999894
+        }
+      ]
+    },
+    {
+      "task": "hard-dependency-handoff",
+      "source_cell": "000-hard-dependency-handoff-agent",
+      "result_hash": "cc33932ff3a9f9c8f40b2d0714771b575262f4dc9865e51cee56a8d18cf8d0ae",
+      "accepted": true,
+      "selector": "openai-codex/gpt-6.1-sol:low",
+      "outcome": "passed",
+      "process_elapsed_ms": 245249.6096989999,
+      "implementation_ms": 180346.183384,
+      "model_calls": 14,
+      "equivalent_usd": 0.1093566,
+      "catalog_usd": 0.7481939999999999,
+      "accounting_complete": true,
+      "tokens": {
+        "input": 326222,
+        "output": 9575,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 335797
+      },
+      "repairs": 1,
+      "review_accepted": true,
+      "visible_accepted": true,
+      "candidate_hash": "04d4b6f0c63216a6be5112647330c6fda883a826157d691590e68b23521d36b6",
+      "task_hash": "d979407d0e1fdf935a7c2b994c98c634b5f11a8e044d12a307ca468880b0fb30",
+      "stages": [
+        {
+          "name": "initialize",
+          "elapsed_ms": 127.71648400000001
+        },
+        {
+          "name": "implementation",
+          "elapsed_ms": 99607.968104
+        },
+        {
+          "name": "visible-check",
+          "elapsed_ms": 1751.8274939999974
+        },
+        {
+          "name": "impact-review",
+          "elapsed_ms": 4475.902612000005
+        },
+        {
+          "name": "repair",
+          "elapsed_ms": 66223.796258
+        },
+        {
+          "name": "visible-check",
+          "elapsed_ms": 1743.0884220000007
+        },
+        {
+          "name": "impact-review",
+          "elapsed_ms": 6295.050908000005
+        },
+        {
+          "name": "terminal-grading",
+          "elapsed_ms": 64839.51068499999
+        }
+      ]
+    },
+    {
+      "task": "hard-lifecycle-extract",
+      "source_cell": "004-hard-lifecycle-extract-agent",
+      "result_hash": "14da59e29c094ba0fdb973ad520b8aba6f1d6cdd961fd615056dcb88ece63874",
+      "accepted": true,
+      "selector": "openai-codex/gpt-6.1-sol:low",
+      "outcome": "passed",
+      "process_elapsed_ms": 206683.38462000003,
+      "implementation_ms": 177938.784824,
+      "model_calls": 10,
+      "equivalent_usd": 0.04756979999999999,
+      "catalog_usd": 0.322104,
+      "accounting_complete": true,
+      "tokens": {
+        "input": 148622,
+        "output": 2486,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 151108
+      },
+      "repairs": 0,
+      "review_accepted": true,
+      "visible_accepted": true,
+      "candidate_hash": "3a84a8fb5139ab9dd84dfc19cf81a2daa844cd492738b9f82adf6c6f9c0f1999",
+      "task_hash": "c6365120c768dec61e14fed5c2adc988444879b14063cb06ca72aafab59a71cb",
+      "stages": [
+        {
+          "name": "initialize",
+          "elapsed_ms": 124.13460699999999
+        },
+        {
+          "name": "implementation",
+          "elapsed_ms": 147488.851951
+        },
+        {
+          "name": "visible-check",
+          "elapsed_ms": 28483.117677000002
+        },
+        {
+          "name": "impact-review",
+          "elapsed_ms": 1754.310954000015
+        },
+        {
+          "name": "terminal-grading",
+          "elapsed_ms": 28690.153457000008
+        }
+      ]
+    }
+  ],
+  "baseline": {
+    "n": 3,
+    "seconds": 474.961856825,
+    "equivalent_usd": 0.1661088,
+    "calls": 28,
+    "tokens": 514714
+  },
+  "iterations": [
+    {
+      "run": "01-patch-editors",
+      "strategy": "patch-editors",
+      "manifest_hash": "68b02945cb9bd15d8f54338747d7847f616f30adb8c01e39f08430c295477204",
+      "freeze_hash": "78f54ca03b806f80a10307aa5c3887adc4515166f48ec43033558e288476f7d1",
+      "runtime_hash": "4b0955cb403ab3e645ae7c8f072055c01d8e72058a2dc17216b1013fe54438cd",
+      "complete": true,
+      "n": 3,
+      "expected": 3,
+      "accepted": 1,
+      "delivered": 1,
+      "qualified_delivered": 1,
+      "seconds": 520.142522487,
+      "equivalent_usd": 0.2026851,
+      "calls": 24,
+      "tokens": 606086,
+      "failure_adjusted_speed_ratio": 0.24115493804425378,
+      "beats_reference": false,
+      "cells": [
+        {
+          "task": "hard-context-calibration",
+          "accepted": true,
+          "delivered": true,
+          "strategy": "patch-editors",
+          "selector": "openai-codex/gpt-6.1-sol:low",
+          "outcome": "passed",
+          "process_elapsed_ms": 36992.644658,
+          "implementation_ms": 33850.704694,
+          "model_calls": 3,
+          "equivalent_usd": 0.0074016,
+          "catalog_usd": 0.052862,
+          "accounting_complete": true,
+          "tokens": {
+            "input": 17636,
+            "output": 1759,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 19395
+          },
+          "repairs": 0,
+          "review_accepted": true,
+          "visible_accepted": true,
+          "candidate_hash": "996cff630561d9b6927413d01b4fec93818e36102b977d277132083dcdbd8513",
+          "task_hash": "53a7b4559f4db02a586dda721ec592e6bf4a3e90f8f671b69a50f92621536b49",
+          "result_hash": "70f1510a5288a8d1b956f40dc458d319036e75d3ee4a6a88322d24b64a2d5358",
+          "posthoc": null,
+          "qualified_delivery": true,
+          "speed_ratio": 0.6225254430685813,
+          "stages": [
+            {
+              "name": "initialize",
+              "elapsed_ms": 139.437749
+            },
+            {
+              "name": "planning",
+              "elapsed_ms": 9539.770477
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 21048.692476000004
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 79.00576600000204
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 3035.3609399999987
+            },
+            {
+              "name": "terminal-grading",
+              "elapsed_ms": 105.48989099999744
+            }
+          ],
+          "operations": [
+            {
+              "id": "seed-resumed-calibration",
+              "executor": "simple",
+              "status": "passed",
+              "elapsed_ms": 21047.705740999998,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/context-budget/policy.mjs": "6f5801f7ace77210cbaea294bcb79f0485736df31f98e398eb250667096a4816",
+                "pi/extensions/context-budget/policy.test.mjs": "e427999b6332a75931723f91c45ee54250c11a227f213dd53678eec9d85865e0"
+              }
+            }
+          ],
+          "reviewer_findings": [],
+          "hidden_summary": {
+            "ok": true,
+            "output_hash": "50295151dcdb8646a23c6cba46094fee1fc562d3ef0f708dce8a62e16215f2d5"
+          }
+        },
+        {
+          "task": "hard-dependency-handoff",
+          "accepted": false,
+          "delivered": false,
+          "strategy": "patch-editors",
+          "selector": "openai-codex/gpt-6.1-sol:low",
+          "outcome": "failed",
+          "process_elapsed_ms": 243391.20252199998,
+          "implementation_ms": 178620.857752,
+          "model_calls": 8,
+          "equivalent_usd": 0.0871617,
+          "catalog_usd": 0.603626,
+          "accounting_complete": true,
+          "tokens": {
+            "input": 245443,
+            "output": 11274,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 256717
+          },
+          "repairs": 0,
+          "review_accepted": true,
+          "visible_accepted": true,
+          "candidate_hash": "86af10a3b416d2b8e4ec8586d9aeae5ff1d21f4e322db65dea460990a8b0e7ff",
+          "task_hash": "d979407d0e1fdf935a7c2b994c98c634b5f11a8e044d12a307ca468880b0fb30",
+          "result_hash": "91130f625141f8932c7799f9a8581d6a217b4d3fb3ef08b7c4e0c456ebb7cc35",
+          "posthoc": null,
+          "qualified_delivery": false,
+          "speed_ratio": 0.16349973979933327,
+          "stages": [
+            {
+              "name": "initialize",
+              "elapsed_ms": 124.27346699999998
+            },
+            {
+              "name": "discovery-planning",
+              "elapsed_ms": 53428.585442
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 118750.291649
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 1723.5249390000245
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 4485.756110000017
+            },
+            {
+              "name": "terminal-grading",
+              "elapsed_ms": 64701.498296999984
+            }
+          ],
+          "operations": [
+            {
+              "id": "dependency-handoff",
+              "executor": "involved",
+              "status": "passed",
+              "elapsed_ms": 38138.17982199999,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/dependency-handoff.mjs": "6534c047be0a8477ea92106b6284b07056fbfda6afa278827c63a45a1f7e1bc8"
+              }
+            },
+            {
+              "id": "export-complete-outcomes",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 19.707563000003574,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/completion.mjs": "874022e2a140bfbcc2e2ade5d883597f289b7322a3a5a02d462c1019849572da"
+              }
+            },
+            {
+              "id": "runtime-wiring-and-recovery",
+              "executor": "involved",
+              "status": "passed",
+              "elapsed_ms": 26692.328416000004,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/runtime.mjs": "307f8ec606e54a3c059e7ea9f55cb416c392e4ec331d013336e0a248e033f894"
+              }
+            },
+            {
+              "id": "profiles",
+              "executor": "simple",
+              "status": "passed",
+              "elapsed_ms": 10244.267816,
+              "usage": null,
+              "output_hashes": {
+                "pi/agents/spec-step-owner.md": "9dc32615594c27d4f91464fa6df5469830a7e29cbac1db11ee28a64964a65eb5",
+                "pi/agents/spec-step-editor.md": "01ff00da1460d8abf3370dc47138b552814b8319294fbacc48a1fe3463a499c7"
+              }
+            },
+            {
+              "id": "wave-handoff-tests",
+              "executor": "involved",
+              "status": "passed",
+              "elapsed_ms": 53917.76547300001,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/runtime.test.mjs": "91652b4a7622f73a2c01483c1ee8445e77522eef6eaced2bf5a2b22f7e4ab84e"
+              }
+            }
+          ],
+          "reviewer_findings": [],
+          "hidden_summary": {
+            "ok": false,
+            "output_hash": "8491e910c4b6ad6c18cb076c84e195c480fc19e4951bb9eddf94cfff25476fe4"
+          }
+        },
+        {
+          "task": "hard-lifecycle-extract",
+          "accepted": false,
+          "delivered": false,
+          "strategy": "patch-editors",
+          "selector": "openai-codex/gpt-6.1-sol:low",
+          "outcome": "failed",
+          "process_elapsed_ms": 239758.675307,
+          "implementation_ms": 236683.81642,
+          "model_calls": 13,
+          "equivalent_usd": 0.10812180000000002,
+          "catalog_usd": 0.7411,
+          "accounting_complete": true,
+          "tokens": {
+            "input": 319830,
+            "output": 10144,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 329974
+          },
+          "repairs": 1,
+          "review_accepted": false,
+          "visible_accepted": true,
+          "candidate_hash": "2b4615d3ec0be88aaa54bdb3e9e64603c2e887abccd097f2b150a48326155f93",
+          "task_hash": "c6365120c768dec61e14fed5c2adc988444879b14063cb06ca72aafab59a71cb",
+          "result_hash": "addf1eb36a769f12881a7420bef42c56dea68992e14369b35b369dbcbc0f7c5e",
+          "posthoc": null,
+          "qualified_delivery": false,
+          "speed_ratio": 0.13778892308000001,
+          "stages": [
+            {
+              "name": "initialize",
+              "elapsed_ms": 132.923205
+            },
+            {
+              "name": "discovery-planning",
+              "elapsed_ms": 20849.397343
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 10785.463562999998
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 28680.156952000005
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 3572.2004970000053
+            },
+            {
+              "name": "repair-planning",
+              "elapsed_ms": 34525.489963
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 105235.45616300001
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 28522.890424000012
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 4268.70618400001
+            },
+            {
+              "name": "terminal-grading",
+              "elapsed_ms": 34.23480400000699
+            }
+          ],
+          "operations": [
+            {
+              "id": "extract-wave-lifecycle",
+              "executor": "involved",
+              "status": "failed",
+              "error": "Editor returned no edits",
+              "elapsed_ms": 10784.408694000002,
+              "usage": null
+            },
+            {
+              "id": "extract-wave-support",
+              "executor": "involved",
+              "status": "passed",
+              "elapsed_ms": 63984.808785000016,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/runtime.mjs": "56bf1b25117d563e2d75e0cb5c4a7d04bcadaf56952c6775840ae7410da8991c",
+                "pi/extensions/spec-runtime/wave-lifecycle.mjs": "f7684579077ea9e86579cde287efc28f317ccb6fd24d45a470e21d3aededbc1b"
+              }
+            },
+            {
+              "id": "extract-wave-orchestration",
+              "executor": "involved",
+              "status": "passed",
+              "elapsed_ms": 41249.575988,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/runtime.mjs": "694d96c9506175ac9f3dd87fc14ef05900c67f4563c3ac002ffd302e086368b6",
+                "pi/extensions/spec-runtime/wave-lifecycle.mjs": "ff284fd0154fd6c0707e4c56453c302fdb6cf72d6ba777198f1184189f840435"
+              }
+            }
+          ],
+          "reviewer_findings": [
+            "No implementation changes were produced (the extraction operation failed with 'Editor returned no edits'). Create wave-lifecycle.mjs, move the specified lifecycle logic into it without behavioral changes, and retain Runtime entrypoints as delegates with injected helpers and no import cycle. Re-export environmentFacts from runtime.mjs and reduce runtime.mjs to at most 1,550 lines. The passing existing tests do not establish that this required extraction occurred.",
+            "The extraction is incomplete: containedRoot, prepareWaveMember and remountWaveMember orchestration, including private environment/request forwarding, remain in runtime.mjs rather than moving to wave-lifecycle.mjs. Move those bodies and retain Runtime delegates using the original receiver and injected helpers, without behavioral changes.",
+            "The supplied diff removes only about 210 net lines from the approximately 1,970-line runtime.mjs, leaving it above the required 1,550-line maximum. Complete the orchestration extraction to meet that limit."
+          ],
+          "hidden_summary": {
+            "ok": false,
+            "output_hash": "500f06aa9b29aa569e3c797545e45bc1389ea9d89493b19894e9429460555733"
+          }
+        }
+      ],
+      "pending": []
+    },
+    {
+      "run": "02-direct-edits",
+      "strategy": "direct-edits",
+      "replay_of": null,
+      "manifest_hash": "fd29118ac7613e48e8fdc2acd799abe07d7dcb39b183901b00132c94ddfb2915",
+      "freeze_hash": "2947eab876723d6556e4c649e294780679359f19259d625940f662c222f1e104",
+      "runtime_hash": "389ce9e0aed4e62836c67e6aaf37c417fceb8b99f58063079dd7e14857d36501",
+      "complete": true,
+      "n": 3,
+      "expected": 3,
+      "accepted": 2,
+      "delivered": 2,
+      "qualified_delivered": 2,
+      "seconds": 545.489220494,
+      "equivalent_usd": 0.11048399999999998,
+      "calls": 15,
+      "tokens": 278886,
+      "failure_adjusted_speed_ratio": 0.49946215872722516,
+      "beats_reference": false,
+      "cells": [
+        {
+          "task": "hard-context-calibration",
+          "accepted": true,
+          "delivered": true,
+          "strategy": "direct-edits",
+          "selector": "openai-codex/gpt-6.1-sol:low",
+          "outcome": "passed",
+          "process_elapsed_ms": 18472.734181,
+          "implementation_ms": 15406.454468,
+          "model_calls": 2,
+          "equivalent_usd": 0.0039981,
+          "catalog_usd": 0.028388,
+          "accounting_complete": true,
+          "tokens": {
+            "input": 9859,
+            "output": 867,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 10726
+          },
+          "repairs": 0,
+          "review_accepted": true,
+          "visible_accepted": true,
+          "candidate_hash": "b62e66ffb10f43085f65d8e7867a0930af3f084162e7302f7bf45b156d0660f2",
+          "task_hash": "53a7b4559f4db02a586dda721ec592e6bf4a3e90f8f671b69a50f92621536b49",
+          "result_hash": "ce443ad915d6a5c1e95a987bf43c9cc0c600ca71a67d1c380fbdeeab5afa7982",
+          "posthoc": null,
+          "qualified_delivery": true,
+          "speed_ratio": 1.246640712758494,
+          "stages": [
+            {
+              "name": "initialize",
+              "elapsed_ms": 141.25911
+            },
+            {
+              "name": "planning",
+              "elapsed_ms": 13326.888662000001
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 38.37024100000053
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 78.85699800000111
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 1812.7950770000007
+            },
+            {
+              "name": "terminal-grading",
+              "elapsed_ms": 97.88818899999933
+            }
+          ],
+          "operations": [
+            {
+              "id": "seed-resumed-calibration",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 37.36353699999927,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/context-budget/policy.mjs": "a477629e038ac4f31ed478a121ce34f92863e36686743cbdb745199ea8992a92",
+                "pi/extensions/context-budget/policy.test.mjs": "b95638689f942e77ed5dbe345631ad39ce5c2583d8f6a685f836f6deef91c94b"
+              }
+            }
+          ],
+          "reviewer_findings": [],
+          "hidden_summary": {
+            "ok": true,
+            "output_hash": "24aae50df103f2c09bce62b9ed70bc6d42e2e6fbe5e773c23747920d48f1c0c9"
+          }
+        },
+        {
+          "task": "hard-dependency-handoff",
+          "accepted": false,
+          "delivered": false,
+          "strategy": "direct-edits",
+          "selector": "openai-codex/gpt-6.1-sol:low",
+          "outcome": "failed",
+          "process_elapsed_ms": 188907.925607,
+          "implementation_ms": 123667.56296899999,
+          "model_calls": 8,
+          "equivalent_usd": 0.051917099999999994,
+          "catalog_usd": 0.362682,
+          "accounting_complete": true,
+          "tokens": {
+            "input": 139921,
+            "output": 8284,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 148205
+          },
+          "repairs": 1,
+          "review_accepted": false,
+          "visible_accepted": true,
+          "candidate_hash": "7141daf2494575222da0511cd87c42cb7791e491a45fbb4492ee107c0d0d2074",
+          "task_hash": "d979407d0e1fdf935a7c2b994c98c634b5f11a8e044d12a307ca468880b0fb30",
+          "result_hash": "0dd266b68e820bc617613ffe3839b9066590f1a2d21f3551ae2d7b60b1ffee86",
+          "posthoc": null,
+          "qualified_delivery": false,
+          "speed_ratio": 0.16349973979933327,
+          "stages": [
+            {
+              "name": "initialize",
+              "elapsed_ms": 127.08750099999999
+            },
+            {
+              "name": "discovery-planning",
+              "elapsed_ms": 59779.753393
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 62.396788999998535
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 1773.749947999997
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 4508.626899000003
+            },
+            {
+              "name": "repair-planning",
+              "elapsed_ms": 51399.992279
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 21.55787099999725
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 1771.091499000002
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 4071.402216000002
+            },
+            {
+              "name": "terminal-grading",
+              "elapsed_ms": 65182.77068599999
+            }
+          ],
+          "operations": [
+            {
+              "id": "dependency-handoff",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 20.39343099999678,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/dependency-handoff.mjs": "cc61f425da1b1c2deefa1575985f5d64e5ac2d8ea514b56cedbc0582d0f690ab"
+              }
+            },
+            {
+              "id": "runtime-wiring",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 40.021835999999894,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/completion.mjs": "874022e2a140bfbcc2e2ade5d883597f289b7322a3a5a02d462c1019849572da",
+                "pi/extensions/spec-runtime/runtime.mjs": "273a9052386ff96378474723a68e43e7ef9d11198aa0b5cbd42ff4b7e2568c87"
+              }
+            },
+            {
+              "id": "profiles",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 0.15031500000623055,
+              "usage": null,
+              "output_hashes": {
+                "pi/agents/spec-step-owner.md": "9dc32615594c27d4f91464fa6df5469830a7e29cbac1db11ee28a64964a65eb5",
+                "pi/agents/spec-step-editor.md": "01ff00da1460d8abf3370dc47138b552814b8319294fbacc48a1fe3463a499c7"
+              }
+            },
+            {
+              "id": "wave-handoff-regressions",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 20.89286499998707,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/runtime.test.mjs": "2e5b1a71e6ac0586593294cbfb0ec351251c168e6ba5557e24828daa1c3af594"
+              }
+            }
+          ],
+          "reviewer_findings": [
+            "The five required `wave handoff:` regression cases were not added to runtime.test.mjs. Add them with the specified production-call fixtures and assertions, then run the focused regression and `^wave handoff:` commands. Visible feedback covers only six existing tests, not prerequisite classification, detail-budget omission, incomplete-packet recovery, or profile wiring.",
+            "In dependency-handoff.mjs, `reason = chosen?.reason ?? 'no-accepted-wave-record'` replaces an accepted record's intentional null reason with 'no-accepted-wave-record'. Preserve null when a record is chosen; use the fallback only when no record is chosen. Accepted dependencies must return reason null, as required by D5 and the step-13 and classifier tests."
+          ],
+          "hidden_summary": {
+            "ok": false,
+            "output_hash": "3a81bb957611fce3b62846c6d452b54064d1c4fd606b196c20f6c1e24bba2734"
+          }
+        },
+        {
+          "task": "hard-lifecycle-extract",
+          "accepted": true,
+          "delivered": true,
+          "strategy": "direct-edits",
+          "selector": "openai-codex/gpt-6.1-sol:low",
+          "outcome": "passed",
+          "process_elapsed_ms": 338108.56070599996,
+          "implementation_ms": 309625.234174,
+          "model_calls": 5,
+          "equivalent_usd": 0.054568799999999994,
+          "catalog_usd": 0.405086,
+          "accounting_complete": true,
+          "tokens": {
+            "input": 99308,
+            "output": 20647,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 119955
+          },
+          "repairs": 0,
+          "review_accepted": true,
+          "visible_accepted": true,
+          "candidate_hash": "a540f8f8ca67bdb0dc016ae10194f9d421cad993fb16242d4f8e1a0488779780",
+          "task_hash": "c6365120c768dec61e14fed5c2adc988444879b14063cb06ca72aafab59a71cb",
+          "result_hash": "e84bb2d6cd05b25caf10721f3baa1d42d191604352210c32a825682715c530db",
+          "posthoc": null,
+          "qualified_delivery": true,
+          "speed_ratio": 0.6112929651601462,
+          "stages": [
+            {
+              "name": "initialize",
+              "elapsed_ms": 127.174891
+            },
+            {
+              "name": "discovery-planning",
+              "elapsed_ms": 279282.609481
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 42.770635000022594
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 28589.565110000025
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 1485.5208209999837
+            },
+            {
+              "name": "terminal-grading",
+              "elapsed_ms": 28424.81903100002
+            }
+          ],
+          "operations": [
+            {
+              "id": "extract-wave-lifecycle",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 41.24127399997087,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/runtime.mjs": "eff0398434d359b603afcc03fe8cc7b7b3cfb56aa0adce36b3b610e90c1881c2",
+                "pi/extensions/spec-runtime/wave-lifecycle.mjs": "4ec94e411da1e4ad031b1567aa06032e1ce32b8b203fdb361723620d08af88dd"
+              }
+            }
+          ],
+          "reviewer_findings": [],
+          "hidden_summary": {
+            "ok": true,
+            "output_hash": "89e04a76db80f1120bd984b430a9a839c622be4786e535b829d4dc312c337d88"
+          }
+        }
+      ],
+      "pending": []
+    },
+    {
+      "run": "03-source-ranges",
+      "strategy": "source-ranges",
+      "replay_of": null,
+      "manifest_hash": "dbf80d10fe758c324fc1d7dcc71a3ba625edf0611a1c189694e3163156e07d42",
+      "freeze_hash": "b55b3bab0e3073585af118eb74929ea468b7e6fa0a8334e6a0296b63cf5a4953",
+      "runtime_hash": "def8b496194e1ce1f4e5921d61da724c509e359e921e78a2a6db13670203ac4d",
+      "complete": true,
+      "n": 3,
+      "expected": 3,
+      "accepted": 2,
+      "delivered": 2,
+      "qualified_delivered": 2,
+      "seconds": 321.935824312,
+      "equivalent_usd": 0.0825948,
+      "calls": 15,
+      "tokens": 240006,
+      "failure_adjusted_speed_ratio": 0.7399621475682019,
+      "beats_reference": false,
+      "cells": [
+        {
+          "task": "hard-context-calibration",
+          "accepted": true,
+          "delivered": true,
+          "strategy": "source-ranges",
+          "selector": "openai-codex/gpt-6.1-sol:low",
+          "outcome": "passed",
+          "process_elapsed_ms": 20765.796262,
+          "implementation_ms": 17697.297795,
+          "model_calls": 2,
+          "equivalent_usd": 0.0044013,
+          "catalog_usd": 0.031466,
+          "accounting_complete": true,
+          "tokens": {
+            "input": 10423,
+            "output": 1062,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 11485
+          },
+          "repairs": 0,
+          "review_accepted": true,
+          "visible_accepted": true,
+          "candidate_hash": "c4f77977af046d89acfa6e484bb4f595375ccb2b6fca5d554a8eda553636e940",
+          "task_hash": "53a7b4559f4db02a586dda721ec592e6bf4a3e90f8f671b69a50f92621536b49",
+          "result_hash": "8255487bfa5eaf2f6ca1df855995b15727fef9e62c3104d8067a8580623a6e07",
+          "posthoc": null,
+          "qualified_delivery": true,
+          "speed_ratio": 1.1089804703584274,
+          "stages": [
+            {
+              "name": "initialize",
+              "elapsed_ms": 134.957897
+            },
+            {
+              "name": "planning",
+              "elapsed_ms": 16110.578497
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 40.92525399999977
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 81.28085199999805
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 1321.089950999998
+            },
+            {
+              "name": "terminal-grading",
+              "elapsed_ms": 98.83520800000042
+            }
+          ],
+          "operations": [
+            {
+              "id": "seed-resumed-calibration",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 39.8356130000011,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/context-budget/policy.mjs": "e39b9f6003f824436a22aa26146999f7f8120031e800e310fab1dc8a73089e02",
+                "pi/extensions/context-budget/policy.test.mjs": "c3dc2b2585d32f863378732cf9f8082b18be3fbe76a297387cb31a2f350dbbc3"
+              }
+            }
+          ],
+          "reviewer_findings": [],
+          "hidden_summary": {
+            "ok": true,
+            "output_hash": "35ef1a5ead076e453fe13433f70da6938c2a232aa7a205a5617d635dcbc5001e"
+          }
+        },
+        {
+          "task": "hard-dependency-handoff",
+          "accepted": false,
+          "delivered": false,
+          "strategy": "source-ranges",
+          "selector": "openai-codex/gpt-6.1-sol:low",
+          "outcome": "failed",
+          "process_elapsed_ms": 208675.07924700002,
+          "implementation_ms": 143502.398079,
+          "model_calls": 8,
+          "equivalent_usd": 0.0562692,
+          "catalog_usd": 0.39320999999999995,
+          "accounting_complete": true,
+          "tokens": {
+            "input": 151400,
+            "output": 9041,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 160441
+          },
+          "repairs": 1,
+          "review_accepted": true,
+          "visible_accepted": true,
+          "candidate_hash": "c65d0b8f700ff498aa9f2a97e6d0521beca07cb514f3715196b9f82373a138f3",
+          "task_hash": "d979407d0e1fdf935a7c2b994c98c634b5f11a8e044d12a307ca468880b0fb30",
+          "result_hash": "2032ca01fcf86a2a9d028030d201e3836d58fdd0fa6091d56848a90e179e25cc",
+          "posthoc": null,
+          "qualified_delivery": false,
+          "speed_ratio": 0.16349973979933327,
+          "stages": [
+            {
+              "name": "initialize",
+              "elapsed_ms": 122.79298600000001
+            },
+            {
+              "name": "discovery-planning",
+              "elapsed_ms": 104277.69381900001
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 86.76828199999
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 1800.9928340000042
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 6207.052723999994
+            },
+            {
+              "name": "repair-planning",
+              "elapsed_ms": 24097.61420699999
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 42.96177799999714
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 1815.155424000026
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 4893.8298030000005
+            },
+            {
+              "name": "terminal-grading",
+              "elapsed_ms": 65113.90091
+            }
+          ],
+          "operations": [
+            {
+              "id": "dependency-module",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 19.08729100000346,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/dependency-handoff.mjs": "0889e0208493c3f60fae6c702704dccd1b06b6e6de9485ae107ffca5b7277a73"
+              }
+            },
+            {
+              "id": "runtime-wiring",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 42.76556400000118,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/runtime.mjs": "2fed28f48cf789c89497eb0ecd3cdf385bab96d1cc4fe3f44880eb7d51dd2906",
+                "pi/extensions/spec-runtime/completion.mjs": "874022e2a140bfbcc2e2ade5d883597f289b7322a3a5a02d462c1019849572da"
+              }
+            },
+            {
+              "id": "profiles",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 0.12915700000303332,
+              "usage": null,
+              "output_hashes": {
+                "pi/agents/spec-step-owner.md": "9dc32615594c27d4f91464fa6df5469830a7e29cbac1db11ee28a64964a65eb5",
+                "pi/agents/spec-step-editor.md": "01ff00da1460d8abf3370dc47138b552814b8319294fbacc48a1fe3463a499c7"
+              }
+            },
+            {
+              "id": "regression-tests",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 22.154191999987233,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/runtime.test.mjs": "ccb9aa78f553dd8167abed704521c8e2785f9c95c992baf24bc55cf19c0167b4"
+              }
+            },
+            {
+              "id": "preserve-porcelain-paths",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 41.944748999987496,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/runtime.mjs": "166638c8b1f5d111b35e69a245a7d43c636a18d10dbd82b54b42b0b5397680af",
+                "pi/extensions/spec-runtime/runtime.test.mjs": "5f6b26a9f6375ae4f8c384c0d1de2e63ab44b91b8f0ba0c96c8c4dc5c042b587"
+              }
+            }
+          ],
+          "reviewer_findings": [
+            "runtime.mjs reconstructs the first porcelain status record incorrectly: a staged entry such as `M  partial.txt` already retains both status columns after git() trims output, but the heuristic prepends a space and reports ` partial.txt` as the dirty path. Staged renames have the same problem. Parse porcelain output without trimming its leading whitespace (or otherwise preserve both status columns), so PREVIOUS PACKET INCOMPLETE contains exact dirty paths while still skipping rename/copy source entries."
+          ],
+          "hidden_summary": {
+            "ok": false,
+            "output_hash": "f779c07fa27c58f5e27f2768d63a83ae8bdfd3c45436b61bddfd6f48a8bfe760"
+          }
+        },
+        {
+          "task": "hard-lifecycle-extract",
+          "accepted": true,
+          "delivered": true,
+          "strategy": "source-ranges",
+          "selector": "openai-codex/gpt-6.1-sol:low",
+          "outcome": "passed",
+          "process_elapsed_ms": 92494.948803,
+          "implementation_ms": 63931.794981,
+          "model_calls": 5,
+          "equivalent_usd": 0.0219243,
+          "catalog_usd": 0.14949600000000002,
+          "accounting_complete": true,
+          "tokens": {
+            "input": 66413,
+            "output": 1667,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 68080
+          },
+          "repairs": 0,
+          "review_accepted": true,
+          "visible_accepted": true,
+          "candidate_hash": "51388e54fea0bbd13d85204a3278f2347f343dbf26fbea62eef751b3d0d3a1bd",
+          "task_hash": "c6365120c768dec61e14fed5c2adc988444879b14063cb06ca72aafab59a71cb",
+          "result_hash": "37d95897cd7ac778111d06e574d262b52ceba2a90f849b2cc7da89723be7c577",
+          "posthoc": null,
+          "qualified_delivery": true,
+          "speed_ratio": 2.234536991422135,
+          "stages": [
+            {
+              "name": "initialize",
+              "elapsed_ms": 128.835793
+            },
+            {
+              "name": "discovery-planning",
+              "elapsed_ms": 31578.618206
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 43.243319999997766
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 28554.083717999998
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 3527.309380000006
+            },
+            {
+              "name": "terminal-grading",
+              "elapsed_ms": 28508.930133
+            }
+          ],
+          "operations": [
+            {
+              "id": "extract-wave-lifecycle",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 41.693834000001516,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/wave-lifecycle.mjs": "03d0c38397ed5e1cb168559e3f7330df8868374dad5eaa7e0caea42f418b2673",
+                "pi/extensions/spec-runtime/runtime.mjs": "1b5ae7497cc4e666ed07536eff5e5b3a130c1a905758ff057421fe9575f6684d"
+              }
+            }
+          ],
+          "reviewer_findings": [],
+          "hidden_summary": {
+            "ok": true,
+            "output_hash": "7d2574e87ceeea4839ba6728a30e64bf158427a40992ae45e075a7fcdf1efadd"
+          }
+        }
+      ],
+      "pending": []
+    },
+    {
+      "run": "04-checked-ranges",
+      "strategy": "checked-ranges",
+      "replay_of": null,
+      "manifest_hash": "c70692aa70c906467521e4034a0d64de7ba86ca675dc497cdf584d4e8d21225a",
+      "freeze_hash": "805730f06b5eabf7d815cad9f47ca0462d5d97b7efea582ec00f89adffa48095",
+      "runtime_hash": "179cf101ad25b179534ee53d99ec6e7a3308c6ef0a593d2b75cf8ac3e920e8cc",
+      "complete": true,
+      "n": 3,
+      "expected": 3,
+      "accepted": 3,
+      "delivered": 3,
+      "qualified_delivered": 2,
+      "seconds": 326.54591258500005,
+      "equivalent_usd": 0.06967499999999999,
+      "calls": 13,
+      "tokens": 202034,
+      "failure_adjusted_speed_ratio": 0.7707633835275214,
+      "beats_reference": false,
+      "cells": [
+        {
+          "task": "hard-context-calibration",
+          "accepted": true,
+          "delivered": true,
+          "strategy": "checked-ranges",
+          "selector": "openai-codex/gpt-6.1-sol:low",
+          "outcome": "passed",
+          "process_elapsed_ms": 18422.235017,
+          "implementation_ms": 15348.002545000001,
+          "model_calls": 2,
+          "equivalent_usd": 0.004446,
+          "catalog_usd": 0.03157,
+          "accounting_complete": true,
+          "tokens": {
+            "input": 10960,
+            "output": 965,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 11925
+          },
+          "repairs": 0,
+          "review_accepted": true,
+          "visible_accepted": true,
+          "candidate_hash": "330aad729d06342da753a099bac3f2b12d1b0b91b3b7e69b487d69567aaa0081",
+          "task_hash": "53a7b4559f4db02a586dda721ec592e6bf4a3e90f8f671b69a50f92621536b49",
+          "result_hash": "584e10cdaacfd53dda5c99456303a18bd6127e746ebf77e0cf6350d0406e297a",
+          "posthoc": null,
+          "qualified_delivery": true,
+          "speed_ratio": 1.2500580133056087,
+          "stages": [
+            {
+              "name": "initialize",
+              "elapsed_ms": 133.168454
+            },
+            {
+              "name": "planning",
+              "elapsed_ms": 13426.902596999998
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 37.38756000000103
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 163.88119499999993
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 1577.8166900000015
+            },
+            {
+              "name": "terminal-grading",
+              "elapsed_ms": 95.92680099999961
+            }
+          ],
+          "operations": [
+            {
+              "id": "seed-resumed-calibration",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 36.376540000001114,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/context-budget/policy.mjs": "d54b7007fcbde61fce4027578613503f9d6fb82a212f4a13dce8a6c29e346648",
+                "pi/extensions/context-budget/policy.test.mjs": "03f14590da09c47173428bfdf5b46a6d4ad75152958574ea79cd3e8afd271877"
+              }
+            }
+          ],
+          "reviewer_findings": [],
+          "hidden_summary": {
+            "ok": true,
+            "output_hash": "f5d6dee1a8c7add044178884246f2975d42ffcd9458ebf41815bd66219cf29aa"
+          }
+        },
+        {
+          "task": "hard-dependency-handoff",
+          "accepted": true,
+          "delivered": true,
+          "strategy": "checked-ranges",
+          "selector": "openai-codex/gpt-6.1-sol:low",
+          "outcome": "passed",
+          "process_elapsed_ms": 215868.749301,
+          "implementation_ms": 150656.591465,
+          "model_calls": 6,
+          "equivalent_usd": 0.04269389999999999,
+          "catalog_usd": 0.299672,
+          "accounting_complete": true,
+          "tokens": {
+            "input": 112221,
+            "output": 7523,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 119744
+          },
+          "repairs": 1,
+          "review_accepted": true,
+          "visible_accepted": true,
+          "candidate_hash": "eac7d7d58082eeba8d3059c6f97c9a8bc8265634a1ec6b56b1261c0bd7b0d2b8",
+          "task_hash": "d979407d0e1fdf935a7c2b994c98c634b5f11a8e044d12a307ca468880b0fb30",
+          "result_hash": "409ed64e2ef93623b3d464715dbd2c97e58d54537ab224111dbb6b1aa60c918a",
+          "posthoc": {
+            "run": "04-checked-ranges",
+            "task": "hard-dependency-handoff",
+            "schema_version": 2,
+            "scope": "Exact candidate dirty-state block and same-file functions against real disposable Git repositories. Does not exercise prompt launch or receipt loading. Posthoc only; no model feedback.",
+            "candidate_hash": "eac7d7d58082eeba8d3059c6f97c9a8bc8265634a1ec6b56b1261c0bd7b0d2b8",
+            "passed": false,
+            "rows": [
+              {
+                "case": "unstaged",
+                "expected": [
+                  "file.txt"
+                ],
+                "actual": {
+                  "dirty_paths": [
+                    "ile.txt"
+                  ],
+                  "dirty_count": 1
+                },
+                "passed": false
+              },
+              {
+                "case": "staged",
+                "expected": [
+                  "file.txt"
+                ],
+                "actual": {
+                  "dirty_paths": [
+                    "file.txt"
+                  ],
+                  "dirty_count": 1
+                },
+                "passed": true
+              },
+              {
+                "case": "rename",
+                "expected": [
+                  "new.txt"
+                ],
+                "actual": {
+                  "dirty_paths": [
+                    "new.txt"
+                  ],
+                  "dirty_count": 1
+                },
+                "passed": true
+              },
+              {
+                "case": "mixed",
+                "expected": [
+                  "staged.txt",
+                  "unstaged.txt",
+                  "new.txt"
+                ],
+                "actual": {
+                  "dirty_paths": [
+                    "staged.txt",
+                    "unstaged.txt",
+                    "new.txt"
+                  ],
+                  "dirty_count": 3
+                },
+                "passed": true
+              },
+              {
+                "case": "leading-space-name",
+                "expected": [
+                  " leading.txt"
+                ],
+                "actual": {
+                  "dirty_paths": [
+                    "leading.txt"
+                  ],
+                  "dirty_count": 1
+                },
+                "passed": false
+              },
+              {
+                "case": "git-error",
+                "expected": null,
+                "actual": {
+                  "dirty_paths": null,
+                  "dirty_count": null
+                },
+                "passed": true
+              }
+            ],
+            "elapsed_ms": 104.227432
+          },
+          "qualified_delivery": false,
+          "speed_ratio": 0.16349973979933327,
+          "stages": [
+            {
+              "name": "initialize",
+              "elapsed_ms": 127.91635200000002
+            },
+            {
+              "name": "discovery-planning",
+              "elapsed_ms": 95194.361075
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 87.91855699999724
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 2912.7948190000025
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 3086.653704000011
+            },
+            {
+              "name": "repair-planning",
+              "elapsed_ms": 38960.494871
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 20.794885999988765
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 2920.9266129999887
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 7188.281514000002
+            },
+            {
+              "name": "terminal-grading",
+              "elapsed_ms": 65152.860084000014
+            }
+          ],
+          "operations": [
+            {
+              "id": "dependency-handoffs",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 62.85115699999733,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/dependency-handoff.mjs": "db1396c11fad1158fb9b53ea31befa34b88c90b151eb407b9a5ed8c20cb66380",
+                "pi/extensions/spec-runtime/runtime.mjs": "b21016e52b585dacd2255a9d76336e074e6b169b0308a6f82d1b413c9e3ae1bb",
+                "pi/extensions/spec-runtime/completion.mjs": "874022e2a140bfbcc2e2ade5d883597f289b7322a3a5a02d462c1019849572da"
+              }
+            },
+            {
+              "id": "profiles",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 0.12478199999895878,
+              "usage": null,
+              "output_hashes": {
+                "pi/agents/spec-step-owner.md": "9dc32615594c27d4f91464fa6df5469830a7e29cbac1db11ee28a64964a65eb5",
+                "pi/agents/spec-step-editor.md": "01ff00da1460d8abf3370dc47138b552814b8319294fbacc48a1fe3463a499c7"
+              }
+            },
+            {
+              "id": "regressions",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 20.974923999994644,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/runtime.test.mjs": "5ec075f3ed875402c14f27da1e98b13b23c9916d2b04b56475c4f94f25d68abb"
+              }
+            },
+            {
+              "id": "preserve-accepted-null-reason",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 20.4715960000176,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/dependency-handoff.mjs": "b8fc67f9e8878c7320105bec411f7502ebc709ebceca62f49222ceef079cfd2c"
+              }
+            }
+          ],
+          "reviewer_findings": [
+            "dependency-handoff.mjs replaces an accepted record's null reason with 'no-accepted-wave-record' via selected?.reason ?? fallback. Preserve null when a record is selected; use the fallback only when no record exists. Accepted entries must have reason:null. This defect causes two visible wave handoff tests to fail."
+          ],
+          "hidden_summary": {
+            "ok": true,
+            "output_hash": "cfcfe2408c668fee7e782c11f41b0953a7f5e290a906f65aea247778cfe62bd7"
+          }
+        },
+        {
+          "task": "hard-lifecycle-extract",
+          "accepted": true,
+          "delivered": true,
+          "strategy": "checked-ranges",
+          "selector": "openai-codex/gpt-6.1-sol:low",
+          "outcome": "passed",
+          "process_elapsed_ms": 92254.92826700001,
+          "implementation_ms": 63683.567293,
+          "model_calls": 5,
+          "equivalent_usd": 0.0225351,
+          "catalog_usd": 0.15340199999999998,
+          "accounting_complete": true,
+          "tokens": {
+            "input": 68781,
+            "output": 1584,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 70365
+          },
+          "repairs": 0,
+          "review_accepted": true,
+          "visible_accepted": true,
+          "candidate_hash": "a54b60209f9186f5002b2945cd44d2ee3c2363f8082080179f18538a5f45b006",
+          "task_hash": "c6365120c768dec61e14fed5c2adc988444879b14063cb06ca72aafab59a71cb",
+          "result_hash": "1c2454c1f7a6015ace38207550f621e4c74ad0e5288903e7fe26acdf12557ec4",
+          "posthoc": null,
+          "qualified_delivery": true,
+          "speed_ratio": 2.2403506078485735,
+          "stages": [
+            {
+              "name": "initialize",
+              "elapsed_ms": 126.78783899999999
+            },
+            {
+              "name": "discovery-planning",
+              "elapsed_ms": 31293.979757
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 47.199351999999635
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 28551.708581000003
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 3565.063172000002
+            },
+            {
+              "name": "terminal-grading",
+              "elapsed_ms": 28511.706278999998
+            }
+          ],
+          "operations": [
+            {
+              "id": "extract-wave-lifecycle",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 45.676158999998734,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/wave-lifecycle.mjs": "88ccbb250369e82c75d75b9b126ab5753e5d52de5a55a3cb1124c17634cf3b6a",
+                "pi/extensions/spec-runtime/runtime.mjs": "079eea22aaf4810ac5feca59d387671a231128ec0194c671c989a35072ea20b9"
+              }
+            }
+          ],
+          "reviewer_findings": [],
+          "hidden_summary": {
+            "ok": true,
+            "output_hash": "ed7420979d45c7f4fde44e5d6ffb8c60068f7d6cd2edd72a8af2b81fc32e4528"
+          }
+        }
+      ],
+      "pending": []
+    },
+    {
+      "run": "05-checked-ranges-repeat",
+      "strategy": "checked-ranges",
+      "replay_of": "04-checked-ranges",
+      "manifest_hash": "0e8247b41408610b5850d8bea60d290f1c8e5696c745065b0831b33ffcc82c5d",
+      "freeze_hash": "805730f06b5eabf7d815cad9f47ca0462d5d97b7efea582ec00f89adffa48095",
+      "runtime_hash": "179cf101ad25b179534ee53d99ec6e7a3308c6ef0a593d2b75cf8ac3e920e8cc",
+      "complete": true,
+      "n": 3,
+      "expected": 3,
+      "accepted": 3,
+      "delivered": 2,
+      "qualified_delivered": 2,
+      "seconds": 301.47741522300004,
+      "equivalent_usd": 0.07844943599999998,
+      "calls": 14,
+      "tokens": 235807,
+      "failure_adjusted_speed_ratio": 0.7675362414998477,
+      "beats_reference": false,
+      "cells": [
+        {
+          "task": "hard-context-calibration",
+          "accepted": true,
+          "delivered": true,
+          "strategy": "checked-ranges",
+          "selector": "openai-codex/gpt-6.1-sol:low",
+          "outcome": "passed",
+          "process_elapsed_ms": 20793.454811,
+          "implementation_ms": 17717.803846000003,
+          "model_calls": 2,
+          "equivalent_usd": 0.0045195,
+          "catalog_usd": 0.032218,
+          "accounting_complete": true,
+          "tokens": {
+            "input": 10889,
+            "output": 1044,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 11933
+          },
+          "repairs": 0,
+          "review_accepted": true,
+          "visible_accepted": true,
+          "candidate_hash": "a5bc57dc3472683306aca821b2857416c605a90a893f32cc2fb3165f2dfb4aaa",
+          "task_hash": "53a7b4559f4db02a586dda721ec592e6bf4a3e90f8f671b69a50f92621536b49",
+          "result_hash": "83d4e7a776545286cb8df134049fb6529acbb60c57af00d24d2242a033ba4d24",
+          "posthoc": null,
+          "qualified_delivery": true,
+          "speed_ratio": 1.1075053527813703,
+          "stages": [
+            {
+              "name": "initialize",
+              "elapsed_ms": 132.932723
+            },
+            {
+              "name": "planning",
+              "elapsed_ms": 14374.864032000001
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 44.24856899999941
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 165.564022999999
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 2991.7478939999983
+            },
+            {
+              "name": "terminal-grading",
+              "elapsed_ms": 100.44236499999897
+            }
+          ],
+          "operations": [
+            {
+              "id": "seed-resumed-calibration",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 43.15915999999925,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/context-budget/policy.mjs": "4fe3f09bd359f85cbd2e3fcdc6099e2a959f5463ab76bb782fe40fb4d1150a99",
+                "pi/extensions/context-budget/policy.test.mjs": "5a26739efbaa677ecb5e5ee0d6826e21afbdd9d926e451376cd508b4ce6ca211"
+              }
+            }
+          ],
+          "reviewer_findings": [],
+          "hidden_summary": {
+            "ok": true,
+            "output_hash": "3308fed21640aaa747e1e6f89aae34ef280ec68b4310a838331a4c3db524a900"
+          }
+        },
+        {
+          "task": "hard-dependency-handoff",
+          "accepted": true,
+          "delivered": false,
+          "strategy": "checked-ranges",
+          "selector": "openai-codex/gpt-6.1-sol:low",
+          "outcome": "passed",
+          "process_elapsed_ms": 197914.18224400003,
+          "implementation_ms": 132642.175364,
+          "model_calls": 8,
+          "equivalent_usd": 0.05802616799999998,
+          "catalog_usd": 0.4037048,
+          "accounting_complete": true,
+          "tokens": {
+            "input": 160026,
+            "output": 8332,
+            "cacheRead": 3328,
+            "cacheWrite": 0,
+            "totalTokens": 171686
+          },
+          "repairs": 1,
+          "review_accepted": false,
+          "visible_accepted": true,
+          "candidate_hash": "595d87e1eda298793c5b7dcf4f53a0ac6ee975763961235ce784ef2649061981",
+          "task_hash": "d979407d0e1fdf935a7c2b994c98c634b5f11a8e044d12a307ca468880b0fb30",
+          "result_hash": "b4778b8daed7e6499e7d9d052c4c7cc599ae756b3e11a02507f2bd47a3a44883",
+          "posthoc": {
+            "run": "05-checked-ranges-repeat",
+            "task": "hard-dependency-handoff",
+            "schema_version": 2,
+            "scope": "Exact candidate dirty-state block and same-file functions against real disposable Git repositories. Does not exercise prompt launch or receipt loading. Posthoc only; no model feedback.",
+            "candidate_hash": "595d87e1eda298793c5b7dcf4f53a0ac6ee975763961235ce784ef2649061981",
+            "passed": false,
+            "rows": [
+              {
+                "case": "unstaged",
+                "expected": [
+                  "file.txt"
+                ],
+                "actual": {
+                  "dirty_paths": [
+                    "file.txt"
+                  ],
+                  "dirty_count": 1
+                },
+                "passed": true
+              },
+              {
+                "case": "staged",
+                "expected": [
+                  "file.txt"
+                ],
+                "actual": {
+                  "dirty_paths": [
+                    " file.txt"
+                  ],
+                  "dirty_count": 1
+                },
+                "passed": false
+              },
+              {
+                "case": "rename",
+                "expected": [
+                  "new.txt"
+                ],
+                "actual": {
+                  "dirty_paths": [
+                    " new.txt"
+                  ],
+                  "dirty_count": 1
+                },
+                "passed": false
+              },
+              {
+                "case": "mixed",
+                "expected": [
+                  "staged.txt",
+                  "unstaged.txt",
+                  "new.txt"
+                ],
+                "actual": {
+                  "dirty_paths": [
+                    " staged.txt",
+                    "unstaged.txt",
+                    "new.txt"
+                  ],
+                  "dirty_count": 3
+                },
+                "passed": false
+              },
+              {
+                "case": "leading-space-name",
+                "expected": [
+                  " leading.txt"
+                ],
+                "actual": {
+                  "dirty_paths": [
+                    " leading.txt"
+                  ],
+                  "dirty_count": 1
+                },
+                "passed": true
+              },
+              {
+                "case": "git-error",
+                "expected": null,
+                "actual": {
+                  "dirty_paths": null,
+                  "dirty_count": null
+                },
+                "passed": true
+              }
+            ],
+            "elapsed_ms": 103.945536
+          },
+          "qualified_delivery": false,
+          "speed_ratio": 0.16349973979933327,
+          "stages": [
+            {
+              "name": "initialize",
+              "elapsed_ms": 130.405019
+            },
+            {
+              "name": "discovery-planning",
+              "elapsed_ms": 107030.172206
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 82.63073099999747
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 2902.4756259999995
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 3384.7838550000015
+            },
+            {
+              "name": "repair-planning",
+              "elapsed_ms": 6053.863537000012
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 22.469980999987456
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 2926.324760000003
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 9953.305653999982
+            },
+            {
+              "name": "terminal-grading",
+              "elapsed_ms": 65210.212941000005
+            }
+          ],
+          "operations": [
+            {
+              "id": "handoff",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 60.28769699999248,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/dependency-handoff.mjs": "ef22c1bf92afd7d678ca6b2ccd4c73f58f32d1e7af7154ba35127110a60d776e",
+                "pi/extensions/spec-runtime/runtime.mjs": "11b64fabce6214ce6edbb74f24a3462d60f581a9f94ccf6df9a06fc00d6d51ad",
+                "pi/extensions/spec-runtime/completion.mjs": "874022e2a140bfbcc2e2ade5d883597f289b7322a3a5a02d462c1019849572da"
+              }
+            },
+            {
+              "id": "profiles",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 0.08517599999322556,
+              "usage": null,
+              "output_hashes": {
+                "pi/agents/spec-step-owner.md": "9dc32615594c27d4f91464fa6df5469830a7e29cbac1db11ee28a64964a65eb5",
+                "pi/agents/spec-step-editor.md": "01ff00da1460d8abf3370dc47138b552814b8319294fbacc48a1fe3463a499c7"
+              }
+            },
+            {
+              "id": "regressions",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 20.154746999993222,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/runtime.test.mjs": "ae3d9df09ae522f81a77734a9e44959dd906dc8dad9727eb23257e7735624d8f"
+              }
+            },
+            {
+              "id": "preserve-accepted-null-reason",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 21.947268000003533,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/dependency-handoff.mjs": "57a1edefd3f6607808a65199cfa35ce26e06f22263d7ef45bd9c06a39b508599"
+              }
+            }
+          ],
+          "reviewer_findings": [
+            "In dependency-handoff.mjs, `chosen?.reason ?? 'no-accepted-wave-record'` replaces an accepted record's intentional null reason with 'no-accepted-wave-record'. Preserve null when a record is chosen; use the fallback only when no record is chosen. Accepted prerequisites must return reason:null. This defect causes two visible wave handoff tests to fail.",
+            "runtime.mjs incompletePacket incorrectly prepends a space to already intact staged-status records such as 'M  file.txt' and 'R  new.txt', producing dirty_paths with a spurious leading space. Restore a trimmed status column only when actually missing, so continuation packets report exact paths for staged modifications and renames while still skipping rename/copy source entries."
+          ],
+          "hidden_summary": {
+            "ok": true,
+            "output_hash": "b14b17a89437fcbb2935116fbb3a6ad9b58a926a68e5c7add288642ee5f3b283"
+          }
+        },
+        {
+          "task": "hard-lifecycle-extract",
+          "accepted": true,
+          "delivered": true,
+          "strategy": "checked-ranges",
+          "selector": "openai-codex/gpt-6.1-sol:low",
+          "outcome": "passed",
+          "process_elapsed_ms": 82769.77816800002,
+          "implementation_ms": 54250.726590000006,
+          "model_calls": 4,
+          "equivalent_usd": 0.015903768,
+          "catalog_usd": 0.10894879999999998,
+          "accounting_complete": true,
+          "tokens": {
+            "input": 47498,
+            "output": 1362,
+            "cacheRead": 3328,
+            "cacheWrite": 0,
+            "totalTokens": 52188
+          },
+          "repairs": 0,
+          "review_accepted": true,
+          "visible_accepted": true,
+          "candidate_hash": "e3312ab48cbcaceb0799355c426cba8a0cd03f98b60ce8aaa9efdf06890f05ef",
+          "task_hash": "c6365120c768dec61e14fed5c2adc988444879b14063cb06ca72aafab59a71cb",
+          "result_hash": "bd16a50f5b3eb7d60edf99657cc8309e0ab85d05edf3bd310cfea50486402837",
+          "posthoc": null,
+          "qualified_delivery": true,
+          "speed_ratio": 2.4970875746518164,
+          "stages": [
+            {
+              "name": "initialize",
+              "elapsed_ms": 131.072611
+            },
+            {
+              "name": "discovery-planning",
+              "elapsed_ms": 23253.202545
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 41.40203200000178
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 28591.490897
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 2133.799235999999
+            },
+            {
+              "name": "terminal-grading",
+              "elapsed_ms": 28461.646943999993
+            }
+          ],
+          "operations": [
+            {
+              "id": "extract-wave-lifecycle",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 40.023323000001255,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/wave-lifecycle.mjs": "f4abfd57ab31674bbc9cf05137112fd65ee0649534d873376921befd216fa5d5",
+                "pi/extensions/spec-runtime/runtime.mjs": "058c705f490fa752b78d6d14aa7a3262aef627666f76564be661deae00707eef"
+              }
+            }
+          ],
+          "reviewer_findings": [],
+          "hidden_summary": {
+            "ok": true,
+            "output_hash": "2fc31e3066b6bf62ce9ecef3ad12e1614da4dc4ede8d6937bb85d7b6fccfe72c"
+          }
+        }
+      ],
+      "pending": []
+    },
+    {
+      "run": "06-boundary-review",
+      "strategy": "boundary-review",
+      "replay_of": null,
+      "manifest_hash": "9ecbef09a4bc1578b38b6acf0e9ccbcef0538c65b4b6fc69ac05f89a1c806018",
+      "freeze_hash": "f3509458deee79bb8ce43f00ef1f0e437500ee85c23c56ba78a4ca778e2d44c1",
+      "runtime_hash": "1e8afe7596c09e83cb48fe0c72249eb5fd35cc7dd1310404848d2f7d8997303f",
+      "complete": true,
+      "n": 3,
+      "expected": 3,
+      "accepted": 3,
+      "delivered": 3,
+      "qualified_delivered": 3,
+      "seconds": 319.735001747,
+      "equivalent_usd": 0.10760613599999999,
+      "calls": 16,
+      "tokens": 328670,
+      "failure_adjusted_speed_ratio": 1.3740480625369953,
+      "beats_reference": true,
+      "cells": [
+        {
+          "task": "hard-context-calibration",
+          "accepted": true,
+          "delivered": true,
+          "strategy": "boundary-review",
+          "selector": "openai-codex/gpt-6.1-sol:low",
+          "outcome": "passed",
+          "process_elapsed_ms": 23829.431741,
+          "implementation_ms": 20753.584269,
+          "model_calls": 2,
+          "equivalent_usd": 0.0053988,
+          "catalog_usd": 0.03862,
+          "accounting_complete": true,
+          "tokens": {
+            "input": 12740,
+            "output": 1314,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 14054
+          },
+          "repairs": 0,
+          "review_accepted": true,
+          "visible_accepted": true,
+          "candidate_hash": "7e65f3c94e30245452d6900e2a68c433575b10bc54fd0ec0ca6c3168d271dc21",
+          "task_hash": "53a7b4559f4db02a586dda721ec592e6bf4a3e90f8f671b69a50f92621536b49",
+          "result_hash": "75d86f2915826f701ce86226c8a3921684a0a99436bb75d6748e6399dd864d8f",
+          "posthoc": null,
+          "qualified_delivery": true,
+          "speed_ratio": 0.9664041827056019,
+          "stages": [
+            {
+              "name": "initialize",
+              "elapsed_ms": 140.794713
+            },
+            {
+              "name": "planning",
+              "elapsed_ms": 15233.317595
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 37.53276900000128
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 182.0055339999999
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 5138.003528000001
+            },
+            {
+              "name": "terminal-grading",
+              "elapsed_ms": 101.39118900000176
+            }
+          ],
+          "operations": [
+            {
+              "id": "seed-resumed-calibration",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 36.69558700000016,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/context-budget/policy.mjs": "0dc7da41388883904185cb5f473425343e28916ce5ca36d003fe3bc49f85bab2",
+                "pi/extensions/context-budget/policy.test.mjs": "15344f44caee31a6e2b0cfbf8e5ff800e0f5ed642ef156eb52913f125345ead4"
+              }
+            }
+          ],
+          "reviewer_findings": [],
+          "hidden_summary": {
+            "ok": true,
+            "output_hash": "6a57d7e6b07e764fcd8efd875aaa6b5400eec915fdcfcd9bd01d99f431b5ce05"
+          }
+        },
+        {
+          "task": "hard-dependency-handoff",
+          "accepted": true,
+          "delivered": true,
+          "strategy": "boundary-review",
+          "selector": "openai-codex/gpt-6.1-sol:low",
+          "outcome": "passed",
+          "process_elapsed_ms": 202790.762301,
+          "implementation_ms": 137892.01371,
+          "model_calls": 9,
+          "equivalent_usd": 0.07392676799999999,
+          "catalog_usd": 0.5110708,
+          "accounting_complete": true,
+          "tokens": {
+            "input": 210304,
+            "output": 9013,
+            "cacheRead": 3328,
+            "cacheWrite": 0,
+            "totalTokens": 222645
+          },
+          "repairs": 1,
+          "review_accepted": true,
+          "visible_accepted": true,
+          "candidate_hash": "1a3ae6504801d22e4a1ba8106def1783241532fc524721c3c51220fdf1f4fc3a",
+          "task_hash": "d979407d0e1fdf935a7c2b994c98c634b5f11a8e044d12a307ca468880b0fb30",
+          "result_hash": "1450f6391d5003b09ad010e93565706ac9d4637db41bd376215e0a5f390483a2",
+          "posthoc": {
+            "run": "06-boundary-review",
+            "task": "hard-dependency-handoff",
+            "schema_version": 2,
+            "scope": "Exact candidate dirty-state block and same-file functions against real disposable Git repositories. Does not exercise prompt launch or receipt loading. Posthoc only; no model feedback.",
+            "candidate_hash": "1a3ae6504801d22e4a1ba8106def1783241532fc524721c3c51220fdf1f4fc3a",
+            "passed": true,
+            "rows": [
+              {
+                "case": "unstaged",
+                "expected": [
+                  "file.txt"
+                ],
+                "actual": {
+                  "dirty_paths": [
+                    "file.txt"
+                  ],
+                  "dirty_count": 1
+                },
+                "passed": true
+              },
+              {
+                "case": "staged",
+                "expected": [
+                  "file.txt"
+                ],
+                "actual": {
+                  "dirty_paths": [
+                    "file.txt"
+                  ],
+                  "dirty_count": 1
+                },
+                "passed": true
+              },
+              {
+                "case": "rename",
+                "expected": [
+                  "new.txt"
+                ],
+                "actual": {
+                  "dirty_paths": [
+                    "new.txt"
+                  ],
+                  "dirty_count": 1
+                },
+                "passed": true
+              },
+              {
+                "case": "mixed",
+                "expected": [
+                  "staged.txt",
+                  "unstaged.txt",
+                  "new.txt"
+                ],
+                "actual": {
+                  "dirty_paths": [
+                    "staged.txt",
+                    "unstaged.txt",
+                    "new.txt"
+                  ],
+                  "dirty_count": 3
+                },
+                "passed": true
+              },
+              {
+                "case": "leading-space-name",
+                "expected": [
+                  " leading.txt"
+                ],
+                "actual": {
+                  "dirty_paths": [
+                    " leading.txt"
+                  ],
+                  "dirty_count": 1
+                },
+                "passed": true
+              },
+              {
+                "case": "git-error",
+                "expected": null,
+                "actual": {
+                  "dirty_paths": null,
+                  "dirty_count": null
+                },
+                "passed": true
+              }
+            ],
+            "elapsed_ms": 103.237555
+          },
+          "qualified_delivery": true,
+          "speed_ratio": 1.209372689940278,
+          "stages": [
+            {
+              "name": "initialize",
+              "elapsed_ms": 128.03011199999997
+            },
+            {
+              "name": "discovery-planning",
+              "elapsed_ms": 94615.86938599999
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 83.29158499999903
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 2880.413991999987
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 11133.174085999999
+            },
+            {
+              "name": "repair-planning",
+              "elapsed_ms": 19315.511140000002
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 61.333241999993334
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 2949.0894849999895
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 6498.590559000004
+            },
+            {
+              "name": "terminal-grading",
+              "elapsed_ms": 64835.856634000025
+            }
+          ],
+          "operations": [
+            {
+              "id": "handoff",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 81.49796799999604,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/dependency-handoff.mjs": "1210641a36ebd6b198340b0ec4f1631853ba1a68d802cd48ee74d31bdd43f856",
+                "pi/extensions/spec-runtime/runtime.mjs": "8f29a4a95956ba664d64966abf2c638a40c8611d7b433b353909725a7ac6de1d",
+                "pi/extensions/spec-runtime/completion.mjs": "874022e2a140bfbcc2e2ade5d883597f289b7322a3a5a02d462c1019849572da",
+                "pi/agents/spec-step-owner.md": "9dc32615594c27d4f91464fa6df5469830a7e29cbac1db11ee28a64964a65eb5",
+                "pi/agents/spec-step-editor.md": "01ff00da1460d8abf3370dc47138b552814b8319294fbacc48a1fe3463a499c7",
+                "pi/extensions/spec-runtime/runtime.test.mjs": "2b1074068e4be9260e132a9c49cc969fa9e83ac2c7e3940da64cf471f6dee01e"
+              }
+            },
+            {
+              "id": "repair-handoff-boundaries",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 60.41986200000974,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/dependency-handoff.mjs": "57c4c3898bdbb62d48621b22b0b8d9b6de12cfda41064c182af9014b5fc8d928",
+                "pi/extensions/spec-runtime/runtime.mjs": "91b55cf7eb6b2c376c27f0bf529ba515d7b23a93c75a24b8abb1bb36e26d1e61",
+                "pi/extensions/spec-runtime/runtime.test.mjs": "a20ea724c5087697812972e5d246b700da1f468a3e7bba4251aebbb9ad189687"
+              }
+            }
+          ],
+          "reviewer_findings": [
+            "dependency-handoff.mjs replaces an accepted record's null reason with 'no-accepted-wave-record' through chosen?.reason ?? fallback. Preserve null when a record is chosen; accepted entries must have reason null. This causes both visible test failures.",
+            "incompletePacket parses porcelain output through git(), whose .trim() removes the initial status-column space. When the first record is an unstaged modification (' M file'), slice(3) consequently drops the first filename character; similar corruption affects unstaged rename/copy records. Preserve raw porcelain bytes before splitting NUL-delimited records, while retaining rename/copy source skipping, so continuation prompts report exact dirty paths."
+          ],
+          "hidden_summary": {
+            "ok": true,
+            "output_hash": "23da0e5aae679aa0fdc59c1febc6ec9e487d599d168542318310165a17371529"
+          }
+        },
+        {
+          "task": "hard-lifecycle-extract",
+          "accepted": true,
+          "delivered": true,
+          "strategy": "boundary-review",
+          "selector": "openai-codex/gpt-6.1-sol:low",
+          "outcome": "passed",
+          "process_elapsed_ms": 93114.80770500001,
+          "implementation_ms": 64677.083182,
+          "model_calls": 5,
+          "equivalent_usd": 0.028280568000000002,
+          "catalog_usd": 0.1924428,
+          "accounting_complete": true,
+          "tokens": {
+            "input": 86790,
+            "output": 1853,
+            "cacheRead": 3328,
+            "cacheWrite": 0,
+            "totalTokens": 91971
+          },
+          "repairs": 0,
+          "review_accepted": true,
+          "visible_accepted": true,
+          "candidate_hash": "85eabc8e0b1e5e4cad0a5f82233fe07ea857b61b606f26d157481bdb650ecfbe",
+          "task_hash": "c6365120c768dec61e14fed5c2adc988444879b14063cb06ca72aafab59a71cb",
+          "result_hash": "e014aa72c7e5c4fe464f8f45440c211f8e3f707b5b5b08a4d88e86793e4c0610",
+          "posthoc": null,
+          "qualified_delivery": true,
+          "speed_ratio": 2.2196618316047028,
+          "stages": [
+            {
+              "name": "initialize",
+              "elapsed_ms": 132.16888500000002
+            },
+            {
+              "name": "discovery-planning",
+              "elapsed_ms": 27606.80035
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 43.04196700000102
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 28489.447185
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 8253.796859000002
+            },
+            {
+              "name": "terminal-grading",
+              "elapsed_ms": 28381.259999999995
+            }
+          ],
+          "operations": [
+            {
+              "id": "extract-wave-lifecycle",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 41.57976299999791,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/wave-lifecycle.mjs": "bc6efe99c76e8b1775469d32f52cca76446f4e6fb3219ede47358de6bee6850a",
+                "pi/extensions/spec-runtime/runtime.mjs": "6a7501961d3571e0faf192e91d7810235ec5f443d78e16045f65516cb571d876"
+              }
+            }
+          ],
+          "reviewer_findings": [],
+          "hidden_summary": {
+            "ok": true,
+            "output_hash": "cd659fda0c3e25ad4d874105b85d57d48ec8d258f00bbfa83dd2a9972a5edc8a"
+          }
+        }
+      ],
+      "pending": []
+    },
+    {
+      "run": "07-boundary-review-repeat",
+      "strategy": "boundary-review",
+      "replay_of": "06-boundary-review",
+      "manifest_hash": "f45caf91a997a1c8a81c39f0867686105ce9faf61bbec81954eeca775fb6c3ce",
+      "freeze_hash": "f3509458deee79bb8ce43f00ef1f0e437500ee85c23c56ba78a4ca778e2d44c1",
+      "runtime_hash": "1e8afe7596c09e83cb48fe0c72249eb5fd35cc7dd1310404848d2f7d8997303f",
+      "complete": true,
+      "n": 3,
+      "expected": 3,
+      "accepted": 3,
+      "delivered": 3,
+      "qualified_delivered": 3,
+      "seconds": 339.54939131800006,
+      "equivalent_usd": 0.10683277199999998,
+      "calls": 17,
+      "tokens": 340136,
+      "failure_adjusted_speed_ratio": 1.3529358655368064,
+      "beats_reference": true,
+      "cells": [
+        {
+          "task": "hard-context-calibration",
+          "accepted": true,
+          "delivered": true,
+          "strategy": "boundary-review",
+          "selector": "openai-codex/gpt-6.1-sol:low",
+          "outcome": "passed",
+          "process_elapsed_ms": 22261.800682,
+          "implementation_ms": 19175.954767000003,
+          "model_calls": 2,
+          "equivalent_usd": 0.002630076,
+          "catalog_usd": 0.020143599999999998,
+          "accounting_complete": true,
+          "tokens": {
+            "input": 4277,
+            "output": 1086,
+            "cacheRead": 7296,
+            "cacheWrite": 0,
+            "totalTokens": 12659
+          },
+          "repairs": 0,
+          "review_accepted": true,
+          "visible_accepted": true,
+          "candidate_hash": "c32d969fc32f37f36cab7cf24420643b4b086ee9d76ecf684d92dbb55e948cb8",
+          "task_hash": "53a7b4559f4db02a586dda721ec592e6bf4a3e90f8f671b69a50f92621536b49",
+          "result_hash": "948cc9809502286f65e9d0965a2a21fa7c5bd47458c49153d6bf673e3722d39e",
+          "posthoc": null,
+          "qualified_delivery": true,
+          "speed_ratio": 1.034456414148935,
+          "stages": [
+            {
+              "name": "initialize",
+              "elapsed_ms": 138.186482
+            },
+            {
+              "name": "planning",
+              "elapsed_ms": 11935.282492
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 39.083683999999266
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 165.97189600000092
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 6875.703992000001
+            },
+            {
+              "name": "terminal-grading",
+              "elapsed_ms": 98.98815800000011
+            }
+          ],
+          "operations": [
+            {
+              "id": "seed-calibration",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 38.071484000000055,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/context-budget/policy.mjs": "234dab39f428888d3689b5fa41710f90e072d688ac5483dd353f338b81c269ff",
+                "pi/extensions/context-budget/policy.test.mjs": "8eb7483d0300fe53b892dd5863c0d4de11eef800862d9430105dcfd47968abe2"
+              }
+            }
+          ],
+          "reviewer_findings": [],
+          "hidden_summary": {
+            "ok": true,
+            "output_hash": "e9f8f60bc844d822c6871b49028198edcfd4c1d41384caa7199e8269f43b7889"
+          }
+        },
+        {
+          "task": "hard-dependency-handoff",
+          "accepted": true,
+          "delivered": true,
+          "strategy": "boundary-review",
+          "selector": "openai-codex/gpt-6.1-sol:low",
+          "outcome": "passed",
+          "process_elapsed_ms": 221843.999813,
+          "implementation_ms": 156561.989667,
+          "model_calls": 10,
+          "equivalent_usd": 0.07644524399999998,
+          "catalog_usd": 0.5300064,
+          "accounting_complete": true,
+          "tokens": {
+            "input": 215137,
+            "output": 9867,
+            "cacheRead": 10624,
+            "cacheWrite": 0,
+            "totalTokens": 235628
+          },
+          "repairs": 1,
+          "review_accepted": true,
+          "visible_accepted": true,
+          "candidate_hash": "5e95be1fd7542fee9b7953d959aae86aa52d292cc144f2a0ab4550779df8bea0",
+          "task_hash": "d979407d0e1fdf935a7c2b994c98c634b5f11a8e044d12a307ca468880b0fb30",
+          "result_hash": "b205d984ce62ce26db1c1de20e3c5e200fdc445695541efe74f699680da931b6",
+          "posthoc": {
+            "run": "07-boundary-review-repeat",
+            "task": "hard-dependency-handoff",
+            "schema_version": 2,
+            "scope": "Exact candidate dirty-state block and same-file functions against real disposable Git repositories. Does not exercise prompt launch or receipt loading. Posthoc only; no model feedback.",
+            "candidate_hash": "5e95be1fd7542fee9b7953d959aae86aa52d292cc144f2a0ab4550779df8bea0",
+            "passed": true,
+            "rows": [
+              {
+                "case": "unstaged",
+                "expected": [
+                  "file.txt"
+                ],
+                "actual": {
+                  "dirty_paths": [
+                    "file.txt"
+                  ],
+                  "dirty_count": 1
+                },
+                "passed": true
+              },
+              {
+                "case": "staged",
+                "expected": [
+                  "file.txt"
+                ],
+                "actual": {
+                  "dirty_paths": [
+                    "file.txt"
+                  ],
+                  "dirty_count": 1
+                },
+                "passed": true
+              },
+              {
+                "case": "rename",
+                "expected": [
+                  "new.txt"
+                ],
+                "actual": {
+                  "dirty_paths": [
+                    "new.txt"
+                  ],
+                  "dirty_count": 1
+                },
+                "passed": true
+              },
+              {
+                "case": "mixed",
+                "expected": [
+                  "staged.txt",
+                  "unstaged.txt",
+                  "new.txt"
+                ],
+                "actual": {
+                  "dirty_paths": [
+                    "staged.txt",
+                    "unstaged.txt",
+                    "new.txt"
+                  ],
+                  "dirty_count": 3
+                },
+                "passed": true
+              },
+              {
+                "case": "leading-space-name",
+                "expected": [
+                  " leading.txt"
+                ],
+                "actual": {
+                  "dirty_paths": [
+                    " leading.txt"
+                  ],
+                  "dirty_count": 1
+                },
+                "passed": true
+              },
+              {
+                "case": "git-error",
+                "expected": null,
+                "actual": {
+                  "dirty_paths": null,
+                  "dirty_count": null
+                },
+                "passed": true
+              }
+            ],
+            "elapsed_ms": 106.963604
+          },
+          "qualified_delivery": true,
+          "speed_ratio": 1.1055048137688164,
+          "stages": [
+            {
+              "name": "initialize",
+              "elapsed_ms": 130.786405
+            },
+            {
+              "name": "discovery-planning",
+              "elapsed_ms": 112961.789245
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 76.8406629999954
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 2817.561533
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 9340.290087999994
+            },
+            {
+              "name": "repair-planning",
+              "elapsed_ms": 18149.59077099999
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 43.43853699997999
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 3238.7949090000184
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 9567.778242
+            },
+            {
+              "name": "terminal-grading",
+              "elapsed_ms": 65219.10383900002
+            }
+          ],
+          "operations": [
+            {
+              "id": "dependency-handoff",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 19.06613799999468,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/dependency-handoff.mjs": "482dfea3ffeade0a1de1244ce61be7be2bd4440aed74f4b10e25c1bb33953d80"
+              }
+            },
+            {
+              "id": "runtime-wiring",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 36.349614999999176,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/runtime.mjs": "de0838c0d9f505df70930c746ee195a0bfc9fe285652ee694c6e2d2c1ef4aafd",
+                "pi/extensions/spec-runtime/completion.mjs": "874022e2a140bfbcc2e2ade5d883597f289b7322a3a5a02d462c1019849572da"
+              }
+            },
+            {
+              "id": "profiles",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 0.10235000000102445,
+              "usage": null,
+              "output_hashes": {
+                "pi/agents/spec-step-owner.md": "9dc32615594c27d4f91464fa6df5469830a7e29cbac1db11ee28a64964a65eb5",
+                "pi/agents/spec-step-editor.md": "01ff00da1460d8abf3370dc47138b552814b8319294fbacc48a1fe3463a499c7"
+              }
+            },
+            {
+              "id": "handoff-tests",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 19.240869999994175,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/runtime.test.mjs": "3e4443b8cb104091d80f7cb3abb9fbed84aceeee4830f76f6d7cca61f6294a48"
+              }
+            },
+            {
+              "id": "preserve-status-failure",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 42.35778799999389,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/runtime.mjs": "54a6ea49ffe765d062ae54a05366e96b5d762ce9cc6449f2963637c87f96ced6",
+                "pi/extensions/spec-runtime/runtime.test.mjs": "50c993c5630fc3249f51a8aad83a7c9916c1f4c60b327eee52ce243829e342de"
+              }
+            }
+          ],
+          "reviewer_findings": [
+            "In runEditor, the spec-dirty alias pipes git status into a successful printf/cat group, so a failing git status can still return exit zero. The continuation then reports dirty_paths: [] and dirty_count: 0 instead of the null fields required by D12 on git errors. Preserve the status command's failure exit code while protecting significant leading whitespace, and test a failing status command."
+          ],
+          "hidden_summary": {
+            "ok": true,
+            "output_hash": "4ee9f16450d7f1902e5080a655edd4f7ddb1b80174211993b75ff2ab5bdf51c6"
+          }
+        },
+        {
+          "task": "hard-lifecycle-extract",
+          "accepted": true,
+          "delivered": true,
+          "strategy": "boundary-review",
+          "selector": "openai-codex/gpt-6.1-sol:low",
+          "outcome": "passed",
+          "process_elapsed_ms": 95443.590823,
+          "implementation_ms": 66507.996019,
+          "model_calls": 5,
+          "equivalent_usd": 0.027757452,
+          "catalog_usd": 0.18906119999999998,
+          "accounting_complete": true,
+          "tokens": {
+            "input": 85001,
+            "output": 1856,
+            "cacheRead": 4992,
+            "cacheWrite": 0,
+            "totalTokens": 91849
+          },
+          "repairs": 0,
+          "review_accepted": true,
+          "visible_accepted": true,
+          "candidate_hash": "dd81058ec56e765aae27523202feb6a8a071d118cf2bc3cf973d78df4a071054",
+          "task_hash": "c6365120c768dec61e14fed5c2adc988444879b14063cb06ca72aafab59a71cb",
+          "result_hash": "4c3fb11fd6e540dd164fbb9b2328a9b1f04017a0f9343256c319b472ad2df5a3",
+          "posthoc": null,
+          "qualified_delivery": true,
+          "speed_ratio": 2.1655030247478226,
+          "stages": [
+            {
+              "name": "initialize",
+              "elapsed_ms": 128.835915
+            },
+            {
+              "name": "discovery-planning",
+              "elapsed_ms": 28048.858849
+            },
+            {
+              "name": "execution",
+              "elapsed_ms": 47.906262999997125
+            },
+            {
+              "name": "visible-check",
+              "elapsed_ms": 28652.745961999997
+            },
+            {
+              "name": "impact-review",
+              "elapsed_ms": 9473.857045999997
+            },
+            {
+              "name": "terminal-grading",
+              "elapsed_ms": 28873.641864999998
+            }
+          ],
+          "operations": [
+            {
+              "id": "extract-wave-lifecycle",
+              "executor": "deterministic",
+              "status": "passed",
+              "elapsed_ms": 45.97682200000054,
+              "usage": null,
+              "output_hashes": {
+                "pi/extensions/spec-runtime/wave-lifecycle.mjs": "4fc892c98c21f258329601774e20d52927349f0073cfb9dc34f5d6fe4fe38bb7",
+                "pi/extensions/spec-runtime/runtime.mjs": "0d77e4c5c3ffea588068817f5c23fa73a62ba591d1ffb5cdba1c9559d77a115c"
+              }
+            }
+          ],
+          "reviewer_findings": [],
+          "hidden_summary": {
+            "ok": true,
+            "output_hash": "81f93e2be2f64400988c1f9e46bd3c6fe8952747106f3fe543b634333835cf18"
+          }
+        }
+      ],
+      "pending": []
+    }
+  ],
+  "repeated_wins": [
+    {
+      "first": "06-boundary-review",
+      "repeat": "07-boundary-review-repeat",
+      "freeze_hash": "f3509458deee79bb8ce43f00ef1f0e437500ee85c23c56ba78a4ca778e2d44c1"
+    }
+  ],
+  "posthoc_audits": {
+    "required_tasks": [
+      "hard-dependency-handoff"
+    ],
+    "artifact_hash": "612d7d8cb16cf7049379fb06e6c9c73e475a21f2fc7e28b044675eb835981b4e"
+  }
+}

@@ -24,6 +24,26 @@ async function log(file, rows) {
 }
 const header = id => ({ type: 'session', id, timestamp: time(0), cwd: '/repo' });
 
+test('package metrics expose managed final-review sessions and API writer telemetry separately', async t => {
+  const dir = await fixture(t), root = path.join(dir, 'pi/root.jsonl'), decision = path.join(dir, 'pi/decision.jsonl');
+  await log(root, [header('root'), assistant(1, 0)]);
+  await log(decision, [header('decision'), assistant(3, 2)]);
+  await mkdir(path.join(dir, 'runtime/runs/run-edits/edit'), { recursive: true });
+  await writeFile(path.join(dir, 'runtime/runs/run.json'), JSON.stringify({ id: 'run', parent_session: root,
+    decision_session: decision, stage: { role: 'decision', kind: 'final-review' },
+    started_at: time(0), finished_at: time(5), state: 'completed', writing_route: 'changeset-v1' }));
+  await writeFile(path.join(dir, 'runtime/runs/run-edits/edit/summary.json'), JSON.stringify({ schema_version: 1,
+    run_id: 'run', edit_id: 'edit', status: 'failed', publication: 'not-published',
+    calls: [{ stage: 'writer', selector: 'fixture/writer:off', status: 'failed', usage: null }] }));
+  const data = await metrics(dir, { now: Date.parse(time(10)) });
+  assert.equal(data.agents.find(agent => agent.role === 'final-review').model_calls, 1);
+  assert.equal(data.totals.model_calls, 2);
+  assert.equal(data.changesets.totals.writer_calls, 1);
+  assert.equal(data.changesets.totals.failed, 1);
+  assert.equal(data.changesets.totals.unknown_usage_calls, 1);
+  assert.match(formatMetrics(data), /1 failed/);
+});
+
 test('test detection counts submissions, ignores quoted mentions, and handles common runners', () => {
   assert.deepEqual(testCommands('echo "mix test"; grep "pytest" log.txt; cat test/foo.exs'), []);
   assert.deepEqual(testCommands('cd /repo&&MIX_ENV=test mix test test/foo.exs | tail -10; timeout 120 npm run test:unit'), ['mix test', 'npm test-script']);

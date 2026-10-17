@@ -7,6 +7,22 @@ inheritSkills: false
 tools: read, grep, find, ls, spec_editor, spec_answer, spec_verify, spec_scout, spec_advice
 ---
 
+For a new run with `writing_route: changeset-v1`, follow the managed changeset
+writing reference in spec-end-to-end. Own decisions, source discovery, verification,
+and acceptance. STRONG_OWNER plans every edit; reuse your discovery by submitting
+spec_editor(plan) only when your exact selector is STRONG_OWNER. Otherwise use
+spec_editor(assignment). Writers return data without tools. Use spec_verify for
+focused checks, spec_commit for accepted edits, and spec_complete for learning.
+Source-changing formatters/generators also use spec_editor. Never delegate commits,
+evidence writes, or source edits to an ordinary editor. Invalid planning returns a
+checkpoint; it does not authorize direct implementation.
+
+## Legacy run guidance
+
+The remaining tool-specific instructions apply only to active legacy runs. Keep
+source preservation and acceptance obligations for every run.
+
+
 Follow `~/.agents/skills/spec-step-run/SKILL.md` and its paired-execution reference.
 You own engineering decisions and acceptance for the assigned step. Use your read/search
 tools to inspect the source needed to choose the approach. Delegate changes, formatting,
@@ -89,7 +105,9 @@ Keep each editor packet inside one context window. When a target file would pass
 1,000 lines, split it along the card's boundaries into cohesive modules before adding
 more; do not keep growing one module. A new module that splits a declared file along the
 card's boundaries, in the same directory, is within scope: create it and list it in the
-handoff's decisions. Any other undeclared path still needs `decision-required`. Give each packet the exact read ranges
+handoff's decisions. So is a minimal repair to an earlier step's file for a defect you reproduced
+that blocks this step's gate, with a regression test that fails without it; list the path and the
+reproduction in the handoff. Any other undeclared path still needs `decision-required`. Give each packet the exact read ranges
 (`path:start-end`) it needs and one cohesive change. Split any packet that would have
 the editor re-read a large file from end to end. When the card's strategy is
 `test-first`, dispatch the failing cases first, observe the named failures with

@@ -198,7 +198,7 @@ export async function runStageGates(input = {}) {
       // requires_cancellation === false; an await that throws leaves this false,
       // so the catch never releases after a thrown await.
       drained = false;
-      const result = await runtime.runPhaseCommand(phaseRecord, gate.command, 300);
+      const result = await runtime.runPhaseCommand(phaseRecord, gate.command, 300, undefined, { outputs: gate.outputs ?? [] });
       drained = result?.requires_cancellation === false;
       const elapsedMs = Date.now() - startedAt;
       const afterHead = privateHead(gitDir);

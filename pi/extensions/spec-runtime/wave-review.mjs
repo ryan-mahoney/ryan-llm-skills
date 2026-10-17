@@ -262,7 +262,7 @@ export function renderReviewMarkdown(record, payload) {
     '  kind: step',
     `  step: ${stage.label}`,
     `  target: ${stage.base}..${stage.head}`,
-    '  scope: step',
+    `  scope: ${stage.scope ?? 'step'}`,
     `  commit: ${stage.head}`,
     `  verdict: ${payload.verdict}`
   ];
@@ -321,6 +321,7 @@ function fixGroups(record, payload) {
     let receipt;
     try { receipt = JSON.parse(readFileSync(join(dir, name), 'utf8')); } catch { continue; }
     if (receipt?.accepted !== true || receipt.role !== 'fixer' || receipt.label !== stage.label) continue;
+    if (record.writing_route && receipt.head !== stage.head) continue;
     if (waveId !== null && receipt.wave_id !== waveId) continue;
     let packet = null;
     try { packet = JSON.parse(readFileSync(join(dir, `${runId}.json`), 'utf8'))?.stage?.packet ?? null; } catch { packet = null; }
@@ -361,7 +362,7 @@ export function renderFixMarkdown(record, payload) {
     '',
     '```yaml',
     'fix:',
-    '  kind: step',
+    `  kind: ${stage.scope === 'branch' ? 'branch' : 'step'}`,
     `  step: ${stage.label}`,
     `  consumed: ${relative(record.package, stagePaths(record).reviewPath)}`,
     `  target: ${stage.base}..${commit === 'none' ? stage.head : commit}`,
@@ -448,6 +449,8 @@ function refuse(record, role, payload, code, detail, fingerprint = null) {
 // `submitStage(record, role, payload)`: lease first, then role/payload checks, then
 // receipt intent, atomic Markdown, and the accepted receipt with its hash.
 export function submitStage(record, role, payload) {
+  if (existsSync(join(record.package, 'runtime/runs', `${record.id}-commit-reconciliation.json`)))
+    throw new Error('Commit publication requires reconciliation before stage completion');
   assertLease(record);
   const stage = record.stage;
   if (!stage || stage.role !== role)

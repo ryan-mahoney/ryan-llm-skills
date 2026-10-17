@@ -414,18 +414,22 @@ export async function discoverPackage(packagePath, options = {}) {
     catch { index.errors.push({ path: path.join(runtime, 'runs', file), code: 'INVALID_RUN_RECORD' }); continue; }
     if (!record || typeof record.id !== 'string') continue; // Ignore sidecar receipts.
     const safe = {};
-    for (const key of ['id', 'assignment_id', 'step', 'checkout', 'owner_model', 'editor_model', 'parent_session', 'owner_session', 'editor_session', 'state', 'pid', 'started_at', 'finished_at', 'dispatch_requested_at']) {
+    for (const key of ['id', 'assignment_id', 'step', 'checkout', 'owner_model', 'editor_model', 'strong_owner_model', 'planner_model', 'writing_route', 'parent_session', 'owner_session', 'editor_session', 'state', 'pid', 'started_at', 'finished_at', 'dispatch_requested_at']) {
       if (typeof record[key] === 'string' || typeof record[key] === 'number') safe[key] = record[key];
     }
     const identity = runWaveIdentity(record);
     if (identity) { safe.wave_id = identity.wave_id; safe.phase = identity.phase; safe.step_number = identity.step_number; }
-    const commandRun = identity?.phase === 'command';
+    const commandRun = identity?.phase === 'command' || record.infrastructure === true;
+    safe.infrastructure = record.infrastructure === true;
+    if (['reviewer', 'fixer', 'decision'].includes(record.stage?.role)) {
+      safe.stage_role = record.stage.role; safe.stage_kind = record.stage.kind ?? record.stage.role;
+    }
     // A command run has no model session of its own; only the coordinator
     // parent is opened. Stage runs project the session for the actual role
     // (reviewer/fixer) rather than the generic owner anchor.
     let modelSession;
     if (commandRun) modelSession = undefined;
-    else if (typeof safe.wave_id === 'string' && (record.stage?.role === 'reviewer' || record.stage?.role === 'fixer'))
+    else if (safe.stage_role)
       modelSession = record[`${record.stage.role}_session`];
     else modelSession = record.owner_session;
     if (typeof modelSession === 'string') safe.model_session = modelSession;

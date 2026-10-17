@@ -1,0 +1,5 @@
+# tenant-records
+
+Implement tenant-scoped immutable helpers. list(records,tenantId) returns only records whose tenantId strictly equals a nonempty string tenantId. remove(records,tenantId,id) removes only the matching tenant's matching id. upsert(records,tenantId,record) replaces matching id within that tenant at the same array position, or appends; it must reject a record whose tenantId differs, empty/non-string id, or invalid tenantId with TypeError. list/remove/upsert reject an invalid tenantId with TypeError. Do not mutate the input array or objects, including frozen inputs. Keep references to unchanged records; replacements use the supplied record. Same id can exist in multiple tenants.
+Implement label(record) in src/label.mjs as trimmed nonempty name followed by " (#ID)"; blank or absent name becomes "Untitled". Do not mutate the record.
+Enable features.tenantIsolation preserving pageSize. Execution classification: store involved, label simple, config deterministic. Keep unrelated files unchanged.

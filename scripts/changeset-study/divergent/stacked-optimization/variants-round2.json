@@ -1,0 +1,36 @@
+{
+  "reference-v4a": {
+    "options": null
+  },
+  "hybrid-lean-seeded": {
+    "options": {
+      "advice": "none",
+      "writer_routing": "hybrid",
+      "prune_dependencies": true,
+      "prompt_order": "static-first",
+      "concurrency": 8,
+      "seed_moves": true
+    }
+  },
+  "hybrid-lean-snapshot": {
+    "options": {
+      "advice": "none",
+      "writer_routing": "hybrid",
+      "prune_dependencies": true,
+      "prompt_order": "static-first",
+      "concurrency": 8,
+      "anti_dependencies": "snapshot"
+    }
+  },
+  "hybrid-lean-seeded-snapshot": {
+    "options": {
+      "advice": "none",
+      "writer_routing": "hybrid",
+      "prune_dependencies": true,
+      "prompt_order": "static-first",
+      "concurrency": 8,
+      "seed_moves": true,
+      "anti_dependencies": "snapshot"
+    }
+  }
+}

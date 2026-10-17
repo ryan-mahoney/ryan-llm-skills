@@ -271,6 +271,7 @@ export function createCandidateRetainedRecovery(deps = {}) {
             isolation: entry?.openContext?.input?.isolation ?? record.isolation_requested,
             owner_model: entry?.openContext?.input?.owner_model ?? record.models?.owner_model ?? null,
             strong_owner_model: entry?.openContext?.input?.strong_owner_model ?? record.models?.strong_owner_model ?? null,
+            writing_route: record.writing_route ?? null,
             editor_model: entry?.openContext?.input?.editor_model ?? record.models?.editor_model ?? null,
             review_model: entry?.openContext?.input?.review_model ?? record.models?.review_model ?? null,
             fix_model_override: entry?.openContext?.input?.fix_model_override ?? record.models?.fix_model_override ?? null,

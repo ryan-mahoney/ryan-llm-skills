@@ -1,11 +1,12 @@
 // Durable workflow facts. Process exit, a complete handoff and acceptance are distinct.
 import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, readdirSync, lstatSync, realpathSync, watch } from 'node:fs';
 import { join, dirname, basename, resolve, relative, isAbsolute } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { buildHistoryIndex } from '../../../skills/spec-run/scripts/build-history-index.mjs';
 import { readWaveRecords, runWaveIdentity, ACTIVE_MEMBER_PHASES } from '../../../scripts/spec-observe/core.mjs';
+import { decisionCompletion } from './decision-stage.mjs';
 
 const read = file => JSON.parse(readFileSync(file, 'utf8'));
 const now = () => new Date().toISOString();
@@ -215,6 +216,22 @@ export function submitCompletion(r, input) {
   return completionStatus(r);
 }
 export function completionStatus(r, { checkHead = isWave(r) } = {}) {
+  if (existsSync(join(r.package, 'runtime/runs', `${r.id}-commit-reconciliation.json`)))
+    return { status: 'handoff_incomplete', missing: ['Commit publication requires reconciliation; inspect the retained mismatch receipt'] };
+  if (r.stage?.role === 'decision') return decisionCompletion(r, { checkHead });
+  if (r.writing_route && ['reviewer', 'fixer'].includes(r.stage?.role)) {
+    try {
+      const receipt = read(runFile(r, 'stage'));
+      if (!receipt.accepted || !receipt.artifact_written || receipt.run_id !== r.id || receipt.role !== r.stage.role)
+        throw new Error('Missing accepted stage submission');
+      const artifact = safePath(r.package, receipt.artifact);
+      if (createHash('sha256').update(readFileSync(artifact)).digest('hex') !== receipt.artifact_sha256) throw new Error('Stage artifact changed after submission');
+      const commit = receipt.payload.commits?.at(-1) ?? receipt.head;
+      if (checkHead && !isWave(r) && (revision(r).commit !== commit || revision(r).dirty)) throw new Error('Stage source changed after submission');
+      return { status: 'recorded', outcome: receipt.role === 'reviewer' ? receipt.payload.verdict : 'fixed',
+        commit, artifact: receipt.artifact, missing: [], acceptance: 'Recorded stage result; the outer workflow retains readiness assessment' };
+    } catch (error) { return { status: 'handoff_incomplete', missing: [error.message] }; }
+  }
   if (!r.completion_contract) return { status: 'legacy_unchecked', missing: ['legacy handoff needs coordinator reconciliation'] };
   try {
     const file = runFile(r, 'completion');

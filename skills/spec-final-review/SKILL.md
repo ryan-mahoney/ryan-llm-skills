@@ -7,6 +7,8 @@ metadata:
 
 # Spec Final Review
 
+For new managed assignments, apply [Managed changeset writing](../spec-end-to-end/references/changeset-writing.md). STRONG_OWNER plans every code edit, including easy/medium steps and review fixes. Use the shared service for implementation, repairs, final review, formatting, and conflict resolution. Its managed tool and commit rules supersede direct-edit and ordinary-editor instructions below. Only already active legacy runs retain their recorded editing contract.
+
 Give a completed implementation a fresh, whole-branch assessment. Start with this
 question, rather than reconstructing the spec audit:
 
@@ -34,16 +36,16 @@ implementation/review workers must have finished before this stage writes code.
 Preserve unrelated dirty files. If they overlap the proposed edits or make the
 reviewed revision ambiguous, report that concrete blocker.
 
-In Pi, launch `spec-final-reviewer` with `model: FINAL_REVIEWER`, `context: fresh`,
-explicit checkout `cwd`, provider extension available, and a finite deadline
-(45 minutes by default). It can launch `spec-final-editor` with `model: EDITOR_MODEL`,
-`context: fresh`, `async: false`, explicit checkout `cwd`, and a finite deadline
-(15 minutes per bounded assignment by default). These are ordinary subagent runs;
-do not use step-card dispatch or retained implementation pairs for this stage.
-Other harnesses use equivalent capable workers. If nesting is unavailable, return
-the edit assignment to the coordinator to dispatch under the same roles, then resume
-the reviewer. Missing model selection or editing capability is a concrete launch
-gap; it does not authorize the reviewer to take over code edits.
+In a managed Pi run, use `spec_stage` with `kind: final-review`, the prior drained
+run ID, explicit FINAL_REVIEWER as `owner_model`, the recorded STRONG_OWNER and
+EDITOR_MODEL, actual base, `reviews/final-review.md`, and the supplied skill/scope.
+The runtime launches a fresh decision owner. It applies all edits through the shared
+service, verifies, commits, and records the report through `spec_report`. The
+coordinator performs any authorized push with `spec_git` after the stage drains.
+Do not launch an ordinary `spec-final-editor` subagent. On another harness, require
+the same service adapter; report a missing capability without direct editing.
+Review-only assessment remains read-only. An active legacy run retains its recorded
+launch contract until it drains.
 
 ## Assess and improve
 
@@ -66,10 +68,10 @@ unresolved until fixed or dismissed with evidence; do not defer it merely becaus
 it is too large for a quick improvement. Ask only for a consequential missing decision.
 
 For an actionable findings set, apply the Jev review-triage checkpoint once. Give
-the editor bounded `Change / Edits / Preserve / Return` assignments with inspected
-symbols and the chosen approach. Only one editor writes at a time. The editor may
-write necessary test changes, but returns the diff and unresolved choices without
-running verification, committing, pushing, or launching other workers.
+the managed service bounded Change / Edits / Preserve / Return requests with
+inspected symbols and the chosen approach. STRONG_OWNER plans those writes and
+EDITOR_MODEL returns scoped edits. The runtime applies them; the reviewer retains
+verification and acceptance. Necessary test edits use the same service.
 
 Inspect returned edits and run focused checks for the affected behavior. Apply
 the verification/Jev policy before expensive or repeated checks, and load the
@@ -89,7 +91,10 @@ Commit coherent task-owned fixes after checking the complete message against
 [Engineering Writing](../../rules/engineering-writing.md). Commit and push only
 within the invocation's authority: the supplied review/fix/push prompt and an
 end-to-end publication run authorize them; review-only or local-only directions
-take precedence. Use a safe push to the assigned branch and verify the remote HEAD.
+take precedence. In a new managed run, return the report and commits after the stage
+drains. The coordinator uses spec_git for any authorized safe push and verifies the
+remote HEAD. Record that publication result with the report without rewriting its
+reviewed ranges.
 A rejected push needs ordinary reconciliation; never force-push over unknown work.
 Do not merge or wait for CI. If publication is outside scope, finish locally and
 report that limit without inventing a publication prerequisite.

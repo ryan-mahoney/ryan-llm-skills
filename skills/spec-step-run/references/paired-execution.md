@@ -1,5 +1,17 @@
 # Paired execution in Pi
 
+For new managed assignments, read [Managed changeset writing](../../spec-end-to-end/references/changeset-writing.md).
+The step owner retains decisions and verification. STRONG_OWNER plans every write;
+EDITOR_MODEL produces tool-free changesets, and the runtime publishes them. Use
+spec_editor for bounded requests or strong-owner plans, spec_verify for focused
+checks, and spec_commit for accepted edits. Review fixers use the same pathway.
+The runtime records selectors, source state, application, publication, and failures.
+
+The following contract applies only to already active legacy runs without
+`writing_route: changeset-v1`. Preserve those sessions until they drain.
+
+## Legacy run contract
+
 Use the repo-owned `spec-runtime` extension for assigned Pi implementation pairs.
 The coordinator starts an asynchronous owner with `spec_dispatch`; the owner invokes
 `spec_editor` synchronously. Native `pi --print --mode json` processes retain the owner

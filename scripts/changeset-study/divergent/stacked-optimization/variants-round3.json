@@ -1,0 +1,4 @@
+{
+  "hybrid-lean-seeded": { "options": { "advice": "none", "writer_routing": "hybrid", "prune_dependencies": true, "prompt_order": "static-first", "concurrency": 8, "seed_moves": true } },
+  "hybridwide-lean-seeded": { "options": { "advice": "none", "writer_routing": "hybrid-wide", "prune_dependencies": true, "prompt_order": "static-first", "concurrency": 8, "seed_moves": true } }
+}

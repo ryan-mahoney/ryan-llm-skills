@@ -813,7 +813,7 @@ build_bundle() {
     local resource
     while IFS= read -r resource; do
       copy_file "$bundle_dir" "$resource" "$resource"
-    done < <(cd "$ROOT" && find pi/agents pi/extensions/spec-runtime pi/extensions/opencode-pi scripts/spec-facts scripts/spec-location scripts/spec-observe scripts/verification scripts/spec-gym scripts/workspaces scenarios scripts/repo-search/identity.mjs -name node_modules -prune -o -type f -print | sort)
+    done < <(cd "$ROOT" && find pi/agents pi/extensions/spec-runtime pi/extensions/opencode-pi scripts/changeset scripts/design/schema.mjs scripts/spec-facts scripts/spec-location scripts/spec-observe scripts/verification scripts/spec-gym scripts/workspaces scenarios scripts/repo-search/identity.mjs -name node_modules -prune -o -type f -print | sort)
     for resource in "$ROOT"/scripts/jev/*.mjs "$ROOT"/scripts/jev/README.md "$ROOT"/scripts/jev/package.json "$ROOT"/scripts/jev/package-lock.json; do
       resource="${resource#"$ROOT"/}"
       copy_file "$bundle_dir" "$resource" "$resource"

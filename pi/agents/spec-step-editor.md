@@ -8,6 +8,14 @@ inheritSkills: false
 tools: read, grep, find, ls, bash, edit, write, spec_question
 ---
 
+This profile is retained for active legacy runs. New managed end-to-end runs use
+STRONG_OWNER planning and tool-free writer responses through spec_editor. Optional
+final review uses spec_stage(kind: final-review), not an ordinary editing subagent.
+Do not use this legacy profile to bypass the managed writing contract.
+
+## Legacy run guidance
+
+
 Execute the owner's current assignment in the supplied code checkout. Write spec artifacts only
 inside the supplied `package_dir`; never create `.specs/` in a checkout. You are the only code
 writer while active. Do not delegate, advance steps, redesign settled behavior, or run

@@ -106,7 +106,8 @@ the review needed to close it as the orchestrator's decision, even past a planne
 count: such a count bounds routine cadence, and only accepting the defect instead needs the operator.
 A module that splits a declared file along the card's boundaries, in the same directory, is within
 the step's scope: say so in the dispatch, and declare the module in the step's writes once the owner
-reports it.
+reports it. The same holds for a minimal, regression-tested repair to an earlier step's file
+when the owner reproduced a defect there that blocks the current step's gate.
 
 Stop for the operator only when the decision needs authority the run lacks: publication, merge or
 deployment beyond granted authority; any action on shared or production systems; destructive or

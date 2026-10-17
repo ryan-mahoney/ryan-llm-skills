@@ -1,0 +1,41 @@
+{
+  "id": "tenant-records",
+  "skill": "spec-changeset-plan",
+  "driver": "changeset",
+  "status": "ready",
+  "phase": "train",
+  "purpose": "Implement tenant-scoped immutable helpers. list(records,tenantId) returns only records whose tenantId strictly equals a nonempty string tenantId. remove(records,tenantId,id) removes only the matching tenant's matching id. upsert(records,tenantId,record) replaces matching id within that tenant at the same array position, or appends; it must reject a record whose tenantId differs, empty/non-string id, or invalid tenantId with TypeError. list/remove/upsert reject an invalid tenantId with TypeError. Do not mutate the input array or objects, including frozen inputs. Keep references to unchanged records; replacements use the supplied record. Same id can exist in multiple tenants.",
+  "task": "Compile the supplied specification into one executable changeset plan.",
+  "fixture": {
+    "feature": "tenant-records"
+  },
+  "timeout_ms": 480000,
+  "execution": {
+    "concurrency": 4,
+    "review_model": "openai-codex/gpt-6.1-sol:low",
+    "repair_model": "openai-codex/gpt-6.1-sol:low",
+    "max_repairs": 1,
+    "simple_model": "openrouter/inception/mercury-2.5:low",
+    "involved_model": "deepseek/deepseek-flash:off",
+    "max_tokens": 16000
+  },
+  "expectation_sources": [
+    "input/package/spec.md"
+  ],
+  "checks": [
+    {
+      "id": "behavior",
+      "kind": "node-check",
+      "script": "graders/behavior.mjs",
+      "timeout_ms": 10000
+    },
+    {
+      "id": "unrelated",
+      "kind": "git-untouched",
+      "root": "repo",
+      "paths": [
+        "keep.txt"
+      ]
+    }
+  ]
+}

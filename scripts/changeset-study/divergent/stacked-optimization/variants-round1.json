@@ -1,0 +1,7 @@
+{
+  "reference-v4a": { "options": null },
+  "json-baseline": { "profile": null },
+  "v4a-lean": { "options": { "advice": "none", "prune_dependencies": true, "prompt_order": "static-first", "concurrency": 8 } },
+  "hybrid-lean": { "options": { "advice": "none", "writer_routing": "hybrid", "prune_dependencies": true, "prompt_order": "static-first", "concurrency": 8 } },
+  "json-lean": { "options": { "advice": "none", "writer_routing": "json", "prune_dependencies": true, "prompt_order": "static-first", "concurrency": 8 } }
+}

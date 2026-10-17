@@ -112,7 +112,7 @@ export function planFixes(review, { exclude = [] } = {}) {
 }
 
 /** Render one packet as the fixer task section the coordinator passes on launch. */
-export function renderPacket(packet, { review, total }) {
+export function renderPacket(packet, { review, total, managed = false }) {
   const lines = [
     `Bounded fix packet ${packet.index} of ${total} for ${review}: ${packet.ids.join(", ")}.`,
     "Act only on these findings; the others belong to later packets.",
@@ -128,7 +128,9 @@ export function renderPacket(packet, { review, total }) {
   lines.push("",
     "Guards: begin editing within your first three tool calls and make at most six bounded reads before the first edit.",
     "Write each regression case first and observe it fail, then fix. Do not weaken, skip, rename or delete an existing case.",
-    "Commit once for this packet. If you cannot finish, `git restore` the files you touched, leave the tree clean, and report the failing case name.",
+    managed
+      ? "Use spec_editor for all changes and spec_commit for the accepted packet. If unfinished, preserve accepted changesets and report the remaining case; never restore source."
+      : "Commit once for this packet. If you cannot finish, `git restore` the files you touched, leave the tree clean, and report the failing case name.",
     `Update reviews/${review.replace(/-review\.md$/, "-fix.md")}: keep earlier packets' decisions, add yours, and set pending: [${packet.pending_after.join(", ")}].`);
   return lines.join("\n");
 }

@@ -289,7 +289,7 @@ export function createWaveBarrier(deps = {}) {
         purpose: opts.purpose,
         capacityClaim: opts.capacityClaim
       }),
-      runCommand: (phaseRecord_, command, timeout) => runtime.runPhaseCommand(phaseRecord_, command, timeout),
+      runCommand: (phaseRecord_, command, timeout, options) => runtime.runPhaseCommand(phaseRecord_, command, timeout, undefined, options),
       endPhaseRecord: (phaseRecord_, options) => runtime.endCommandPhase(phaseRecord_, options)
     };
   }

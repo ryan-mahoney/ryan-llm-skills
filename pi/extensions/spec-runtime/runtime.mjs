@@ -26,6 +26,12 @@ export { buildDependencyHandoff };
 import { PROVIDER_RECOVERY } from './provider-recovery.mjs';
 import { inspectProcess } from '../../../scripts/spec-observe/process-identity.mjs';
 import { selectWaveSubject, candidateLeaseSubject, candidateCapacityAttempt } from './wave-candidate-binding.mjs';
+import { CHANGESET_ROUTE, runManagedChangeset, plannerPrompt, latestEditSummary } from './changeset-runtime.mjs';
+import { sourceCommand } from './source-commands.mjs';
+import { Workspace, hash as sourceHash } from '../../../scripts/changeset/workspace.mjs';
+import { decisionPrompt } from './decision-stage.mjs';
+import { stagedGenerator } from './changeset-generator.mjs';
+import { prepareReviewCheckout, removeReviewCheckout } from './review-checkout.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const RUNTIME_MODULE_PATH = resolve(fileURLToPath(import.meta.url));
@@ -443,8 +449,14 @@ function save(record) {
   atomic(join(record.package, 'runtime/runs', `${record.id}.json`), record);
   // A wave run or a run-only command phase never replaces the serial latest
   // pointer; only its own durable run record is written.
-  if (record.wave_bindings || record.command_phase) return;
+  if (record.wave_bindings || record.command_phase || record.review_checkout) return;
   atomic(join(record.package, 'runtime/run.json'), record);
+}
+function ownsSettledPackageClaim(claim, parentSession) {
+  const current = inspectProcess(process.pid);
+  return claim.kind === 'package' && claim.coordinator?.session === parentSession
+    && claim.coordinator?.pid === process.pid && current.state === 'alive'
+    && claim.coordinator.started_at === current.started_at;
 }
 // A spec-location refusal as an Error that keeps the machine-readable code and remedy.
 export function refusalError({ code, message, remedy }) {
@@ -463,6 +475,14 @@ const deepFreeze = value => {
   return value;
 };
 export const ROLE_CONTRACT = deepFreeze({
+  decision: {
+    profile: 'spec-stage-owner.md', tools: ['read', 'grep', 'find', 'ls', 'spec_editor', 'spec_verify', 'spec_commit', 'spec_advice', 'spec_report'],
+    providerTools: [], modelKey: 'owner_model', sessionKey: 'decision_session', subagents: false
+  },
+  planner: {
+    profile: 'spec-write-planner.md', tools: ['read', 'grep', 'find', 'ls'], providerTools: [],
+    modelKey: 'planner_model', sessionKey: 'planner_session', subagents: false
+  },
   owner: {
     profile: 'spec-step-owner.md',
     tools: ['read', 'grep', 'find', 'ls', 'spec_editor', 'spec_answer', 'spec_verify', 'spec_scout', 'spec_search', 'spec_advice', 'spec_complete'],
@@ -500,6 +520,18 @@ export const ROLE_CONTRACT = deepFreeze({
 // A parallel packet's editor keeps the editor contract minus its shell and owner channel.
 export const FENCED_EDITOR_TOOLS = Object.freeze(ROLE_CONTRACT.editor.tools.filter(name => !['bash', 'spec_question'].includes(name)));
 
+export function roleContract(record, role) {
+  const contract = ROLE_CONTRACT[role];
+  if (!contract || record.writing_route !== CHANGESET_ROUTE || role === 'planner') return contract;
+  const reads = ['read', 'grep', 'find', 'ls'];
+  if (role === 'reviewer') return { ...contract, tools: [...reads, 'spec_verify', 'spec_stage_complete'], providerTools: [] };
+  if (role === 'fixer') return { ...contract, tools: [...reads, 'spec_editor', 'spec_verify', 'spec_commit', 'spec_advice', 'spec_stage_complete'], providerTools: [] };
+  if (role === 'owner') return { ...contract, tools: [...reads, 'spec_editor', 'spec_verify', 'spec_commit', 'spec_scout', 'spec_search', 'spec_advice', 'spec_complete'], providerTools: [] };
+  // A managed changeset writer is an API response, never a tool-enabled agent.
+  if (role === 'editor') throw new Error('Changeset writers return data; direct editor processes are prohibited');
+  return contract;
+}
+
 // The real package folder for a `workspace/slug` ref, the folder, or a file inside it.
 export async function packageDirOf(ref, location = {}) {
   const found = await locatePackage(ref, location);
@@ -519,6 +551,8 @@ export function summary(record) {
     ledger: join(record.package, 'runtime/progress.json'), run_receipt: runFileOf(record), events: join(record.package, 'runtime/events.jsonl'),
     checks: ['canonical package', 'checkout repository and target branch', 'no live coordinator already running this package'],
     owner_model: record.owner_model, editor_model: record.editor_model, routing_reason: record.routing_reason,
+    strong_owner_model: record.strong_owner_model ?? null, planner_model: record.planner_model ?? null,
+    writing_route: record.writing_route ?? 'legacy', latest_edit: record.writing_route ? latestEditSummary(record) : null,
     environment: record.environment,
     handoff: record.handoff || completionStatus(record), progress: join(record.package, 'runtime/progress.json'),
     result: record.result, stop_reason: record.stop_reason, shutdown_cleanup: record.shutdown_cleanup === true,
@@ -844,7 +878,7 @@ const targetFacts = record => record.target ? `TARGET: ${record.target}\n${recor
 // questions continue in that same process, never in a competing writer.
 // Discovery stays disabled: no goal continuation, subagent fanout, or unrelated extension tools.
 function nativeCommand(record, role, prompt, options = {}) {
-  const contract = ROLE_CONTRACT[role];
+  const contract = roleContract(record, role);
   if (!contract) throw refusalError({ code: 'role-unknown', message: `Native role ${JSON.stringify(role)} is not in the role contract.`,
     remedy: `Use one of ${Object.keys(ROLE_CONTRACT).join(', ')}.` });
   const model = record[contract.modelKey];
@@ -1002,6 +1036,89 @@ export class Runtime {
     return waveLifecycle.ensureWaveDeadline.call(this, record);
   }
 
+  async validateStageInput(input) {
+    const config = await resolveInput(input, this.location);
+    return { head: git(config.checkout, 'rev-parse', 'HEAD') };
+  }
+
+  async infrastructure(input, signal, parentSession) {
+    const checked = await checkPackage(input.package, this.location);
+    if (!checked.ok) throw refusalError(checked);
+    const prior = loadRun(checked.locations.package_dir, input.prior_run_id);
+    if (!terminal.has(prior.state) || activeWaveRecords(prior.package).length || serialRunActive(prior.package)
+      || [...this.active.values()].some(({ record }) => record.package === prior.package))
+      throw new Error('All implementation/review workers and waves must drain before coordinator commands');
+    const target = checked.locations.targets.find(target => target.id === prior.target) ?? checked.locations.targets[0];
+    const checkout = target.worktree ?? target.primary;
+    const { claims } = await this.ownership.inspectClaims({ packageId: prior.package_ref });
+    if (claims.some(claim => !ownsSettledPackageClaim(claim, parentSession)))
+      throw new Error('Coordinator commands cannot replace another package, checkout, or capacity owner');
+    if (activeWaveRecords(prior.package).length || serialRunActive(prior.package)) throw new Error('Managed work became active before command admission');
+    const quote = value => `'${value.replace(/'/g, `'"'"'`)}'`;
+    let command = input.command, checkoutWrite = false;
+    if (input.git_action) {
+      const remote = input.remote ?? 'origin';
+      if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(remote)) throw new Error('Use a configured remote name');
+      if (input.git_action === 'fetch') command = `git fetch -- ${quote(remote)}`;
+      else if (input.git_action === 'push') {
+        if (!input.branch || input.branch.startsWith('-')) throw new Error('An explicit push branch is required');
+        execFileSync('git', ['check-ref-format', '--branch', input.branch], { stdio: 'pipe' });
+        command = `git push -- ${quote(remote)} ${quote(`HEAD:refs/heads/${input.branch}`)}`;
+      } else if (input.git_action === 'rebase') {
+        if (git(checkout, 'status', '--porcelain')) throw new Error('Commit/reconcile changes before rebase');
+        if (typeof input.base !== 'string' || !input.base || input.base.startsWith('-')) throw new Error('Explicit rebase base is required');
+        const base = git(checkout, 'rev-parse', '--verify', '--end-of-options', `${input.base}^{commit}`);
+        command = `git rebase -- ${quote(base)}`; checkoutWrite = true;
+      } else if (['continue', 'abort'].includes(input.git_action)) {
+        let stage = '';
+        if (input.git_action === 'continue') {
+          const unmerged = execFileSync('git', ['-C', checkout, 'diff', '--name-only', '--diff-filter=U', '-z'], { encoding: 'utf8' }).split('\0').filter(Boolean);
+          if (unmerged.length) {
+            const root = join(prior.package, 'runtime/runs', `${prior.id}-edits`), published = new Map();
+            for (const id of existsSync(root) ? readdirSync(root).filter(id => /^[a-f0-9-]{36}$/.test(id)) : []) {
+              const file = join(root, id, 'publication.json');
+              if (!existsSync(file)) continue;
+              const publication = read(file);
+              if (publication.state === 'published') for (const change of publication.changes) published.set(change.path, change.after_sha256);
+            }
+            const current = Workspace.loadPaths(checkout, unmerged);
+            for (const path of unmerged) if (!published.has(path) || sourceHash(current.read(path)) !== published.get(path))
+              throw new Error(`Conflict resolution must be published through the changeset service: ${path}`);
+            stage = `git add -- ${unmerged.map(quote).join(' ')}\n`;
+          }
+        }
+        command = `set -e\n${stage}GIT_EDITOR=true git rebase --${input.git_action}`; checkoutWrite = true;
+      } else throw new Error('Unsupported structured Git action');
+    }
+    if (typeof command !== 'string' || !command.trim() || command.length > 24000) throw new Error('A bounded command is required');
+    const current = existsSync(join(prior.package, 'runtime/run.json')) ? read(join(prior.package, 'runtime/run.json')) : null;
+    const record = { ...prior, id: randomUUID(), checkout, state: 'running', stage: null, wave_bindings: null,
+      wave_path: null, command_phase: null, infrastructure: true, writing_route: CHANGESET_ROUTE,
+      completion_contract: 0, assignment_id: `command-${randomUUID()}`, parent_session: parentSession,
+      owner_session: null, editor_session: null, coordinator_pid: process.pid, started_at: timestamp(),
+      finished_at: null, error: null, result: null, handoff: null };
+    save(record); this.active.set(record.id, { record, task: {}, timer: null });
+    let reply;
+    try {
+      reply = await runCommand(record, command, input.timeout ?? 120, signal,
+        { outputs: input.outputs, gitWrite: Boolean(input.git_action), checkoutWrite });
+      record.state = reply.requires_cancellation ? 'blocked' : signal?.aborted ? 'cancelled' : reply.error || reply.exit_code !== 0 ? 'failed' : 'completed';
+      record.error = reply.error ?? null; record.finished_at = timestamp();
+      return { ...reply, run_id: record.id, prior_run_id: prior.id, git_action: input.git_action ?? null,
+        observed_head: git(checkout, 'rev-parse', 'HEAD') };
+    } catch (error) {
+      record.state = activeGroups(record).length ? 'blocked' : 'failed';
+      record.error = error.message; record.finished_at = timestamp();
+      throw error;
+    } finally {
+      save(record);
+      if (record.state !== 'blocked') {
+        this.active.delete(record.id);
+        if (current && read(join(prior.package, 'runtime/run.json')).id === record.id) atomic(join(prior.package, 'runtime/run.json'), current);
+      }
+    }
+  }
+
   async drainContainedService(record, options = {}) {
     return waveLifecycle.drainContainedService.call(this, record, options);
   }
@@ -1068,6 +1185,9 @@ export class Runtime {
       throw new Error('workflow_id must be 1-128 ASCII letters/digits/underscore/hyphen');
     // Everything after this await is synchronous, so the check-then-write below cannot interleave in this process.
     const config = await resolveInput(input, this.location, { ownership: this.ownership, ownershipRoot: this.ownershipRoot });
+    const isolatedReview = config.writing_route === CHANGESET_ROUTE && !config.wave_bindings && config.stage?.role === 'reviewer';
+    if (isolatedReview && [...this.active.values()].some(({ record }) => record.package === config.package
+      && record.stage?.review_path === config.stage.review_path)) throw new Error('The assigned review artifact still has an active reviewer');
     if (config.wave_bindings) {
       config.wave_bindings.owner_model = config.owner_model;
       config.wave_bindings.editor_model = config.editor_model;
@@ -1084,6 +1204,8 @@ export class Runtime {
     const scope = config.session_scope ?? (retained ? retained.session_scope ?? 'package' : 'step');
     const legacyParts = [config.step, config.target, config.checkout, config.owner_model, config.editor_model, config.scout_model, config.child_extensions || [], config.instructions || ''];
     const contractParts = [...legacyParts, { attempt_kind: config.attempt_kind ?? null, session_scope: scope }];
+    if (config.writing_route === CHANGESET_ROUTE && (!previousAssignment || retained?.writing_route === CHANGESET_ROUTE))
+      contractParts.push({ writing_route: CHANGESET_ROUTE, planner_model: config.strong_owner_model });
     // A supplied workflow_id joins the launch contract so an existing assignment
     // cannot be reused under another workflow; the legacy/no-workflow shape is
     // preserved exactly.
@@ -1102,6 +1224,7 @@ export class Runtime {
       if (previous.contract !== contract && !compatibleLegacy) throw new Error('assignment_id already identifies a different launch contract; use a new explicit attempt ID for an intentional change.');
       return summary(loadRun(config.package, previous.run_id));
     }
+    if (config.writing_route === CHANGESET_ROUTE) splitModelSelector(config.strong_owner_model);
     // A serial run cannot start while a nonterminal wave record is persisted: the
     // wave owns the package and a serial launch would fork the work. Wave runs
     // carry wave_bindings and are admitted by their own validation.
@@ -1116,7 +1239,7 @@ export class Runtime {
     // terminal; a wave run bypasses only the serial latest-run exclusion.
     if (!config.wave_bindings) {
       const { claims } = await this.ownership.inspectClaims({ packageId: config.package_ref });
-      if (claims.some(claim => claim.kind === 'package'))
+      if (claims.some(claim => claim.kind === 'package' && !(config.stage && config.writing_route === CHANGESET_ROUTE && ownsSettledPackageClaim(claim, parentSession))))
         throw refusalError({ code: 'wave-active', message: `Package ${config.package_ref} holds an active wave claim; a serial run cannot replace it.`,
           remedy: 'Finish or recover the wave before starting a serial run.' });
     }
@@ -1141,7 +1264,7 @@ export class Runtime {
     // disjoint from this request's interval.
     const inspectedAt = timestamp();
     const latest = join(runtimeDir, 'run.json');
-    if (!config.wave_bindings && existsSync(latest)) {
+    if (!config.wave_bindings && !isolatedReview && existsSync(latest)) {
       const prior = read(latest);
       const active = ['running', 'cancelling', 'blocked'].includes(prior.state);
       const priorStarted = Number.isFinite(Date.parse(prior.started_at)) ? Date.parse(prior.started_at) : null;
@@ -1177,15 +1300,19 @@ export class Runtime {
     const sessionDir = join(runtimeDir, 'sessions', pair);
     mkdirSync(sessionDir, { recursive: true });
     if (config.stage) mkdirSync(join(sessionDir, 'stages'), { recursive: true });
+    const reviewCheckout = isolatedReview ? prepareReviewCheckout(config.checkout, config.stage.head) : null;
     const record = { schema_version: 1, completion_contract: 1, id, assignment_id: key, workflow_id: config.workflow_id ?? null, wave_bindings: config.wave_bindings ?? null, wave_path: config.wave_path ?? null, package: config.package, package_ref: config.package_ref, target: config.target, primary: config.primary, other_targets: config.other_targets,
-      step: config.step, checkout: config.checkout, owner_model: config.owner_model, editor_model: config.editor_model, scout_model: config.scout_model,
+      step: config.step, checkout: reviewCheckout?.checkout ?? config.checkout,
+      ...(reviewCheckout ? { review_checkout: reviewCheckout } : {}), owner_model: config.owner_model, editor_model: config.editor_model, scout_model: config.scout_model,
+      ...(config.writing_route === CHANGESET_ROUTE ? { writing_route: CHANGESET_ROUTE,
+        strong_owner_model: config.strong_owner_model, planner_model: config.strong_owner_model } : {}),
       dispatch_requested_at: requestedAt, routing_reason: config.routing_reason,
       attempt_kind: config.attempt_kind ?? null, session_scope: scope,
-      environment: environmentFacts(config.checkout, config.primary),
+      environment: environmentFacts(reviewCheckout?.checkout ?? config.checkout, config.primary),
       // A wave member's checkout is an overlay mountpoint that is empty in the coordinator;
       // git there would search parent directories, so record the frozen base instead.
       revisions: { runtime: revisionOf(here), checkout: config.wave_bindings
-        ? { head: config.wave_bindings.base_commit ?? null, dirty: null } : revisionOf(config.checkout) },
+        ? { head: config.wave_bindings.base_commit ?? null, dirty: null } : revisionOf(reviewCheckout?.checkout ?? config.checkout) },
       child_extensions: config.child_extensions || [], owner_session: join(sessionDir, 'owner.jsonl'), editor_session: join(sessionDir, 'editor.jsonl'),
       stage: config.stage ?? null, review_model: config.review_model ?? null, fix_model: config.fix_model ?? null,
       ...(config.stage ? { [`${config.stage.role}_session`]: join(sessionDir, 'stages', `${id}-${config.stage.role}.jsonl`) } : {}),
@@ -1200,10 +1327,15 @@ export class Runtime {
       // failed bind or launch keeps the run blocked with its truthful error and
       // every ownership claim, never an unbound orphan.
       if (config.wave_bindings) await bindWaveMemberRun(config, record.id);
-      const prompt = config.stage ? stagePrompt(record) : `Implement this prepared step as its architect/owner using spec_editor.\nPACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${targetFacts(record)}${dependencyContext(record, config.target_ids)}Read the card and required policy. Choose the implementation approach yourself, then send a short Change/Edits/Preserve/Return packet for a bounded transformation. Name affected symbols, the chosen approach and preservation constraints; let the editor choose local implementation details and batch related edits. The editor does not run tests, compile/lint checks or other executable verification. After it returns, use spec_verify for necessary focused checks and diagnose failures before assigning bounded corrections. Do not check every packet automatically; reuse valid evidence. Read/search missing source facts directly. The editor normally reads and edits in one assignment; reserve facts-only requests for a specific blocking fact unavailable through your tools. Request compact results with artifact paths, not source inventories. Do not delegate architecture, whole-step restoration, or an entire acceptance suite with open-ended repairs. Keep owner context bounded. Every editor call starts a fresh session: include the chosen decisions, relevant files and preservation constraints in each packet; never refer to prior chat. Assess each returned diff/result before the next packet; commit is a separate assignment after acceptance of the completed changes and required evidence. Use spec_scout only for a bounded discovery gap worth delegating; direct reads remain the default. Do not discover models, run startup suites, poll, or start other agents outside that scout tool. The runtime retains the owner session and records each fresh editor session. Before ending, call spec_complete with decisions, introduced symbols, gaps and step-owned evidence assessments. It writes the canonical learning from verification receipts; an evidence log is not a learning. Commit via the editor first when complete. Missing handoffs remain unfinished obligations. This owner assignment ends after this step; independent review belongs to the coordinator.\n${input.instructions || ''}`;
+      const prompt = config.stage ? (config.stage.role === 'decision' ? decisionPrompt(record) : stagePrompt(record)) : `Implement this prepared step as its architect/owner using spec_editor.\nPACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${targetFacts(record)}${dependencyContext(record, config.target_ids)}Read the card and required policy. Choose the implementation approach yourself, then send a short Change/Edits/Preserve/Return packet for a bounded transformation. Name affected symbols, the chosen approach and preservation constraints; let the editor choose local implementation details and batch related edits. The editor does not run tests, compile/lint checks or other executable verification. After it returns, use spec_verify for necessary focused checks and diagnose failures before assigning bounded corrections. Do not check every packet automatically; reuse valid evidence. Read/search missing source facts directly. The editor normally reads and edits in one assignment; reserve facts-only requests for a specific blocking fact unavailable through your tools. Request compact results with artifact paths, not source inventories. Do not delegate architecture, whole-step restoration, or an entire acceptance suite with open-ended repairs. Keep owner context bounded. Every editor call starts a fresh session: include the chosen decisions, relevant files and preservation constraints in each packet; never refer to prior chat. Assess each returned diff/result before the next packet; commit is a separate assignment after acceptance of the completed changes and required evidence. For changeset runs that action is spec_commit. Use spec_scout only for a bounded discovery gap worth delegating; direct reads remain the default. Do not discover models, run startup suites, poll, or start other agents outside that scout tool. The runtime retains the owner session and records each fresh editor session. Before ending, call spec_complete with decisions, introduced symbols, gaps and step-owned evidence assessments. It writes the canonical learning from verification receipts; an evidence log is not a learning. For changeset runs, commit accepted edits with spec_commit before completion. Legacy runs retain their original editor commit contract. Missing handoffs remain unfinished obligations. This owner assignment ends after this step; independent review belongs to the coordinator.\n${input.instructions || ''}`;
+      const writingContext = record.writing_route === CHANGESET_ROUTE && config.stage?.role !== 'reviewer'
+        ? record.owner_model === record.planner_model
+          ? `You are the bound strong owner. Reuse your discovery: submit executable plans through spec_editor(plan), using this schema contract (not as your final response):\n${plannerPrompt}\nCommit accepted changes with spec_commit.\n`
+          : 'Your step ownership is unchanged. Send bounded change requests through spec_editor(assignment); the runtime always assigns write planning to STRONG_OWNER. Commit accepted edits with spec_commit.\n'
+        : '';
       task = config.wave_bindings
-        ? await this.containedRoot(record, prompt)
-        : this.launchProcess(record, 'owner', `${prompt}\nEnvironment paths (observations, not setup approval): ${JSON.stringify(record.environment)}`, { onEvent: this.onWorkerEvent });
+        ? await this.containedRoot(record, writingContext + prompt)
+        : this.launchProcess(record, config.stage?.role ?? 'owner', `${writingContext}${prompt}\nEnvironment paths (observations, not setup approval): ${JSON.stringify(record.environment)}`, { onEvent: this.onWorkerEvent });
     }
     catch (error) {
       record.state = config.wave_bindings ? 'blocked' : 'failed';
@@ -1273,6 +1405,10 @@ export class Runtime {
       record.handoff = completionStatus(record, { checkHead: true });
       record.result_truncated = result.result_truncated; record.full_result_path = result.full_result_path; record.finished_at = timestamp();
       record.shutdown_cleanup = result.shutdown_cleanup === true;
+    }
+    if (record.state === 'completed' && record.review_checkout && !record.review_checkout.removed) {
+      try { removeReviewCheckout(record.review_checkout); record.review_checkout.removed = true; }
+      catch (error) { record.review_checkout.cleanup_error = error.message; }
     }
     save(record); event(record, 'run_finished', { state: record.state, error: record.error });
     if (record.state !== 'blocked') { clearTimeout(this.active.get(record.id)?.timer); this.active.delete(record.id); }
@@ -1352,8 +1488,19 @@ export function contextExcerpts(record, context = []) {
   return `CONTEXT EXCERPTS (exact current bytes chosen by the owner; edit against them and read further only when an edit anchor does not match):\n${blocks.join('\n')}\n--- end of excerpts\n`;
 }
 
-export async function runEditor(record, assignment, signal, launchProcess = launch, { stopGroup = terminateGroup, context = [], reasoning, paths, member, workspace } = {}) {
+export async function runEditor(record, assignment, signal, launchProcess = launch, { stopGroup = terminateGroup, context = [], reasoning, paths, member, workspace, plan, submittedModel, createClient } = {}) {
   assertLease(record);
+  if (record.writing_route === CHANGESET_ROUTE) {
+    if (reasoning !== undefined) throw new Error('Set the exact editor selector on the assignment; per-packet thinking overrides are legacy-only');
+    assertIdleWriter(record);
+    invalidateCompletion(record);
+    return runManagedChangeset(record, assignment, signal, { assertActive: () => assertLease(record), paths,
+      submittedPlan: plan, submittedModel, createClient,
+      generate: stagedGenerator(record, runCommand),
+      onEvent: ({ event: name, ...detail }) => event(record, `changeset_${name}`, detail),
+      plan: ({ assignment, correction, directory, trace, signal }) => runWritePlanner(record, assignment, signal,
+        launchProcess, { stopGroup, correction, directory, trace, context }) });
+  }
   if (reasoning !== undefined && !THINKING.test(reasoning)) throw new Error(`reasoning must be one of off, minimal, low, medium, high, xhigh, max`);
   const excerpts = contextExcerpts(record, context);
   const editorModel = reasoning ? (({ provider, model }) => `${provider}/${model}:${reasoning}`)(splitModelSelector(record.editor_model)) : record.editor_model;
@@ -1461,6 +1608,50 @@ export async function runEditor(record, assignment, signal, launchProcess = laun
   } finally { if (!member && (!task || !activeGroups(record).some(group => group.role !== 'owner'))) rmSync(editorLock, { recursive: true, force: true }); }
 }
 
+async function runWritePlanner(record, assignment, signal, launchProcess, { stopGroup, correction, directory, trace, context }) {
+  const plannerSession = join(directory, 'planner.jsonl');
+  const prompt = `${plannerPrompt}\nPACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\n`
+    + `${record.stage ? `STAGE: ${JSON.stringify(record.stage)}\n` : ''}REQUEST:\n${assignment}\n`
+    + (correction ? `Read your previous plan and failure in ${directory}/planning-${correction - 1}-failure.json. Correct the plan once. No editor has run.\n` : '')
+    + contextExcerpts(record, context);
+  const task = launchProcess({ ...record, planner_session: plannerSession }, 'planner', prompt);
+  let stopping;
+  let failCancellation;
+  const cancellationFailed = new Promise(resolveFailure => { failCancellation = resolveFailure; });
+  const abort = () => {
+    stopping ??= Promise.resolve().then(() => stopGroup(record, task.child.pid)).then(stopped => {
+      if (!stopped) failCancellation({ error: 'Planner cancellation unconfirmed', requires_cancellation: true });
+      return stopped;
+    }, () => { failCancellation({ error: 'Planner cancellation unconfirmed', requires_cancellation: true }); return false; });
+  };
+  signal?.addEventListener('abort', abort, { once: true });
+  if (signal?.aborted) abort();
+  try {
+    const result = await Promise.race([task.done, cancellationFailed,
+      ...(task.lifecycleFailure ? [task.lifecycleFailure.then(error => ({ error, requires_cancellation: true }))] : [])]);
+    if (result.requires_cancellation || (stopping && !await stopping)) {
+      revoke(record); throw Object.assign(new Error('Planner cancellation unconfirmed; cancel the managed run'), { requires_cancellation: true });
+    }
+    settleGroup(record, task.child.pid);
+    // Preserve per-request usage, including intermediate discovery turns and
+    // unsuccessful requests. Native worker streams remain the source of truth.
+    if (result.stream && existsSync(result.stream)) {
+      let index = 0;
+      for (const line of readFileSync(result.stream, 'utf8').split('\n').filter(Boolean)) {
+        let row; try { row = JSON.parse(line); } catch { continue; }
+        if (row.type !== 'message_end' || row.message?.role !== 'assistant') continue;
+        trace.calls.push({ call_id: `planner-${correction}-${++index}`, selector: record.planner_model,
+          stage: 'planning', status: row.message.stopReason === 'error' ? 'failed' : row.message.stopReason === 'aborted' ? 'cancelled' : row.message.stopReason === 'length' ? 'incomplete' : 'completed',
+          stop_reason: row.message.stopReason ?? null, usage: row.message.usage ?? null });
+      }
+    }
+    signal?.throwIfAborted(); assertLease(record);
+    if (result.error) throw Object.assign(new Error(result.error), { planner_transport: true });
+    return { plan: JSON.parse((result.full_result_path ? readFileSync(result.full_result_path, 'utf8') : result.result)
+      .trim().replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```$/, '')), session: plannerSession, stream: result.stream ?? null };
+  } finally { signal?.removeEventListener('abort', abort); }
+}
+
 // Each parallel batch member's outcome receipt, keyed by run and member number so
 // siblings never overwrite one another or the per-run receipt.
 const memberOutcomeFile = (record, member) => join(record.package, 'runtime/runs', `${record.id}-editor-outcome-${member}.json`);
@@ -1565,6 +1756,11 @@ export async function runEditorBatch(record, packets, signal, launchProcess = la
   assertLease(record);
   if (!Array.isArray(packets) || packets.length < 2 || packets.length > PARALLEL_EDITORS) throw new Error(`a parallel batch takes 2 to ${PARALLEL_EDITORS} packets`);
   const sets = packetPaths(record, packets, { allowOverlap: true });
+  if (record.writing_route === CHANGESET_ROUTE && packets.some(packet => packet.reasoning !== undefined))
+    throw new Error('Per-packet thinking overrides are legacy-only; preserve the configured editor selector');
+  if (record.writing_route === CHANGESET_ROUTE) return runEditor(record,
+    packets.map((packet, index) => `Request ${index + 1}; writable paths: ${JSON.stringify(sets[index])}\n${packet.assignment}`).join('\n\n'),
+    signal, launchProcess, { paths: [...new Set(sets.flat())], context: packets.flatMap(packet => packet.context ?? []) });
   const selectedBackend = packets.map(packet => packet.backend ?? packet.selected_backend ?? packet.launch ?? null).find(value => value != null) ?? null;
   // The run's backend selection bounds which backend an isolated batch may use;
   // a disjoint batch shares the owner checkout and never provisions.
@@ -1757,7 +1953,7 @@ async function verificationFingerprint(record, command, reply) {
   };
 }
 
-export async function runVerification(record, command, timeout = 120, signal, server) {
+export async function runVerification(record, command, timeout = 120, signal, server, outputs = []) {
   return withIdleWriter(record, async () => {
     invalidateCompletion(record);
     const before = revision(record);
@@ -1766,8 +1962,8 @@ export async function runVerification(record, command, timeout = 120, signal, se
     let reply;
     try {
       reply = await (server
-        ? withVerificationServer(record, server, () => runCommand(record, command, timeout, signal), signal)
-        : runCommand(record, command, timeout, signal));
+        ? withVerificationServer(record, server, () => runCommand(record, command, timeout, signal, { outputs }), signal)
+        : runCommand(record, command, timeout, signal, { outputs }));
     } catch (error) {
       const receipt = recordVerification(record, command, before, revision(record), { error: error.message, exit_code: null }, timing());
       event(record, 'verification_finished', { receipt_id: receipt.id, outcome: receipt.outcome });
@@ -1780,6 +1976,81 @@ export async function runVerification(record, command, timeout = 120, signal, se
       started_at: receipt.started_at, observed_at: receipt.observed_at, elapsed_ms: receipt.elapsed_ms };
     if (typeof reply?.exit_code !== 'number' || reply.exit_code === 0) return { ...reply, ...facts };
     return { ...reply, ...facts, sentinel_failure: await verificationFingerprint(record, command, reply) };
+  });
+}
+
+export function verifyPublishedCommit(checkout, parent, expected, modes = {}) {
+  const head = git(checkout, 'rev-parse', 'HEAD');
+  const parents = git(checkout, 'rev-list', '--parents', '-n', '1', head).trim().split(/\s+/).slice(1);
+  if (parents.length !== 1 || parents[0] !== parent) throw new Error('Commit parent changed during publication');
+  const changed = execFileSync('git', ['-C', checkout, 'diff', '--name-only', '-z', parent, head], { encoding: 'utf8' }).split('\0').filter(Boolean);
+  for (const path of changed) if (!expected.has(path)) throw new Error(`Commit contains an unpublished path: ${path}`);
+  for (const [path, hash] of expected) {
+    const entry = execFileSync('git', ['-C', checkout, 'ls-tree', '-z', head, '--', path], { encoding: 'utf8' });
+    if (hash === null) {
+      if (entry) throw new Error(`Commit retained a deleted path: ${path}`);
+      continue;
+    }
+    const mode = (modes[path] ?? 0o644) & 0o111 ? '100755' : '100644';
+    if (!entry.startsWith(`${mode} blob `)) throw new Error(`Commit changed the source type or mode: ${path}`);
+    const bytes = execFileSync('git', ['-C', checkout, 'show', `${head}:${path}`]);
+    if (sourceHash(bytes) !== hash) throw new Error(`Commit bytes differ from the published changeset: ${path}`);
+  }
+  return head;
+}
+
+export async function runCommit(record, message, signal) {
+  if (record.writing_route !== CHANGESET_ROUTE) throw new Error('Managed commit requires a changeset assignment');
+  if (typeof message !== 'string' || !message.trim() || message.length > 16000) throw new Error('A complete reviewed commit message is required');
+  return withIdleWriter(record, async () => {
+    if (latestEditSummary(record)?.state === 'incomplete') throw new Error('Resolve the incomplete edit before committing');
+    const root = join(record.package, 'runtime/runs', `${record.id}-edits`);
+    const receiptFile = join(record.package, 'runtime/runs', `${record.id}-commits.json`);
+    const reconciliationFile = join(record.package, 'runtime/runs', `${record.id}-commit-reconciliation.json`);
+    if (existsSync(reconciliationFile)) throw new Error('Reconcile the recorded commit publication mismatch before another managed commit');
+    const commits = existsSync(receiptFile) ? read(receiptFile) : [];
+    const committed = new Set(commits.flatMap(commit => commit.edit_ids));
+    const edits = (existsSync(root) ? readdirSync(root) : []).filter(id => /^[a-f0-9-]{36}$/.test(id) && !committed.has(id))
+      .map(id => ({ id, dir: join(root, id), summary: read(join(root, id, 'summary.json')) }))
+      .filter(edit => edit.summary.publication === 'published').sort((a, b) => a.summary.started_at.localeCompare(b.summary.started_at));
+    const before = new Map(), after = new Map();
+    for (const edit of edits) {
+      const source = read(join(edit.dir, 'source-state.json'));
+      for (const change of read(join(edit.dir, 'publication.json')).changes) {
+        if (!before.has(change.path)) before.set(change.path, source[change.path].sha256);
+        after.set(change.path, change.after_sha256);
+      }
+    }
+    if (!after.size) throw new Error('No published changeset changes to commit');
+    if (git(record.checkout, 'diff', '--cached', '--name-only').trim()) throw new Error('Existing staged changes must be reconciled before managed commit');
+    const current = Workspace.loadPaths(record.checkout, [...after.keys()]);
+    for (const [path, expected] of after) {
+      if (sourceHash(current.read(path)) !== expected) throw new Error(`Source changed outside the published changeset: ${path}`);
+      let original = null;
+      try { original = execFileSync('git', ['-C', record.checkout, 'show', `HEAD:${path}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); }
+      catch (error) { if (error.status !== 128) throw error; }
+      if (sourceHash(original) !== before.get(path)) throw new Error(`Pre-existing edits overlap the commit: ${path}; preserve and reconcile them explicitly`);
+    }
+    const messagePath = join(record.package, 'runtime/runs', `${record.id}-commit-${randomUUID()}.txt`);
+    writeFileSync(messagePath, message, { flag: 'wx', mode: 0o600 });
+    const parent = git(record.checkout, 'rev-parse', 'HEAD');
+    const quote = value => `'${value.replace(/'/g, `'"'"'`)}'`;
+    const command = `git add -- ${[...after.keys()].map(quote).join(' ')}\ngit commit --file ${quote(messagePath)}`;
+    const reply = await runCommand(record, `set -e\n${command}`, 120, signal, { gitWrite: true });
+    if (reply.error || reply.exit_code !== 0) return reply;
+    let commit;
+    try { commit = verifyPublishedCommit(record.checkout, parent, after, current.modes); }
+    catch (error) {
+      const mismatch = { error: error.message, requires_reconciliation: true, observed_head: git(record.checkout, 'rev-parse', 'HEAD'),
+        parent, edit_ids: edits.map(edit => edit.id), created_at: timestamp(), artifact: reply.full_output_path };
+      atomic(reconciliationFile, mismatch); event(record, 'changeset_commit_reconciliation_required', mismatch);
+      return { ...reply, ...mismatch };
+    }
+    const receipt = { commit, edit_ids: edits.map(edit => edit.id),
+      paths: [...after.keys()], created_at: timestamp(), artifact: reply.full_output_path };
+    commits.push(receipt); atomic(receiptFile, commits);
+    event(record, 'changeset_commit_finished', receipt);
+    return { ...reply, ...receipt };
   });
 }
 
@@ -1802,7 +2073,8 @@ export async function withVerificationServer(record, server, verify, signal) {
   assertLease(record);
   const output = join(record.package, 'runtime/runs', `${record.id}-server-${randomUUID()}.log`);
   writeFileSync(output, '', { mode: 0o600, flag: 'wx' });
-  const child = spawnManaged(record, 'server', '/bin/bash', ['-o', 'pipefail', '-c', `export SHELLOPTS\n${server.command}`]);
+  const protectedCommand = record.writing_route === CHANGESET_ROUTE ? sourceCommand(record, server.command, { outputs: server.outputs ?? [] }) : null;
+  const child = spawnManaged(record, 'server', protectedCommand?.command ?? '/bin/bash', protectedCommand?.args ?? ['-o', 'pipefail', '-c', `export SHELLOPTS\n${server.command}`]);
   let exited = false, serverError, result;
   child.on('error', error => { serverError = error.message; exited = true; });
   child.on('exit', () => { exited = true; });
@@ -1831,6 +2103,7 @@ export async function withVerificationServer(record, server, verify, signal) {
       revoke(record);
       result = { ...result, error: 'Server cleanup unconfirmed; lease revoked pending coordinator cancellation.', requires_cancellation: true };
     }
+    if (stopped) protectedCommand?.cleanup();
   }
   return { ...result, server_output_path: output };
 }
@@ -1851,7 +2124,8 @@ export async function runAdvice(record, task, input, { offline = false, signal, 
 export function assertIdleWriter(record) {
   assertLease(record);
   if (existsSync(editorSlot(record))) throw new Error('An editor or verification command holds the writer slot.');
-  if (activeGroups(record).some(group => group.role !== 'owner')) throw new Error('Managed work remains active; resolve it before another writer.');
+  const rootRole = record.writing_route === CHANGESET_ROUTE ? record.stage?.role ?? 'owner' : 'owner';
+  if (activeGroups(record).some(group => group.role !== rootRole)) throw new Error('Managed work remains active; resolve it before another writer.');
 }
 
 async function withIdleWriter(record, action) {
@@ -1863,12 +2137,13 @@ async function withIdleWriter(record, action) {
   } finally { rmSync(slot, { recursive: true, force: true }); }
 }
 
-export async function runCommand(record, command, timeout = 120, signal, { stopGroup = terminateGroup } = {}) {
+export async function runCommand(record, command, timeout = 120, signal, { stopGroup = terminateGroup, outputs = [], gitWrite = false, checkoutWrite = false } = {}) {
   assertLease(record);
   const output = join(record.package, 'runtime/runs', `${record.id}-command-${randomUUID()}.log`);
   writeFileSync(output, '', { mode: 0o600, flag: 'wx' });
   const logSummary = createLogSummary();
-  const child = spawnManaged(record, 'command', '/bin/bash', ['-o', 'pipefail', '-c', `export SHELLOPTS\n${command}`]);
+  const protectedCommand = record.writing_route === CHANGESET_ROUTE ? sourceCommand(record, command, { outputs, gitWrite, checkoutWrite }) : null;
+  const child = spawnManaged(record, 'command', protectedCommand?.command ?? '/bin/bash', protectedCommand?.args ?? ['-o', 'pipefail', '-c', `export SHELLOPTS\n${command}`]);
   let error, stopping;
   let reportUnconfirmed;
   const unconfirmed = new Promise(resolveFailure => { reportUnconfirmed = resolveFailure; });
@@ -1899,7 +2174,9 @@ export async function runCommand(record, command, timeout = 120, signal, { stopG
     else { revoke(record); requiresCancellation = true; error = 'Command cleanup unconfirmed; lease revoked pending coordinator cancellation.'; }
     event(record, 'command_cleanup', { stopped });
   }
+  if (!requiresCancellation) protectedCommand?.cleanup();
   return { ...outcome, ...logSummary.finish(), full_output_path: output, error: child.launchError || error,
+    ...(protectedCommand ? { enforcement: protectedCommand.enforcement } : {}),
     ...(requiresCancellation ? { requires_cancellation: true } : {}) };
 }
 

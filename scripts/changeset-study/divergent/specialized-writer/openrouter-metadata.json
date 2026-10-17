@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-10-17T02:17:07.291355+00:00",
+  "catalog_url": "https://openrouter.ai/api/v1/models",
+  "catalog_response_sha256": "46617489dde28abe38d5b6ca178cfeadf60457bc8f458589e6ebe774b8a6fce8",
+  "prompt_format": "<instruction>{instruction}</instruction>\n<code>{initial_code}</code>\n<update>{edit_snippet}</update>",
+  "prompt_sources": [
+    "https://openrouter.ai/morph/morph-v3-fast",
+    "https://openrouter.ai/relace/relace-apply-3"
+  ],
+  "models": [
+    {
+      "catalog": {
+        "id": "morph/morph-v3-fast",
+        "name": "Morph: Morph V3 Fast",
+        "context_length": 81920,
+        "pricing": {
+          "prompt": "0.0000008",
+          "completion": "0.0000012"
+        },
+        "top_provider": {
+          "context_length": 81920,
+          "max_completion_tokens": 38000,
+          "is_moderated": false
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "stop",
+          "temperature"
+        ]
+      },
+      "endpoint_url": "https://openrouter.ai/api/v1/models/morph/morph-v3-fast/endpoints",
+      "endpoint_response_sha256": "093c15d3dc6a8ccb8cc24b797563a94e378f16c8b12b6255b942d77545b6ac3e",
+      "endpoints": [
+        {
+          "name": "Morph | morph/morph-v3-fast",
+          "model_id": "morph/morph-v3-fast",
+          "provider_name": "Morph",
+          "tag": "morph",
+          "context_length": 81920,
+          "pricing": {
+            "prompt": "0.0000008",
+            "completion": "0.0000012",
+            "discount": 0
+          },
+          "max_completion_tokens": 38000,
+          "max_prompt_tokens": null,
+          "supported_parameters": [
+            "max_tokens",
+            "temperature",
+            "stop"
+          ],
+          "status": 0
+        }
+      ]
+    },
+    {
+      "catalog": {
+        "id": "relace/relace-apply-3",
+        "name": "Relace: Relace Apply 3",
+        "context_length": 256000,
+        "pricing": {
+          "prompt": "0.00000085",
+          "completion": "0.00000125"
+        },
+        "top_provider": {
+          "context_length": 256000,
+          "max_completion_tokens": 128000,
+          "is_moderated": false
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "seed",
+          "stop"
+        ]
+      },
+      "endpoint_url": "https://openrouter.ai/api/v1/models/relace/relace-apply-3/endpoints",
+      "endpoint_response_sha256": "97c3e7a88274592e727c7adcc4d5545a717c27ccd3fa049ce0a7744973037e0b",
+      "endpoints": [
+        {
+          "name": "Relace | relace/relace-apply-3",
+          "model_id": "relace/relace-apply-3",
+          "provider_name": "Relace",
+          "tag": "relace/fp8",
+          "context_length": 256000,
+          "pricing": {
+            "prompt": "0.00000085",
+            "completion": "0.00000125",
+            "discount": 0
+          },
+          "max_completion_tokens": 128000,
+          "max_prompt_tokens": null,
+          "supported_parameters": [
+            "stop",
+            "seed",
+            "max_tokens"
+          ],
+          "status": 0
+        }
+      ]
+    }
+  ]
+}

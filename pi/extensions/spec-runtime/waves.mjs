@@ -621,6 +621,7 @@ export function createWaveController(deps = {}) {
       admitted_width: admission.admittedWidth,
       software_ceiling: effectiveLimits.software_ceiling,
       effective_limits: effectiveLimits,
+      writing_route: input.writing_route ?? null,
       models: {
         owner_model: routedOwners.get(steps[0]) ?? input.owner_model ?? null,
         strong_owner_model: input.strong_owner_model ?? null,
