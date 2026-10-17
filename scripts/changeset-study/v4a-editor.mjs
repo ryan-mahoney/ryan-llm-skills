@@ -4,6 +4,7 @@ import { safePath } from '../changeset/workspace.mjs';
 import { v4aInput } from './v4a-context.mjs';
 import { applyV4A } from './divergent/v4a-suite/applier.mjs';
 import { ModelJsonParseError } from './client.mjs';
+import { recipeFidelity } from './recipe-fidelity.mjs';
 
 const primaryContract = `Return exactly ONE strict V4A patch. Emit *** Begin Patch once and *** End Patch once. No Markdown fences, commentary, nested patches or extra end markers. Use one file header for the owned destination and put ALL assignment changes under it.
 Update example:
@@ -143,6 +144,10 @@ export async function v4aEditor(model, stage, { operation, files }, { contextPar
     const missing = seedIntegrity(files[target], output ?? '', { parse: contextParse });
     if (missing.length) throw localFailure('application', `Copied source lines are missing or commented out in the result; the patch may only add wrappers, separators, exports and relocations around copied code. Missing: ${missing.map(line => JSON.stringify(line)).join(' | ')}`);
   };
+  const fidelity = output => {
+    const missing = recipeFidelity(operation, output ?? '', files);
+    if (missing.length) throw localFailure('application', `The result does not contain code the recipe quotes verbatim. Write quoted snippets and shorthand object members exactly as given; shorthand members name existing module-scope bindings. Missing: ${missing.join(' | ')}`);
+  };
   const record = (writer_attempt, format) => {
     const row = { writer_attempt, format, applied: false, syntax_valid: null, local_failure_kind: null, elapsed_ms: 0, model_calls: 0 };
     attempts.push(row); return row;
@@ -172,6 +177,7 @@ export async function v4aEditor(model, stage, { operation, files }, { contextPar
     try { validateFileSyntax(changed); first.syntax_valid = true; }
     catch (error) { first.syntax_valid = false; throw syntaxFailure(error, target); }
     if (seed) integrity(changed[target]);
+    fidelity(changed[target]);
     first.elapsed_ms = performance.now() - began;
     return { files: changed, ...metrics() };
   } catch (error) {
@@ -201,7 +207,7 @@ export async function v4aEditor(model, stage, { operation, files }, { contextPar
       second.applied = true;
       try { validateFileSyntax(changed); second.syntax_valid = true; }
       catch (error) { second.syntax_valid = false; throw syntaxFailure(error, target); }
-      integrity(changed[target]);
+      integrity(changed[target]); fidelity(changed[target]);
       second.elapsed_ms = performance.now() - retryBegan;
       return { files: changed, ...metrics() };
     } catch (error) {
@@ -229,6 +235,7 @@ export async function v4aEditor(model, stage, { operation, files }, { contextPar
     second.applied = true;
     try { validateFileSyntax(changed); second.syntax_valid = true; }
     catch (error) { second.syntax_valid = false; throw syntaxFailure(error, target); }
+    fidelity(changed[target]);
     second.elapsed_ms = performance.now() - retryBegan;
     return { files: changed, ...metrics() };
   } catch (error) {

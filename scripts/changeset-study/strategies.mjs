@@ -1,5 +1,6 @@
 import { performance } from 'node:perf_hooks';
 import { transform, validateFileSyntax } from '../changeset/engine.mjs';
+import { recipeFidelity } from './recipe-fidelity.mjs';
 import { createHash } from 'node:crypto';
 import { ModelJsonParseError } from './client.mjs';
 import { focusedPlanner, focusedPacketRules, validateFocusedPlan, focusedInput } from './focused-editors.mjs';
@@ -212,14 +213,17 @@ export async function patchEditor(model, stage, task, { operation, files }, { ra
         attemptedFiles = transform({ ...operation, edits: attemptedEdits }, files);
         row.applied = true;
         validateFileSyntax(attemptedFiles);
-        row.syntax_valid = true; row.elapsed_ms = performance.now() - began;
+        row.syntax_valid = true;
+        const unfaithful = recipeFidelity(operation, attemptedFiles[target] ?? '', files);
+        if (unfaithful.length) throw Object.assign(new Error(`The result does not contain code the recipe quotes verbatim. Write quoted snippets and shorthand object members exactly as given; shorthand members name existing module-scope bindings. Missing: ${unfaithful.join(' | ')}`), { recipe_fidelity: unfaithful });
+        row.elapsed_ms = performance.now() - began;
         return { files: attemptedFiles, writer_attempts: writerAttempts, writer_fallback: attempt > 0 };
       } catch (error) {
         row.elapsed_ms = performance.now() - began; row.failure = error.message.slice(0, 2000);
-        row.local_failure_kind = formatFailure || error instanceof ModelJsonParseError ? 'format' : attemptedFiles ? 'syntax' : Array.isArray(attemptedEdits) ? 'application' : null;
+        row.local_failure_kind = formatFailure || error instanceof ModelJsonParseError ? 'format' : error.recipe_fidelity ? 'application' : attemptedFiles ? 'syntax' : Array.isArray(attemptedEdits) ? 'application' : null;
         if (attemptedFiles) row.syntax_valid = false;
         Object.assign(error, { writer_attempts: writerAttempts, writer_fallback: attempt > 0 });
-        const retryable = formatFailure || Array.isArray(attemptedEdits) || error instanceof ModelJsonParseError;
+        const retryable = formatFailure || Array.isArray(attemptedEdits) || error instanceof ModelJsonParseError || Boolean(error.recipe_fidelity);
         if (attempt === 1 || terminalEditorFailure(error) || (recoveryModel && !retryable)) throw error;
         const original = error.message.slice(0, 2000);
         const diagnostic = attemptedFiles && Array.isArray(attemptedEdits)
