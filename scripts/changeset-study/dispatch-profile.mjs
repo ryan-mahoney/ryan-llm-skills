@@ -11,9 +11,10 @@ export const defaultDispatchOptions = Object.freeze({
   anti_dependencies: 'serialize', // 'serialize' | 'snapshot': let a writer start once the reader of its file has started
   seed_moves: false,          // pre-fill an absent destination with its declared source excerpts so the writer patches seams only
   seam_retry_reasoning: 'off', // 'off' | 'low': reasoning tier of the same DeepSeek model for the second seam attempt on a seeded move
+  repair_rounds: 0,           // 0 | 1: after a failed visible check, the planner (not the writers) sees the diff and check output once and re-plans
 });
 const optionValues = { advice: ['jev', 'none'], writer_routing: ['v4a', 'json', 'hybrid', 'hybrid-wide'], prune_dependencies: [false, true],
-  prompt_order: ['target-first', 'static-first'], anti_dependencies: ['serialize', 'snapshot'], seed_moves: [false, true], seam_retry_reasoning: ['off', 'low'] };
+  prompt_order: ['target-first', 'static-first'], anti_dependencies: ['serialize', 'snapshot'], seed_moves: [false, true], seam_retry_reasoning: ['off', 'low'], repair_rounds: [0, 1] };
 export function resolveDispatchOptions(options = null) {
   if (options === null || options === undefined) return { ...defaultDispatchOptions };
   if (typeof options !== 'object' || Array.isArray(options)) throw new Error('dispatchOptions must be an object');
@@ -31,8 +32,8 @@ export function resolveDispatchOptions(options = null) {
 // sequencing-only edges pruned, per-packet representation, cacheable prompt prefix,
 // seeded moves. Explicit dispatchOptions still override individual fields.
 export const leanDispatchOptions = Object.freeze({ advice: 'none', writer_routing: 'hybrid', prune_dependencies: true, prompt_order: 'static-first',
-  concurrency: 8, anti_dependencies: 'serialize', seed_moves: true, seam_retry_reasoning: 'low' });
-const profiles = { 'optimized-v4a': {}, 'optimized-lean': leanDispatchOptions };
+  concurrency: 8, anti_dependencies: 'serialize', seed_moves: true, seam_retry_reasoning: 'low', repair_rounds: 0 });
+const profiles = { 'optimized-v4a': {}, 'optimized-lean': leanDispatchOptions, 'optimized-lean-repair': { ...leanDispatchOptions, repair_rounds: 1 } };
 
 // Explicit opt-in: historical configurations retain their original defaults.
 export function resolveDispatchProfile({ dispatchProfile = null, dispatchOptions = null, strategy, selector, editorSelector,

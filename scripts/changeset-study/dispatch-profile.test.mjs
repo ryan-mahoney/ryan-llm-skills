@@ -37,7 +37,7 @@ test('preprocessing rejects protected writes before advice and never mutates its
 
 // node --test --test-name-pattern='dispatch options' scripts/changeset-study/dispatch-profile.test.mjs
 test('dispatch options default to the historical profile, validate strictly and select the writer format', () => {
-  assert.deepEqual(resolveDispatchProfile(route).options, { advice: 'jev', writer_routing: 'v4a', prune_dependencies: false, prompt_order: 'target-first', concurrency: 4, anti_dependencies: 'serialize', seed_moves: false, seam_retry_reasoning: 'off' });
+  assert.deepEqual(resolveDispatchProfile(route).options, { advice: 'jev', writer_routing: 'v4a', prune_dependencies: false, prompt_order: 'target-first', concurrency: 4, anti_dependencies: 'serialize', seed_moves: false, seam_retry_reasoning: 'off', repair_rounds: 0 });
   assert.equal(resolveDispatchProfile({ ...route, dispatchOptions: { writer_routing: 'json' } }).writerFormat, 'json-focused');
   assert.equal(resolveDispatchProfile({ ...route, dispatchOptions: { writer_routing: 'hybrid', concurrency: 8 } }).writerFormat, 'hybrid');
   for (const bad of [{ unknown: true }, { advice: 'maybe' }, { concurrency: 0 }, { concurrency: 1.5 }, { prune_dependencies: 'yes' }])
@@ -47,6 +47,8 @@ test('dispatch options default to the historical profile, validate strictly and 
   assert.deepEqual(lean.options, { ...leanDispatchOptions }); assert.equal(lean.writerFormat, 'hybrid');
   assert.equal(resolveDispatchProfile({ ...route, dispatchProfile: 'optimized-lean', dispatchOptions: { concurrency: 4 } }).options.concurrency, 4);
   assert.throws(() => resolveDispatchProfile({ ...route, dispatchProfile: 'optimized-json' }), /Unknown dispatch profile/);
+  assert.equal(resolveDispatchProfile({ ...route, dispatchProfile: 'optimized-lean-repair' }).options.repair_rounds, 1);
+  assert.equal(resolveDispatchProfile({ ...route, dispatchProfile: 'optimized-lean' }).options.repair_rounds, 0);
 });
 
 // node --test --test-name-pattern='disabled advice' scripts/changeset-study/dispatch-profile.test.mjs
@@ -60,5 +62,5 @@ test('disabled advice skips the routing request and pruning is recorded in the m
   assert.equal(routed[0].fallback, 'advice-disabled'); assert.equal(routed[0].requests_started, 0); assert.equal(result.routing.attempted, false);
   assert.deepEqual(result.metrics.pruned_dependencies, [{ from: 'b', to: 'a' }]);
   assert.deepEqual(result.plan.operations.map(o => o.depends_on), [[], []]);
-  assert.deepEqual(result.options, { advice: 'none', writer_routing: 'v4a', prune_dependencies: true, prompt_order: 'target-first', concurrency: 4, anti_dependencies: 'serialize', seed_moves: false, seam_retry_reasoning: 'off' });
+  assert.deepEqual(result.options, { advice: 'none', writer_routing: 'v4a', prune_dependencies: true, prompt_order: 'target-first', concurrency: 4, anti_dependencies: 'serialize', seed_moves: false, seam_retry_reasoning: 'off', repair_rounds: 0 });
 });

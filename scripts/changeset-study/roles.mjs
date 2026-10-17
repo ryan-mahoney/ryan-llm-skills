@@ -148,7 +148,7 @@ export function resolveQueryGranularity({ requested = null, inherited = null, st
   if (inherited !== null && requested !== null && requested !== inherited)
     throw new Error('Query granularity differs from the inherited plan');
   const value = requested ?? inherited ?? 'default';
-  const combined = ['optimized-v4a', 'optimized-lean'].includes(dispatchProfile) && optimization === 'contextual';
+  const combined = ['optimized-v4a', 'optimized-lean', 'optimized-lean-repair'].includes(dispatchProfile) && optimization === 'contextual';
   if (value === 'smaller-regions' && (strategy !== 'owner-query-writer' || queryMode !== 'catalog-lookup' || (optimization !== 'none' && !combined)))
     throw new Error('smaller-regions requires owner-query-writer, catalog-lookup and optimization none');
   return value;

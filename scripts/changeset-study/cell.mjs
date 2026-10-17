@@ -414,7 +414,12 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
       return report;
     };
     let feedback = null;
-    for (let round = 0; round <= (dispatchOnly(strategy) ? 0 : 1); round++) {
+    // Dispatch-only strategies normally end after one round: the planner finishes at
+    // dispatch and no role sees test output. `repair_rounds: 1` lets the planner alone
+    // see the diff and visible-check output once and re-plan; writers still receive
+    // only their packets, and hidden grading stays outside every role.
+    const repairRounds = dispatchOnly(strategy) ? (dispatch.options?.repair_rounds ?? 0) : 1;
+    for (let round = 0; round <= repairRounds; round++) {
       result.repairs = round;
       let implementation;
       try { implementation = await implement(feedback); } catch (error) { implementation = { error: error.message }; }
@@ -425,7 +430,9 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
       if (dispatchOnly(strategy)) {
         result.checks.push({ visible, implementation_error: implementation?.error ?? null });
         result.visible_accepted = visible.ok;
-        break;
+        if (visible.ok || round === repairRounds) break;
+        feedback = { visible: diffMode ? tail(visible, 20000) : visible, implementation };
+        continue;
       }
       const reviewInput = diffMode ? { task: task.spec, changes: diffs(task.files, files), visible: tail(visible, 20000) } : { task: task.spec, files, visible };
       if (strategy) reviewInput.execution = implementation;
