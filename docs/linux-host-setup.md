@@ -440,7 +440,16 @@ that fixes the setup.
 
 ## 10. Updating
 
-**[Host]**
+**[Client]** From a machine that can SSH to the host:
+
+```bash
+scripts/update-host.sh [host]    # host defaults to restory-box
+```
+
+It refuses to update a checkout that is off `main` or has tracked changes, runs the
+steps below, and fails if Sentinel is not active afterward.
+
+**[Host]** The same update by hand:
 
 ```bash
 cd ~/.agents && git pull --ff-only && ./sync.sh
