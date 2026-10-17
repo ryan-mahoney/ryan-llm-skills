@@ -1,0 +1,725 @@
+{
+  "schema_version": 1,
+  "protocol": "deepseek-specialized-full-file-v1",
+  "status": "one_run_complete",
+  "source": {
+    "owner_revision": "56a11ea5b497917146ae986d3485a7f498c58d3a",
+    "resume_revision": "6284c83b2bb99bcfc51607076757a5266279f698",
+    "source_tasks_hash": "09b6c830064193cb03212d362640bf99a7384bbcfbcd6966a87e0876eeeffbeb",
+    "manifest_hash": "e7fc0b29f0a3d80048b4443069b9043279a0e9d540e3043c1b70d1a7f8db0ce8",
+    "metadata_hash": "b60f623323ba090bc5813295ebc5961713c4f7c17f9af5ab6f5158c12e26f814",
+    "source_preparation_manifest_hash": "853ddc0fbb10b964c1b41965aeb6cb04388aa2cc37553496cc46cac5c8fb781d",
+    "run_id": "specialized-writer/05-original-three",
+    "preparation_run_id": "specialized-writer/04-original-three",
+    "path_base": "Run IDs are relative to the adjacent experiment runtime root; repository report links remain relative."
+  },
+  "limits": {
+    "extra_exposure_usd": 5,
+    "owner_calls": 8,
+    "json_format_retries": 1,
+    "semantic_retries": 0,
+    "writer_retries": 0,
+    "context_estimate": "utf8-bytes-div4",
+    "writer_output_tokens": {
+      "openrouter/morph/morph-v3-fast": 38000,
+      "openrouter/relace/relace-apply-3": 128000
+    }
+  },
+  "preparations": [
+    {
+      "task": "hard-context-calibration",
+      "status": "prepared",
+      "elapsed_s": 5.396871201000001,
+      "calls": 1,
+      "catalog_usd": 0.0033705,
+      "tokens": {
+        "input": 7027,
+        "output": 1052,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 8079
+      },
+      "targets": [
+        {
+          "path": "pi/extensions/context-budget/policy.mjs",
+          "instruction_hash": "1d515949b2c3b84c463488b788984dc570a35e107e48b142fe75f1502c86ce48",
+          "update_hash": "c68862b78f6188116ee7791ed73e24a1c7e93ee954c47ba86f1d1c60d6fe63c8",
+          "update_bytes": 964
+        },
+        {
+          "path": "pi/extensions/context-budget/policy.test.mjs",
+          "instruction_hash": "4a7a37cc6bd5dc5f61e17811894b9fdb3a1db9ad180cf87eb921d9932909c939",
+          "update_hash": "3672bc7cb75137beaec132ecb86dff25a3fb53565ea3f736331280d87a3f7ea4",
+          "update_bytes": 2110
+        }
+      ],
+      "format_correction_used": false,
+      "error": null
+    },
+    {
+      "task": "hard-dependency-handoff",
+      "status": "prepared",
+      "elapsed_s": 37.570985245,
+      "calls": 1,
+      "catalog_usd": 0.042806567999999996,
+      "tokens": {
+        "input": 91806,
+        "output": 12720,
+        "cacheRead": 128,
+        "cacheWrite": 0,
+        "totalTokens": 104654
+      },
+      "targets": [
+        {
+          "path": "pi/extensions/spec-runtime/dependency-handoff.mjs",
+          "instruction_hash": "c656ab1d1b04ae15ce0415ce6640fb11044d4b21138267a578bd66c5e91c8b6d",
+          "update_hash": "8e590574190ab011c46eb0e89563128fd7366587c002d4aa74e0f9473ba3d7cd",
+          "update_bytes": 13885
+        },
+        {
+          "path": "pi/extensions/spec-runtime/completion.mjs",
+          "instruction_hash": "6a5b41eaa18ab2cdd930a6ba796cd82e9792d00156831a108383c73717949b64",
+          "update_hash": "d5f602037c44ebd003ab99005c70778322adee0688a1795be74a92bc9762ff9c",
+          "update_bytes": 84
+        },
+        {
+          "path": "pi/extensions/spec-runtime/runtime.mjs",
+          "instruction_hash": "c7733f370f23a32cca10d90385de7c6cf48c77f3591a6acf02c68e836fda78f2",
+          "update_hash": "7800e95a0bb3928811fc781d19ce3d036c6fa2c188399a18837bf9f52cc7b6a4",
+          "update_bytes": 6339
+        },
+        {
+          "path": "pi/extensions/spec-runtime/runtime.test.mjs",
+          "instruction_hash": "2899bd6111087567db858cdb5295d2cf35527b161d714cb683e3d21487866f1e",
+          "update_hash": "c4590b925c22030dcfc57a23943e14effb3e5c743a124499c43a81cba788f01f",
+          "update_bytes": 16016
+        },
+        {
+          "path": "pi/agents/spec-step-owner.md",
+          "instruction_hash": "adef10f80557e84b774d1c4c4ea4cc547a9c1e85b8381d936b3bea01990a9a48",
+          "update_hash": "13a91f243e537eb8c5b786dd438458759abb681f20a51b8966f3f9000918a7e1",
+          "update_bytes": 2138
+        },
+        {
+          "path": "pi/agents/spec-step-editor.md",
+          "instruction_hash": "b071656e08ad28d54b397c5cd8b6adba16cecc6a954e82a6e99182777dd41a6c",
+          "update_hash": "125eff69182de6dac7fc0b8077c21379b6595be3145550cd92a9d04dcee01b55",
+          "update_bytes": 1615
+        }
+      ],
+      "format_correction_used": false,
+      "error": null
+    },
+    {
+      "task": "hard-lifecycle-extract",
+      "status": "failed",
+      "elapsed_s": 83.15585248699999,
+      "calls": 2,
+      "catalog_usd": 0.058686588,
+      "tokens": {
+        "input": 65977,
+        "output": 32081,
+        "cacheRead": 66048,
+        "cacheWrite": 0,
+        "totalTokens": 164106
+      },
+      "targets": [],
+      "format_correction_used": true,
+      "error": "Model stopped: length: "
+    }
+  ],
+  "preparation_total": {
+    "elapsed_s": 126.12370893299999,
+    "calls": 4,
+    "catalog_usd": 0.104863656,
+    "tokens": {
+      "input": 164810,
+      "output": 45853,
+      "cacheRead": 66176,
+      "cacheWrite": 0,
+      "totalTokens": 276839
+    }
+  },
+  "cells": [
+    {
+      "task": "hard-context-calibration",
+      "selector": "openrouter/morph/morph-v3-fast",
+      "status": "applied",
+      "preparation_status": "prepared",
+      "application": true,
+      "delivered": false,
+      "writer_elapsed_s": 1.446291628,
+      "checks_elapsed_s": 0.1534841839999999,
+      "downstream_elapsed_s": 0.2531298609999999,
+      "complete_route_elapsed_s": 7.097093758000001,
+      "capped_time_to_delivery_s": 1500,
+      "calls": 2,
+      "catalog_usd": 0.013181599999999998,
+      "tokens": {
+        "input": 6705,
+        "output": 6408,
+        "cacheRead": 160,
+        "cacheWrite": 0,
+        "totalTokens": 13273
+      },
+      "allocated_preparation_calls": 1,
+      "allocated_preparation_usd": 0.0033705,
+      "complete_route_catalog_usd": 0.016552099999999997,
+      "visible_pass": false,
+      "candidate_tests": [
+        {
+          "path": "pi/extensions/context-budget/policy.test.mjs",
+          "names": [
+            "session_start seeds calibration from the last usable usage entry so a resumed session is not refused"
+          ],
+          "passed": false,
+          "timed_out": false
+        }
+      ],
+      "hidden_pass": true,
+      "hidden_completed": true,
+      "hidden_timed_out": false,
+      "hidden_exit_code": 0,
+      "hidden_signal": null,
+      "hidden_deadline_abort": false,
+      "path_audit": null,
+      "candidate_hash": "ccf4e06e669b574774e799d6b8558efa62164577e3294546c798d1fc50c6abf3",
+      "files": [
+        {
+          "path": "pi/extensions/context-budget/policy.mjs",
+          "source_hash": "0edd6ba7b612b80bbfdb6fdea258f0e871a3ca09eac2bada1efe04ba90a3e48d",
+          "output_hash": "307806fa877f5aa39654c3d04c6318433bc6d50ee8ba60e615207710909a4262",
+          "context_estimate": "utf8-bytes-div4",
+          "estimated_input_tokens": 4133,
+          "error": null,
+          "code": null
+        },
+        {
+          "path": "pi/extensions/context-budget/policy.test.mjs",
+          "source_hash": "c166730e6b8dc6956bed37d5fcbf2d53fde28590abac743e4f95bc2e9dd14342",
+          "output_hash": "ed4c9b350b2ab9f2bc97b541df0562e9618b12bf38646a113b69073909f2766f",
+          "context_estimate": "utf8-bytes-div4",
+          "estimated_input_tokens": 2645,
+          "error": null,
+          "code": null
+        }
+      ],
+      "error": null
+    },
+    {
+      "task": "hard-dependency-handoff",
+      "selector": "openrouter/morph/morph-v3-fast",
+      "status": "applied",
+      "preparation_status": "prepared",
+      "application": true,
+      "delivered": false,
+      "writer_elapsed_s": 22.229802151,
+      "checks_elapsed_s": 0.5927563570000021,
+      "downstream_elapsed_s": 300.668705181,
+      "complete_route_elapsed_s": 360.48642757199997,
+      "capped_time_to_delivery_s": 1500,
+      "calls": 6,
+      "catalog_usd": 0.15810999999999997,
+      "tokens": {
+        "input": 81423,
+        "output": 77263,
+        "cacheRead": 320,
+        "cacheWrite": 0,
+        "totalTokens": 159006
+      },
+      "allocated_preparation_calls": 1,
+      "allocated_preparation_usd": 0.042806567999999996,
+      "complete_route_catalog_usd": 0.20091656799999996,
+      "visible_pass": false,
+      "candidate_tests": [
+        {
+          "path": "pi/extensions/spec-runtime/runtime.test.mjs",
+          "names": [
+            "wave handoff: step 13 owner prompt lists accepted step 1 despite eleven newer unrelated runs",
+            "wave handoff: nine prerequisites stay indexed when detail budget omits excerpts",
+            "wave handoff: fresh editor packets carry incomplete-packet state and length stop blocks completion",
+            "wave handoff: worker receipts never make unsealed, unintegrated, conflicting or unreadable dependencies accepted",
+            "wave handoff: owner and editor profiles carry overlay EXDEV rename guidance"
+          ],
+          "passed": false,
+          "timed_out": false
+        }
+      ],
+      "hidden_pass": false,
+      "hidden_completed": false,
+      "hidden_timed_out": false,
+      "hidden_exit_code": 137,
+      "hidden_signal": "SIGKILL",
+      "hidden_deadline_abort": true,
+      "path_audit": {
+        "passed": false,
+        "candidate_hash": null,
+        "selection": null,
+        "structurally_inapplicable": true,
+        "rows": null
+      },
+      "candidate_hash": "586ee5dc23534b586dd1ecab85676f8be7f590633f081592f128673a21516734",
+      "files": [
+        {
+          "path": "pi/extensions/spec-runtime/dependency-handoff.mjs",
+          "source_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "output_hash": "bacac5744692b5c16882d9098d0c9ba8a3409189747c037d9c0aae1f465fa53b",
+          "context_estimate": "utf8-bytes-div4",
+          "estimated_input_tokens": 3866,
+          "error": null,
+          "code": null
+        },
+        {
+          "path": "pi/extensions/spec-runtime/completion.mjs",
+          "source_hash": "afdbe289a3cf42ef259d8561a26a833681ab3734c6277c58e7f5df2bdb38fa28",
+          "output_hash": "874022e2a140bfbcc2e2ade5d883597f289b7322a3a5a02d462c1019849572da",
+          "context_estimate": "utf8-bytes-div4",
+          "estimated_input_tokens": 8910,
+          "error": null,
+          "code": null
+        },
+        {
+          "path": "pi/extensions/spec-runtime/runtime.mjs",
+          "source_hash": "6dd64d9b67f11d0af5756145da795111aa3bb318239afe9a28b1deac8ac1e2ae",
+          "output_hash": "ea75331914261c8ee5bcafe7a4da2c7a680118bb80d3df42b3dd0f75e071cf53",
+          "context_estimate": "utf8-bytes-div4",
+          "estimated_input_tokens": 29415,
+          "error": null,
+          "code": null
+        },
+        {
+          "path": "pi/extensions/spec-runtime/runtime.test.mjs",
+          "source_hash": "a1229087ac5385d9bfe1508f51c061fa9d57d1747250b5cfee1ca30a81aabf37",
+          "output_hash": "8e4c082335048ab4aa57f0ad03c5ade4885243835d074969a4b40bb4f90a267a",
+          "context_estimate": "utf8-bytes-div4",
+          "estimated_input_tokens": 34031,
+          "error": null,
+          "code": null
+        },
+        {
+          "path": "pi/agents/spec-step-owner.md",
+          "source_hash": "8b142a2256882c3d1c08b52d43963136fe5dd153647de34aa1816930f0df1a38",
+          "output_hash": "9dc32615594c27d4f91464fa6df5469830a7e29cbac1db11ee28a64964a65eb5",
+          "context_estimate": "utf8-bytes-div4",
+          "estimated_input_tokens": 4568,
+          "error": null,
+          "code": null
+        },
+        {
+          "path": "pi/agents/spec-step-editor.md",
+          "source_hash": "9b7722391dedf41f54358907e6e12647793f650f904ee2e1845e74d770c229e6",
+          "output_hash": "01ff00da1460d8abf3370dc47138b552814b8319294fbacc48a1fe3463a499c7",
+          "context_estimate": "utf8-bytes-div4",
+          "estimated_input_tokens": 2680,
+          "error": null,
+          "code": null
+        }
+      ],
+      "error": null
+    },
+    {
+      "task": "hard-lifecycle-extract",
+      "selector": "openrouter/morph/morph-v3-fast",
+      "status": "owner-failed",
+      "preparation_status": "failed",
+      "application": false,
+      "delivered": false,
+      "writer_elapsed_s": null,
+      "checks_elapsed_s": null,
+      "downstream_elapsed_s": null,
+      "complete_route_elapsed_s": 83.15585248699999,
+      "capped_time_to_delivery_s": 1500,
+      "calls": 0,
+      "catalog_usd": 0,
+      "tokens": null,
+      "allocated_preparation_calls": 2,
+      "allocated_preparation_usd": 0.058686588,
+      "complete_route_catalog_usd": 0.058686588,
+      "visible_pass": null,
+      "candidate_tests": null,
+      "hidden_pass": null,
+      "hidden_completed": null,
+      "hidden_timed_out": null,
+      "hidden_exit_code": null,
+      "hidden_signal": null,
+      "hidden_deadline_abort": false,
+      "path_audit": null,
+      "candidate_hash": null,
+      "files": [],
+      "error": null
+    },
+    {
+      "task": "hard-context-calibration",
+      "selector": "openrouter/relace/relace-apply-3",
+      "status": "applied",
+      "preparation_status": "prepared",
+      "application": true,
+      "delivered": false,
+      "writer_elapsed_s": 1.808798395000049,
+      "checks_elapsed_s": 0.15320994199998678,
+      "downstream_elapsed_s": 0.25364443899999606,
+      "complete_route_elapsed_s": 7.459941387000027,
+      "capped_time_to_delivery_s": 1500,
+      "calls": 2,
+      "catalog_usd": 0.0136217,
+      "tokens": {
+        "input": 6602,
+        "output": 6408,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 13010
+      },
+      "allocated_preparation_calls": 1,
+      "allocated_preparation_usd": 0.0033705,
+      "complete_route_catalog_usd": 0.0169922,
+      "visible_pass": false,
+      "candidate_tests": [
+        {
+          "path": "pi/extensions/context-budget/policy.test.mjs",
+          "names": [
+            "session_start seeds calibration from the last usable usage entry so a resumed session is not refused"
+          ],
+          "passed": false,
+          "timed_out": false
+        }
+      ],
+      "hidden_pass": true,
+      "hidden_completed": true,
+      "hidden_timed_out": false,
+      "hidden_exit_code": 0,
+      "hidden_signal": null,
+      "hidden_deadline_abort": false,
+      "path_audit": null,
+      "candidate_hash": "9b0b5bfca61f551d578016d9cc9dc9f2addddd91154af6af986467a6ecfa0911",
+      "files": [
+        {
+          "path": "pi/extensions/context-budget/policy.mjs",
+          "source_hash": "0edd6ba7b612b80bbfdb6fdea258f0e871a3ca09eac2bada1efe04ba90a3e48d",
+          "output_hash": "cc461893443144679a71f0d976a49ea41037e6d66cd01fa61a2cfff2879bf13c",
+          "context_estimate": "utf8-bytes-div4",
+          "estimated_input_tokens": 4133,
+          "error": null,
+          "code": null
+        },
+        {
+          "path": "pi/extensions/context-budget/policy.test.mjs",
+          "source_hash": "c166730e6b8dc6956bed37d5fcbf2d53fde28590abac743e4f95bc2e9dd14342",
+          "output_hash": "f29d388b068127b1bd47e493ea747e7d1075467d8230ca5415828ddf7ff0be58",
+          "context_estimate": "utf8-bytes-div4",
+          "estimated_input_tokens": 2645,
+          "error": null,
+          "code": null
+        }
+      ],
+      "error": null
+    },
+    {
+      "task": "hard-dependency-handoff",
+      "selector": "openrouter/relace/relace-apply-3",
+      "status": "syntax",
+      "preparation_status": "prepared",
+      "application": false,
+      "delivered": false,
+      "writer_elapsed_s": 5.48811449800001,
+      "checks_elapsed_s": 1.7574866219999967,
+      "downstream_elapsed_s": 1.9441012939999929,
+      "complete_route_elapsed_s": 45.01527648300004,
+      "capped_time_to_delivery_s": 1500,
+      "calls": 3,
+      "catalog_usd": 0.0790668,
+      "tokens": {
+        "input": 38008,
+        "output": 37408,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 75416
+      },
+      "allocated_preparation_calls": 1,
+      "allocated_preparation_usd": 0.042806567999999996,
+      "complete_route_catalog_usd": 0.12187336800000001,
+      "visible_pass": true,
+      "candidate_tests": [],
+      "hidden_pass": false,
+      "hidden_completed": false,
+      "hidden_timed_out": false,
+      "hidden_exit_code": 1,
+      "hidden_signal": null,
+      "hidden_deadline_abort": false,
+      "path_audit": {
+        "passed": false,
+        "candidate_hash": null,
+        "selection": null,
+        "structurally_inapplicable": true,
+        "rows": null
+      },
+      "candidate_hash": "b351eebdb8df3a3e71f6502943208e53e5d2685592bc6927a1bb45562e7adf11",
+      "files": [
+        {
+          "path": "pi/extensions/spec-runtime/dependency-handoff.mjs",
+          "source_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "output_hash": "bacac5744692b5c16882d9098d0c9ba8a3409189747c037d9c0aae1f465fa53b",
+          "context_estimate": "utf8-bytes-div4",
+          "estimated_input_tokens": 3866,
+          "error": null,
+          "code": null
+        },
+        {
+          "path": "pi/extensions/spec-runtime/completion.mjs",
+          "source_hash": "afdbe289a3cf42ef259d8561a26a833681ab3734c6277c58e7f5df2bdb38fa28",
+          "output_hash": "e8958604c749a8ecffc0ac61f269775eab601db0d8fc39a34d822967ecacf2b8",
+          "context_estimate": "utf8-bytes-div4",
+          "estimated_input_tokens": 8910,
+          "error": null,
+          "code": null
+        },
+        {
+          "path": "pi/extensions/spec-runtime/runtime.mjs",
+          "source_hash": null,
+          "output_hash": null,
+          "context_estimate": null,
+          "estimated_input_tokens": null,
+          "error": "Returned full file failed JavaScript syntax validation",
+          "code": "syntax"
+        }
+      ],
+      "error": "Returned full file failed JavaScript syntax validation"
+    },
+    {
+      "task": "hard-lifecycle-extract",
+      "selector": "openrouter/relace/relace-apply-3",
+      "status": "owner-failed",
+      "preparation_status": "failed",
+      "application": false,
+      "delivered": false,
+      "writer_elapsed_s": null,
+      "checks_elapsed_s": null,
+      "downstream_elapsed_s": null,
+      "complete_route_elapsed_s": 83.15585248699999,
+      "capped_time_to_delivery_s": 1500,
+      "calls": 0,
+      "catalog_usd": 0,
+      "tokens": null,
+      "allocated_preparation_calls": 2,
+      "allocated_preparation_usd": 0.058686588,
+      "complete_route_catalog_usd": 0.058686588,
+      "visible_pass": null,
+      "candidate_tests": null,
+      "hidden_pass": null,
+      "hidden_completed": null,
+      "hidden_timed_out": null,
+      "hidden_exit_code": null,
+      "hidden_signal": null,
+      "hidden_deadline_abort": false,
+      "path_audit": null,
+      "candidate_hash": null,
+      "files": [],
+      "error": null
+    }
+  ],
+  "routes": [
+    {
+      "selector": "openrouter/morph/morph-v3-fast",
+      "tasks": 3,
+      "prepared_tasks": 2,
+      "application": 2,
+      "delivered": 0,
+      "writer_elapsed_s": 23.676093779000002,
+      "writer_calls": 8,
+      "writer_catalog_usd": 0.17129159999999996,
+      "writer_tokens": {
+        "input": 88128,
+        "output": 83671,
+        "cacheRead": 480,
+        "cacheWrite": 0,
+        "totalTokens": 172279
+      },
+      "allocated_preparation": {
+        "elapsed_s": 126.12370893299999,
+        "calls": 4,
+        "catalog_usd": 0.104863656,
+        "tokens": {
+          "input": 164810,
+          "output": 45853,
+          "cacheRead": 66176,
+          "cacheWrite": 0,
+          "totalTokens": 276839
+        }
+      },
+      "complete_route_elapsed_s": 450.739373817,
+      "capped_time_to_delivery_s": 4500,
+      "complete_route_calls": 12,
+      "complete_route_catalog_usd": 0.27615525599999996
+    },
+    {
+      "selector": "openrouter/relace/relace-apply-3",
+      "tasks": 3,
+      "prepared_tasks": 2,
+      "application": 1,
+      "delivered": 0,
+      "writer_elapsed_s": 7.296912893000059,
+      "writer_calls": 5,
+      "writer_catalog_usd": 0.09268850000000001,
+      "writer_tokens": {
+        "input": 44610,
+        "output": 43816,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 88426
+      },
+      "allocated_preparation": {
+        "elapsed_s": 126.12370893299999,
+        "calls": 4,
+        "catalog_usd": 0.104863656,
+        "tokens": {
+          "input": 164810,
+          "output": 45853,
+          "cacheRead": 66176,
+          "cacheWrite": 0,
+          "totalTokens": 276839
+        }
+      },
+      "complete_route_elapsed_s": 135.63107035700006,
+      "capped_time_to_delivery_s": 4500,
+      "complete_route_calls": 9,
+      "complete_route_catalog_usd": 0.197552156
+    }
+  ],
+  "actual_campaign": {
+    "entries": 17,
+    "reused_owner_entries": 4,
+    "new_entries": 13,
+    "exposure_usd": 0.36884375599999997,
+    "tokens": {
+      "input": 297548,
+      "output": 173340,
+      "cacheRead": 66656,
+      "cacheWrite": 0,
+      "totalTokens": 537544
+    },
+    "priced": 17,
+    "holds": 0,
+    "catalog_usd": 0.36884375599999997
+  },
+  "integrity": {
+    "schema_version": 1,
+    "protocol": "deepseek-specialized-full-file-v1",
+    "manifest_hash": "e7fc0b29f0a3d80048b4443069b9043279a0e9d540e3043c1b70d1a7f8db0ce8",
+    "frozen_inputs_verified": true,
+    "same_owner_snippets_and_original_sources": true,
+    "protected_and_candidate_hashes_verified": true,
+    "routing_verified": true,
+    "requests": 17,
+    "priced": 17,
+    "holds": 0,
+    "exposure_usd": 0.36884375599999997,
+    "cells": [
+      {
+        "task": "hard-context-calibration",
+        "selector": "openrouter/morph/morph-v3-fast",
+        "requests": 2,
+        "application": true,
+        "delivered": false,
+        "status": "applied"
+      },
+      {
+        "task": "hard-dependency-handoff",
+        "selector": "openrouter/morph/morph-v3-fast",
+        "requests": 6,
+        "application": true,
+        "delivered": false,
+        "status": "applied"
+      },
+      {
+        "task": "hard-lifecycle-extract",
+        "selector": "openrouter/morph/morph-v3-fast",
+        "requests": 0,
+        "application": false,
+        "delivered": false,
+        "status": "owner-failed"
+      },
+      {
+        "task": "hard-context-calibration",
+        "selector": "openrouter/relace/relace-apply-3",
+        "requests": 2,
+        "application": true,
+        "delivered": false,
+        "status": "applied"
+      },
+      {
+        "task": "hard-dependency-handoff",
+        "selector": "openrouter/relace/relace-apply-3",
+        "requests": 3,
+        "application": false,
+        "delivered": false,
+        "status": "syntax"
+      },
+      {
+        "task": "hard-lifecycle-extract",
+        "selector": "openrouter/relace/relace-apply-3",
+        "requests": 0,
+        "application": false,
+        "delivered": false,
+        "status": "owner-failed"
+      }
+    ]
+  },
+  "limitations": [
+    "Three exposed development tasks, one preparation per task and one attempt per vendor; no general winner inference.",
+    "Lifecycle preparation failed before either vendor; keep in full three-task denominator but exclude from descriptive writing timings.",
+    "Different advertised full-file output ceilings and heuristic bytes/4 input estimate; no identical-cap claim.",
+    "Original04 infrastructure failure preceded every vendor request;05 reuses exact four owner calls and adds no owner retry.",
+    "Actual campaign spends preparation once; each hypothetical complete route allocates that preparation once. Route costs must not be summed as actual spend.",
+    "Infrastructure recovery/archive/development elapsed is outside estimated complete-route timings; no observed end-to-end wall-clock win is claimed.",
+    "Catalog receipt estimates, not invoice-exact charges; development and offline checks outside experimental ledger."
+  ],
+  "failure_attribution": [
+    {
+      "task": "hard-context-calibration",
+      "selectors": [
+        "openrouter/morph/morph-v3-fast",
+        "openrouter/relace/relace-apply-3"
+      ],
+      "stage": "owner-generated-regression",
+      "evidence": "Both candidates pass five existing tests and completed hidden suite; generated assertion expects540000-character request pass despite projected90517 >=90000 guard."
+    },
+    {
+      "task": "hard-dependency-handoff",
+      "selector": "openrouter/morph/morph-v3-fast",
+      "stage": "apply-unintended-helper-deletion",
+      "helper": "promptRevision",
+      "original_definitions": 1,
+      "update_definitions": 0,
+      "update_references": 1,
+      "output_definitions": 0,
+      "evidence": "Settled instruction removes observedRuns, not promptRevision; original helper disappears while its call remains. Existing checks raise ReferenceError.",
+      "evidence_pointers": {
+        "original": "tasks.json#/1/files/pi~1extensions~1spec-runtime~1runtime.mjs",
+        "instruction": "preparations/hard-dependency-handoff/settled.json#/files/2/instruction",
+        "update": "preparations/hard-dependency-handoff/settled.json#/files/2/update",
+        "candidate": "vendor-0/hard-dependency-handoff/candidate.json#/pi~1extensions~1spec-runtime~1runtime.mjs"
+      }
+    },
+    {
+      "task": "hard-dependency-handoff",
+      "selector": "openrouter/relace/relace-apply-3",
+      "stage": "apply-duplicate-function",
+      "helper": "currentHandoff",
+      "original_definitions": 1,
+      "update_definitions": 1,
+      "output_definitions": 2,
+      "rejected_output_hash": "f3a61abf1b174a338df2340bd90651987605813876591ad3f9c7ad2e655d9bde",
+      "parse_error": "Identifier 'currentHandoff' has already been declared (117:9)",
+      "evidence_pointers": {
+        "original": "tasks.json#/1/files/pi~1extensions~1spec-runtime~1runtime.mjs",
+        "update": "preparations/hard-dependency-handoff/settled.json#/files/2/update",
+        "rejected_output": "vendor-1/hard-dependency-handoff/responses.jsonl (record3, response.content text)"
+      }
+    },
+    {
+      "task": "hard-lifecycle-extract",
+      "stage": "owner-preparation",
+      "evidence": "Initial prose/tool markup failed JSON parse; one format correction length-stopped at32000 output tokens. No vendor call."
+    }
+  ],
+  "failure_attribution_evidence_base": "Paths below are relative to run specialized-writer/05-original-three."
+}
