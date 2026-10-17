@@ -11,7 +11,7 @@ import { createWaveController, phaseLifecycle } from './waves.mjs';
 import * as reviewNamespace from './wave-review.mjs';
 import * as integrationNamespace from './wave-integration.mjs';
 import { readCheckpointRecord, recordCheckpoint, reconcileRuntimeReturn } from './sentinel.mjs';
-import { checkRuntimeHost } from './linux-resources.mjs';
+import { runtimeHostCommand } from './linux-resources.mjs';
 import { createOwnership } from './ownership.mjs';
 
 // startup/advance/recover are always native wave entries. status/cancel are
@@ -58,7 +58,7 @@ export function createNativeWaveController(options = {}) {
     coordinator,
     send,
     indexDir,
-    hostCheck = checkRuntimeHost,
+    hostCheck = async args => (await runtimeHostCommand('check', {}, args)).result,
     ownershipFactory = createOwnership,
     review = reviewNamespace,
     integration = integrationNamespace,

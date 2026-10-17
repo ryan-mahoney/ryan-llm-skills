@@ -17,7 +17,7 @@ import { mkdirSync, writeFileSync, createWriteStream } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { totalmem } from 'node:os';
-import { calculateResourcePolicy } from './linux-resources.mjs';
+import { calculateWaveResourcePolicy } from './wave-resource-policy.mjs';
 import { buildOverlayArgv, createOverlayPhases } from './overlay.mjs';
 import { artifactEnvironment } from '../../../scripts/spec-location/artifact-environment.mjs';
 import { stageLabel, stagePaths, resolveStageModel } from './wave-review.mjs';
@@ -110,7 +110,7 @@ export async function inspectAllClaims(ownership, packageId) {
 export function stageCapacityRequest(claims) {
   if (!Array.isArray(claims)) return null;
   const held = claims.filter((claim) => claim?.kind === 'capacity');
-  const policy = calculateResourcePolicy({
+  const policy = calculateWaveResourcePolicy({
     physicalMemoryBytes: totalmem(),
     held: {
       memoryBytes: held.reduce((total, claim) => total + (claim.reservations?.memoryBytes || 0), 0),
@@ -255,6 +255,7 @@ export function createWaveReviewRuntime(deps) {
       const model = resolveStageModel({ role, review_model: input.review_model,
         fix_model_override: input.fix_model_override, implementation_owner_model: implementation.owner_model });
       const editorModel = input.editor_model ?? implementation.editor_model;
+      const childExtensions = input.child_extensions ?? implementation.child_extensions;
       // Canonical artifact paths: the reviewer's record and every record's fix
       // record come from the public stagePaths defaults; a confirmation round
       // instead names the preceding reviewed label's fix record. Nulls would make
@@ -273,6 +274,7 @@ export function createWaveReviewRuntime(deps) {
         assignment_id: assignmentId,
         owner_model: model,
         editor_model: editorModel,
+        child_extensions: childExtensions,
         review_model: role === 'reviewer' ? model : null,
         fix_model: role === 'fixer' ? model : null,
         stage: {
@@ -302,7 +304,7 @@ export function createWaveReviewRuntime(deps) {
         throw waveInvalid('role-unknown', `Stage record has no reviewer/fixer role (${JSON.stringify(role)}).`, 'Start the stage through startStage.');
       const adapter = this.serviceAdapter;
       const heldClaims = readOwnershipClaimsSync(this.ownershipRoot).filter(claim => claim.kind === 'capacity');
-      const policy = calculateResourcePolicy({ physicalMemoryBytes: totalmem(),
+      const policy = calculateWaveResourcePolicy({ physicalMemoryBytes: totalmem(),
         held: { memoryBytes: heldClaims.reduce((total, claim) => total + (claim.reservations?.memoryBytes || 0), 0),
           tasks: heldClaims.reduce((total, claim) => total + (claim.reservations?.tasks || 0), 0) } });
       const reserved = await this.ownership.reserveCapacity({ packageId: binding.package_ref,
@@ -485,7 +487,7 @@ export function createWaveReviewRuntime(deps) {
       assertWaveLease(record);
       const adapter = this.serviceAdapter;
       const heldClaims = readOwnershipClaimsSync(this.ownershipRoot).filter(claim => claim.kind === 'capacity');
-      const policy = calculateResourcePolicy({ physicalMemoryBytes: totalmem(),
+      const policy = calculateWaveResourcePolicy({ physicalMemoryBytes: totalmem(),
         held: { memoryBytes: heldClaims.reduce((total, claim) => total + (claim.reservations?.memoryBytes || 0), 0),
           tasks: heldClaims.reduce((total, claim) => total + (claim.reservations?.tasks || 0), 0) } });
       const deadline = record.deadline;

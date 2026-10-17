@@ -770,10 +770,11 @@ export async function checkRuntimeHost(options = {}) {
           // must not mask an unsupported unit property set.
           overlay = {
             ...overlay,
-            status: 'not-probed',
+            status: capability.status,
             reason: capability.reason,
             remedy: capability.remedy,
             fallbackEligible: capability.fallbackEligible,
+            probed: false,
           };
         } else {
           const probe = await runCapabilityProbe({
@@ -1114,8 +1115,9 @@ function resolveExecutablePath(command, pathValue, stat) {
 // probe accepts them (never inferred from a version string).
 async function readPropertySupport({ runCommand, env, timeoutMs }) {
   const queryNames = HOST_REQUIRED_UNIT_PROPERTIES.map(name => HOST_UNIT_PROPERTY_QUERY[name]);
-  const args = ['--user', 'show', '-.slice'];
+  const args = ['--user', 'show'];
   for (const name of queryNames) args.push(`--property=${name}`);
+  args.push('--', '-.slice');
   const record = await runCommand('systemctl', args, { env, timeoutMs });
   if (record.exitCode !== 0 || record.signal !== null) {
     return {
@@ -1376,6 +1378,25 @@ function applySavedHostPolicy(values, shared) {
   for (const key of RUNTIME_HOST_FLAGS) {
     if (shared[key] === undefined && values[key] !== undefined) shared[key] = values[key];
   }
+}
+
+// Shared resolver for the native callers (CLI check, wave launch policy). It
+// applies only explicitly saved values on top of the supplied options and
+// reports invalid host configuration or saved policy instead of defaulting.
+export function resolveRuntimeHostPolicyOptions(options = {}) {
+  const shared = { ...options };
+  let paths;
+  try {
+    paths = hostConfigPaths({ env: shared.env ?? process.env, home: shared.home ?? homedir() });
+  } catch (error) {
+    return { ok: false, paths: null, reason: 'config-home-invalid', detail: error instanceof Error ? error.message : String(error) };
+  }
+  const savedPolicy = loadSavedHostPolicy(paths);
+  if (!savedPolicy.ok) {
+    return { ok: false, paths, reason: savedPolicy.reason, detail: savedPolicy.detail };
+  }
+  applySavedHostPolicy(savedPolicy.values, shared);
+  return { ok: true, paths, options: shared };
 }
 
 function runtimeHostCheckRefusal(paths, reason, detail = null) {
@@ -1747,19 +1768,13 @@ export async function runtimeHostCommand(action, flags = {}, options = {}) {
   // saved values are resolved here too so both CLI actions inherit an earlier
   // install, and a foreign/invalid/symlinked policy refuses instead of being
   // silently replaced by defaults.
-  let paths;
-  try {
-    paths = hostConfigPaths({ env: shared.env ?? process.env, home: shared.home ?? homedir() });
-  } catch (error) {
-    return { exitCode: 1, result: runtimeHostCheckRefusal(null, 'config-home-invalid', error instanceof Error ? error.message : String(error)) };
+  const resolved = resolveRuntimeHostPolicyOptions(shared);
+  if (!resolved.ok) {
+    return { exitCode: 1, result: runtimeHostCheckRefusal(resolved.paths, resolved.reason, resolved.detail) };
   }
-  const savedPolicy = loadSavedHostPolicy(paths);
-  if (!savedPolicy.ok) {
-    return { exitCode: 1, result: runtimeHostCheckRefusal(paths, savedPolicy.reason, savedPolicy.detail) };
-  }
-  applySavedHostPolicy(savedPolicy.values, shared);
-  if (flags.probe === true) shared.probe = true;
-  const result = await checkRuntimeHost(shared);
+  const checkOptions = resolved.options;
+  if (flags.probe === true) checkOptions.probe = true;
+  const result = await checkRuntimeHost(checkOptions);
   return { exitCode: result.ok ? 0 : 1, result };
 }
 
@@ -2232,6 +2247,14 @@ export function createSystemdServiceAdapter(options = {}) {
     if (before.load_state === 'not-found') return { ok: true, status: 'not-found', not_found: true };
     if (before.invocation_id !== record.invocation_id) {
       return { ok: false, status: 'unknown', reason: 'changed-invocation' };
+    }
+    if (before.control_group !== '' && record.control_group !== null && before.control_group !== record.control_group) {
+      return { ok: false, status: 'unknown', reason: 'changed-cgroup' };
+    }
+    const recordedGroup = record.control_group ?? before.control_group;
+    const cgroupPath = typeof recordedGroup === 'string' && recordedGroup !== '' ? join(cgroupRoot, recordedGroup) : null;
+    if (cgroupPath !== null && !pathInside(cgroupPath, cgroupRoot)) {
+      return { ok: false, status: 'unknown', reason: 'cgroup-path-outside-root' };
     }
     const requested = await requestStopUnit(record, requestEnv);
     if (requested.ok !== true) return { ok: false, status: 'unknown', reason: 'stop-refused', detail: requested };

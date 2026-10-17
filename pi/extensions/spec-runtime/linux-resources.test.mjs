@@ -565,7 +565,7 @@ test('wave resources: host probe proves unit properties even when bubblewrap is 
   assert.equal(result.remedy, HOST_REMEDIES['bwrap-absent']);
   assert.equal(result.properties.source, 'probe');
   assert.equal(result.properties.status, 'supported');
-  assert.equal(result.overlay.status, 'not-probed');
+  assert.equal(result.overlay.status, 'unavailable');
   assert.equal(result.bwrap.present, false);
   assert.equal(result.route, 'worktree');
   assert.ok(calls.some(call => call.command === 'systemd-run' && !call.args.includes('--version')));

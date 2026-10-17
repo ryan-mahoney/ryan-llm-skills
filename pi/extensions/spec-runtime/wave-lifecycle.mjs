@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { checkPackage } from '../../../scripts/spec-location/index.mjs';
 import { artifactEnvironment } from '../../../scripts/spec-location/artifact-environment.mjs';
 import { prepareStepWorkspace, remountRetainedWorkspace, setupIdentity, stagingDigest, resolveBackend } from './step-workspaces.mjs';
-import { calculateResourcePolicy } from './linux-resources.mjs';
+import { calculateWaveResourcePolicy } from './wave-resource-policy.mjs';
 import { buildOverlayArgv } from './overlay.mjs';
 
 export function environmentFacts(checkout, primary) {
@@ -178,7 +178,7 @@ export function createWaveLifecycle({
     const binding = record.wave_bindings;
     const adapter = this.serviceAdapter;
     const heldClaims = readOwnershipClaimsSync(this.ownershipRoot).filter(claim => claim.kind === 'capacity');
-    const policy = calculateResourcePolicy({ physicalMemoryBytes: totalmem(),
+    const policy = calculateWaveResourcePolicy({ physicalMemoryBytes: totalmem(),
       held: { memoryBytes: heldClaims.reduce((total, claim) => total + (claim.reservations?.memoryBytes || 0), 0),
         tasks: heldClaims.reduce((total, claim) => total + (claim.reservations?.tasks || 0), 0) } });
     const reserved = await this.ownership.reserveCapacity({ packageId: binding.package_ref,
@@ -384,7 +384,7 @@ export function createWaveLifecycle({
     buildWaveStaging({ targetCommon: common, baseCommit, source, gitDir });
     const waveStaging = { worktree: canonicalTarget, gitCommonDir: common };
     const heldClaims = readOwnershipClaimsSync(this.ownershipRoot).filter(claim => claim.kind === 'capacity');
-    const policy = calculateResourcePolicy({ physicalMemoryBytes: totalmem(),
+    const policy = calculateWaveResourcePolicy({ physicalMemoryBytes: totalmem(),
       held: { memoryBytes: heldClaims.reduce((total, claim) => total + (claim.reservations?.memoryBytes || 0), 0),
         tasks: heldClaims.reduce((total, claim) => total + (claim.reservations?.tasks || 0), 0) } });
     const reserved = await this.ownership.reserveCapacity({ packageId: packageRef, attempt: `${input.wave_id}:${input.attempt_id}:setup`,
