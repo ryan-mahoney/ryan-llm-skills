@@ -14,7 +14,7 @@ import { strategyPlanner, strategyReviewer, usesCandidateChecks, usesBoundaryRev
 import { changedTestCommands } from './candidate-checks.mjs';
 import { reviewContext } from './review-context.mjs';
 import { preflightFocusedPlan } from './focused-editors.mjs';
-import { implementationOwnerPrompt, catalogPlannerRole } from './roles.mjs';
+import { implementationOwnerPrompt, catalogPlannerRole, resolveQueryGranularity, queryAssignmentBudget, smallerRegionQueryRole } from './roles.mjs';
 import { buildQueryCatalog } from './query-catalog.mjs';
 import { resolveSourceRequests } from './query-source.mjs';
 import { optimizePlan } from './optimizer.mjs';
@@ -44,9 +44,11 @@ function diffs(before, after, limit = 200000) {
 const tail = (visible, chars) => visible?.output?.length > chars ? { ...visible, output: '[earlier output omitted]\n' + visible.output.slice(-chars) } : visible;
 function materialize(files, root) { rmSync(root, { recursive: true, force: true }); mkdirSync(root, { recursive: true }); new Workspace(files).materialize(root); }
 
-export async function runCell({ task, arm, selector, ledger, directory, plannerPrompt, timeoutMs, mounts = [], simpleSelector = null, editorSelector = null, writerRecoverySelector = null, strategy = null, optimization = 'none', preparedPlan = null, preparedBrief = null, planningSource = null, queryMode = 'discovery', briefSource = null }) {
+export async function runCell({ task, arm, selector, ledger, directory, plannerPrompt, timeoutMs, mounts = [], simpleSelector = null, editorSelector = null, writerRecoverySelector = null, strategy = null, optimization = 'none', preparedPlan = null, preparedBrief = null, planningSource = null, queryMode = 'discovery', briefSource = null, queryGranularity = null }) {
   if (!['discovery', 'catalog', 'catalog-lookup'].includes(queryMode)) throw new Error('Unknown query mode');
   if (queryMode.startsWith('catalog') && strategy !== 'owner-query-writer') throw new Error('Catalog query requires owner-query-writer');
+  queryGranularity = resolveQueryGranularity({ requested: queryGranularity,
+    inherited: preparedPlan ? planningSource?.query_granularity ?? 'default' : null, strategy, queryMode, optimization });
   if (writerRecoverySelector !== null) {
     if (strategy !== 'owner-query-writer' || !editorSelector) throw new Error('Writer recovery requires owner-query-writer and an editor selector');
     const primary = parseSelector(editorSelector), recovery = parseSelector(writerRecoverySelector);
@@ -71,7 +73,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
     ...(editorSelector ? { editor_selector: editorSelector } : {}),
     writer_recovery_selector: writerRecoverySelector,
     ...(strategy ? { strategy, exploratory: true } : {}),
-    optimization, planning_source: planningSource, query_mode: queryMode, brief_source: briefSource,
+    optimization, planning_source: planningSource, query_mode: queryMode, query_granularity: queryGranularity, brief_source: briefSource,
     ...(dispatchOnly(strategy) ? { review_mode: 'executable-checks-only', checks: [] } : {}),
   };
   let client, agent, simpleClient, recoveryClient, contextParse;
@@ -146,6 +148,12 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
         : diffMode ? { task: task.spec, file_tree: Object.keys(current.snapshot()), changes: diffs(task.files, current.snapshot()), feedback }
           : { task: task.spec, files: current.snapshot(), feedback };
       let plan, queryCatalog, queryLookup;
+      if (queryGranularity === 'smaller-regions') result.query_assignment_budget = queryAssignmentBudget({
+        maxCalls: limits.model_calls, callsUsed: client.shared.calls, queryCallsReserved: preparedPlan ? 0 : 3 });
+      const checkAssignmentCount = candidate => {
+        if (result.query_assignment_budget && candidate.operations.length > result.query_assignment_budget.max_operations)
+          throw new Error(`Plan exceeds remaining-call assignment cap: ${candidate.operations.length} > ${result.query_assignment_budget.max_operations}`);
+      };
       const beforeDispatch = async (initial, replan) => {
         if (!dispatchOnly(strategy)) return initial;
         let candidate = initial;
@@ -155,6 +163,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
           if (candidate?.blocked) throw new Error('Query planner needs an owner decision: ' + candidate.blocked);
           try {
             validateStrategyPlan(strategy, candidate);
+            checkAssignmentCount(candidate);
             errors = preflightFocusedPlan(candidate, current.snapshot(), { parse: contextParse });
             if (queryCatalog) {
               const anchors = new Map();
@@ -207,6 +216,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
       if (preparedPlan) {
         plan = structuredClone(preparedPlan);
         validateStrategyPlan(strategy, plan);
+        checkAssignmentCount(plan);
         const errors = preflightFocusedPlan(plan, current.snapshot(), { parse: contextParse });
         if (errors.length) throw new Error('Reused plan invalid: ' + errors.join('; '));
       } else if (queryMode.startsWith('catalog')) {
@@ -223,7 +233,8 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
         result.catalog_limit_bytes = catalogLimitBytes;
         result.query_request_size_scope = 'serialized Client.json context (systemPrompt plus one JSON user message and timestamp); excludes provider framing and request options';
         const lookupMode = queryMode === 'catalog-lookup';
-        const system = plannerPrompt + '\n' + catalogPlannerRole({ lookup: lookupMode });
+        const system = plannerPrompt + '\n' + catalogPlannerRole({ lookup: lookupMode }) +
+          (queryGranularity === 'smaller-regions' ? '\n' + smallerRegionQueryRole(result.query_assignment_budget) : '');
         let input = { ...planningInput, catalog };
         const normalize = (value, attempt) => {
           const normalized = structuredClone(value);

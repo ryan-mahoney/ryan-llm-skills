@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { hash, safePath } from '../changeset/workspace.mjs';
 import { parseJson, parseSelector } from '../changeset/models.mjs';
 import { equivalentCost, costPolicy } from '../changeset-research/cost.mjs';
+import { resolveQueryGranularity, queryAssignmentBudget, smallerRegionQueryRole } from './roles.mjs';
 
 const read = p => JSON.parse(readFileSync(p, 'utf8'));
 const rows = p => existsSync(p) ? readFileSync(p, 'utf8').split('\n').filter(x => x.trim()).map(JSON.parse) : [];
@@ -55,6 +56,35 @@ function requestInput(request) {
     const content = typeof message?.content === 'string' ? message.content : message?.content?.map(part => part.text ?? '').join('');
     return parseJson(content ?? '');
   } catch { return null; }
+}
+function queryGranularityEvidence({ manifest, result, job, plan, rawPlan, requests, verify }) {
+  const value = manifest.query_granularity ?? 'default';
+  const checks = [], check = (ok, name) => { checks.push(Boolean(ok)); verify(ok, name); };
+  check((result.query_granularity ?? 'default') === value && (job.queryGranularity ?? 'default') === value,
+    'query granularity matches manifest, job and result');
+  let policy = false;
+  try { policy = resolveQueryGranularity({ requested: value, strategy: manifest.strategy,
+    queryMode: manifest.query_mode ?? 'discovery', optimization: manifest.optimization ?? 'none' }) === value; } catch {}
+  check(policy, 'query granularity policy');
+  if (value !== 'smaller-regions') return { value, valid: checks.every(Boolean), assignment_budget: null };
+  const budget = result.query_assignment_budget ?? null;
+  let expected;
+  try { expected = queryAssignmentBudget({ maxCalls: job.task?.limits?.model_calls ?? 32,
+    callsUsed: requests.filter(request => phase(request.stage) === 'owner').length,
+    queryCallsReserved: result.planning_source || job.planningSource ? 0 : 3 }); } catch {}
+  check(Boolean(expected) && sameData(budget, expected) && result.limits?.model_calls === expected.max_calls,
+    'smaller-regions assignment cap derives from the remaining call budget');
+  check(!plan || (Array.isArray(plan.operations) && plan.operations.length <= (expected?.max_operations ?? 0)),
+    'smaller-regions plan fits the reserved writer attempts');
+  if (plan) check(Array.isArray(rawPlan?.operations) && rawPlan.operations.length === plan.operations?.length &&
+    plan.operations.every(operation => {
+      const original = rawPlan.operations.find(original => original.id === operation.id);
+      return original && ['executor', 'reads', 'writes', 'objective', 'instruction', 'requirements'].every(field => sameData(operation[field], original[field]));
+    }), 'smaller-regions optimization preserves all assignment partitions');
+  check(requests.filter(request => phase(request.stage) === 'query').every(request =>
+    expected && request.context?.systemPrompt?.endsWith(smallerRegionQueryRole(expected))),
+    'smaller-regions query packets retain the optional planning rule and assignment cap');
+  return { value, valid: checks.every(Boolean), assignment_budget: budget };
 }
 function writerRecoveryEvidence({ manifest, result, job, plan, requests, receipts, verify }) {
   const selector = manifest.writer_recovery_selector ?? null;
@@ -212,6 +242,8 @@ export function buildReport(runRoot) {
     verify(requestIds.size === requests.length && new Set(receipts.map(x => x.reservation)).size === receipts.length && receipts.every(x => requestIds.has(x.reservation)), 'request and receipt identities');
     verify(receipts.every(x => { const q = requests.find(q => q.reservation === x.reservation); return q?.stage === x.stage && q?.selector === x.selector; }), 'receipt routing matches requests');
     const job = existsSync(join(directory, 'job.json')) ? read(join(directory, 'job.json')) : {};
+    const granularity = queryGranularityEvidence({ manifest: m, result: r, job, plan,
+      rawPlan: rawHash ? read(join(directory, 'raw-plan.json')) : null, requests, verify });
     const writerRecovery = writerRecoveryEvidence({ manifest: m, result: r, job, plan, requests, receipts, verify });
     const sol = /^(openai|openai-codex)\/gpt-6\.1-sol(?::|$)/;
     const firstWriter = requests.findIndex(x => x.stage === 'editor');
@@ -246,6 +278,7 @@ export function buildReport(runRoot) {
         selectedSourceArtifact = safePlanArtifact(selectedName) ? donor.planning_artifacts.find(a => a.name === selectedName) ?? null : null;
         verifySource(selectedSourceArtifact?.hash === source.plan_hash && rawHash === source.plan_hash, 'shared selected planning artifact hash');
         verifySource(donor.result_hash === source.result_hash, 'planning source result hash');
+        verifySource(donor.query_granularity === granularity.value && (source.query_granularity ?? 'default') === granularity.value, 'planning source query granularity');
         verifySource(donor.provider_routing_valid && donor.owner_role_valid && donor.owner_selector === ownerSelector, 'planning source provider routing');
         verifySource(Boolean(donor.allocated_planning), 'planning source allocated planning available');
         verifySource(donor.implementation_brief_valid && donor.implementation_brief_hash === briefHash && donor.task_hash === r.task_hash, 'shared task and frozen brief');
@@ -293,7 +326,7 @@ export function buildReport(runRoot) {
     const visible = (r.checks ?? []).at(-1)?.visible;
     const candidateTests = visible?.candidate_tests ?? [];
     const applicationComplete = r.executions?.at(-1)?.ok === true;
-    const output = { ...evidence, task: r.task ?? cellName.replace(/^\d+-/, ''), cell: key, optimization: m.optimization ?? 'none', query_mode: m.query_mode ?? 'discovery', editor_selector: m.editor_selector, writer_recovery_selector: writerRecovery.selector, writer_recovery_evidence: writerRecovery, owner_selector: ownerSelector, task_hash: r.task_hash,
+    const output = { ...evidence, task: r.task ?? cellName.replace(/^\d+-/, ''), cell: key, optimization: m.optimization ?? 'none', query_mode: m.query_mode ?? 'discovery', query_granularity: granularity.value, query_granularity_evidence: granularity, editor_selector: m.editor_selector, writer_recovery_selector: writerRecovery.selector, writer_recovery_evidence: writerRecovery, owner_selector: ownerSelector, task_hash: r.task_hash,
       application_complete: applicationComplete, visible_accepted: r.visible_accepted ?? visible?.ok ?? null,
       candidate_tests: { count: candidateTests.length, failed: candidateTests.filter(t => t.ok !== true).length },
       base_visible_accepted: visible?.base_ok ?? visible?.visible_check_ok ?? null,
@@ -328,7 +361,7 @@ export function buildReport(runRoot) {
     }
     const totalUsage = cells.reduce((a, c) => plus(a, c.incurred.model_usage), emptyUsage());
     const allocatedUsage = cells.every(c => c.allocated.model_usage) ? cells.reduce((a, c) => plus(a, c.allocated.model_usage), emptyUsage()) : null;
-    return { run: name, editor_selector: m.editor_selector, writer_recovery_selector: m.writer_recovery_selector ?? null, optimization: m.optimization ?? 'none', query_mode: m.query_mode ?? 'discovery', plans_from: m.plans_from ?? null, briefs_from: m.briefs_from ?? null,
+    return { run: name, editor_selector: m.editor_selector, writer_recovery_selector: m.writer_recovery_selector ?? null, optimization: m.optimization ?? 'none', query_mode: m.query_mode ?? 'discovery', query_granularity: m.query_granularity ?? 'default', plans_from: m.plans_from ?? null, briefs_from: m.briefs_from ?? null,
       manifest_hash: hash(readFileSync(join(root, name, 'manifest.json'))), expected: m.schedule.length, pending,
       application_complete: cells.filter(c => c.application_complete).length, integrity_valid: cells.every(c => c.integrity_valid),
       incurred_seconds: sum(cells.map(c => c.incurred.seconds)), allocated_seconds: exactSum(cells.map(c => c.allocated.seconds)),

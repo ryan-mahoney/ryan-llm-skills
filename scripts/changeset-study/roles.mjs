@@ -128,3 +128,53 @@ export function catalogPlannerRole({ lookup = false } = {}) {
       'If necessary source bindings or context are missing, use the single source_requests batch described below before returning a plan. After that batch, report a blocked result if necessary source or settled owner decisions are still missing.')
     + '\n' + catalogLookupRole;
 }
+
+// Optional planning treatment; the default role text above remains unchanged.
+export function resolveQueryGranularity({ requested = null, inherited = null, strategy, queryMode = 'discovery', optimization = 'none' }) {
+  const allowed = ['default', 'smaller-regions'];
+  if ((requested !== null && !allowed.includes(requested)) || (inherited !== null && !allowed.includes(inherited)))
+    throw new Error('Unknown query granularity');
+  if (inherited !== null && requested !== null && requested !== inherited)
+    throw new Error('Query granularity differs from the inherited plan');
+  const value = requested ?? inherited ?? 'default';
+  if (value === 'smaller-regions' && (strategy !== 'owner-query-writer' || queryMode !== 'catalog-lookup' || optimization !== 'none'))
+    throw new Error('smaller-regions requires owner-query-writer, catalog-lookup and optimization none');
+  return value;
+}
+
+export function queryAssignmentBudget({ maxCalls, callsUsed, queryCallsReserved }) {
+  if (!Number.isInteger(maxCalls) || maxCalls < 1 || !Number.isInteger(callsUsed) || callsUsed < 0 || callsUsed > maxCalls ||
+      ![0, 3].includes(queryCallsReserved)) throw new Error('Invalid query assignment budget');
+  const maxOperations = Math.min(200, Math.floor((maxCalls - callsUsed - queryCallsReserved) / 2));
+  if (maxOperations < 1) throw new Error('Insufficient remaining model calls for a bounded writer assignment');
+  return { max_calls: maxCalls, calls_used: callsUsed, query_calls_reserved: queryCallsReserved,
+    writer_attempts_per_operation: 2, max_operations: maxOperations };
+}
+
+export function smallerRegionQueryRole(budget) {
+  return `Optional smaller-regions planning treatment. Preserve the settled owner design.
+Separate independently editable regions of existing files and distinct syntactic
+transformations into small assignments: import/export wiring, factory or call-site
+wiring, method delegation, and source cleanup need not share one packet. Use one
+local outcome per packet; keep edits together when separating them would break syntax
+or require the writer to invent an intermediate implementation. Do not split an
+unchanged function body merely because it is large.
+The current edit backend can compose source parts ONLY into an absent destination.
+It cannot insert source parts into an existing file: replace and replace-range require
+literal replacement text. Keep a source-range compose assembly and its required
+scope/separator conversions atomic. Do not propose scaffolding followed by source-part
+appends, temporary helper files, or regeneration of large unchanged bodies to bypass
+that limitation. Split independent edits to existing source regions instead.
+Chain repeated writes to the same file with explicit depends_on edges. Each assignment
+sees staged contents and must leave syntactically valid files. Complete all source
+copies before removing their original definitions. Preserve source anchors needed by
+later assignments; do not bind generated formatting you cannot know. Later packets
+for a newly created path may use null/null staged context under the existing delivered
+source cap; existing paths still require supplied catalog or lookup bindings.
+Return at most ${budget.max_operations} operations. This cap reserves ${budget.query_calls_reserved}
+query calls and two writer attempts per operation from ${budget.max_calls - budget.calls_used}
+remaining model calls. It does not raise any existing request, excerpt, assignment,
+output, call or time bound. If no valid partition fits, report the exact input or
+budget gap rather than dropping obligations or inventing owner decisions.
+Every write remains delegated. No query, lookup or review follows writer dispatch.`;
+}

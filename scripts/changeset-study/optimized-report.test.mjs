@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { hash } from '../changeset/workspace.mjs';
 import { buildReport, markdown } from './optimized-report.mjs';
+import { smallerRegionQueryRole } from './roles.mjs';
 
 // A costly failed donor check must never be charged to replay planning. External
 // failures remain visible even when successful application qualifies writer timing.
@@ -406,5 +407,49 @@ test('writer recovery audits bounded off to low attempts against dispatched oper
       ['unconfigured recovery does not relax fixed selector routing', d => { delete d.manifest.writer_recovery_selector; delete d.result.writer_recovery_selector; delete d.job.writerRecoverySelector; }],
     ];
     for (const [name, mutate] of violations) assert.equal(audit(mutate).integrity_valid, false, name);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// Run alone: node --test --test-name-pattern='smaller-region reporting' scripts/changeset-study/optimized-report.test.mjs
+test('smaller-region reporting verifies treatment identity, planning rule, call reserve and retained partitions', () => {
+  const root = mkdtempSync(join(tmpdir(), 'optimized-report-granularity-'));
+  const run = join(root, 'smaller'), directory = join(run, '000-case'); mkdirSync(directory, { recursive: true });
+  const sol = 'openai-codex/gpt-6.1-sol:low', ds = 'deepseek/deepseek-flash:off';
+  const budget = { max_calls: 6, calls_used: 1, query_calls_reserved: 3, writer_attempts_per_operation: 2, max_operations: 1 };
+  const plan = { operations: [{ id: 'one', executor: 'simple', reads: [], writes: ['answer.mjs'], objective: 'Update answer', instruction: 'Apply settled update', requirements: ['Preserve other source.'] }] };
+  const brief = 'Settled implementation.\n', catalog = { schema_version: 1, files: [] };
+  const manifest = { strategy: 'owner-query-writer', selector: sol, editor_selector: ds, query_mode: 'catalog-lookup',
+    optimization: 'none', query_granularity: 'smaller-regions', schedule: ['case'] };
+  const requests = ['implementation-planning', 'planning', 'editor'].map((stage, index) => ({ reservation: 'request-' + index,
+    stage, selector: stage === 'planning' ? sol : ds, ...(stage === 'planning' ? {
+      context: { systemPrompt: smallerRegionQueryRole(budget), messages: [{ role: 'user', content: JSON.stringify({ catalog }) }] },
+    } : {}) }));
+  const receipts = requests.map(request => ({ ...request, elapsed_ms: 1,
+    usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { total: 0.001 } } }));
+  const result = { selector: sol, editor_selector: ds, task: 'case', task_hash: 'task', optimization: 'none', query_mode: 'catalog-lookup',
+    query_granularity: 'smaller-regions', query_assignment_budget: budget, limits: { model_calls: 6 }, process_elapsed_ms: 100,
+    implementation_brief_hash: hash(brief), candidate_hash: hash('{}'), catalog_hash: hash(JSON.stringify(catalog)),
+    executions: [{ ok: true, plan_sha256: hash(JSON.stringify(plan)), operations: [{ id: 'one', executor: 'simple', status: 'passed' }] }] };
+  const baseline = { manifest, requests, receipts, result, plan, raw: structuredClone(plan), job: { queryGranularity: 'smaller-regions', task: { limits: { model_calls: 6 } } } };
+  const write = (path, value) => writeFileSync(path, typeof value === 'string' ? value : JSON.stringify(value));
+  function audit(mutate = () => {}) {
+    const data = structuredClone(baseline); mutate(data);
+    write(join(run, 'manifest.json'), data.manifest);
+    for (const [name, value] of Object.entries({ 'raw-plan.json': data.raw, 'plan-0.json': data.plan, 'implementation-brief.md': brief,
+      'catalog.json': catalog, 'candidate.json': '{}', 'result.json': data.result, 'job.json': data.job })) write(join(directory, name), value);
+    write(join(directory, 'requests.jsonl'), data.requests.map(JSON.stringify).join('\n'));
+    write(join(directory, 'receipts.jsonl'), data.receipts.map(JSON.stringify).join('\n'));
+    return buildReport(root).runs[0].cells[0];
+  }
+  try {
+    assert.equal(audit().integrity_valid, true);
+    for (const [name, mutate] of [
+      ['job silently relabeled', d => { delete d.job.queryGranularity; }],
+      ['result silently relabeled', d => { delete d.result.query_granularity; }],
+      ['regrouping enabled', d => { d.manifest.optimization = d.result.optimization = 'deterministic'; }],
+      ['assignment cap inflated', d => { d.result.query_assignment_budget.max_operations = 2; }],
+      ['default prompt mislabeled as smaller', d => { d.requests[1].context.systemPrompt = 'Default prompt'; }],
+      ['partition assignment changed after planning', d => { d.plan.operations[0].instruction = 'Different assignment'; }],
+    ]) assert.equal(audit(mutate).integrity_valid, false, name);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

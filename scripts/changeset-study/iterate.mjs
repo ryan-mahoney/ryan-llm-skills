@@ -11,6 +11,7 @@ import { recoverAccounting } from './accounting.mjs';
 import { strategyNames, usesCandidateChecks, usesEditor, deliveredResult } from './strategies.mjs';
 import { modelRuntime, parseSelector } from '../changeset/models.mjs';
 import { buildRunRoles } from './run-roles.mjs';
+import { resolveQueryGranularity } from './roles.mjs';
 
 const args = process.argv.slice(2);
 const option = name => { const i = args.indexOf(name); if (i < 0 || !args[i + 1]) throw new Error(`${name} required`); return args[i + 1]; };
@@ -25,6 +26,7 @@ const queryMode = args.includes('--query-mode') ? option('--query-mode') : 'disc
 if (!['discovery', 'catalog', 'catalog-lookup'].includes(queryMode)) throw new Error('Unknown query mode');
 if (plansFrom && briefsFrom) throw new Error('--plans-from and --briefs-from are mutually exclusive');
 if ((queryMode.startsWith('catalog') || briefsFrom) && strategy !== 'owner-query-writer') throw new Error('Catalog queries and shared briefs require owner-query-writer');
+const requestedQueryGranularity = args.includes('--query-granularity') ? option('--query-granularity') : null;
 const editorSelector = args.includes('--editor-model') ? option('--editor-model') : null;
 if (usesEditor(strategy) !== Boolean(editorSelector)) throw new Error('Use --editor-model only and always with an owner-editor strategy');
 const writerRecoverySelector = args.includes('--writer-recovery-model') ? option('--writer-recovery-model') : null;
@@ -58,8 +60,10 @@ const sdkFiles = () => Object.fromEntries(['pi-agent-core', 'pi-coding-agent', '
 const original = read(join(source, 'manifest.json'));
 if (hash(readFileSync(join(source, 'tasks.json'))) !== original.tasks_file_hash) throw new Error('Reference task bytes changed');
 const replayManifest = replay ? read(join(replay, 'manifest.json')) : null;
-if (replayManifest && (replayManifest.strategy !== strategy || replayManifest.selector !== selector || (replayManifest.editor_selector ?? null) !== editorSelector || (replayManifest.writer_recovery_selector ?? null) !== writerRecoverySelector || (replayManifest.query_mode ?? 'discovery') !== queryMode || !equal(files(codeRoot), replayManifest.frozen_files))) throw new Error('Replay strategy, selectors or frozen bytes differ');
 const donorManifest = plansFrom || briefsFrom ? read(join(plansFrom ?? briefsFrom, 'manifest.json')) : null;
+const queryGranularity = resolveQueryGranularity({ requested: requestedQueryGranularity,
+  inherited: plansFrom ? donorManifest.query_granularity ?? 'default' : null, strategy, queryMode, optimization });
+if (replayManifest && (replayManifest.strategy !== strategy || replayManifest.selector !== selector || (replayManifest.editor_selector ?? null) !== editorSelector || (replayManifest.writer_recovery_selector ?? null) !== writerRecoverySelector || (replayManifest.query_mode ?? 'discovery') !== queryMode || (replayManifest.query_granularity ?? 'default') !== queryGranularity || !equal(files(codeRoot), replayManifest.frozen_files))) throw new Error('Replay strategy, selectors or frozen bytes differ');
 const runRoles = buildRunRoles({ strategy, selector, editorSelector, donorManifest });
 if (original.comparison !== 'sol-native-vs-sol-nemotron-workflow' || original.models[0] !== selector) throw new Error('Use previous workflow run and identical Sol selector');
 const selected = ['hard-context-calibration', 'hard-dependency-handoff', 'hard-lifecycle-extract'];
@@ -88,12 +92,13 @@ if (plansFrom || briefsFrom) {
     const briefSource = { run: basename(donor), cell: basename(sourceCell), brief_hash: hash(briefBytes), result_hash: hash(resultBytes) };
     let preparedPlan = null, planningSource = null;
     if (plansFrom) {
+      if ((sourceResult.query_granularity ?? 'default') !== queryGranularity) throw new Error('Inherited plan granularity differs from donor manifest');
       const planArtifact = existsSync(join(sourceCell, 'raw-plan.json')) ? 'raw-plan.json'
         : readdirSync(sourceCell).filter(name => /^planning-attempt-\d+\.json$/.test(name)).sort((a, b) => Number(b.match(/\d+/)[0]) - Number(a.match(/\d+/)[0]))[0];
       if (!planArtifact) throw new Error('No submitted query plan available for replay');
       const planBytes = readFileSync(join(sourceCell, planArtifact));
       preparedPlan = JSON.parse(planBytes);
-      planningSource = { run: basename(donor), cell: basename(sourceCell), plan_hash: hash(planBytes), plan_artifact: planArtifact, result_hash: hash(resultBytes) };
+      planningSource = { run: basename(donor), cell: basename(sourceCell), plan_hash: hash(planBytes), plan_artifact: planArtifact, result_hash: hash(resultBytes), query_granularity: queryGranularity };
     }
     inherited.set(id, { preparedBrief, briefSource, preparedPlan, planningSource });
   }
@@ -120,7 +125,7 @@ if (replayManifest && !equal(frozen, replayManifest.frozen_files)) throw new Err
 write(join(run, 'tasks.json'), selected.map(id => tasks.find(t => t.id === id)));
 write(join(run, 'references.json'), references);
 const manifest = { schema_version: 1, comparison: strategy === 'owner-query-writer' ? 'deepseek-owner-sol-query-deepseek-writer' : editorSelector ? 'sol-owner-deepseek-editor' : 'adaptive-sol-only-development', exploratory: true, strategy, selector,
-  editor_selector: editorSelector, writer_recovery_selector: writerRecoverySelector, models, optimization, query_mode: queryMode,
+  editor_selector: editorSelector, writer_recovery_selector: writerRecoverySelector, models, optimization, query_mode: queryMode, query_granularity: queryGranularity,
   plans_from: plansFrom ? basename(plansFrom) : null, briefs_from: briefsFrom ? basename(briefsFrom) : null,
   ...(runRoles ? { roles: runRoles } : {}),
   replay_of: replay ? basename(replay) : null,
@@ -137,7 +142,7 @@ for (const id of selected) {
   const directory = join(run, `${String(index++).padStart(3, '0')}-${id}`); mkdirSync(directory);
   const task = structuredClone(tasks.find(t => t.id === id)); delete task.gold;
   const { preparedPlan = null, preparedBrief = null, planningSource = null, briefSource = null } = inherited.get(id) ?? {};
-  const job = { task, optimization, queryMode, preparedPlan, preparedBrief, planningSource, briefSource, arm: 'changeset', strategy, selector, editorSelector, writerRecoverySelector, ledger, directory, mounts: original.mounts,
+  const job = { task, optimization, queryMode, queryGranularity, preparedPlan, preparedBrief, planningSource, briefSource, arm: 'changeset', strategy, selector, editorSelector, writerRecoverySelector, ledger, directory, mounts: original.mounts,
     plannerPrompt: readFileSync(join(run, 'frozen/skills/spec-changeset-plan/SKILL.md'), 'utf8') };
   write(join(directory, 'job.json'), job);
   const began = performance.now(), cap = task.limits.cell_ms + task.limits.grade_ms;
