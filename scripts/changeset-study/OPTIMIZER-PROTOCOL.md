@@ -341,3 +341,40 @@ fresh owner time, calls, tokens and charges. This is a new end-to-end explorator
 treatment with new briefs and plans, not a paired replay isolating prompt effects.
 Earlier brief-reuse attempts remain unchanged. The separate divergent prototypes have
 offline evidence only; their live comparisons remain queued after this goal.
+
+## Protocol 12: resolve sandbox paths and admit the larger catalog
+
+The fresh-owner run completed calibration, including downstream checks. Both larger
+cases stopped during deterministic catalog construction before any query-planner or
+writer request. Handoff named one existing file by its relative path and equivalent
+absolute sandbox path. The catalog dropped the leading slash, treated the latter as
+an absent relative path, and incorrectly reported an ambiguous basename. Extraction's
+catalog contained 51,727 bytes, exceeding the 49,152-byte catalog limit by 2,575 bytes.
+These are harness failures; they do not establish a model's inability to plan or edit.
+
+Normalize absolute paths only against the declared source root. An absolute reference
+under `/work` may alias an exact existing source-map key. Unknown absolute references
+and paths outside that root remain unresolved; they cannot authorize absent write
+paths. Preserve real basename ambiguity checks. Increase the catalog-only allowance
+to 64 KiB in `catalog-lookup` mode; ordinary catalog mode retains its 48 KiB limit.
+Every complete query request still must fit 160 KiB, source lookup remains limited to
+eight requests and 64,000 characters, and writer context remains 32,000 characters.
+
+Reuse all three exact fresh owner briefs from run 11 without manual edits. Run the
+same deterministic optimizer and query/writer selectors once against the unchanged
+original sources and checks. Record owner work as borrowed allocation as well as
+actual query/writer time, usage and charges. Offline preflight must establish that all
+three catalogs and initial query packets fit before paid execution. Followup packets
+remain subject to their existing complete-request bound. Retain every failure and
+receipt. This is another exploratory treatment, not a successful repeat or a matched
+comparison against the historical controls. Repeat promising frozen plans before
+selecting a configuration; divergent live experiments remain a separate later phase.
+
+The query cap now measures the serialized `Client.json` context: system prompt and
+one user message containing the JSON payload, including its timestamp. This includes
+JSON string escaping previously omitted by the `{systemPrompt,input}` estimate;
+it excludes provider framing and request options. Persist that scope and each admitted
+context's byte count. Offline initial contexts for calibration, handoff and extraction
+measure 25,460, 104,647 and 84,602 bytes respectively. Their catalogs measure 5,038,
+34,742 and 51,727 bytes. All fit the applicable bounds. Ten focused catalog/lookup/cell
+checks passed in 921 ms; Jev's offline verification returned fallback advice.

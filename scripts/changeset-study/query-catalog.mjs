@@ -1,7 +1,7 @@
 import { basename, dirname, join, normalize } from 'node:path';
 
 const javascriptExtensions = /\.(?:mjs|cjs|js|jsx)$/i;
-const referencePattern = /(?:\.\.\/|\.\/)*(?:[\w@.-]+\/)*[\w@.-]+\.(?:mjs|cjs|js|jsx|ts|tsx|md|mdx|txt|json|ya?ml|toml|sh)\b/gi;
+const referencePattern = /(?<![\w.-])\/?(?:\.\.\/|\.\/)*(?:[\w@.-]+\/)*[\w@.-]+\.(?:mjs|cjs|js|jsx|ts|tsx|md|mdx|txt|json|ya?ml|toml|sh)\b/gi;
 const identifierBoundary = name => new RegExp(`(?<![\\w$])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w$])`);
 const unique = values => [...new Set(values)];
 
@@ -17,16 +17,26 @@ function normalizeRef(value) {
   return parts.join('/');
 }
 
-function references(brief) {
-  return [...brief.matchAll(referencePattern)].map(match => ({ raw: match[0], at: match.index,
-    normalized: normalizeRef(match[0]), explicit: match[0].includes('/') }));
+function references(brief, sourceRoot, files) {
+  const root = typeof sourceRoot === 'string' ? sourceRoot.replaceAll('\\', '/').replace(/\/+$/, '') : null;
+  return [...brief.matchAll(referencePattern)].map(match => {
+    const raw = match[0], absolute = raw.startsWith('/');
+    if (!absolute) return { raw, at: match.index, normalized: normalizeRef(raw), explicit: raw.includes('/'), absolute: false };
+    const relative = root && (raw === root ? '' : raw.startsWith(root + '/') ? raw.slice(root.length + 1) : null);
+    const normalized = relative === null ? null : normalizeRef(relative);
+    const knownPath = normalized && typeof files[normalized] === 'string' ? normalized : null;
+    return { raw, at: match.index, normalized: knownPath, explicit: true, absolute: true,
+      unresolvedReason: relative === null ? 'absolute path is outside the declared source root' :
+        normalized === null ? 'absolute path escapes the declared source root' :
+          knownPath === null ? 'absolute path does not match an existing supplied source path' : null };
+  });
 }
 
-function resolvePaths(files, brief) {
+function resolvePaths(files, brief, sourceRoot) {
   const keys = Object.keys(files).map(path => path.replaceAll('\\', '/'));
-  const allRefs = references(brief), resolved = new Map(), absentPaths = [], explicitTargets = new Map();
+  const allRefs = references(brief, sourceRoot, files), resolved = new Map(), absentPaths = [], explicitTargets = new Map();
   const unresolvedRefs = allRefs.filter(ref => ref.normalized === null).map(ref => ({
-    reference: ref.raw, reason: 'relative path escapes the checkout; its location is unresolved',
+    reference: ref.raw, reason: ref.unresolvedReason ?? 'relative path escapes the checkout; its location is unresolved',
   }));
   const refs = allRefs.filter(ref => ref.normalized !== null);
   const matchRef = ref => {
@@ -36,7 +46,7 @@ function resolvePaths(files, brief) {
     return suffix;
   };
 
-  for (const ref of refs.filter(item => item.explicit && (item.normalized.includes('/') || item.raw.split('/').includes('..')))) {
+  for (const ref of refs.filter(item => item.explicit && (item.absolute || item.normalized.includes('/') || item.raw.split('/').includes('..')))) {
     const candidates = matchRef(ref);
     if (candidates.length > 1) throw new Error(`needs-discovery: ambiguous path ${ref.raw}`);
     const path = candidates[0] ?? ref.normalized;
@@ -290,10 +300,10 @@ function importedSources(files, brief, selected, parse) {
     import_refs: [...new Map(import_refs.map(ref => [ref.reference, ref])).values()] };
 }
 
-export function buildQueryCatalog(files, brief, { parse, maxBytes = 48 * 1024 } = {}) {
+export function buildQueryCatalog(files, brief, { parse, maxBytes = 48 * 1024, sourceRoot } = {}) {
   if (!files || typeof files !== 'object' || typeof brief !== 'string' || !brief.trim()) throw new Error('needs-discovery: source files and owner brief are required');
   if (!Number.isInteger(maxBytes) || maxBytes < 1) throw new Error('maxBytes must be a positive integer');
-  const resolved = resolvePaths(files, brief);
+  const resolved = resolvePaths(files, brief, sourceRoot);
   const { selected, import_refs } = importedSources(files, brief, resolved.selected, parse);
   const unresolved_refs = resolved.unresolved_refs.filter(ref => !import_refs.some(binding => binding.reference === ref.reference));
   const catalogFiles = selected.map(ref => {

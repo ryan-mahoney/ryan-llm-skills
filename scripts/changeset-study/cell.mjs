@@ -202,12 +202,17 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
         if (errors.length) throw new Error('Reused plan invalid: ' + errors.join('; '));
       } else if (queryMode.startsWith('catalog')) {
         let catalog;
-        try { catalog = await stage('query-context', () => buildQueryCatalog(current.snapshot(), implementationBrief, { parse: contextParse })); }
+        const catalogLimitBytes = (queryMode === 'catalog-lookup' ? 64 : 48) * 1024;
+        try { catalog = await stage('query-context', () => buildQueryCatalog(current.snapshot(), implementationBrief,
+          { parse: contextParse, sourceRoot: '/work', maxBytes: catalogLimitBytes })); }
         catch (error) { throw new Error('needs discovery: ' + error.message); }
         queryCatalog = catalog;
         const catalogBytes = JSON.stringify(catalog, null, 2) + '\n';
         writeFileSync(join(directory, 'catalog.json'), catalogBytes);
         result.catalog_hash = hash(catalogBytes);
+        result.catalog_bytes = Buffer.byteLength(JSON.stringify(catalog));
+        result.catalog_limit_bytes = catalogLimitBytes;
+        result.query_request_size_scope = 'serialized Client.json context (systemPrompt plus one JSON user message and timestamp); excludes provider framing and request options';
         const lookupMode = queryMode === 'catalog-lookup';
         const system = plannerPrompt + '\n' + catalogPlannerRole({ lookup: lookupMode });
         let input = { ...planningInput, catalog };
@@ -231,9 +236,12 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
           while (true) {
             // Bound every complete request, including source followup and correction.
             const maxKiB = lookupMode ? 160 : 80;
-            if (Buffer.byteLength(JSON.stringify({ systemPrompt: system, input: payload })) > maxKiB * 1024)
+            const requestBytes = Buffer.byteLength(JSON.stringify({ systemPrompt: system,
+              messages: [{ role: 'user', content: JSON.stringify(payload), timestamp: Date.now() }] }));
+            if (requestBytes > maxKiB * 1024)
               throw new Error(`needs discovery: catalog query exceeds ${maxKiB} KiB`);
             if (queryCalls >= (lookupMode ? 3 : 2)) throw new Error('Query call bound exceeded');
+            (result.query_request_sizes ??= []).push({ call: queryCalls + 1, bytes: requestBytes, limit_bytes: maxKiB * 1024 });
             const attempt = queryCalls++;
             try { return normalize(await stage('planning', () => client.json(system, payload, 'planning')), attempt); }
             catch (error) {

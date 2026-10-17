@@ -1,6 +1,8 @@
 // Run alone: CHANGESET_TEST_PARSER=/path/to/acorn.mjs node --test scripts/changeset-study/query-catalog.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { buildQueryCatalog } from './query-catalog.mjs';
 
@@ -89,6 +91,42 @@ test('catalog resolves parent segments within the checkout and leaves escaping r
   assert.deepEqual(catalog.unresolved_refs.map(ref => ref.reference), ['../outside/file.mjs', 'src/../../escape.mjs']);
   assert.ok(catalog.unresolved_refs.every(ref => ref.reason.includes('escapes the checkout')));
   assert.ok(!catalog.files.some(file => ['src/lib/target.mjs', 'outside/file.mjs', 'src/escape.mjs'].includes(file.path)));
+});
+
+// Run alone: CHANGESET_TEST_PARSER=/path/to/acorn.mjs node --test --test-name-pattern='known absolute paths' scripts/changeset-study/query-catalog.test.mjs
+test('catalog treats known absolute paths under the declared root as aliases without authorizing unknown paths', async () => {
+  const parse = await parser();
+  const files = {
+    'scripts/spec-observe/steps.mjs': 'export function validateStepIndex() {}\n',
+    'pi/extensions/spec-runtime/runtime.mjs': 'export function Runtime() {}\n',
+  };
+  const brief = `Use the bare name steps.mjs after identifying scripts/spec-observe/steps.mjs.\n` +
+    'Path resolves from /work/pi/extensions/spec-runtime/ to /work/scripts/spec-observe/steps.mjs.\n' +
+    'Keep ../outside/steps.mjs and /other/scripts/spec-observe/steps.mjs unchanged. Do not create /work/new-module.mjs.';
+  const catalog = buildQueryCatalog(files, brief, { parse, sourceRoot: '/work' });
+  assert.deepEqual(catalog.files.map(file => file.path), ['scripts/spec-observe/steps.mjs']);
+  assert.equal(catalog.files.filter(file => file.path === 'work/scripts/spec-observe/steps.mjs').length, 0);
+  assert.ok(catalog.unresolved_refs.some(ref => ref.reference === '/other/scripts/spec-observe/steps.mjs'));
+  assert.ok(catalog.unresolved_refs.some(ref => ref.reference === '/work/new-module.mjs'));
+  assert.ok(!catalog.files.some(file => file.exists === false), 'absolute paths cannot authorize absent writable entries');
+
+  const rootFileCatalog = buildQueryCatalog({
+    'rootfile.mjs': 'export const rootFile = true;\n',
+    'nested/rootfile.mjs': 'export const nestedFile = true;\n',
+  }, 'Update /work/rootfile.mjs.', { parse, sourceRoot: '/work' });
+  assert.deepEqual(rootFileCatalog.files.map(file => file.path), ['rootfile.mjs'],
+    'an absolute reference to an exact root file must not become ambiguous with a nested basename match');
+});
+
+// Run alone: CHANGESET_TEST_PARSER=/path/to/acorn.mjs CHANGESET_QUERY_CATALOG_REPRO_DIR=/path/to/11-fresh-owner-briefs/001-hard-dependency-handoff node --test --test-name-pattern='retained run-11' scripts/changeset-study/query-catalog.test.mjs
+test('catalog resolves the retained run-11 handoff brief without copying it into a test fixture', { skip: !process.env.CHANGESET_QUERY_CATALOG_REPRO_DIR }, async () => {
+  const root = process.env.CHANGESET_QUERY_CATALOG_REPRO_DIR;
+  const task = JSON.parse(readFileSync(join(root, 'job.json'), 'utf8')).task;
+  const brief = readFileSync(join(root, 'implementation-brief.md'), 'utf8');
+  const catalog = buildQueryCatalog(task.files, brief, { parse: await parser(), sourceRoot: '/work' });
+  assert.ok(catalog.files.some(file => file.path === 'scripts/spec-observe/steps.mjs'));
+  assert.ok(!catalog.files.some(file => file.path === 'work/scripts/spec-observe/steps.mjs'));
+  assert.ok(!catalog.unresolved_refs.some(ref => ref.reference === '/work/scripts/spec-observe/steps.mjs'));
 });
 
 // Run alone: CHANGESET_TEST_PARSER=/path/to/acorn.mjs node --test --test-name-pattern='constants and local helper' scripts/changeset-study/query-catalog.test.mjs
