@@ -1,0 +1,13 @@
+applier.mjs adapts matching and patch semantics from the Apache-2.0 apply-patch
+implementation at https://github.com/openai/codex, revision
+ce0323f2f2d3b25e82806cd555237da3db4e1897. The accompanying LICENSE is retained
+for that upstream-derived material. No Ratatui implementation is included here.
+
+The upstream repository NOTICE follows, retained verbatim:
+
+OpenAI Codex
+Copyright 2025 OpenAI
+
+This project includes code derived from [Ratatui](https://github.com/ratatui/ratatui), licensed under the MIT license.
+Copyright (c) 2016-2022 Florian Dehau
+Copyright (c) 2023-2025 The Ratatui Developers
