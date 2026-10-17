@@ -610,3 +610,35 @@ The successful path, actual edit semantics, syntax diagnostic, retry count and m
 limits are unchanged. It performs no fuzzy application or model call. Focused offline
 checks cover ordered replay, literal escapes, ambiguous locations and the size bound.
 This backend is not part of the frozen 18/19 comparison and has no live result yet.
+
+## Protocol 20–21: bounded application diagnosis on the retained small assignments
+
+After the two fixed-plan Sol writer controls finish, run two complete three-case
+replays with the generic local application diagnostic. Reuse the exact run-18 raw
+plans and inherited owner briefs, original source, optimization `none`,
+`catalog-lookup`, `smaller-regions`, native DeepSeek off primary writers and the
+single native low recovery. Do not generate another owner brief or query plan.
+Run 20 freezes the committed diagnostic backend; run 21 repeats that exact freeze.
+Preserve the original call, output, concurrency, command and deadline bounds and
+the existing shared budget ledger. Stop for an integrity or budget failure, not
+merely an unfavorable application or downstream result.
+
+The only intended execution change from the run-18/19 backend is additional bounded
+context after a rejected replacement or range edit. Initial writer packets, edit
+semantics, successful application, format/syntax handling and retry eligibility are
+unchanged. Verify that executable difference and exact raw/dispatched plan identities
+before inference. The diagnostic uses rejected edits and current staged source only;
+behavioral test output remains outside the writer loop.
+
+Retain every result from both runs. Report application completion, writing plus
+optimizer/routing seconds, calls, retries, diagnostic-bearing retries, token usage
+and normalized cost. Preserve downstream checks separately and allocate inherited
+planning exactly once outside the writing denominator. Compare the pair with both
+18/19 observations, rather than selecting the fastest run or successful cells.
+If no eligible diagnostic is exercised, report that fact; timing variation alone
+cannot establish a benefit from it.
+
+The Sol controls retain the earlier exact backend and remain unchanged. A comparison
+with this diagnostic treatment evaluates a changed writing configuration, not an
+isolated model substitution under identical code. These exposed-case measurements
+cannot establish production reliability or end-to-end savings in the managed workflow.
