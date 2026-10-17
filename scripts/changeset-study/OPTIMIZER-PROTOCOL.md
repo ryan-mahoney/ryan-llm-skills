@@ -570,3 +570,26 @@ generation remains a source of variation. Keep downstream delivery separate and
 preserve failed plans or writes as measured outcomes. No source-splice prototype or
 other executor change enters this treatment. A complete application result must be
 repeated on the exact frozen plans before selecting a configuration.
+
+## Protocol 19: repeat the complete smaller-assignment writing treatment
+
+Run 18 completed application in all three original cases. Calibration and extraction
+also passed downstream checks; handoff did not. After its provenance and accounting
+audit, replay its exact raw plans and owner briefs once against the original source,
+using its exact execution freeze, model selectors, ungrouped dispatch and one local
+off-to-low retry. There are no new owner, query or Jev calls. Keep every attempt and
+all outer checks. Do not edit the plans or candidates using downstream findings.
+
+Evaluate all three cases again. Report newly incurred writing/check time and usage
+separately from inherited owner/query allocation. Compare writing plus optimization
+and routing elapsed time between the two runs, retaining failures rather than
+selecting successful cells from different runs. Two observations characterize this
+exposed workload only; they do not establish production reliability.
+
+For a later matched writing-boundary comparison, prioritize complete application
+under the existing limits, then lower writing/optimization/routing elapsed time;
+report normalized cost and calls as separate tradeoffs. A Sol-writer control must use
+the same plans, initial source and execution backend, be labeled separately from the
+DeepSeek product configuration, and retain its effective provider-bound differences.
+Neither this repeat nor a component-level control can establish an end-to-end win
+over historical native Sol or resolve handoff's downstream failures.
