@@ -1,6 +1,6 @@
-# Optimizer findings: runs 03–21
+# Optimizer findings: runs 03–23
 
-Smaller-region plans completed application across all three cases in run 18 and its exact frozen repeat, run 19. Full delivery fell from two cases to one, and writing plus optimization/routing rose from 73.550699 to 124.219280 seconds. These observations establish repeated application completion on the exposed cases, not reliable behavior or a quality-preserving win over Sol. The diagnostic pair 20/21 also completed application 3/3 twice, with delivery 1/3 twice and writing plus optimizer/routing 110.072900/136.809800 seconds. Its one diagnostic exposure establishes no improvement. Earlier deterministic grouping improved matched calibration; no global optimum is established.
+Smaller-region plans completed application across all three cases in run 18 and its exact frozen repeat, run 19. Full delivery fell from two cases to one, and writing plus optimization/routing rose from 73.550699 to 124.219280 seconds. These observations establish repeated application completion on the exposed cases, not reliable behavior or a quality-preserving win over Sol. The diagnostic pair 20/21 also completed application 3/3 twice, with delivery 1/3 twice and writing plus optimizer/routing 110.072900/136.809800 seconds. Its one diagnostic exposure establishes no improvement. The final fixed-off pair 22/23 again completed application 3/3, with delivery 1/3; its faster first-pass writing is a provisional candidate, while recovery was never exercised. Earlier deterministic grouping improved matched calibration; no global optimum is established.
 
 The [measurement tables](optimized-results.md), [JSON evidence](optimized-results.json) and [interactive report](optimized-results.html) retain actual and allocated accounting, phase times, provider checks and artifact hashes. [Sol-only measurements](sol-only-results.json) provide historical, unmatched controls.
 
@@ -29,6 +29,8 @@ Runs 04–06 share one corrected backend freeze: exact retry classification, a 4
 | 19 exact repeat | 3/3 | 1/3 | 1/2 selected cells | 1/3 | 1/3 |
 | 20 diagnostic | 3/3 | 1/3 | 1/2 selected cells | 1/3 | 1/3 |
 | 21 diagnostic repeat | 3/3 | 2/3 | 1/2 selected cells | 1/3 | 1/3 |
+| 22 fixed off | 3/3 | 2/3 | 1/2 selected cells | 1/3 | 1/3 |
+| 23 fixed-off repeat | 3/3 | 2/3 | 1/2 selected cells | 1/3 | 1/3 |
 
 Zero selected candidate checks means no candidate check ran; it is not a pass. Base visible checks can pass on an unchanged or partial candidate. Application completion is the primary outcome.
 
@@ -67,6 +69,8 @@ Actual model usage counts newly incurred requests. Allocated usage adds the orig
 | 19 exact repeat | 28 | 49,521 | 54,207 | 57,344 | 161,072 | 0.080248764 |
 | 20 diagnostic | 27 | 40,374 | 30,159 | 52,864 | 123,397 | 0.048620184 |
 | 21 diagnostic repeat | 29 | 59,161 | 42,182 | 53,376 | 154,719 | 0.068686956 |
+| 22 fixed off | 26 | 41,621 | 20,864 | 53,504 | 115,989 | 0.037844124 |
+| 23 fixed off repeat | 26 | 44,427 | 16,166 | 52,992 | 113,585 | 0.033045252 |
 
 | Allocated run | Calls | Input | Output | Cache read | Total tokens | Normalized USD |
 |---|---:|---:|---:|---:|---:|---:|
@@ -89,6 +93,8 @@ Actual model usage counts newly incurred requests. Allocated usage adds the orig
 | 19 exact repeat | 99 | 285,334 | 139,411 | 3,142,528 | 3,567,273 | 0.271748568 |
 | 20 diagnostic | 98 | 276,187 | 115,363 | 3,138,048 | 3,529,598 | 0.240119988 |
 | 21 diagnostic repeat | 100 | 294,974 | 127,386 | 3,138,560 | 3,560,920 | 0.260186760 |
+| 22 fixed off | 97 | 277,434 | 106,068 | 3,138,688 | 3,522,190 | 0.229343928 |
+| 23 fixed off repeat | 97 | 280,240 | 101,370 | 3,138,176 | 3,519,786 | 0.224545056 |
 
 Phase totals below are actual seconds. Query includes deterministic catalog generation. Phase sums exclude initialization and process overhead; elapsed totals use process wall time.
 
@@ -113,6 +119,8 @@ Phase totals below are actual seconds. Query includes deterministic catalog gene
 | 19 exact repeat | 0.000 | 0.000 | 0.000 | 0.002 | 124.218 | 123.156 | 248.127 | 795.475 |
 | 20 diagnostic | 0.000 | 0.000 | 0.000 | 0.002 | 110.071 | 91.137 | 201.957 | 749.305 |
 | 21 diagnostic repeat | 0.000 | 0.000 | 0.000 | 0.002 | 136.808 | 272.249 | 409.796 | 957.144 |
+| 22 fixed off | 0.000 | 0.000 | 0.000 | 0.002 | 50.081 | 124.462 | 175.258 | 722.606 |
+| 23 fixed off repeat | 0.000 | 0.000 | 0.000 | 0.002 | 35.298 | 245.559 | 281.557 | 828.905 |
 
 04–06 each allocate 612.420656s of original owner/query planning. Run 07 allocates 299.548442s of original owner work and incurs 79.310576s of fresh query/context work, including 0.128773s of catalog generation. Its allocated planning is 378.859018s; allocated elapsed is 419.725242s. No later Sol review or repair occurred after writers started.
 
@@ -342,6 +350,47 @@ Run 20 used 27 writer calls (26 off/one low); its sole retry used existing synta
 
 The diagnostic-pair writing mean is 123.441350 seconds, range 110.072900–136.809800, versus 98.884990 (73.550699–124.219280) for the earlier exact-plan DeepSeek pair 18/19. Neither pair establishes a speed improvement, and delivery did not improve. These are sequential, non-randomized observations with varying caches, provider latency and recovery work. Process-total time includes all failed checks; it is not the writing denominator. Allocation retains original 11 owner plus 18 query/context work exactly once and excludes donor writing/checks. All source/provider/receipt/attempt audits passed; prior 03–19 measurements remain unchanged.
 
-Latest shared ledger: 530 settled entries, zero holds, $3.925017016 exposure against $50. The separate Sol controls remain 52 entries/$0.607328400; the DeepSeek-route campaign through21 is 478 entries/$3.317688616. Its model receipts total $3.317429616; trial Jev adds $0.000169000 and another settled Jev entry $0.000090000. Main normalized model cost is $1.563241500, or $1.563410500 with trial Jev. Allocated donor costs are not new spend.
+At through-21 publication, the shared ledger had 530 settled entries, zero holds and $3.925017016 exposure against $50. The separate Sol controls remain 52 entries/$0.607328400; the DeepSeek-route campaign through21 is 478 entries/$3.317688616. Its model receipts total $3.317429616; trial Jev adds $0.000169000 and another settled Jev entry $0.000090000. Main normalized model cost is $1.563241500, or $1.563410500 with trial Jev. Allocated donor costs are not new spend.
 
-The fixed-off diagnostic pair 22–23 is prespecified and awaiting its frozen audit setup; no further trial has started. This is the next tuning comparison before provisional selection. No global optimum, quality-preserving win or full-workflow Sol improvement is established.
+The final main tuning pair 22–23 is now measured below. No further main trial has started. No global optimum, quality-preserving win or full-workflow Sol improvement is established.
+
+## Final main tuning pair: fixed off 22–23
+
+The final pair retained all three original tasks, exact 18 raw plans/briefs/dispatched partitions, smaller-region assignments, optimization `none`, original limits and diagnostic backend. Run 22 froze `3a4de3f`; run 23 retained its exact frozen inventory. The only writer-policy change from 20/21 removed the low-reasoning recovery selector: both primary and any existing retry would use off. Reachable main runtime modules and the injected parser matched 20. No owner, query, review, Jev or behavioral-feedback call occurred.
+
+| Case | Applied each run | Delivery each run | 22 writing + optimizer s | 23 writing + optimizer s | 22 checks s | 23 checks s |
+|---|---:|---|---:|---:|---:|---:|
+| hard-context-calibration | 3 | pass | 2.992324 | 2.753049 | 0.253830 | 0.265526 |
+| hard-dependency-handoff | 19 | fail | 24.933117 | 25.484960 | 72.269142 | 191.928447 |
+| hard-lifecycle-extract | 4 | fail | 22.156735 | 7.061948 | 51.939481 | 53.365427 |
+
+Application completed 3/3 in both runs; full delivery was 1/3 in both. Calibration passed base/candidate/external checks. Both handoff base suites passed, but generated candidate and external checks failed. Run 22's first candidate failure was a fixture dependency-graph error: steps 1–3 omitted requires/writes; external checks also found undefined packagePath. Run 23's first candidate failure was an undefined path passed to join in buildDependencyHandoff. Run 22 extraction first failed spec-file/directory identity (`undefined !== []`). Run 23 extraction first failed wave-member startup because ensureWaveDeadline tried to call an undefined method. Both extraction external checks failed; no generated extraction candidate check was selected. All failed check time remains included.
+
+Each run used exactly 26 off primary calls and zero retries. No diagnostic packet, reasoning token, length stop or transport retry occurred. The strict fixed-off audits independently replayed staged-source edits and validated all tasks, source/brief/raw/dispatched bytes, frozen SDK/backend/dependencies, provider/request/receipt identities, call bounds and qualification. Audit exit zero means integrity passed; it does not mean delivery passed. The audits made no provider call. Previous 03–21 report objects remain unchanged.
+
+| Accounting | 22 | 23 |
+|---|---:|---:|
+| Writing + optimizer/routing s | 50.082176 | 35.299958 |
+| Process-total s | 175.258161 | 281.556840 |
+| Allocated pipeline s | 722.606254 | 828.904933 |
+| Actual calls | 26 | 26 |
+| Input / output / cache-read tokens | 41,621 / 20,864 / 53,504 | 44,427 / 16,166 / 52,992 |
+| Actual tokens | 115,989 | 113,585 |
+| Normalized / receipt USD | 0.037844124 | 0.033045252 |
+| Allocated calls / tokens | 97 / 3,522,190 | 97 / 3,519,786 |
+| Allocated normalized USD | 0.229343928 | 0.224545056 |
+
+Cache writes are zero. Allocation retains inherited 11 owner plus 18 query/context exactly once, excluding donor writing/checks. Actual writing-stage cost equals native DeepSeek receipts; allocated work is not charged again.
+
+| Whole-suite writer pair | Mean writing + optimizer/routing s | Observed range s | Calls per suite | Retry exposure | Application / delivery |
+|---|---:|---:|---|---|---|
+| DeepSeek 18/19 off → low, earlier backend | 98.884990 | 73.550699–124.219280 | 28 / 28 | 2 / 2 | 3/3 twice; 2/3 then 1/3 |
+| DeepSeek 20/21 off → low, diagnostic backend | 123.441350 | 110.072900–136.809800 | 27 / 29 | 1 / 3; new diagnostic 0 / 1 | 3/3 twice; 1/3 twice |
+| DeepSeek 22/23 fixed off, diagnostic backend | 42.691067 | 35.299958–50.082176 | 26 / 26 | 0 / 0 | 3/3 twice; 1/3 twice |
+| Separate matched Sol controls 01/02 | 105.247815 | 102.315176–108.180454 | 26 / 26 | 0 / 0 | 3/3 twice; 2/3 twice |
+
+The fixed-off pair has the lowest observed writer mean and range on these exact tasks/plans. It is a provisional first-pass writing candidate. Because no fixed-off retry occurred, neither fast recovery capability nor a causal speed benefit from changing recovery mode is established. Only two sequential, non-randomized observations per pair, varying output/cache/provider latency and imperfect provider-output-cap parity limit comparisons. Sol's downstream outcomes were stronger; none of these configurations delivered every case. The historical full-workflow Sol observations are unmatched and cannot establish a writing-boundary win. No global optimum or quality-preserving full-workflow speedup is claimed.
+
+Final main snapshot: shared ledger 582 settled entries, zero holds, $3.995906392 of $50. Separate Sol controls remain 52 entries/$0.607328400; DeepSeek-route campaign03–23 is 530 entries/$3.388577992. Main model receipts $3.388318992 plus trial Jev $0.000169000 and other Jev $0.000090000 reconcile to that campaign exposure. Main normalized model cost is $1.634130876, or $1.634299876 including trial Jev.
+
+Main tuning stops here for configuration selection. The separate DeepSeek-only changesets architecture is prepared for a subsequent comparison; no result from that route is included here. No further main trial has started.

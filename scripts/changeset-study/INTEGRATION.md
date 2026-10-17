@@ -3,6 +3,13 @@
 **Status:** design for a bounded research comparison. This branch does not implement
 this path in the managed runtime or change production routing.
 
+The [configuration assessment](CONFIGURATION.md) selects the provisional writing
+candidate from the completed tuning sequence: small assignments, bounded catalog
+lookup, four concurrent DeepSeek writers, and no optional grouping or Jev routing.
+Its lower observed writing time does not establish a quality-preserving or complete
+workflow improvement. Integration must measure the existing owner's work, query
+planning, writing, required checks and separate review together.
+
 The proposed sequence is:
 
 ```text

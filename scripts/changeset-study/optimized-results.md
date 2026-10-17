@@ -23,6 +23,8 @@ Actual incurred model usage excludes reused planning. plans_from adds original o
 | 19-smaller-regions-repeat | none/catalog-lookup | 3/3 | 0 | 248.13 | 795.48 | 124.22 | 124.22 |
 | 20-application-diagnostic | none/catalog-lookup | 3/3 | 0 | 201.96 | 749.31 | 110.07 | 110.07 |
 | 21-application-diagnostic-repeat | none/catalog-lookup | 3/3 | 0 | 409.80 | 957.14 | 136.81 | 136.81 |
+| 22-fast-recovery | none/catalog-lookup | 3/3 | 0 | 175.26 | 722.61 | 50.08 | 50.08 |
+| 23-fast-recovery-repeat | none/catalog-lookup | 3/3 | 0 | 281.56 | 828.90 | 35.30 | 35.30 |
 
 | Run | Calls actual / allocated | Tokens actual / allocated | Equivalent USD actual / allocated | Jev calls | Jev tokens | Jev est. USD |
 |---|---:|---:|---:|---:|---:|---:|
@@ -45,6 +47,8 @@ Actual incurred model usage excludes reused planning. plans_from adds original o
 | 19-smaller-regions-repeat | 28 / 99 | 161072 / 3567273 | 0.080249 / 0.271749 | 0 | 0 | 0.000000 |
 | 20-application-diagnostic | 27 / 98 | 123397 / 3529598 | 0.048620 / 0.240120 | 0 | 0 | 0.000000 |
 | 21-application-diagnostic-repeat | 29 / 100 | 154719 / 3560920 | 0.068687 / 0.260187 | 0 | 0 | 0.000000 |
+| 22-fast-recovery | 26 / 97 | 115989 / 3522190 | 0.037844 / 0.229344 | 0 | 0 | 0.000000 |
+| 23-fast-recovery-repeat | 26 / 97 | 113585 / 3519786 | 0.033045 / 0.224545 | 0 | 0 | 0.000000 |
 
 | Cell | Valid | Applied | Visible base | Candidate failures | External | Owner s* | Query s* | Routing s | Optimization s | Writing s | Checks s |
 |---|---|---|---|---:|---|---:|---:|---:|---:|---:|---:|
@@ -105,6 +109,12 @@ Actual incurred model usage excludes reused planning. plans_from adds original o
 | 21-application-diagnostic-repeat/000-hard-context-calibration | true | true | true | 0/1 | true | 54.36 | 17.21 | 0.00 | 0.00 | 3.04 | 0.25 |
 | 21-application-diagnostic-repeat/001-hard-dependency-handoff | true | true | true | 1/1 | false | 205.22 | 90.18 | 0.00 | 0.00 | 111.24 | 246.02 |
 | 21-application-diagnostic-repeat/002-hard-lifecycle-extract | true | true | false | 0/0 | false | 151.80 | 28.58 | 0.00 | 0.00 | 22.53 | 25.98 |
+| 22-fast-recovery/000-hard-context-calibration | true | true | true | 0/1 | true | 54.36 | 17.21 | 0.00 | 0.00 | 2.99 | 0.25 |
+| 22-fast-recovery/001-hard-dependency-handoff | true | true | true | 1/1 | false | 205.22 | 90.18 | 0.00 | 0.00 | 24.93 | 72.27 |
+| 22-fast-recovery/002-hard-lifecycle-extract | true | true | false | 0/0 | false | 151.80 | 28.58 | 0.00 | 0.00 | 22.16 | 51.94 |
+| 23-fast-recovery-repeat/000-hard-context-calibration | true | true | true | 0/1 | true | 54.36 | 17.21 | 0.00 | 0.00 | 2.75 | 0.27 |
+| 23-fast-recovery-repeat/001-hard-dependency-handoff | true | true | true | 1/1 | false | 205.22 | 90.18 | 0.00 | 0.00 | 25.48 | 191.93 |
+| 23-fast-recovery-repeat/002-hard-lifecycle-extract | true | true | false | 0/0 | false | 151.80 | 28.58 | 0.00 | 0.00 | 7.06 | 53.37 |
 
 *Owner and query seconds include allocated original planning for replays. JSON retains actual phase time and all stage calls/tokens separately. Application completion means execute returned ok, independently of downstream checks.
 
@@ -114,9 +124,18 @@ matched observations available.
 - 18-smaller-regions: 73.55 writer + optimizer + routing seconds; 19-smaller-regions-repeat: 124.22. Faster observed pipeline: 18-smaller-regions.
 - 18-smaller-regions: 73.55 writer + optimizer + routing seconds; 20-application-diagnostic: 110.07. Faster observed pipeline: 18-smaller-regions.
 - 18-smaller-regions: 73.55 writer + optimizer + routing seconds; 21-application-diagnostic-repeat: 136.81. Faster observed pipeline: 18-smaller-regions.
+- 18-smaller-regions: 73.55 writer + optimizer + routing seconds; 22-fast-recovery: 50.08. Faster observed pipeline: 22-fast-recovery.
+- 18-smaller-regions: 73.55 writer + optimizer + routing seconds; 23-fast-recovery-repeat: 35.30. Faster observed pipeline: 23-fast-recovery-repeat.
 - 19-smaller-regions-repeat: 124.22 writer + optimizer + routing seconds; 20-application-diagnostic: 110.07. Faster observed pipeline: 20-application-diagnostic.
 - 19-smaller-regions-repeat: 124.22 writer + optimizer + routing seconds; 21-application-diagnostic-repeat: 136.81. Faster observed pipeline: 19-smaller-regions-repeat.
+- 19-smaller-regions-repeat: 124.22 writer + optimizer + routing seconds; 22-fast-recovery: 50.08. Faster observed pipeline: 22-fast-recovery.
+- 19-smaller-regions-repeat: 124.22 writer + optimizer + routing seconds; 23-fast-recovery-repeat: 35.30. Faster observed pipeline: 23-fast-recovery-repeat.
 - 20-application-diagnostic: 110.07 writer + optimizer + routing seconds; 21-application-diagnostic-repeat: 136.81. Faster observed pipeline: 20-application-diagnostic.
+- 20-application-diagnostic: 110.07 writer + optimizer + routing seconds; 22-fast-recovery: 50.08. Faster observed pipeline: 22-fast-recovery.
+- 20-application-diagnostic: 110.07 writer + optimizer + routing seconds; 23-fast-recovery-repeat: 35.30. Faster observed pipeline: 23-fast-recovery-repeat.
+- 21-application-diagnostic-repeat: 136.81 writer + optimizer + routing seconds; 22-fast-recovery: 50.08. Faster observed pipeline: 22-fast-recovery.
+- 21-application-diagnostic-repeat: 136.81 writer + optimizer + routing seconds; 23-fast-recovery-repeat: 35.30. Faster observed pipeline: 23-fast-recovery-repeat.
+- 22-fast-recovery: 50.08 writer + optimizer + routing seconds; 23-fast-recovery-repeat: 35.30. Faster observed pipeline: 23-fast-recovery-repeat.
 
 | Historical control (unmatched) | Seconds | Calls | Tokens | Equivalent USD |
 |---|---:|---:|---:|---:|

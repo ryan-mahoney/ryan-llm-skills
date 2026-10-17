@@ -33,8 +33,12 @@ Delivery still varies. The [writer-boundary comparison](writer-control-results.m
 sequential observations per route: DeepSeek 73.55/124.22 seconds, Sol 102.32/108.18.
 Normalized cost, receipt charges and provider-policy limits remain separate. The
 bounded diagnostic pair 20/21 also completed application 3/3 twice, but delivery
-remained 1/3 and its single diagnostic exposure establishes no improvement. The
-prespecified fixed-off pair is next; configuration selection is provisional.
+remained 1/3 and its single diagnostic exposure establishes no improvement. The final
+fixed-off pair 22/23 completed application 3/3 twice, delivery 1/3 twice,
+with a 42.69-second mean writing plus optimizer time. It exercised no retries, so
+fixed-off recovery remains untested. Main tuning is complete with a
+[provisional configuration](CONFIGURATION.md);
+DeepSeek-only changesets is the next separate architecture comparison.
 See the [three-role visual](optimized-results.html), [measurements](optimized-results.md),
 [JSON evidence](optimized-results.json) and [comparison protocol](OPTIMIZER-PROTOCOL.md).
 The study remains active.
