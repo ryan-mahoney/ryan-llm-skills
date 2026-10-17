@@ -498,3 +498,50 @@ and downstream delivery separately against the fixed-off and fixed-low treatment
 If this completes application across all three cases, repeat its exact freeze before
 selection. Otherwise investigate smaller assignments as a distinct query-planning
 treatment; do not keep escalating output limits or add unbounded retries.
+
+## Protocol 17: ungrouped recovery control
+
+Run 17 will reuse the exact run-16 freeze (`1f7e427`), run-12 raw plans and owner
+briefs, original source/checks, and the same DeepSeek off-first/low-local-retry policy.
+Set optimization to none; make no owner, Sol query or Jev call. This retains the
+existing plan as the baseline for a later smaller-regions planning treatment and
+changes grouping alone relative to run 16. Retain all attempts, failures, actual
+charges and inherited planning allocation. Application completion and downstream
+checks remain separate outcomes; variable execution of the same plan does not
+establish a deterministic defect or a causal performance benefit.
+
+## Prospective smaller-regions query treatment
+
+`--query-granularity smaller-regions` is an optional, unmeasured planning treatment.
+It requires `owner-query-writer`, `--query-mode catalog-lookup`, and
+`--optimization none`. Omitting the option retains the existing query prompt.
+A plan replay inherits its donor's granularity; an explicit mismatch is rejected.
+Manifest, job, result and reporter retain this provenance, and freeze replay checks
+include it. Reusing only briefs does not inherit the donor's planning treatment.
+
+The generic rule asks Sol to separate independent existing-file regions and syntax
+transformations, with explicit same-file dependency chains and valid syntax at each
+stage. It does not supply task-specific repairs or change owner decisions. Current
+source-range compose creates only an absent file. Keep its assembly and required
+scope/separator conversions atomic; later existing-file replacements accept literal
+text, not source parts. Do not regenerate large unchanged bodies to manufacture
+smaller packets. Newly created files can use staged whole-file context under the
+existing source cap; existing-file bindings still come from catalog or lookup.
+
+Before a fresh query, reserve all three permitted query calls and two writer attempts
+per operation from the actual remaining shared call allowance. The assignment cap is
+`min(200, floor((model_calls - calls_used - 3) / 2))`. A plan replay reserves zero query
+calls instead. Fail explicitly if no assignment fits; reject over-cap plans before
+writing using the existing single correction allowance. All source, request, output,
+call and time limits remain unchanged. Optimization none preserves partitions while
+retaining deterministic conflict ordering and duplicate-context removal.
+
+A future measurement should reuse the exact source and owner-brief bytes from run 11,
+freeze new query plans, and hold writer/recovery settings, backend and checks fixed.
+Keep optimizer grouping disabled in both arms. Compare application completion and
+local retries alongside total calls, tokens, cost and elapsed time. Sol acts only
+before dispatch; no downstream behavioral result is given to a writer or query.
+The new query plan together with optimization none is an exploratory treatment; a
+comparison with a deterministically grouped prior run does not isolate granularity
+as the cause of any difference. This offline implementation establishes no
+performance or reliability benefit.
