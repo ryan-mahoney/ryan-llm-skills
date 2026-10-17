@@ -41,7 +41,9 @@ The revised [writer instructions](../../v4a-editor.mjs) require exactly one enve
 one owned file header, chunks in original source order and complete physical lines.
 They explain that a source-range composition recipe must become literal complete
 V4A file content; V4A has no implicit copy operation. These changes passed scoped
-review; paid rerun results remain pending. The applier is unchanged.
+review. The [completed rerun](v4a-rerun-results.md) applied all three tasks,
+with 15 of 17 primary V4A packets accepted and two successful JSON fallbacks.
+Two tasks passed behavioral verification. The applier is unchanged.
 
 Keep strict application and one bounded same-model JSON fallback. Do not guess
 missing line tails, silently reorder chunks, extract arbitrary nested patches or
