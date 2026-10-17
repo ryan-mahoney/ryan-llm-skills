@@ -378,3 +378,30 @@ context's byte count. Offline initial contexts for calibration, handoff and extr
 measure 25,460, 104,647 and 84,602 bytes respectively. Their catalogs measure 5,038,
 34,742 and 51,727 bytes. All fit the applicable bounds. Ten focused catalog/lookup/cell
 checks passed in 921 ms; Jev's offline verification returned fallback advice.
+
+## Protocol 13: local syntax context for composed writes
+
+Run 12 completed calibration and handoff writing. Extraction failed its first
+composition because two copied object methods lacked a separating comma. Its one
+local retry received the parser diagnostic and rejected edit JSON, but no assembled
+source around the error. The retry moved a declaration into an object literal and
+failed syntax again. These errors came from application diagnostics and rejected
+writer responses; downstream behavioral failures do not inform this treatment.
+
+Keep the exact run 12 briefs and raw query plans. Improve only the writer's local
+application feedback: for a compose syntax error with a known parser line, provide
+a bounded excerpt of the privately assembled output and a deterministic mapping to
+the intersecting compose parts. Bound the additional serialized diagnostic to 4 KiB.
+Do not expose the full assembled file or guess a parser location. Explain that compose
+concatenates parts literally, without inserting separators or repairing lexical scope.
+No successful edit is changed, and the writer still has at most one local retry.
+There is no owner regeneration, fresh Sol query, post-dispatch Sol call, or behavioral
+feedback to writers. Syntax failure leaves staged source unchanged.
+
+After focused offline verification, replay all three cases once under one new freeze
+using the run 12 raw plans and deterministic grouping. Retain failed attempts, source
+hashes, the additional diagnostic and all receipts. Attribute reused owner/query work
+as allocation, not new spending. This is a new exploratory treatment; it is neither a
+successful repeat nor an isolated estimate of prompt effects. Complete application
+remains separate from downstream delivery. Do not select a configuration from one
+successful case or count unchanged-source checks as implemented behavior.

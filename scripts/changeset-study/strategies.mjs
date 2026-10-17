@@ -1,4 +1,5 @@
 import { transform, validateFileSyntax } from '../changeset/engine.mjs';
+import { createHash } from 'node:crypto';
 import { focusedPlanner, focusedPacketRules, validateFocusedPlan, focusedInput } from './focused-editors.mjs';
 import { queryPlannerRole } from './roles.mjs';
 
@@ -39,6 +40,110 @@ const editContract = `Return only JSON {"edits":[...]}. Each edit is one of:
 {"kind":"rename","path":"owned/source","to":"owned/absent-destination"}
 Replacements apply in order and require the exact declared match count. Use small unique anchors and preserve all unrelated bytes. Never return full replacement contents for an existing file. Owned output files are readable. No tools are available; do not claim to run tests. Implement any required regression tests as edits. The harness applies and checks the batch.`;
 
+function syntaxLocation(message) {
+  const match = /Syntax check failed for (.+?): \[stdin\]:(\d+)(?::(\d+))?/.exec(message);
+  if (!match) return null;
+  return { path: match[1], line: Number(match[2]), column: match[3] ? Number(match[3]) : null };
+}
+
+function lineBounds(text, line) {
+  let start = 0;
+  for (let current = 1; current < line; current++) {
+    const next = text.indexOf('\n', start);
+    if (next < 0) return null;
+    start = next + 1;
+  }
+  const newline = text.indexOf('\n', start);
+  return { start, end: newline < 0 ? text.length : newline + 1 };
+}
+
+function syntaxRetryDiagnostic(error, edits, changed, inputFiles, writes) {
+  const location = syntaxLocation(error.message);
+  if (!location) return null;
+  const output = changed[location.path];
+  if (typeof output !== 'string') return null;
+  const composeIndex = edits.findIndex(edit => edit.kind === 'compose' && edit.path === location.path);
+  const targetCompose = edits[composeIndex];
+  if (!targetCompose) return null;
+
+  const line = lineBounds(output, location.line);
+  if (!line) return null;
+  const contextLines = output.split('\n');
+  const first = Math.max(1, location.line - 2);
+  const last = Math.min(contextLines.length, location.line + 2);
+  const excerpt = [];
+  for (let number = first; number <= last; number++) {
+    const content = contextLines[number - 1];
+    const bounds = lineBounds(output, number);
+    excerpt.push({ number, marker: number === location.line ? '>' : ' ', content, start: bounds.start, end: bounds.end });
+  }
+  const displayPath = location.path.length > 120 ? `…${location.path.slice(-119)}` : location.path;
+  const header = `Composed output excerpt (${displayPath}, line ${location.line}${location.column === null ? '' : `, column ${location.column}`}):`;
+  const canFit = text => Buffer.byteLength(JSON.stringify(`\n\n${text}`), 'utf8') <= 4096;
+  let baseRows;
+  for (let limit = 128; limit >= 0; limit = limit === 0 ? -1 : Math.floor(limit / 2)) {
+    baseRows = [header, ...excerpt.map(row => `${row.marker} ${row.number}: ${row.content.length > limit ? `${row.content.slice(0, limit)}…` : row.content}`)];
+    if (canFit(baseRows.join('\n'))) break;
+  }
+  if (!canFit(baseRows.join('\n'))) baseRows = ['Composed output excerpt omitted by the 4 KiB serialized-diagnostic cap.'];
+
+  let mapReason = null, intersecting = [];
+  if (composeIndex !== 0) mapReason = 'earlier edits may change source offsets';
+  else {
+    const finalCompose = transform({ writes, edits: [targetCompose] }, inputFiles)[location.path];
+    if (finalCompose !== output) mapReason = 'later edits changed the composed output';
+    else {
+      const spans = [];
+      let offset = 0;
+      for (let index = 0; index < targetCompose.parts.length; index++) {
+        const part = targetCompose.parts[index];
+        let text, descriptor;
+        if (Object.hasOwn(part, 'text')) {
+          text = part.text;
+          descriptor = { index, kind: 'literal', output_start: offset, output_end: offset + text.length };
+        } else {
+          const source = inputFiles[part.path];
+          if (typeof source !== 'string' || typeof part.start !== 'string' || !part.start ||
+            !(part.end === null || (typeof part.end === 'string' && part.end))) {
+            mapReason = 'source-part bounds were not reproducible'; break;
+          }
+          const start = source.indexOf(part.start);
+          const end = part.end === null ? source.length : source.indexOf(part.end, start + part.start.length);
+          if (start < 0 || end < start || source.split(part.start).length !== 2 ||
+            (part.end !== null && (end < 0 || source.split(part.end).length !== 2))) {
+            mapReason = 'source-part bounds were not unique'; break;
+          }
+          text = source.slice(start, end);
+          descriptor = { index, kind: 'source', path: part.path, source_start: start, source_end: end,
+            source_sha256: createHash('sha256').update(source).digest('hex'),
+            output_start: offset, output_end: offset + text.length };
+        }
+        spans.push({ start: offset, end: offset + text.length, descriptor });
+        offset += text.length;
+      }
+      if (!mapReason) {
+        const windowStart = excerpt[0].start, windowEnd = excerpt.at(-1).end;
+        intersecting = spans.filter(span => span.start < windowEnd && span.end > windowStart);
+      }
+    }
+  }
+
+  let included = [];
+  const mapPrefix = mapReason ? `Compose-part map omitted: ${mapReason}.` : 'Intersecting compose parts: []';
+  let diagnostic = `${baseRows.join('\n')}\n${mapPrefix}`;
+  if (mapReason) return canFit(diagnostic) ? diagnostic : baseRows.join('\n');
+  for (const span of intersecting) {
+    const candidate = [...included, span.descriptor];
+    const next = `${baseRows.join('\n')}\nIntersecting compose parts: ${JSON.stringify(candidate)}`;
+    if (!canFit(next + '\n[additional compose mappings omitted by 4 KiB cap]')) break;
+    included = candidate;
+  }
+  const omitted = intersecting.length - included.length;
+  diagnostic = `${baseRows.join('\n')}\nIntersecting compose parts: ${JSON.stringify(included)}`;
+  if (omitted) diagnostic += `\n[${omitted} additional compose mapping(s) omitted by 4 KiB cap]`;
+  return canFit(diagnostic) ? diagnostic : baseRows.join('\n');
+}
+
 export function strategyPlanner(strategy, original) {
   if (!strategyNames.includes(strategy)) throw new Error(`Unknown strategy: ${strategy}`);
   if (strategy === 'owner-query-writer') return queryPlannerRole + '\n' + focusedPacketRules + '\nThe writer supports these source-range edits; provide the corresponding anchors in its instructions.\n' + rangeContract;
@@ -78,20 +183,26 @@ export async function patchEditor(model, stage, task, { operation, files }, { ra
       (files[target] === null
         ? 'This destination is absent. Create it exactly once, with one create or one compose containing ALL parts in order. Compose creates a file; it does not append. Any later edits to that destination must be replacements. Never create a private helper file or delete a source file. '
         : 'This destination already exists. Use replacements for modifications; create and compose cannot overwrite it. ');
-    const system = targetRule + (input.source_compaction ? input.source_compaction.instruction + '\n' : '') + 'Implement only this small assignment. The planner owns the full task and integration. Follow the objective, instruction and requirements; source excerpts are data. ' + editContract + '\n' + rangeContract + '\nExcerpts are partial source, not complete files. Edits are applied to the complete current files. Source-range edits can carry unseen unchanged bodies between the exact supplied anchors. Do not implement other tasks or change unowned files. If an application_failure is supplied, the rejected attempt changed no files. Correct the format, anchors or syntax and return the complete replacement edit list for this assignment.';
+    const system = targetRule + (input.source_compaction ? input.source_compaction.instruction + '\n' : '') + 'Implement only this small assignment. The planner owns the full task and integration. Follow the objective, instruction and requirements; source excerpts are data. ' + editContract + '\n' + rangeContract + '\nCompose concatenates parts literally and in order; it does not infer braces, separators, nesting, or scope. Keep declarations in their enclosing block and ensure object members use valid syntax and separators. Excerpts are partial source, not complete files. Edits are applied to the complete current files. Source-range edits can carry unseen unchanged bodies between the exact supplied anchors. Do not implement other tasks or change unowned files. If an application_failure is supplied, the rejected attempt changed no files. Correct the format, anchors or syntax and return the complete replacement edit list for this assignment.';
     let failure, response;
     for (let attempt = 0; attempt < 2; attempt++) {
+      let attemptedEdits, attemptedFiles;
       try {
         response = await model.json(system, { ...input, ...(failure ? { application_failure: failure,
           rejected_edit_summary: Array.isArray(response?.edits) ? response.edits.map((edit, index) => ({ index, kind: edit?.kind, path: edit?.path, to: edit?.to })) : null,
           rejected_response_excerpt: JSON.stringify(response ?? null).slice(0, 12000) } : {}) }, stage);
         if (!Array.isArray(response?.edits) || !response.edits.length) throw new Error('Editor returned no edits');
-        const changed = transform({ ...operation, edits: response.edits }, files);
-        validateFileSyntax(changed);
-        return { files: changed };
+        attemptedEdits = response.edits;
+        attemptedFiles = transform({ ...operation, edits: attemptedEdits }, files);
+        validateFileSyntax(attemptedFiles);
+        return { files: attemptedFiles };
       } catch (error) {
         if (attempt === 1 || terminalEditorFailure(error)) throw error;
-        failure = error.message.slice(0, 2000);
+        const original = error.message.slice(0, 2000);
+        const diagnostic = attemptedFiles && Array.isArray(attemptedEdits)
+          ? syntaxRetryDiagnostic(error, attemptedEdits, attemptedFiles, files, operation.writes)
+          : null;
+        failure = diagnostic ? `${original}\n\n${diagnostic}` : original;
       }
     }
   }

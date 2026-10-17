@@ -48,6 +48,89 @@ test('editor recovery is bounded to two attempts and syntax failure is reported 
   assert.equal(files['answer.mjs'], 'export const answer = 1;\n// unrelated\nexport const untouched = 3;\n');
 });
 
+test('compose syntax retry includes bounded output and exact intersecting source-part provenance', async () => {
+  const source = '  first() {}\n  second() {}\n';
+  const operation = { id: 'compose', executor: 'simple', reads: ['source.mjs'], writes: ['combined.mjs'], depends_on: [],
+    objective: 'Move methods into an object', instruction: 'Compose the source methods into the object.', requirements: ['Preserve both methods.'],
+    context: [{ path: 'source.mjs', start: '  first() {}\n', end: null }] };
+  const files = { 'source.mjs': source, 'combined.mjs': null };
+  const seen = [];
+  const model = { json: async (system, input) => {
+    seen.push({ system, input });
+    return { edits: [{ kind: 'compose', path: 'combined.mjs', parts: seen.length === 1
+      ? [{ text: 'export const api = {\n' }, { path: 'source.mjs', start: '  first() {}\n', end: null }, { text: '};\n' }]
+      : [{ text: 'export const api = {\n' }, { path: 'source.mjs', start: '  first() {}', end: '\n  second() {}\n' },
+        { text: ',\n' }, { path: 'source.mjs', start: '  second() {}\n', end: null }, { text: '};\n' }] }] };
+  } };
+
+  const result = await patchEditor(model, 'editor', 'contract', { operation, files }, { focused: true });
+  assert.equal(seen.length, 2);
+  assert.match(seen[0].system, /Compose concatenates parts literally and in order/);
+  const failure = seen[1].input.application_failure;
+  assert.match(failure, /Composed output excerpt \(combined\.mjs, line 3/);
+  assert.match(failure, /> 3:   second\(\) \{\}/);
+  const mappingText = failure.split('Intersecting compose parts: ')[1].split('\n')[0];
+  const mappings = JSON.parse(mappingText);
+  assert.deepEqual(mappings.filter(part => part.kind === 'literal').map(part => part.index), [0, 2]);
+  const sourceMapping = mappings.find(part => part.kind === 'source');
+  const { source_sha256, ...sourceMappingIdentity } = sourceMapping;
+  assert.deepEqual(sourceMappingIdentity, { index: 1, kind: 'source', path: 'source.mjs', source_start: 0, source_end: source.length,
+    output_start: 21, output_end: 21 + source.length });
+  assert.match(source_sha256, /^[a-f0-9]{64}$/);
+  assert.deepEqual(mappings.filter(part => part.kind === 'literal').map(part => ({ index: part.index, output_start: part.output_start, output_end: part.output_end })), [
+    { index: 0, output_start: 0, output_end: 21 }, { index: 2, output_start: 48, output_end: 51 },
+  ]);
+  const extra = failure.slice(failure.indexOf('\n\nComposed output excerpt'));
+  assert.ok(Buffer.byteLength(JSON.stringify(extra), 'utf8') <= 4096, 'serialized assembled context and map stay within the extra diagnostic cap');
+  assert.deepEqual({ ...files }, { 'source.mjs': source, 'combined.mjs': null }, 'rejected output never mutates staged input');
+  assert.equal(result.files['combined.mjs'], 'export const api = {\n  first() {},\n  second() {}\n};\n');
+});
+
+test('compose syntax retry does not guess a location when the parser supplies none', async () => {
+  const operation = { id: 'compose-json', executor: 'simple', reads: ['source.mjs'], writes: ['combined.json'], depends_on: [],
+    objective: 'Compose a JSON document', instruction: 'Compose the document.', requirements: ['Return valid JSON.'],
+    context: [{ path: 'source.mjs', start: 'export const source', end: null }] };
+  const files = { 'source.mjs': 'export const source = 1;\n', 'combined.json': null };
+  const seen = [];
+  const model = { json: async (_system, input) => {
+    seen.push(input);
+    return { edits: [{ kind: 'compose', path: 'combined.json', parts: [{ text: '{' }] }] };
+  } };
+
+  await assert.rejects(patchEditor(model, 'editor', 'contract', { operation, files }, { focused: true }), error => error instanceof SyntaxError);
+  assert.equal(seen.length, 2);
+  assert.match(seen[1].application_failure, /Expected property name/);
+  assert.ok(!seen[1].application_failure.includes('Composed output excerpt'));
+  assert.ok(!seen[1].application_failure.includes('Intersecting compose parts'));
+  assert.deepEqual({ ...files }, { 'source.mjs': 'export const source = 1;\n', 'combined.json': null });
+});
+
+test('compose retry keeps the final syntax excerpt but omits stale part mapping after target edits', async () => {
+  const source = 'export const value = 1;\n';
+  const operation = { id: 'compose-edit', executor: 'simple', reads: ['source.mjs'], writes: ['combined.mjs'], depends_on: [],
+    objective: 'Compose and update a module', instruction: 'Compose the source then update its value.', requirements: ['Keep valid syntax.'],
+    context: [{ path: 'source.mjs', start: 'export const value', end: null }] };
+  const files = { 'source.mjs': source, 'combined.mjs': null };
+  const seen = [];
+  const model = { json: async (_system, input) => {
+    seen.push(input);
+    return { edits: [
+      { kind: 'compose', path: 'combined.mjs', parts: [{ path: 'source.mjs', start: 'export const value', end: null }] },
+      { kind: 'replace', path: 'combined.mjs', search: 'value = 1',
+        text: seen.length === 1 ? 'value = {' : 'value = 2' },
+    ] };
+  } };
+
+  const result = await patchEditor(model, 'editor', 'contract', { operation, files }, { focused: true });
+  assert.equal(seen.length, 2);
+  const failure = seen[1].application_failure;
+  assert.match(failure, /Composed output excerpt \(combined\.mjs, line 1/);
+  assert.match(failure, /Compose-part map omitted: later edits changed the composed output/);
+  assert.ok(!failure.includes('Intersecting compose parts:'));
+  assert.equal(result.files['combined.mjs'], 'export const value = 2;\n');
+  assert.deepEqual({ ...files }, { 'source.mjs': source, 'combined.mjs': null });
+});
+
 test('preflight rejects missing and oversized initial excerpts but leaves future source to staged execution', () => {
   const first = { ...operation(), context: [{ path: 'answer.mjs', start: 'missing', end: null }] };
   const later = { ...operation(), id: 'later', depends_on: ['answer'], context: [{ path: 'answer.mjs', start: 'future anchor', end: null }] };
