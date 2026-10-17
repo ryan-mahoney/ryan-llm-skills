@@ -1,0 +1,30 @@
+name: Changeset runtime boundaries
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/changeset/**'
+      - 'scripts/changeset-study/**'
+      - 'pi/extensions/spec-runtime/**'
+      - '.github/workflows/changeset-runtime.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  focused-runtime:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install filesystem boundary and locked runtime dependency
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bubblewrap
+          npm ci --prefix pi/extensions/spec-runtime
+      - name: Exercise changeset and real Linux source boundaries
+        run: node --test pi/extensions/spec-runtime/changeset-runtime.test.mjs pi/extensions/spec-runtime/changeset-runtime.integration.test.mjs pi/extensions/spec-runtime/source-commands.test.mjs

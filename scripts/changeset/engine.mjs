@@ -11,7 +11,7 @@ export function compile(plan) {
     const op = structuredClone(raw);
     if (!/^[a-z][a-z0-9_-]*$/.test(op.id) || ids.has(op.id)) throw new Error('Invalid or duplicate operation ID');
     ids.add(op.id);
-    if (!['deterministic', 'simple', 'involved'].includes(op.executor)) throw new Error(`Invalid executor: ${op.id}`);
+    if (!['deterministic', 'simple', 'involved', 'generated'].includes(op.executor)) throw new Error(`Invalid executor: ${op.id}`);
     for (const key of ['reads', 'writes', 'depends_on']) {
       if (!Array.isArray(op[key]) || op[key].some(x => typeof x !== 'string') || new Set(op[key]).size !== op[key].length) throw new Error(`Invalid ${key}: ${op.id}`);
     }
@@ -159,7 +159,7 @@ export async function execute(plan, workspace, { concurrency = 4, adapters = {},
       if (op.executor === 'deterministic') files = transform(op, context);
       else {
         const adapter = adapters[op.executor]; if (!adapter) throw new Error(`No adapter for ${op.executor}`);
-        modelCalls++;
+        if (op.executor !== 'generated') modelCalls++;
         const response = await adapter({ operation: structuredClone(op), files: context, signal });
         files = response?.files; usage = response?.usage ?? null;
       }
@@ -209,6 +209,6 @@ export async function execute(plan, workspace, { concurrency = 4, adapters = {},
   return {
     schema_version: 1, ok, plan_sha256: hash(JSON.stringify(plan)), operations: records.sort((a, b) => operations.findIndex(o => o.id === a.id) - operations.findIndex(o => o.id === b.id)),
     verification, changes: changes.map(c => ({ path: c.path, before_sha256: hash(c.before), after_sha256: hash(c.after) })),
-    metrics: { execution_ms, total_ms: performance.now() - started, peak_concurrency: peak, anti_dependencies: antiDependencies, model_calls: modelCalls, deterministic_operations: records.filter(r => r.executor === 'deterministic').length, failed: records.filter(r => r.status === 'failed').length, blocked: records.filter(r => r.status === 'blocked').length },
+    metrics: { execution_ms, total_ms: performance.now() - started, peak_concurrency: peak, anti_dependencies: antiDependencies, model_calls: modelCalls, deterministic_operations: records.filter(r => r.executor === 'deterministic').length, generated_operations: records.filter(r => r.executor === 'generated').length, failed: records.filter(r => r.status === 'failed').length, blocked: records.filter(r => r.status === 'blocked').length },
   };
 }

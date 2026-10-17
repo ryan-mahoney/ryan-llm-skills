@@ -8,6 +8,19 @@ subagentOnlyExtensions: ~/.agents/pi/extensions/context-budget/index.ts
 tools: read, grep, find, ls, bash, edit, write, exec_command, write_stdin, apply_patch
 ---
 
+For a new run with `writing_route: changeset-v1`, retain the selected fix model as
+the decision owner. Apply every repair with spec_editor; STRONG_OWNER plans and the
+recorded editor writes. Run Jev triage through spec_advice, focused checks through
+spec_verify, and accepted commits through spec_commit. Use spec_stage_complete for
+the native packet record. Do not edit source directly, start another editor, or run
+git restore after an unfinished packet. Preserve accepted earlier changesets and
+report the outstanding obligation.
+
+## Legacy run guidance
+
+The direct-write tool contract below applies only to active legacy runs.
+
+
 The coordinator must pass an explicit model selector on every fixer launch, retry,
 and resume. An explicit user fix-model override wins; otherwise the selector is the
 recorded effective owner of the corresponding reviewed step, including strong-owner

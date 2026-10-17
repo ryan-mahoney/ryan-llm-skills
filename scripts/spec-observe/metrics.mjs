@@ -4,6 +4,7 @@ import { createInterface } from 'node:readline';
 import path from 'node:path';
 import { discoverPackage, discover, TERMINAL_WAVE_STATES, ACTIVE_MEMBER_PHASES } from './core.mjs';
 import { locatePackage } from '../spec-location/index.mjs';
+import { changesetMetrics } from '../changeset/metrics.mjs';
 
 const ms = value => typeof value === 'number' ? value : Date.parse(value);
 const seconds = value => Math.round(value / 10) / 100;
@@ -296,6 +297,7 @@ export async function metrics(packagePath, { session, allSessions = false, maxBy
     nodes.get(file).firstDispatch = Math.min(...selectedRuns.filter(r => r.parent_session === file).map(r => ms(r.started_at)).filter(Number.isFinite));
   }
   for (const record of selectedRuns) {
+    if (record.infrastructure) continue;
     // Wave-aware role assignment: a command run has no model session at all;
     // every other wave run takes its role solely from the phase, and editor role
     // is never inferred from a phase name.
@@ -306,6 +308,12 @@ export async function metrics(packagePath, { session, allSessions = false, maxBy
     const waveRole = wave ? (record.phase === 'command' ? null : phaseRole(record.phase)) : undefined;
     if (waveRole === null) continue;
     const modelSession = record.model_session ?? record.owner_session;
+    if (!wave && record.stage_role && modelSession) {
+      addNode(modelSession, record.stage_kind ?? record.stage_role,
+        [[ms(record.started_at), Number.isFinite(ms(record.finished_at)) ? ms(record.finished_at) : now]]);
+      nodes.get(modelSession).checkout = record.checkout;
+      continue;
+    }
     if (waveRole && modelSession) {
       if (Number.isFinite(ms(record.started_at))) {
         addNode(modelSession, waveRole, [[ms(record.started_at), Number.isFinite(ms(record.finished_at)) ? ms(record.finished_at) : now]]);
@@ -391,6 +399,7 @@ export async function metrics(packagePath, { session, allSessions = false, maxBy
     const editorStart = r.editor_assignments[0]?.started_at;
     const edit = successfulEdits.filter(t => t >= ms(r.started_at) && t <= (ms(r.finished_at) || now)).sort((a, b) => a - b)[0];
     return ({ run_id: r.id, step: r.step ? path.basename(r.step) : null,
+    stage: r.stage_kind ?? (r.infrastructure ? 'infrastructure' : 'implementation'), writing_route: r.writing_route ?? 'legacy',
     assignment_id: r.assignment_id, state: r.state, started_at: r.started_at, finished_at: r.finished_at ?? null,
     elapsed_seconds: Number.isFinite(ms(r.finished_at)) ? seconds(ms(r.finished_at) - ms(r.started_at)) : null,
     elapsed_to_snapshot_seconds: !Number.isFinite(ms(r.finished_at)) && Number.isFinite(ms(r.started_at)) ? seconds(now - ms(r.started_at)) : null,
@@ -415,7 +424,9 @@ export async function metrics(packagePath, { session, allSessions = false, maxBy
     leaders: { model_calls: most('model_calls'), tool_calls: most('tool_calls'), model_response_seconds: most('model_response_seconds') },
     agents: rows, steps: attempts.sort((a, b) => (a.started_at ?? '').localeCompare(b.started_at ?? '')), coverage, discovery_errors: errors,
     waves, barrier_waits,
+    changesets: await changesetMetrics(packagePath, { runIds: selectedRuns.map(run => run.run_id ?? run.id) }),
     limits: ['Startup uses the first user message in the selected coordinator session, not a proven workflow request; reused sessions can include earlier work. Checkout edits count successful native write/edit results outside .specs; shell writes and semantic correctness are not inferred.',
+      'Native session totals exclude API writer calls. The changesets section reports those calls and separates application/publication from acceptance. Legacy editor timing fields are unmeasured for the API writing route.',
       'Model calls count persisted assistant responses, including errors; hidden provider retries are unavailable.',
       'Response latency uses native message start and persistence timestamps; missing timing stays unmeasured. It includes provider/network latency, not only computation.',
       'Tool waits run from call submission to result; queued/parallel calls overlap. Delegation wait is separate and includes child work. Do not add these times to wall time.',
@@ -583,8 +594,13 @@ export function formatMetrics(value) {
   const lines = [`Spec metrics — ${value.scope}`, `Observed span: ${duration(value.process.observed_span_seconds)} (includes pauses; ${value.process.completion_reported_at ? 'completion reported by coordinator' : 'completion not inferred'})`,
     `Model calls: ${value.totals.model_calls} | Tool calls: ${value.totals.tool_calls} | Test-command submissions: ${value.totals.test_command_calls} (${value.totals.recognized_test_commands} recognized commands)`,
     `Test-command results: ${value.totals.test_command_results} returned; ${value.totals.test_command_failures} failures; ${value.totals.test_commands_with_exit} with structured exit codes (not suite pass counts).`,
-    `Reported cost: ${value.totals.reported_cost === null ? 'unknown' : '$' + value.totals.reported_cost.toFixed(4)} (may be partial/unpriced)`, '',
+    `Reported native-session cost: ${value.totals.reported_cost === null ? 'unknown' : '$' + value.totals.reported_cost.toFixed(4)} (may be partial/unpriced; API writers are reported separately)`, '',
     'Role / model | Model calls | Tool calls | Response time | Test submissions'];
+  if (value.changesets?.totals?.edits) {
+    const edits = value.changesets.totals;
+    lines.push(`Changesets: ${edits.applied} applied, ${edits.failed} failed, ${edits.cancelled} cancelled, ${edits.running} in progress; `
+      + `${edits.planner_calls} planner and ${edits.writer_calls} writer calls; ${edits.unknown_usage_calls} with unknown usage. Application is not acceptance.`);
+  }
   if (value.startup) lines.push(`Session to first owner: ${duration(value.startup.session_to_first_owner_seconds)}; startup: ${value.startup.model_calls} model responses, ${value.startup.tool_calls} tools (${value.startup.reads} reads/searches, ${value.startup.shell_calls} shell calls).`, `Connection errors: ${value.totals.connection_errors}; timeouts: ${value.totals.timeout_errors}.`);
   for (const m of value.process.milestones ?? []) lines.push(`${m.kind}: ${m.timestamp} (${m.source})`);
   if (value.process.completion_reported_at) lines.push(`Time to reported completion: ${duration(value.process.elapsed_to_completion_report_seconds)}; subsequent activity: ${duration(value.process.post_completion_activity_seconds)}.`);

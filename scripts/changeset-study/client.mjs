@@ -14,13 +14,8 @@ export function sdkRoot() {
 }
 export async function sdkImport(path) { return import(pathToFileURL(join(sdkRoot(), path)).href); }
 
-export class ModelJsonParseError extends SyntaxError {
-  constructor(error, text) {
-    super(error.message, { cause: error });
-    this.name = 'ModelJsonParseError';
-    this.responseExcerpt = text.slice(0, 12000);
-  }
-}
+import { ModelJsonParseError } from '../changeset/errors.mjs';
+export { ModelJsonParseError };
 
 export class Client {
   static async create(options) {

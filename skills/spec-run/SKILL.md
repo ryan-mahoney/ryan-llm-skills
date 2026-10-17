@@ -12,6 +12,8 @@ metadata:
 
 # Spec Run
 
+For new managed assignments, apply [Managed changeset writing](../spec-end-to-end/references/changeset-writing.md). STRONG_OWNER plans every code edit, including easy/medium steps and review fixes. Use the shared service for implementation, repairs, final review, formatting, and conflict resolution. Its managed tool and commit rules supersede direct-edit and ordinary-editor instructions below. Only already active legacy runs retain their recorded editing contract.
+
 ## Context budget
 
 Use [context management](../../pi/extensions/context-budget/README.md). Keep the
@@ -71,8 +73,8 @@ with the installed scout profile and Luna. Coordinator, owner and reviewer can r
 scouting; it is not a startup gate or a replacement for direct source reads. Pass the
 run's SCOUT_AGENT as `spec_dispatch.scout_model` and in reviewer assignments.
 
-On harnesses without nested agents, retain one direct implementation worker where
-resumption is supported, or follow `spec-step-run` locally. Honor explicit model/mode
+On another harness, require an adapter to the same writing service and source
+capability contract. Report a missing adapter instead of directly editing code. Honor explicit model/mode
 directives. In Pi, profile/model setup failures require diagnosis, not an unannounced
 switch to a different model or execution mode.
 
@@ -136,7 +138,7 @@ history; never interpret failure as an empty history or reuse a stale index as c
 Keep prepared subspecs immutable as historical inputs. Neither the orchestrator nor an implementation agent rewrites them during execution, but expected targets and edit sequence may adapt within the sourced context and applicable
 acceptance obligations. Changed intent or proof requires correction and re-preparation.
 
-Do not invoke a separate planner or implementation judge. The shared Jev checkpoints
+Do not launch a separate implementation planner or implementation judge. The managed STRONG_OWNER write planner is part of the editing service. The shared Jev checkpoints
 are advisory scheduling/triage calls and are permitted; they neither plan the step nor
 replace its independent review. Step reviews and fixes run outside the step worker under [Background Step Review](#background-step-review); they do not change what a worker does. Let `spec-step-run` use repository evidence and best engineering judgment to add files, tests, commands, repairs, integration work, or work expected in a later step when that produces a more coherent outcome. Ordinary implementation departures belong in the learning. Consequential context, authority,
 or risk changes return to the coordinator as `decision-required`; resolve them under the shared
@@ -519,24 +521,16 @@ count, elapsed time and verdict of each final launch in the ledger. Report
 `step-review-coverage: complete` when step reviews cover every step's commits, `partial`
 when some are uncovered, and `none` when no review ran.
 
-**In Pi.** Launch reviewers and fixers as async single-agent `subagent` runs with an
-explicit `cwd`. Use the installed `spec-stage-reviewer` profile for reviews; it supports
-both Pi tools and the provider adapter's command/patch replacement tools. Pi's builtin
-`reviewer` is analysis-only and cannot own the artifact-writing stage. Keep the provider
-extension available in the async child and state the no-code-edit rule in the task.
-Use `agent: spec-step-fixer` for step fixes, with `context: fresh`, `async: true`,
-an explicit checkout `cwd`, and the provider extension available. Never use the generic
-read-only `worker` for a fixer. The known profile retains edit/write and apply_patch;
-do not probe it before each launch. A missing tool reported at runtime is a launch
-error, not authority to switch the assigned model. Pass the role's
-assigned model as `model` (`provider/model[:thinking]`, preserving any additional
-provider/model segments). Every fixer launch must include `model` with the selector
-chosen above; omission would inherit an unrelated agent or coordinator default and
-is a launch configuration defect. Keep reviewer and fixer sessions separate even
-when their assigned model selectors match. Give reviews `timeoutMs: 2700000`. Give fixers the step-worker budget and
-`checkpointBeforeDeadlineMs`. Don't call `bg_wait` for reviewers, because Pi wakes the
-parent when a child completes. After a resume, check
-`subagent({ action: "status" })` against the ledger's run IDs before relaunching.
+**In new managed Pi runs.** Use `spec_stage(kind: review)` for an independent
+serial reviewer, passing REVIEW_AGENT, the actual comparison base, prior drained
+run ID, canonical review path, and the owning review skill. Use
+`spec_stage(kind: review-fix)` for repairs, with the selected fix owner,
+STRONG_OWNER, editor, findings, and canonical fix path. Confirmation uses a fresh
+`kind: review` stage with the existing round and fix path. Preserve the existing
+review/fix budgets, packet order, and coverage rules. Await native completion events.
+Do not launch these stages through ordinary subagent runs. Native waves retain their
+automatic stage lifecycle and the same managed writing service. Legacy active runs
+retain their recorded stage-launch contract until they drain.
 
 ## Completion Gate
 

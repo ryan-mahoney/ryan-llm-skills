@@ -854,3 +854,57 @@ metadata without stopping workers or changing acceptance evidence. The action
 does not require complete monitoring coverage or a matching page revision.
 Existing worker/checkpoint updates preserve the decision; a dispatch started after
 the decision makes work current again.
+
+
+## Changeset writing and telemetry
+
+New public managed dispatches use `writing_route: changeset-v1`. Supply the exact
+`strong_owner_model` on startup/start or configure it in `spec-runtime.json`. The
+effective step owner still follows difficulty routing. STRONG_OWNER always plans
+writes, including easy and medium steps owned by another model. A strong owner can
+submit `spec_editor(plan)` directly; other owners submit bounded `assignment`
+requests. Writers return V4A/JSON data without agent tools. The runtime validates,
+stages, and publishes the candidate before owner verification. Failed planning gets
+one correction and never falls back to direct editing.
+
+`spec_commit` replaces editor commit packets. `spec_verify` enforces read-only
+source through Linux user/PID/mount namespaces and bubblewrap. Declare ignored
+writable build directories with `outputs`. Package artifacts and isolated temporary
+files remain writable. Unsupported hosts fail explicitly. Source-changing hooks,
+formatters, and generators must run as declared generated operations through
+spec_editor; they execute on isolated source copies. Unrelated binary files and
+symlinks do not enter declared text snapshots.
+
+Native wave fixers use the same service. `spec_stage` covers serial reviews,
+review fixes, branch fixes, final review, and conflict resolution after prior workers
+drain. It preserves the assigned decision-owner selector while routing all write
+planning to STRONG_OWNER. Independent serial reviewers use isolated checkouts at their pinned commits and
+remain read-only. Native fix stages retain the existing fix YAML and pending IDs.
+Decision stages
+submit the canonical report with `spec_report`; reports bind actual HEAD, selectors,
+and selected verification receipts. The coordinator uses source-read-only
+`spec_command` for artifact work and structured `spec_git` for authorized Git
+operations. Ordinary write/shell tools and unmanaged subagents are blocked once the
+coordinator owns this workflow. Substantive conflict resolutions require published
+changesets before Git continuation.
+
+Each edit has `runtime/runs/<run-id>-edits/<edit-id>/events.jsonl` and `summary.json`.
+Private artifacts retain source bindings, plans, raw requests/responses, operation
+attempts, candidates, and publication results. Shared events contain correlated
+identifiers, selectors, outcomes, monotonic trace timing, and separate stage duration.
+A missing provider usage/cost receipt remains unknown. An observer failure is recorded
+without converting successful publication into an automatic retry. Uncertain rollback
+or a failure after publication requires reconciliation.
+
+`/spec-metrics <package-ref>` now exposes a separate `changesets` section. It includes
+planning/writing/publication timing, exact model selectors, failed/cancelled/running
+edits, and usage/cost coverage. Native model totals do not include API writer calls.
+In-owner planning has no separately measured duration. Applied, published, verified,
+and independently reviewed remain separate states. No fixed-plan measurement is an
+end-to-end speed claim. Inspect the receipt named in an error instead of replaying work.
+
+Existing active records without this route remain legacy until they drain. Run
+`sync.sh` after instruction changes and restart an idle Pi session to load runtime
+updates. Never restart an active worker or rewrite its recorded model contract.
+See [Managed changeset writing](../../../skills/spec-end-to-end/references/changeset-writing.md)
+for stage handoffs and the complete workflow policy.

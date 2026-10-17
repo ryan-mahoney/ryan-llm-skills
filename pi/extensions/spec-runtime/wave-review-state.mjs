@@ -77,6 +77,7 @@ export function stagePrompt(record) {
     `MODEL: ${record.owner_model}`,
     `NATIVE STAGE: submit with spec_stage_complete; the runtime writes ${artifact}`
   ];
+  if (stage.assignment) lines.push(stage.assignment);
   if (stage.role === 'reviewer') {
     if (stageIsCandidate(record)) {
       lines.push(`PARENTS: ${(stage.parents ?? []).join(', ')}`);
@@ -89,7 +90,7 @@ export function stagePrompt(record) {
     lines.push(`REVIEW: ${paths.reviewPath}`);
     lines.push(`FIX RECORD: ${paths.fixPath} (runtime-written)`);
     const packet = stage.packet ?? { index: 1, total: 1, ids: [], pending_after: [], ranges: [], findings: [] };
-    lines.push(renderPacket(packet, { review: basename(paths.reviewPath), total: stage.packet?.total ?? 1 }));
+    lines.push(renderPacket(packet, { review: basename(paths.reviewPath), total: stage.packet?.total ?? 1, managed: record.writing_route === 'changeset-v1' }));
     if ((stage.packet?.index ?? 1) <= 1)
       lines.push(`TRIAGE: run Jev review-triage once over ${expected} as your first call`);
     else

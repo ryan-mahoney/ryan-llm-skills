@@ -12,6 +12,8 @@ metadata:
 
 # Spec PR
 
+For new managed assignments, apply [Managed changeset writing](../spec-end-to-end/references/changeset-writing.md). STRONG_OWNER plans every code edit, including easy/medium steps and review fixes. Use the shared service for implementation, repairs, final review, formatting, and conflict resolution. Its managed tool and commit rules supersede direct-edit and ordinary-editor instructions below. Only already active legacy runs retain their recorded editing contract.
+
 Publish an authorized draft after a meaningful implementation checkpoint so the operator
 can follow progress. Mark it ready only when applicable merge evidence is complete. CI
 results belong to the operator: this skill reads CI status once and reports it, never

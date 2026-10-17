@@ -265,6 +265,7 @@ export function createMemberAdmission(deps = {}) {
         isolation: context.input.isolation,
         owner_model: entry.ownerModel,
         strong_owner_model: context.input.strong_owner_model,
+        writing_route: context.input.writing_route,
         editor_model: context.input.editor_model,
         review_model: context.input.review_model,
         fix_model_override: context.input.fix_model_override,

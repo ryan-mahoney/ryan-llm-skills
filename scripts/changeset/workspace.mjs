@@ -9,7 +9,7 @@ export function safePath(path) {
   if (typeof path !== 'string' || !path || path.includes('\\') || path.includes('\0') || path.startsWith('/') || /^[A-Za-z]:/.test(path) || path.split('/').some(p => !p || p === '.' || p === '..' || p === '.git')) throw new Error(`Invalid workspace path: ${path}`);
   return path;
 }
-function diskPath(root, path) {
+export function diskPath(root, path) {
   safePath(path);
   let current = root;
   for (const part of path.split('/')) {
@@ -52,6 +52,27 @@ export class Workspace {
       }
     }
     walk(root); return new Workspace(files, root, modes);
+  }
+  // Snapshot only declared inputs/destinations. Unrelated dependencies, symlinks,
+  // large files and binary assets must not change the ability to edit text code.
+  static loadPaths(root, paths, { maxBytes = 16 * 1024 * 1024 } = {}) {
+    root = realpathSync(root);
+    const files = Object.create(null), modes = Object.create(null);
+    let bytes = 0;
+    for (const path of new Set(paths)) {
+      const full = diskPath(root, path);
+      let info;
+      try { info = lstatSync(full); }
+      catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) continue; throw error; }
+      if (info.isDirectory()) continue; // Publication checks directory transitions.
+      if (!info.isFile()) throw new Error(`Non-regular declared source: ${path}`);
+      bytes += info.size;
+      if (bytes > maxBytes) throw new Error('Declared source snapshot limit exceeded');
+      const buffer = readFileSync(full), text = buffer.toString('utf8');
+      if (buffer.includes(0) || !Buffer.from(text).equals(buffer)) throw new Error(`Non-UTF8 declared source: ${path}`);
+      files[path] = text; modes[path] = info.mode & 0o777;
+    }
+    return new Workspace(files, root, modes);
   }
   read(path) { return this.files.get(safePath(path)) ?? null; }
   snapshot(paths = [...this.files.keys()]) { return Object.fromEntries(paths.map(p => [p, this.read(p)])); }
@@ -114,7 +135,7 @@ export class Workspace {
       const failures = [];
       for (const temp of temps) { try { if (existsSync(temp)) unlinkSync(temp); } catch (e) { failures.push(e.message); } }
       for (const restore of undo.reverse()) { try { restore(); } catch (e) { failures.push(e.message); } }
-      if (failures.length) throw new Error(`${error.message}; rollback failed: ${failures.join('; ')}`);
+      if (failures.length) throw Object.assign(new Error(`${error.message}; rollback failed: ${failures.join('; ')}`), { publication_uncertain: true });
       throw error;
     } finally { for (const temp of temps) if (existsSync(temp)) unlinkSync(temp); }
     this.baseModes = { ...this.modes };

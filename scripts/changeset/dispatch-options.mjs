@@ -1,0 +1,31 @@
+export const defaultDispatchOptions = Object.freeze({
+  advice: 'jev',              // 'jev' | 'none': one batched Jev routing request, or deterministic policy only
+  writer_routing: 'v4a',      // 'v4a' | 'json' | 'hybrid' | 'hybrid-wide': packet representation choice
+  prune_dependencies: false,  // drop declared depends_on edges with no file overlap; compile keeps data dependencies
+  prompt_order: 'target-first', // 'target-first' | 'static-first': shared contract before the per-packet ownership sentence
+  concurrency: 4,             // executor concurrency, 1..32
+  anti_dependencies: 'serialize', // 'serialize' | 'snapshot': let a writer start once the reader of its file has started
+  seed_moves: false,          // pre-fill an absent destination with its declared source excerpts so the writer patches seams only
+  seam_retry_reasoning: 'off', // 'off' | 'low': reasoning tier of the same DeepSeek model for the second seam attempt on a seeded move
+  repair_rounds: 0,           // 0 | 1: after a failed visible check, the planner (not the writers) sees the diff and check output once and re-plans
+});
+const optionValues = { advice: ['jev', 'none'], writer_routing: ['v4a', 'json', 'hybrid', 'hybrid-wide'], prune_dependencies: [false, true],
+  prompt_order: ['target-first', 'static-first'], anti_dependencies: ['serialize', 'snapshot'], seed_moves: [false, true], seam_retry_reasoning: ['off', 'low'], repair_rounds: [0, 1] };
+export function resolveDispatchOptions(options = null) {
+  if (options === null || options === undefined) return { ...defaultDispatchOptions };
+  if (typeof options !== 'object' || Array.isArray(options)) throw new Error('dispatchOptions must be an object');
+  const resolved = { ...defaultDispatchOptions };
+  for (const [key, value] of Object.entries(options)) {
+    if (!Object.hasOwn(defaultDispatchOptions, key)) throw new Error(`Unknown dispatch option: ${key}`);
+    if (key === 'concurrency') { if (!Number.isInteger(value) || value < 1 || value > 32) throw new Error('concurrency must be 1..32'); }
+    else if (!optionValues[key].includes(value)) throw new Error(`Invalid dispatch option ${key}: ${JSON.stringify(value)}`);
+    resolved[key] = value;
+  }
+  return resolved;
+}
+
+// The replay rounds' recommended route (stacked-optimization results): no advice call,
+// sequencing-only edges pruned, per-packet representation, cacheable prompt prefix,
+// seeded moves. Explicit dispatchOptions still override individual fields.
+export const leanDispatchOptions = Object.freeze({ advice: 'none', writer_routing: 'hybrid', prune_dependencies: true, prompt_order: 'static-first',
+  concurrency: 8, anti_dependencies: 'serialize', seed_moves: true, seam_retry_reasoning: 'low', repair_rounds: 0 });

@@ -6,7 +6,9 @@ import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { randomUUID, createHash, randomInt } from 'node:crypto';
 import { join, resolve, realpathSync } from 'node:path';
 import { homedir } from 'node:os';
-import { Runtime, loadRun, summary, assertLease, assertManagedModel, ROLE_CONTRACT, FENCED_EDITOR_TOOLS, waveSiblingConflict, runEditor, runEditorBatch, fencedPath, runCommand, runVerification, runAdvice, runCompletion, packageDirOf, assertIdleWriter, event as runtimeEvent } from './runtime.mjs';
+import { Runtime, loadRun, summary, assertLease, assertManagedModel, ROLE_CONTRACT, roleContract, FENCED_EDITOR_TOOLS, waveSiblingConflict, runEditor, runEditorBatch, fencedPath, runCommand, runVerification, runCommit, runAdvice, runCompletion, packageDirOf, assertIdleWriter, event as runtimeEvent } from './runtime.mjs';
+import { CHANGESET_ROUTE } from './changeset-runtime.mjs';
+import { submitDecisionReport, reportPath, serialFixContext } from './decision-stage.mjs';
 import { assertModelSelector } from './model-selector.mjs';
 import { submitStage, recordStageFingerprint, REVIEW_CATEGORIES } from './wave-review.mjs';
 import { createCommunication } from './communication.mjs';
@@ -115,17 +117,17 @@ export default function (pi: any) {
   if (role) {
     const record = JSON.parse(readFileSync(process.env.SPEC_RUNTIME_RECORD!, 'utf8'));
     installProgressContext(pi, { record, role });
-    const stageRole = role === 'reviewer' || role === 'fixer';
+    const stageRole = ['reviewer', 'fixer', 'decision'].includes(role);
     // Stage roles have no intercom communication channel; createCommunication
     // rejects them (Invalid communication role) before stage tools install.
-    const communication = stageRole ? undefined : createCommunication(pi, record, role, { onEvent: (name: string, detail: any) => runtimeEvent(record, name, detail) });
+    const communication = ['owner', 'editor'].includes(role) ? createCommunication(pi, record, role, { onEvent: (name: string, detail: any) => runtimeEvent(record, name, detail) }) : undefined;
     // A parallel packet's editor may write only its declared files and has no shell or owner channel.
     const fence: string[] | undefined = role === 'editor' && process.env.SPEC_EDITOR_PATHS ? JSON.parse(process.env.SPEC_EDITOR_PATHS) : undefined;
     if (role === 'editor') installDiscoveryBudget(pi, { parallel: Boolean(fence), report: (name: string, detail: any) => runtimeEvent(record, name, detail) });
     // Known roles select their tool allowlist from the shared contract; a fenced
     // editor keeps the editor contract minus its shell and owner channel. An
     // unknown role keeps the historical editor list (the guard still runs).
-    const contract = (ROLE_CONTRACT as any)[role];
+    const contract = roleContract(record, role);
     const allowed: string[] = fence ? [...FENCED_EDITOR_TOOLS]
       : contract ? [...contract.tools, ...contract.providerTools]
       : ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'spec_question'];
@@ -135,10 +137,10 @@ export default function (pi: any) {
     pi.on('session_shutdown', () => communication?.close());
     pi.on('session_start', (_event: any, ctx: any) => {
       // Apply the process guard only to a managed worker with a run record.
-      if (!['owner', 'editor', 'reviewer', 'fixer'].includes(role) || !record.id) return;
+      if (!['owner', 'editor', 'reviewer', 'fixer', 'planner', 'decision'].includes(role) || !record.id) return;
       assertLease(record);
       try {
-        if (stageRole) assertModelSelector(record[`${role === 'reviewer' ? 'review_model' : 'fix_model'}`], ctx.model);
+        if (stageRole) assertModelSelector(role === 'decision' ? record.owner_model : record[`${role === 'reviewer' ? 'review_model' : 'fix_model'}`], ctx.model);
         else assertManagedModel(record, role, ctx.model, ctx.sessionManager.getBranch());
       }
       catch (error: any) {
@@ -152,9 +154,11 @@ export default function (pi: any) {
         stageAllowed = allowed.filter(name => native.has(name));
         const names = new Set(stageAllowed);
         const missing = [
-          names.has('spec_stage_complete') ? null : 'check stage-complete',
-          names.has('bash') || (names.has('exec_command') && names.has('write_stdin')) ? null : 'shell',
-          role === 'fixer' && !(names.has('apply_patch') || (names.has('edit') && names.has('write'))) ? 'write' : null
+          names.has(role === 'decision' ? 'spec_report' : 'spec_stage_complete') ? null : 'check stage-complete',
+          record.writing_route === CHANGESET_ROUTE ? (names.has('spec_verify') ? null : 'managed verification')
+            : names.has('bash') || (names.has('exec_command') && names.has('write_stdin')) ? null : 'shell',
+          role === 'fixer' && !(record.writing_route === CHANGESET_ROUTE ? names.has('spec_editor')
+            : names.has('apply_patch') || (names.has('edit') && names.has('write'))) ? 'write service' : null
         ].filter(Boolean);
         if (missing.length) {
           for (const family of missing) process.stderr.write(`SPEC_ROLE_CAPABILITY_MISSING: ${role} lacks ${family}\n`);
@@ -226,33 +230,65 @@ export default function (pi: any) {
           } catch (error: any) { return result({ error: error.message, next: 'Use direct source reads or diagnose this scout failure; do not switch models.' }, true); }
         } });
       registerRepositorySearch(pi, record);
-      pi.registerTool({ name: 'spec_verify', label: 'Verify step', description: 'Owner runs a necessary focused check or diagnostic after the editor returns. Never edit source, commit, or run broad suites through this tool. Reuse valid evidence; do not check every packet automatically. Commands are bounded and cannot overlap editor work. Build/test artifacts and canonical evidence output are allowed. Pipelines preserve failures; raw output is retained, so omit tail/tee wrappers. For UI capture supply server {command, ready_url, readiness_timeout}: runtime starts it, waits, runs command, and cleans up before returning. Never start a server in a separate background call.',
-        parameters: Type.Object({ command: Type.String(), timeout: Type.Optional(Type.Number({ minimum: 1, maximum: 600 })), server: Type.Optional(Type.Object({ command: Type.String({ description: 'Foreground dev server command; no nohup or background ampersand. Runtime owns startup and cleanup.' }), ready_url: Type.String({ description: 'Loopback HTTP(S) readiness URL on an owned free port' }), readiness_timeout: Type.Optional(Type.Number({ minimum: 1, maximum: 600 })) })) }),
+    }
+    // All new decision roles share the exact editing/verification boundary.
+    if (role === 'owner' || (record.writing_route === CHANGESET_ROUTE && ['fixer', 'reviewer', 'decision'].includes(role))) {
+      if (record.writing_route === CHANGESET_ROUTE && role !== 'reviewer') pi.registerTool({ name: 'spec_commit', label: 'Commit accepted changeset',
+        description: 'Commit published changesets after assessing their diff and required evidence. Inspect the complete message against the diff before submitting it. Source remains read-only during Git/hooks; this tool cannot author implementation. Existing staged or overlapping pre-existing edits require reconciliation.',
+        parameters: Type.Object({ message: Type.String() }),
         async execute(_id: string, args: any, signal: AbortSignal) {
-          try { const reply = await runVerification(record, args.command, args.timeout, signal, args.server); return result(reply, Boolean(reply.error) || reply.exit_code !== 0); }
+          try { const reply = await runCommit(record, args.message, signal); return result(reply, Boolean(reply.error) || reply.exit_code !== 0); }
+          catch (error: any) { return result({ error: error.message }, true); }
+        } });
+      if (record.writing_route === CHANGESET_ROUTE && ['fixer', 'decision'].includes(role)) pi.registerTool({ name: 'spec_advice', label: 'Jev advice',
+        description: 'Batch verification scheduling or review triage with the version-1 Jev input. Advisory only; preserve acceptance and known failures.',
+        parameters: Type.Object({ task: Type.Union([Type.Literal('verification'), Type.Literal('review-triage')]), input: Type.Any(), offline: Type.Optional(Type.Boolean()) }),
+        async execute(_id: string, args: any, signal: AbortSignal) {
+          try { return result(await runAdvice(record, args.task, args.input, { offline: args.offline, signal })); }
+          catch (error: any) { return result({ error: error.message, fallback: true }, true); }
+        } });
+      pi.registerTool({ name: 'spec_verify', label: 'Verify step', description: 'Run a focused check or diagnostic after edits return. Changeset runs enforce read-only source; build outputs and evidence use declared writable destinations. Never author source or commit through verification. Reuse prior evidence and leave broad suites to CI/operator policy.',
+        parameters: Type.Object({ command: Type.String(), outputs: Type.Optional(Type.Array(Type.String({ description: 'Ignored checkout-relative build output directory; tracked source is never writable' }))), timeout: Type.Optional(Type.Number({ minimum: 1, maximum: 600 })), server: Type.Optional(Type.Object({ command: Type.String({ description: 'Foreground dev server command; no nohup or background ampersand. Runtime owns startup and cleanup.' }), outputs: Type.Optional(Type.Array(Type.String())), ready_url: Type.String({ description: 'Loopback HTTP(S) readiness URL on an owned free port' }), readiness_timeout: Type.Optional(Type.Number({ minimum: 1, maximum: 600 })) })) }),
+        async execute(_id: string, args: any, signal: AbortSignal) {
+          try { const reply = await runVerification(record, args.command, args.timeout, signal, args.server, args.outputs); return result(reply, Boolean(reply.error) || reply.exit_code !== 0); }
           catch (error: any) { return result({ error: error.message, receipt_id: error.receipt_id }, true); }
         } });
-      pi.registerTool({ name: 'spec_editor', label: 'Spec editor', description: 'Start a fresh editor session for this packet; include current decisions, paths and preservation constraints without relying on prior editor chat. Apply a bounded transformation whose behavior and architectural approach the owner has chosen; let the editor choose local implementation details. Send a Change/Edits/Preserve/Return packet with named symbols and concrete operations. The owner reads/searches source directly; reserve facts-only requests for a blocking fact unavailable through those tools. Return a compact result and artifact paths. The editor does not run verification; the owner uses spec_verify after the return. Do not delegate whole-step design or open-ended repair. Assess the return before the next assignment; commit is separate. No polling.',
+      if (role !== 'reviewer') pi.registerTool({ name: 'spec_editor', label: 'Spec editor', description: 'Apply a bounded change through STRONG_OWNER planning and the changeset executor. Supply assignment for strong planning, or plan from the active strong-owner session. Writers receive scoped source and operations; owner verification and review remain separate. Failed planning never authorizes direct editing. Returns source publication and telemetry artifact references.',
         parameters: Type.Object({ assignment: Type.Optional(Type.String({ description: 'One packet. Omit when sending packets.' })),
+          plan: Type.Optional(Type.Any({ description: 'Executable plan; accepted only from the bound strong-owner session' })),
           context: Type.Optional(contextRanges),
           reasoning: Type.Optional(reasoningLevel),
           packets: Type.Optional(Type.Array(Type.Object({ assignment: Type.String(), paths: Type.Array(Type.String(), { minItems: 1, description: 'Checkout-relative files this packet alone may write' }),
             context: Type.Optional(contextRanges), reasoning: Type.Optional(reasoningLevel) }),
             { minItems: 2, maxItems: 4, description: 'Closed packets that write disjoint files, run concurrently. Each editor is fenced to its paths, has no shell and cannot ask questions. Settle every shared interface first; keep a shared test file in one packet.' })) }),
-        async execute(_id: string, args: any, signal: AbortSignal) {
+        async execute(_id: string, args: any, signal: AbortSignal, _update: any, ctx: any) {
           try {
-            if (args.packets && args.assignment) throw new Error('send either assignment or packets, not both');
-            const reply = await communication!.beginEditor(() => args.packets
+            if ([args.packets, args.assignment, args.plan].filter(value => value !== undefined).length !== 1) throw new Error('send exactly one of assignment, packets, or plan');
+            if (args.plan) assertModelSelector(record.planner_model, ctx.model);
+            if (args.plan && record.owner_model !== record.planner_model) throw new Error('The submitting session must have the exact strong-owner selector, including thinking level');
+            const edit = () => args.packets
               ? runEditorBatch(record, args.packets, signal)
-              : runEditor(record, args.assignment, signal, undefined, { context: args.context, reasoning: args.reasoning }), signal);
+              : runEditor(record, args.assignment, signal, undefined, { context: args.context, reasoning: args.reasoning,
+                plan: args.plan, submittedModel: args.plan ? record.planner_model : undefined });
+            const reply = record.writing_route === CHANGESET_ROUTE ? await edit() : await communication!.beginEditor(edit, signal);
             return result(reply, Boolean(reply.error)); }
           catch (error: any) { return result({ error: error.message, ...(signal?.aborted ? { requires_cancellation: true } : {}), next: 'resolve this failure; do not start an unmanaged replacement' }, true); }
         } });
-      pi.registerTool({ name: 'spec_answer', label: 'Answer editor', description: 'Answer the retained editor\'s pending decision and await the same editor process. Do not start a replacement editor.',
+      if (record.writing_route !== CHANGESET_ROUTE) pi.registerTool({ name: 'spec_answer', label: 'Answer editor', description: 'Answer the retained editor\'s pending decision and await the same editor process. Do not start a replacement editor.',
         parameters: Type.Object({ request_id: Type.String(), answer: Type.String() }),
         async execute(_id: string, args: any, signal: AbortSignal) {
           try { const reply = await communication!.answer(args.request_id, args.answer, signal); return result(reply, Boolean(reply.error)); }
           catch (error: any) { return result({ error: error.message, ...(signal?.aborted ? { requires_cancellation: true } : {}), next: 'resolve the pending editor question without launching another writer' }, true); }
+        } });
+    }
+    if (role === 'decision') {
+      pi.registerTool({ name: 'spec_report', label: 'Record stage assessment',
+        description: 'Write the assigned canonical stage report with runtime-bound HEAD, models, and actual verification receipts. Complete requires a clean tree and resolved concerns. Publication remains with the coordinator.',
+        parameters: Type.Object({ outcome: Type.Union(['complete', 'blocked', 'checkpoint'].map(value => Type.Literal(value))),
+          summary: Type.String(), unresolved: Type.Array(Type.String()), evidence_receipts: Type.Array(Type.String()) }),
+        async execute(_id: string, args: any) {
+          try { assertIdleWriter(record); return result(submitDecisionReport(record, args)); }
+          catch (error: any) { return result({ error: error.message }, true); }
         } });
     } else if (role === 'reviewer' || role === 'fixer') {
       const parameters = role === 'reviewer'
@@ -281,7 +317,7 @@ export default function (pi: any) {
           try { return result(submitStage(record, role, args)); }
           catch (error: any) { return result({ error: error.message, next: 'correct the reported stage result; do not change role or assignment' }, true); }
         } });
-    } else {
+    } else if (role === 'editor') {
       pi.registerTool({ name: 'spec_question', label: 'Ask step owner', description: 'Ask the current step owner one concrete implementation decision. Wait for its answer in this same editor process. Include relevant source excerpts or diagnostics; do not contact other sessions.',
         parameters: Type.Object({ question: Type.String() }),
         async execute(_id: string, args: any, signal: AbortSignal) {
@@ -402,6 +438,86 @@ export default function (pi: any) {
   // processing; extension-originated messages never do. Never model-supplied.
   let inputGuard = { input_revision: 0, active_prompts: 0 };
   const dispatchBindings = new Map<string, any>();
+  const enforcedPackages = new Set<string>();
+  pi.on('tool_call', (call: any) => {
+    if (!enforcedPackages.size) return;
+    if (['bash', 'exec_command', 'write_stdin', 'edit', 'write', 'apply_patch', 'subagent'].includes(call.toolName))
+      return { block: true, reason: 'This coordinator owns a changeset workflow. Use spec_stage for assessment/repairs, spec_command for source-read-only commands, and spec_git for authorized Git operations. Direct source editing or unmanaged workers would bypass the writing policy.' };
+  });
+  pi.registerTool({ name: 'spec_stage', label: 'Run managed review or repair stage',
+    description: 'Launch an explicitly selected serial review/fix/final-review/conflict stage after prior workers drain. Uses the existing canonical step for context, preserves the decision-owner model, and always plans writes with STRONG_OWNER. No fabricated step card or ordinary editing subagent. Await the native completion event.',
+    parameters: Type.Object({ package: Type.String(), prior_run_id: Type.String(), assignment_id: Type.String(),
+      kind: Type.Union(['review', 'review-fix', 'branch-fix', 'final-review', 'conflict-resolution'].map(value => Type.Literal(value))),
+      owner_model: optional('Explicit stage decision owner; final review requires FINAL_REVIEWER. Repairs default to the recorded effective owner.'),
+      strong_owner_model: optional('Explicit strong planner; defaults to the prior run binding'), editor_model: optional('Explicit editor; defaults to the prior run binding'),
+      report_path: Type.String({ description: 'Assigned package-relative Markdown artifact under reviews/' }),
+      review_path: optional('Canonical source review for review-fix or branch-fix'), packet_index: Type.Optional(Type.Number({ minimum: 1 })),
+      scope: Type.Optional(Type.Union([Type.Literal('step'), Type.Literal('branch')])),
+      base: Type.String(), head: optional('Full pinned review SHA; required for independent background review'), round: Type.Optional(Type.Number({ minimum: 1 })), fix_path: optional('Canonical fix record for confirmation review'),
+      instructions: Type.String(), timeout_ms: Type.Optional(Type.Number({ minimum: 1000 })) }),
+    async execute(_id: string, args: any, _signal: AbortSignal, _update: any, ctx: any) {
+      try {
+        const packagePath = await packageDirOf(args.package), prior = loadRun(packagePath, args.prior_run_id);
+        if (!['completed', 'failed', 'cancelled'].includes(prior.state)) throw new Error('Prior stage must be terminal and drained');
+        if (['review', 'final-review'].includes(args.kind) && !args.owner_model) throw new Error('Supply the explicit REVIEW_AGENT or FINAL_REVIEWER selector');
+        if (args.kind === 'review' && !/^[a-f0-9]{40}$/.test(args.head ?? '')) throw new Error('Independent review requires a full pinned head SHA');
+        const input = { package: packagePath, step: prior.step, assignment_id: args.assignment_id,
+          ...(prior.workflow_id ? { workflow_id: prior.workflow_id } : {}),
+          owner_model: args.owner_model ?? prior.owner_model, strong_owner_model: args.strong_owner_model ?? prior.strong_owner_model,
+          editor_model: args.editor_model ?? prior.editor_model, writing_route: CHANGESET_ROUTE,
+          review_model: args.kind === 'review' ? args.owner_model : null,
+          child_extensions: prior.child_extensions, session_scope: 'step', timeout_ms: args.timeout_ms ?? 2700000,
+          stage: { role: args.kind === 'review' ? 'reviewer' : 'decision', kind: args.kind,
+            report_path: args.report_path, review_path: args.report_path, fix_path: args.fix_path,
+            label: args.report_path.replace(/^reviews\//, '').replace(/\.md$/, '').replace(/-review$/, ''),
+            round: args.round ?? 1, assignment: args.instructions, base: args.base, head: null } };
+        reportPath({ ...prior, stage: input.stage });
+        if (['review-fix', 'branch-fix'].includes(args.kind)) {
+          if (!args.review_path) throw new Error('A source review is required for fix stages');
+          Object.assign(input.stage, serialFixContext(packagePath, args.review_path, args.report_path, args.packet_index ?? 1));
+          (input as any).fix_model = input.owner_model;
+        }
+        (input.stage as any).scope = args.scope ?? (args.kind === 'branch-fix' ? 'branch' : 'step');
+        // Resolve the integration checkout through the package. A wave member's
+        // outside overlay path must never become the stage execution root.
+        const resolved = await runtime.validateStageInput(input);
+        const { stage, ...dispatchInput } = input;
+        return await dispatchManaged(_id, { ...dispatchInput, action: 'start' }, _signal, _update, ctx,
+          { ...stage, head: args.kind === 'review' ? args.head : stage.role === 'fixer' ? stage.head : resolved.head });
+      } catch (error: any) { return result({ error: error.message }, true); }
+    } });
+  pi.registerTool({ name: 'spec_command', label: 'Run source-read-only coordinator command',
+    description: 'Run a bounded infrastructure/artifact command after workers drain. Source is read-only; the canonical package and declared ignored outputs are writable. Never author code or run source-changing formatters here.',
+    parameters: Type.Object({ package: Type.String(), prior_run_id: Type.String(), command: Type.String(),
+      outputs: Type.Optional(Type.Array(Type.String())), timeout: Type.Optional(Type.Number({ minimum: 1, maximum: 600 })) }),
+    async execute(_id: string, args: any, signal: AbortSignal, _update: any, ctx: any) {
+      return coordinatorCommand(args, signal, ctx);
+    } });
+  pi.registerTool({ name: 'spec_git', label: 'Run authorized Git operation',
+    description: 'Perform a structured Git fetch, safe push, rebase or continuation after workers drain. Existing publication authority is required; this tool grants none. Substantive conflict resolution goes through spec_stage and spec_editor. No arbitrary Git options or shell input.',
+    parameters: Type.Object({ package: Type.String(), prior_run_id: Type.String(),
+      action: Type.Union(['fetch', 'push', 'rebase', 'continue', 'abort'].map(value => Type.Literal(value))),
+      base: optional('Resolved commit/ref for rebase'), remote: optional('Configured remote name; default origin'), branch: optional('Explicit remote branch for push') }),
+    async execute(_id: string, args: any, signal: AbortSignal, _update: any, ctx: any) {
+      return coordinatorCommand({ ...args, git_action: args.action }, signal, ctx);
+    } });
+  async function coordinatorCommand(args: any, signal: AbortSignal, ctx: any) {
+    return serializeWorkflow(async () => {
+      try {
+        const packagePath = await packageDirOf(args.package);
+        const prior: any = loadRun(packagePath, args.prior_run_id);
+        const coordinator = coordinatorIdentity(ctx);
+        if (prior.workflow_id) {
+          const checkpoint: any = readCheckpointRecord(packagePath, prior.workflow_id);
+          if (!checkpoint || checkpoint.coordinator_session !== coordinator
+            || (checkpoint.input_revision ?? 0) !== inputGuard.input_revision || inputGuard.active_prompts > 0)
+            throw new Error('Reconcile this coordinator\'s current workflow checkpoint before running infrastructure or Git commands');
+        }
+        const reply = await runtime.infrastructure({ ...args, package: packagePath }, signal, coordinator);
+        return result(reply, Boolean(reply.error) || reply.exit_code !== 0);
+      } catch (error: any) { return result({ error: error.message }, true); }
+    });
+  }
   // Revocation epoch for the sentinel authority: incremented synchronously at
   // every disable/off command entry and session reset, so an activation still
   // queued behind workflow work can never re-arm behind a revocation.
@@ -856,10 +972,13 @@ export default function (pi: any) {
       attempt_kind: Type.Optional(Type.Union(['implementation', 'verification-continuation', 'implementation-repair', 'review-repair', 'launch-retry'].map(value => Type.Literal(value)), { description: 'Explicit reason for this assignment; observation only, grants no retry authority.' })),
       session_scope: Type.Optional(Type.Union([Type.Literal('package'), Type.Literal('step')], { description: 'New steps default to step: separate retained sessions per canonical step. Omitted scope preserves an existing attempt or the latest same-step retry scope. Explicit package preserves cross-step reuse.' })),
       instructions: optional('Scoped task direction, acceptance constraints and publication authority'), timeout_ms: Type.Optional(Type.Number({ minimum: 1000, maximum: 86400000, description: 'Whole assignment deadline, default 7200000 (2 hours)' })), child_extensions: Type.Optional(Type.Array(Type.String({ description: 'Explicit trusted pi-intercom and provider/compat extension paths; discovery is disabled in managed children' }))) }),
-    async execute(_id: string, args: any, _signal: AbortSignal, _update: any, ctx: any) {
+    execute: dispatchManaged });
+
+  async function dispatchManaged(_id: string, args: any, _signal: AbortSignal, _update: any, ctx: any, internalStage?: any) {
       return serializeWorkflow(async () => {
       let receipt: any = null;
       try {
+        if (args.stage !== undefined) throw new Error('Stage bindings are accepted only through spec_stage');
         const packagePath = await packageDirOf(args.package); progress.attach(packagePath);
         const nativeAction = nativeWaveAction(args);
         if (!nativeAction) {
@@ -868,7 +987,9 @@ export default function (pi: any) {
         }
         const configFile = join(homedir(), '.pi/agent/spec-runtime.json');
         const config = existsSync(configFile) ? JSON.parse(readFileSync(configFile, 'utf8')) : {};
-        const input = { ...args, package: packagePath, scout_model: args.scout_model ?? config.scout_model ?? SCOUT_MODEL, child_extensions: args.child_extensions ?? config.child_extensions ?? [] };
+        const input = { ...args, ...(internalStage ? { stage: internalStage } : {}), package: packagePath, writing_route: CHANGESET_ROUTE,
+          strong_owner_model: args.strong_owner_model ?? config.strong_owner_model,
+          scout_model: args.scout_model ?? config.scout_model ?? SCOUT_MODEL, child_extensions: args.child_extensions ?? config.child_extensions ?? [] };
         // An explicit wave member start is validated against the durable wave
         // record (target, generation, member, claims) before any conflict
         // bookkeeping; a raw wave_id never bypasses the serial guard.
@@ -904,12 +1025,21 @@ export default function (pi: any) {
           // generation/epoch/target, evaluated per candidate conflict. Every
           // other unknown, stale or serial conflict still refuses the dispatch.
           const conflict = activeAssignmentConflict(packagePath, registeredWorkflow, args,
-            waveConfig ? (candidate: { id: string; state: string; runId: string | null }) => waveSiblingConflict(packagePath, candidate, waveConfig) : null);
+            waveConfig ? (candidate: { id: string; state: string; runId: string | null }) => waveSiblingConflict(packagePath, candidate, waveConfig)
+              : internalStage?.role === 'reviewer' ? () => true : (candidate: { runId: string | null }) => {
+                if (!candidate.runId) return false;
+                try {
+                  const run = loadRun(packagePath, candidate.runId);
+                  return run.writing_route === CHANGESET_ROUTE && run.stage?.role === 'reviewer'
+                    && Boolean(run.review_checkout) && run.workflow_id === workflowId;
+                } catch { return false; }
+              });
           if (conflict) {
             return result({ error: `workflow ${workflowId} still has active assignment ${conflict.id} (run state ${conflict.state}); refusing a concurrent dispatch`, next: 'await its completion or confirmed cancellation, or reconcile the assignment with spec_sentinel_checkpoint before dispatching the next one' }, true);
           }
         }
         receipt = nativeAction ? await waveController[nativeAction](input, ctx.sessionManager.getSessionFile()) : await runtime.start(input, ctx.sessionManager.getSessionFile());
+        if (receipt.writing_route === CHANGESET_ROUTE) enforcedPackages.add(packagePath);
         if (receipt.run_id) monitor.attach(loadRun(packagePath, receipt.run_id), ctx);
         if (receipt.run_id && !ownPackages.includes(packagePath)) ownPackages.push(packagePath);
         // The actual receipt binds its run/checkout to the workflow validated above
@@ -953,7 +1083,7 @@ export default function (pi: any) {
               && ['working', 'complete', 'failed', 'cancelled'].includes(worker.state));
           let revision = existing.revision;
           const workers = [...(existing.workers ?? [])].filter((worker: any) => worker.id !== assignmentId)
-            .concat([{ id: assignmentId, kind: 'owner', state: 'working' }]);
+            .concat([{ id: assignmentId, kind: internalStage?.role ?? 'owner', state: 'working' }]);
           if (!alreadyBound) {
             const updated = recordSentinelCheckpoint({ package: packagePath, workflow_id: workflowId,
               expected_revision: existing.revision, state: 'waiting-worker', obligation: existing.obligation,
@@ -993,5 +1123,5 @@ export default function (pi: any) {
         return result({ error: error.message, next: 'correct this specific runtime error; do not probe unrelated models or launch another writer' }, true);
       }
       });
-    } });
+  }
 }

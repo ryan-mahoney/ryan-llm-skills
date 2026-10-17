@@ -12,6 +12,8 @@ metadata:
 
 # Spec Step Run
 
+For new managed assignments, apply [Managed changeset writing](../spec-end-to-end/references/changeset-writing.md). STRONG_OWNER plans every code edit, including easy/medium steps and review fixes. Use the shared service for implementation, repairs, final review, formatting, and conflict resolution. Its managed tool and commit rules supersede direct-edit and ordinary-editor instructions below. Only already active legacy runs retain their recorded editing contract.
+
 Apply [Verification and Review](../../rules/verification-and-review.md) for focused-check scheduling
 and batched Jev verification/review-triage checkpoints.
 
@@ -28,8 +30,8 @@ code) but does not run tests, compile/lint checks or other executable verificati
 The owner runs necessary focused checks through `spec_verify` after the editor returns,
 reuses valid evidence and directs bounded repairs. Commit is a separate assignment
 after owner acceptance of the changes and required evidence. Use the runtime's native disk sessions
-and completion/termination contract rather than nested subagent resume or status polling. A direct worker performs the same
-work itself without delegation. Do not begin the next step until assigned or perform
+and completion/termination contract rather than nested subagent resume or status polling. An active legacy direct worker retains its recorded contract. New runs require
+the shared writing service adapter. Do not begin the next step until assigned or perform
 independent branch review. Use the prepared card as the execution plan, adapting only
 where actual code or observed failures require it.
 

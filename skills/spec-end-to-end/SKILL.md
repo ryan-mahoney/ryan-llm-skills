@@ -8,6 +8,8 @@ metadata:
 
 # Spec End To End
 
+For new managed assignments, apply [Managed changeset writing](references/changeset-writing.md). STRONG_OWNER plans every code edit, including easy/medium steps and review fixes. Use the shared service for implementation, repairs, final review, formatting, and conflict resolution. Its managed tool and commit rules supersede direct-edit and ordinary-editor instructions below. Only already active legacy runs retain their recorded editing contract.
+
 ## Context budget
 
 Use [context management](../../pi/extensions/context-budget/README.md). Keep the
@@ -194,21 +196,21 @@ Record owner/editor models separately.
 `FINAL_REVIEWER` enables and selects `spec-final-review`; it does not replace
 `REVIEW_AGENT` or select the iterative `spec-branch-refine` audit. Pass its exact
 selector to a fresh reviewer session. `EDITOR_MODEL` names the editor assignment
-(`EDITOR_AGENT` is the existing alias) and selects its editing subagent; without a
+(`EDITOR_AGENT` is the existing alias) and selects its writing model; without a
 final-stage override, reuse the recorded step editor. Preserve explicitly separate
 step and final editor assignments.
 An explicit final-review request without a selector uses the harness reviewer default.
 Honor explicit skips. Record the stage and effective selectors even on prepared entry
 or resume; these are orchestration roles, not new `spec_dispatch` parameters.
 
-Accept `DEFAULT_OWNER` (or legacy `IMPLEMENT_AGENT`) and optional `STRONG_OWNER`
-assignments. Supplying a stronger owner enables difficulty routing for implementation
-steps under [Step owner routing](../spec-run/references/owner-routing.md). Pass these
-assignments and any explicit step overrides to `spec-run`; it owns selection and
-escalation. Without a stronger assignment, preserve single-owner execution. Routing
-does not change editor or reviewer assignments. Unless the user assigns a fix model,
-review fixes use the effective owner of the reviewed step; pass that selector explicitly
-on every fixer launch so it cannot inherit the coordinator's model.
+Accept `DEFAULT_OWNER` (or legacy `IMPLEMENT_AGENT`) and require an explicit
+`STRONG_OWNER` binding for new managed editing assignments. Difficulty routing still
+chooses the step owner under [Step owner routing](../spec-run/references/owner-routing.md).
+Write planning always uses STRONG_OWNER. A single-model configuration can explicitly
+assign the same selector to both roles. Preserve active legacy single-owner runs.
+Pass both assignments and any explicit step overrides to spec-run. Routing does not
+change editor or reviewer assignments. Unless the user assigns a fix model, fixes
+retain the effective owner of the reviewed step while STRONG_OWNER plans the writes.
 
 Honor explicit directives over the defaults below. Use delegation only when the user requests it,
 a leaf skill requires it, or the active harness instructions independently require it. The

@@ -213,7 +213,7 @@ function materializeCommand(workspace, to, actual) {
 function trackedCleanCommand(workspace) { return `git ${workspaceGitArgs(workspace)} status --porcelain --untracked-files=no`; }
 async function runOneCommand(ctx, record, command) {
   if (typeof ctx.runCommand !== 'function') throw new Error('ctx.runCommand is required');
-  return ctx.runCommand(record, command, 60);
+  return ctx.runCommand(record, command, 60, { trustedGit: true });
 }
 function readProbeOutput(reply) {
   const path = reply?.full_output_path;
@@ -660,7 +660,7 @@ export async function runCandidateChecks(ctx, options = {}) {
     if (!beforeClean) return blockCandidate(ctx, phase, 'candidate-tree-changed');
     const startedAt = Date.now();
     let reply = null; let threw = false;
-    try { reply = await ctx.runCommand(phase.record, gate.command, 300); } catch { threw = true; }
+    try { reply = await ctx.runCommand(phase.record, gate.command, 300, { outputs: gate.outputs ?? [] }); } catch { threw = true; }
     if (threw || !reply || reply.requires_cancellation) phase.unknown = true;
     if (phase.unknown) return blockCandidate(ctx, phase, 'drain-unknown');
     const elapsedMs = Date.now() - startedAt;

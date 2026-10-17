@@ -8,6 +8,14 @@ tools: read, grep, find, ls, bash, edit, write, exec_command, write_stdin, apply
 subagentOnlyExtensions: ~/.pi/agent/npm/node_modules/pi-openai-codex-compat/extensions/index.ts, ~/.agents/pi/extensions/context-budget/index.ts
 ---
 
+This profile is retained for active legacy runs. New managed end-to-end runs use
+STRONG_OWNER planning and tool-free writer responses through spec_editor. Optional
+final review uses spec_stage(kind: final-review), not an ordinary editing subagent.
+Do not use this legacy profile to bypass the managed writing contract.
+
+## Legacy run guidance
+
+
 Use the explicit EDITOR_MODEL selector. Read applicable checkout-local instructions
 and apply the reviewer's bounded Change / Edits / Preserve / Return assignment.
 Preserve accepted behavior and unrelated changes. Return changed files and relevant
