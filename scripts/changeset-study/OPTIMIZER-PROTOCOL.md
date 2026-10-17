@@ -593,3 +593,20 @@ the same plans, initial source and execution backend, be labeled separately from
 DeepSeek product configuration, and retain its effective provider-bound differences.
 Neither this repeat nor a component-level control can establish an end-to-end win
 over historical native Sol or resolve handoff's downstream failures.
+
+## Prepared local application diagnostic
+
+A prospective writer backend adds bounded context to the existing single retry
+after a rejected replace or replace-range edit. It privately replays the edit list
+to identify the first failing index and exact match counts. JSON-encoded literals
+preserve escaped characters. A source window is supplied only for a unique exact
+location or a unique whole-line prefix, explicitly labeled as contextual evidence
+from private replay after preceding edits, not a full-match target or edit authority.
+Overlapping or ambiguous locations do not receive a chosen source window.
+
+The serialized addition is limited to 4 KiB. Oversized literals retain bounded
+previews, original lengths and hashes, while failure identity/counts remain visible.
+The successful path, actual edit semantics, syntax diagnostic, retry count and model
+limits are unchanged. It performs no fuzzy application or model call. Focused offline
+checks cover ordered replay, literal escapes, ambiguous locations and the size bound.
+This backend is not part of the frozen 18/19 comparison and has no live result yet.

@@ -23,6 +23,9 @@ test('focused editor sees only selected current source and retries rejected edit
   const result = await patchEditor(model, 'editor', 'GLOBAL TASK MUST STAY WITH PLANNER', { operation: op, files }, { focused: true });
   assert.equal(seen.length, 2);
   assert.match(seen[1].application_failure, /count mismatch/);
+  const applicationDetail = JSON.parse(seen[1].application_failure.split('Local application diagnosis (context only):\n').at(-1));
+  assert.equal(applicationDetail.failed_edit.index, 0, 'the retry gets the first local edit failure');
+  assert.deepEqual(applicationDetail.match_count, { expected: 1, actual: 0, overlapping_candidates: 0 });
   assert.equal(result.files['answer.mjs'], 'export const answer = 2;\n// unrelated\nexport const untouched = 3;\n');
   assert.equal(files['answer.mjs'], 'export const answer = 1;\n// unrelated\nexport const untouched = 3;\n');
   assert.equal(focusedInput(op, result.files).excerpts[0].text, 'export const answer = 2;');

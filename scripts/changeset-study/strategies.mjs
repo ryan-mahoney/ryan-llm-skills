@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { ModelJsonParseError } from './client.mjs';
 import { focusedPlanner, focusedPacketRules, validateFocusedPlan, focusedInput } from './focused-editors.mjs';
 import { queryPlannerRole } from './roles.mjs';
+import { applicationFailureDiagnostic } from './application-diagnostic.mjs';
 
 export const strategyNames = ['patch-editors', 'direct-edits', 'source-ranges', 'checked-ranges', 'boundary-review', 'owner-editor', 'owner-editor-contracts', 'focused-dispatch', 'owner-query-writer'];
 export const usesEditor = strategy => ['owner-editor', 'owner-editor-contracts', 'focused-dispatch', 'owner-query-writer'].includes(strategy);
@@ -209,7 +210,9 @@ export async function patchEditor(model, stage, task, { operation, files }, { ra
         const original = error.message.slice(0, 2000);
         const diagnostic = attemptedFiles && Array.isArray(attemptedEdits)
           ? syntaxRetryDiagnostic(error, attemptedEdits, attemptedFiles, files, operation.writes)
-          : null;
+          : Array.isArray(attemptedEdits)
+            ? applicationFailureDiagnostic({ operation, files, edits: attemptedEdits, error })
+            : null;
         failure = diagnostic ? `${original}\n\n${diagnostic}` : original;
       }
     }
