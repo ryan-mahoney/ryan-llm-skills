@@ -1,8 +1,9 @@
 import {normalize,authoritativeObservers as observers} from './model-helpers.js';
 import {str,stale,key,activeRun,attention,packageFilterMatches} from './format';
+import {aggregatePackage} from './execution-state';
 import {blockingAssignment,implementationAssignment} from './readiness';
 export type WireRecord=Record<string,any>;
-export interface Observer extends WireRecord {observer_id:string;state:string;published_at:string;snapshot?:{workspace?:string;runs:WireRecord[];recently_completed?:WireRecord[];planned_packages?:WireRecord[];assignments?:WireRecord[];epics?:WireRecord[];coverage?:WireRecord;assignment_coverage?:WireRecord;completion_history?:WireRecord;attention?:WireRecord[]};}
+export interface Observer extends WireRecord {observer_id:string;state:string;published_at:string;snapshot?:{workspace?:string;runs:WireRecord[];recently_completed?:WireRecord[];planned_packages?:WireRecord[];package_executions?:WireRecord[];assignments?:WireRecord[];epics?:WireRecord[];coverage?:WireRecord;assignment_coverage?:WireRecord;completion_history?:WireRecord;attention?:WireRecord[]};}
 export interface Envelope {schema_version?:number;generated_at?:string;observers:Observer[];errors?:WireRecord[];truncated?:boolean;action_token?:string;thread_action_token?:string;completion?:string;}
 export const normalizeEnvelope=(value:unknown):Envelope=>normalize(value);
 export const authoritativeObservers=(list:Observer[]):Observer[]=>observers(list);
@@ -13,6 +14,7 @@ export function collectRecords(payload:Envelope|null):WireRecord[]{
     if(!o.snapshot)continue;
     const rank=(o.state==='observing'&&!stale(o.published_at)?1e15:0)+(Date.parse(o.snapshot.coverage?.observed_at)||0);
     const workspace=o.snapshot.workspace||o.observer_id||o.source||'unknown';
+    const packageExecutions=(Array.isArray(o.snapshot.package_executions)?o.snapshot.package_executions:[]).filter((entry:unknown):entry is WireRecord=>Boolean(entry)&&typeof entry==='object'&&!Array.isArray(entry)&&typeof (entry as WireRecord).package==='string');
     const packageIdentity=(r:WireRecord)=>JSON.stringify([r.workspace||workspace,r.package]);
     const rows=[...o.snapshot.runs.map(r=>({...r,workspace:r.workspace||workspace,recent_completion:false})),...(o.snapshot.recently_completed??[]).map(r=>({...r,workspace:r.workspace||workspace,recent_completion:true}))] as WireRecord[];
     const excludedPackages=new Set(rows.filter(r=>r.recent_completion||activeRun(r)||attention(r)||knownDone(r)).map(packageIdentity));
@@ -27,10 +29,11 @@ export function collectRecords(payload:Envelope|null):WireRecord[]{
       if(!prior||prior.rank<candidateRank)planned.set(k,{...prior,...normalized,targets:normalized.targets??prior?.targets,source_paths:normalized.source_paths??prior?.source_paths,epic:normalized.epic??prior?.epic,rank:candidateRank,key:k,observer:o});
     };
     if(Array.isArray(o.snapshot.planned_packages))for(const r of o.snapshot.planned_packages)addPlanned(r);
-    for(const r of [...rows,...planned.values()] as WireRecord[]){
-      const k=r.recent_completion?JSON.stringify([r.workspace,r.package,'recent-completion']):r.planned?r.key:key(r);
+    const executions=packageExecutions.filter(r=>(r.visibility ? r.visibility==='active' : !['planned','complete'].includes(r.execution_summary?.phase))).map(r=>({...r,workspace:r.workspace||workspace,execution_record:true,recent_completion:false,key:JSON.stringify([r.workspace||workspace,r.package,'execution-source'])}));
+    for(const r of [...rows,...planned.values(),...executions] as WireRecord[]){
+      const k=r.recent_completion?JSON.stringify([r.workspace,r.package,'recent-completion']):r.planned||r.execution_record?r.key:key(r);
       if(r.planned){if(!map.has(k)||map.get(k)!.rank<r.rank)map.set(k,r);continue;}
-      if(!map.has(k)||map.get(k)!.rank<rank)map.set(k,{...r,observer:o,rank,key:k});
+      if(!map.has(k)||map.get(k)!.rank<rank)map.set(k,{...r,package_visibility:packageExecutions.find(e=>e.package===r.package&&(!e.workspace||e.workspace===r.workspace))?.visibility,observer:o,rank,key:k});
     }
   }
   const records=projectStartingRecords([...map.values()],payload);
@@ -97,17 +100,19 @@ function projectStartingRecords(records:WireRecord[],payload:Envelope|null):Wire
 }
 // Specs are packages; assignment records remain available for detail/history.
 export function packageSummaries(records:WireRecord[],filter:Parameters<typeof packageFilterMatches>[1]='all'):WireRecord[]{
-  const packages=new Map<string,WireRecord>();
-  const priority=(r:WireRecord)=>activeRun(r)?5:r.recent_completion?4:r.is_current_assignment===true?3:r.planned?2:1;
+  const packages=new Map<string,WireRecord[]>();
+  const priority=(r:WireRecord)=>r.recent_completion?7:r.execution_record?6:activeRun(r)?5:r.is_current_assignment===true?3:r.planned?2:1;
   const updated=(r:WireRecord)=>Date.parse(r.timing?.started_at||r.completed_at||r.planned_at||r.observed_at||'')||0;
   for(const record of records){
-    if(!packageFilterMatches(record,filter))continue;
     const identity=JSON.stringify([record.workspace,record.package]);
-    const prior=packages.get(identity);
-    if(!prior||priority(record)>priority(prior)
-      ||priority(record)===priority(prior)&&updated(record)>updated(prior))packages.set(identity,record);
+    packages.set(identity,[...(packages.get(identity)??[]),record]);
   }
-  return [...packages.values()];
+  return [...packages.values()].map(rows=>{
+    // Completion and prepared partitions retain their established identities.
+    const eligible=filter==='completed'?rows.filter(r=>r.recent_completion):filter==='ready'||filter==='planned'?rows.filter(r=>r.planned):rows;
+    const sorted=eligible.slice().sort((a,b)=>priority(b)-priority(a)||updated(b)-updated(a));
+    return sorted.length?aggregatePackage(rows,sorted[0]):null;
+  }).filter((record):record is WireRecord=>Boolean(record)&&packageFilterMatches(record,filter));
 }
 export function collectAssignments(payload:Envelope|null):WireRecord[]{
  const map=new Map<string,WireRecord>();

@@ -1,3 +1,5 @@
+import ExecutionOutline from './ExecutionOutline';
+import { executionSummary } from './execution-state';
 import { For, Show } from 'solid-js';
 import { attention, base, runningUnconfirmed, statusMarkdown, str, time } from './format';
 import { assignmentLabel, assignmentTone, completionLabel, duration, epicStats, runState, specProgress } from './observation-format';
@@ -11,6 +13,7 @@ import type { WireRecord } from './model';
 
 export type SpecOverviewProps = {
   record: WireRecord;
+  onOpenFile?: (path: string) => void;
   assignments: WireRecord[];
   context: ObservationContext;
   ws?: string;
@@ -91,7 +94,7 @@ export default function SpecOverview(props: SpecOverviewProps) {
     if (reason) return reason;
     const repository = targetRepositoryId(record()) ?? text(record().workspace);
     const state = text(record().observer?.snapshot?.coverage?.state) || 'unknown';
-    return repository ? `${repository} · workspace ${state}` : `Workspace ${state}`;
+    return repository ? `${repository} · workspace observation ${state}` : `Workspace observation ${state}`;
   };
   const attentionItems = () => {
     const items: { title: string; text: string }[] = [];
@@ -173,6 +176,7 @@ export default function SpecOverview(props: SpecOverviewProps) {
   };
   return <>
     <Show when={!record().planned && !record().recent_completion}>
+      <Show when={executionSummary(record())} fallback={<>
       <div class="progress-head">
         <strong>{progress().label}{progress().name ? ` · ${progress().name}` : ''}</strong>
         <span class="muted">Position, not acceptance</span>
@@ -190,6 +194,9 @@ export default function SpecOverview(props: SpecOverviewProps) {
           <div class="progress-value" style={{ width: `${progressWidth()}%` }} />
         </Show>
       </div>
+      </>}>
+        <ExecutionOutline record={record()} context={props.context} onOpenFile={props.onOpenFile} />
+      </Show>
       <section class="section">
         <div class="section-heading">
           <h3>Current obligation</h3>
@@ -197,9 +204,9 @@ export default function SpecOverview(props: SpecOverviewProps) {
         <div class="obligation"><div class="status-markdown" innerHTML={statusMarkdown(text(record().obligation) || 'No obligation summary was observed.')} /></div>
       </section>
       <div class="facts">
-        <div class="fact"><label>{liveEnd() ? 'Time since spec start' : 'Elapsed at observation'}</label><strong class="mono">{elapsed().value}</strong><p>{elapsed().note}</p></div>
+        <div class="fact"><label>{liveEnd() ? 'Wall elapsed since spec start' : 'Wall elapsed at observation'}</label><strong class="mono">{elapsed().value}</strong><p>{elapsed().note}</p></div>
         <div class="fact"><label>Last activity</label><strong class="mono">{activity().value}</strong><p>{activity().note}</p></div>
-        <div class="fact"><label>Run coverage</label><strong class={coverageState() === 'complete' ? 'good' : 'warn'}>{coverageState()}</strong><p>{coverageNote()}</p></div>
+        <div class="fact"><label>Observation coverage</label><strong class={coverageState() === 'complete' ? 'good' : 'warn'}>{coverageState()}</strong><p>{coverageNote()}</p></div>
       </div>
       <Show when={attentionItems().length}>
         <section class="section">

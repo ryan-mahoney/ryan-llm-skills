@@ -8,7 +8,7 @@ export const PACKAGE_FILE_LIMITS = { entries: 500, totalEntries: 10000, depth: 1
 // `authorizedWorkspace`). Returns the package directory and its reference.
 export async function authorizePackage(state, requested, authorizedWorkspace) {
   const row = typeof requested === 'string'
-    ? state.observers.flatMap(o => [...(o.snapshot?.runs ?? []), ...(o.snapshot?.recently_completed ?? []), ...(o.snapshot?.planned_packages ?? [])]).find(r => r.package === requested)
+    ? state.observers.flatMap(o => [...(o.snapshot?.runs ?? []), ...(o.snapshot?.recently_completed ?? []), ...(o.snapshot?.planned_packages ?? []), ...(o.snapshot?.package_executions ?? [])]).find(r => r.package === requested)
     : undefined;
   if (!row) throw Error('Package is not published');
   const specs = join(await realpath(await authorizedWorkspace(row.workspace)), 'specs');

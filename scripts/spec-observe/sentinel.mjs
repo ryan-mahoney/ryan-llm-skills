@@ -19,6 +19,8 @@ import { publicHint } from '../../pi/extensions/spec-runtime/monitor.mjs';
 import { discoverManaged } from './core.mjs';
 import { collectWaves, waveMemberRunIds, waveCurrentRuns, waveLifecycleActive, waveRunMatch, runWaveProjection, waveMemberCheckout, waveRows, renderWaveLine } from './sentinel-waves.mjs';
 import { collectAssignments } from './assignments.mjs';
+import { packageExecution } from './sentinel-execution.mjs';
+import { validateStepIndex } from './steps.mjs';
 import { readWorkspaceEpics, collectEpics } from './epics.mjs';
 import { legacySpecs, listPackages, locatePackage, previewLocations } from '../spec-location/index.mjs';
 import { listWorkspaces, resolveRepositoryPath } from '../workspaces/store.mjs';
@@ -694,7 +696,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
       for (const name of LIFECYCLE_FILES) await readBounded(join(fact.packagePath, name), lifecycleLimit(name), budget,
         { within: fact.packagePath, memo: fact.reads });
     });
-    if (candidates.length) await readStepIndex(fact, budget);
+    await readStepIndex(fact, budget);
     // Keep the latest assignment as the package's current handoff, including
     // the interval after its worker exits and before review/next-step dispatch.
     fact.currentAssignment = [...candidates].sort((a, b) =>
@@ -720,7 +722,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
       const saved = await readJson(join(fact.packagePath, COMPLETION_FILE), SENTINEL_LIMITS.smallJsonBytes, budget,
         { within: fact.packagePath, allow: value => value, memo: fact.reads });
       completion = manualCompletion(saved.record, { ref: fact.ref, root: fact.packagePath }, fact.completionRevision, Date.parse(readTime),
-        candidates.map(c => c.receipt.started_at ?? c.receipt.dispatch_requested_at));
+        [...candidates.map(c => c.receipt.started_at ?? c.receipt.dispatch_requested_at), ...(fact.waves ?? []).map(wave => wave.opened_at)]);
     }
     const mergeInputs = completion?.completion_basis === 'manual' ? null : await packageMergeInputs(fact, candidates, budget);
     if (mergeInputs) {
@@ -749,8 +751,9 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
         completion = { completed_at: latest, completion_basis: 'merged-pr', merge: fact.merge };
       }
     }
-    fact.completion = completion || null;
-    if (completion && Date.parse(completion.completed_at) <= Date.parse(readTime) && !waveLifecycle) {
+    fact.completion = waveLifecycle && completion?.completion_basis !== 'manual' ? null : completion || null;
+    fact.activityVisible = active;
+    if (completion && Date.parse(completion.completed_at) <= Date.parse(readTime) && (!waveLifecycle || completion.completion_basis === 'manual')) {
       if (Date.parse(completion.completed_at) >= completionCutoff) completed.push({ fact, completion });
       if (!includeInactive) {
         activityFilter.hidden_completed_packages++;
@@ -766,9 +769,10 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
     const hasUnresolvedCheckpoint = fact.checkpoints?.some(item => item.package !== fact.packagePath
       || item.state !== 'complete' || !validTime(item.observed_at) || item.active_workers?.length);
     const candidatesSettled = (fact.candidates ?? []).every(item => item.receipt.state === 'cancelled');
-    if (!fact.completion && !fact.hasWaveFiles && !fact.staleReceipts && !fact.receiptsIncomplete && !fact.checkpointNotes.length
+    if (!fact.completion && !waveLifecycle && !fact.hasWaveFiles && !fact.staleReceipts && !fact.receiptsIncomplete && !fact.checkpointNotes.length
         && candidatesSettled && !hasAttention && !hasUnresolvedCheckpoint
         && !await packageHasImplementation(fact, budget, noteUnknown)) {
+      fact.plannedInventory = true;
       planned.push({ workspace: fact.workspace, package_ref: fact.ref, package: fact.packagePath,
         planned_at: await packagePlanTime(fact.packagePath),
         targets: fact.targets.map(({ id, primary }) => ({ id, primary })),
@@ -784,13 +788,13 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
       if (recent === null) noteUnknown(`activity-filter-unknown: ${fact.packagePath}`);
     }
     await collectFact(fact);
-    if (fact.hasWaveFiles) observedWaveFacts.push(fact);
+    if (fact.hasWaveFiles || fact.waveNotes?.length) observedWaveFacts.push(fact);
   }
 
   // Wave rows are projected for every observed active fact, even without
   // receipts; active, blocked and cancelled members lead the bounded display.
   const waves = observedWaveFacts.flatMap(fact => waveRows(fact, SENTINEL_LIMITS));
-  waves.sort((a, b) => String(a.wave_id).localeCompare(String(b.wave_id)) || String(a.record_path).localeCompare(String(b.record_path)));
+  waves.sort((a, b) => String(a.package).localeCompare(String(b.package)) || (a.ordinal ?? Infinity) - (b.ordinal ?? Infinity) || String(a.record_path).localeCompare(String(b.record_path)));
 
   collected.sort(compareCandidates);
   const chosen = collected.slice(0, SENTINEL_LIMITS.assignments);
@@ -823,10 +827,18 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
     knownOmitted += planned.length - plannedPackages.length;
   }
 
+  const packageExecutions = [...facts.values()].map(fact => {
+    const row = packageExecution(fact, SENTINEL_LIMITS, readTime);
+    row.visibility = fact.completion ? completed.some(item => item.fact === fact) ? 'recently_completed' : 'completed'
+      : planned.some(item => item.package === fact.packagePath) ? 'planned' : fact.activityVisible ? 'active' : 'inactive';
+    fact.execution_summary = row.execution_summary;
+    return row;
+  });
+
   // Epic membership is read for every observed workspace, outside the activity and completion windows.
   const epicState = await collectEpics({ entries: epicEntries, facts, runs, recentlyCompleted, runConditions, readTime,
     budget, readBounded, planningCache, readStepIndex });
-  for (const row of [...runs, ...recentlyCompleted, ...plannedPackages]) {
+  for (const row of [...runs, ...recentlyCompleted, ...plannedPackages, ...packageExecutions]) {
     const epic = epicState.memberships.get(row.package);
     if (epic) row.epic = epic;
   }
@@ -871,7 +883,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
   const coverage = makeCoverage(state, reasons, unknownOmission ? null : knownOmitted, budget.bytes, readTime);
   return reduceConditions({ version: 1, workspace, coverage, activity_filter: activityFilter, runs,
     assignments, assignment_coverage: assignmentCoverage,
-    recently_completed: recentlyCompleted, planned_packages: plannedPackages, waves, epics: epicState.epics, attention,
+    recently_completed: recentlyCompleted, planned_packages: plannedPackages, package_executions: packageExecutions, waves, epics: epicState.epics, attention,
     completion_history: { window_ms: SENTINEL_LIMITS.recentCompletionMs, cutoff: new Date(completionCutoff).toISOString(),
       limit: SENTINEL_LIMITS.completedPackages, omitted: Math.max(0, completed.length - recentlyCompleted.length) },
     spec_roots: [...new Set([...facts.values()].map(f => dirname(f.packagePath)), ...epicEntries.map(e => dirname(e.dir)))], ...(discovery ? { discovery } : {}) });
@@ -1261,8 +1273,12 @@ async function observeRun(candidate, budget, note, readTime) {
 function packageTiming(fact, index, checkpoints, observedAt) {
   const attempts = (fact.candidates ?? []).map(({ id, receipt }) => {
     const progress = specProgress(receipt.step, index);
-    return { assignment_id: receipt.assignment_id ?? id, step: progress.current_step,
-      name: progress.current_name, state: receipt.state ?? 'unknown',
+    const identity = waveRunMatch(fact, receipt);
+    const subject = receipt.command_phase?.subject?.kind === 'candidate' || identity?.identity.candidate != null ? 'candidate' : 'step';
+    return { assignment_id: receipt.assignment_id ?? id, run_id: id, wave_id: identity?.identity.wave_id ?? null,
+      phase: receipt.command_phase ? 'command' : identity?.identity.phase ?? null, subject_kind: subject,
+      step: subject === 'candidate' ? null : progress.current_step,
+      name: subject === 'candidate' ? 'Integration candidate' : progress.current_name, state: receipt.state ?? 'unknown',
       attempt_kind: ['implementation', 'verification-continuation', 'implementation-repair', 'review-repair', 'launch-retry'].includes(receipt.attempt_kind) ? receipt.attempt_kind : null,
       handoff_outcome: ['as-specified', 'adapted', 'checkpoint', 'no-artifact', 'decision-required', 'needs-spec-correction'].includes(receipt.handoff?.outcome) ? receipt.handoff.outcome : null,
       started_at: validTime(receipt.dispatch_requested_at) ?? validTime(receipt.started_at),
@@ -1354,7 +1370,9 @@ async function readStepIndex(fact, budget) {
           || steps.some(existing => existing.step === item.step)) return null;
         steps.push({ step: item.step, name: typeof item.name === 'string' ? item.name : null });
       }
-      return { steps: steps.sort((a, b) => a.step - b.step), readiness_valid };
+      const validation = validateStepIndex({ steps: value.steps }, { targets: targetIds.length ? targetIds : ['unknown'] });
+      return { steps: steps.sort((a, b) => a.step - b.step), readiness_valid,
+        execution_plan: validation.ok ? { legacy: validation.legacy, waves: validation.waves } : null };
     },
   });
   if (result.outcome === 'read-budget') { fact.stepIndexNotes.push(result.reason); fact.stepIndex = { steps: [], source: null, digest: null, readiness_valid: null }; return fact.stepIndex; }
@@ -1365,7 +1383,7 @@ async function readStepIndex(fact, budget) {
   }
   if (result.outcome === 'ok') {
     fact.sources.set('step-index', { file, digest: result.digest });
-    fact.stepIndex = { steps: result.record.steps, source: file, digest: result.digest, readiness_valid: result.record.readiness_valid };
+    fact.stepIndex = { steps: result.record.steps, source: file, digest: result.digest, readiness_valid: result.record.readiness_valid, execution_plan: result.record.execution_plan };
   } else if (result.outcome === 'oversized' || result.outcome === 'invalid') {
     // A missing step index is not a defect; an unreadable or oversized one is.
     fact.stepIndexNotes.push(`step-index-invalid: ${fact.packagePath}`);

@@ -1,6 +1,7 @@
 import { basename, join } from 'node:path';
 
 import { projectWaveRecord, runWaveIdentity, TERMINAL_WAVE_STATES, ACTIVE_MEMBER_PHASES } from './core.mjs';
+import { publicHint } from '../../pi/extensions/spec-runtime/monitor.mjs';
 
 // Wave records share the runtime's safe basename rule; the observer never reads
 // temp files, locks, seal subdirectories or conflict artifacts.
@@ -16,24 +17,26 @@ export async function collectWaves(fact, { listDirectory, readJson, budget, note
   fact.hasWaveFiles = false;
   fact.waves = [];
   fact.invalidWaves = [];
+  fact.waveNotes = [];
+  const gap = reason => { fact.waveNotes.push(reason); noteUnknown(reason); };
   const directory = join(fact.packagePath, 'runtime', 'waves');
   const listed = await listDirectory(directory, limits.waveFiles,
     entry => entry.isFile() && WAVE_FILE_NAME.test(entry.name),
     limits.waveFiles * limits.directoryEntryFactor);
   if (listed.entries === null) {
     // A package with no wave directory has no wave lifecycle to observe.
-    if (listed.code !== 'ENOENT') noteUnknown(`waves-unavailable: ${directory} (${listed.code})`);
+    if (listed.code !== 'ENOENT') gap(`waves-unavailable: ${directory} (${listed.code})`);
     return;
   }
-  if (listed.code) noteUnknown(`waves-unavailable: ${directory} (${listed.code})`);
-  if (listed.truncated) note(`waves-cap: ${directory}`);
+  if (listed.code) gap(`waves-unavailable: ${directory} (${listed.code})`);
+  if (listed.truncated) gap(`waves-cap: ${directory}`);
   for (const entry of listed.entries) {
     fact.hasWaveFiles = true;
     const file = join(directory, entry.name);
     const result = await readJson(file, limits.waveRecordBytes, budget, {
       prefix: 'wave', within: fact.packagePath, allow: value => value,
     });
-    if (result.outcome === 'read-budget') { noteUnknown(result.reason); break; }
+    if (result.outcome === 'read-budget') { gap(result.reason); break; }
     if (result.outcome !== 'ok') {
       fact.invalidWaves.push({ record_path: file, reason: result.outcome === 'oversized' ? 'oversized' : 'invalid-json' });
       note(`wave-invalid: ${file}`);
@@ -74,7 +77,7 @@ export function waveCurrentRuns(fact) {
 // keeps the package's lifecycle open: it must not be hidden as completed or
 // classified as planned inventory.
 export function waveLifecycleActive(fact) {
-  return (fact.waves ?? []).some(wave => !TERMINAL_WAVE_STATES.includes(wave.state)) || (fact.invalidWaves ?? []).length > 0;
+  return (fact.waves ?? []).some(wave => !TERMINAL_WAVE_STATES.includes(wave.state)) || (fact.invalidWaves ?? []).length > 0 || (fact.waveNotes ?? []).length > 0;
 }
 
 // Tie one receipt to its wave member. Identity comes from the receipt's own
@@ -125,24 +128,35 @@ export function waveRow(fact, wave, limits) {
   const sealed = members.filter(member => member.phase === 'sealed').sort(byStep);
   const display = [...active, ...blocked, ...cancelled, ...queued, ...sealed].slice(0, limits.waveMembers);
   return {
-    wave_id: wave.wave_id, state: wave.state, generation: wave.generation ?? null, record_path: wave.record_path,
+    wave_id: wave.wave_id, ordinal: wave.ordinal ?? null, state: wave.state, generation: wave.generation ?? null, record_path: wave.record_path,
+    observed: true, index_sha256: wave.index_sha256 ?? null,
+    requested_width: wave.requested_width, admitted_width: wave.admitted_width,
+    blocking_reason: hint(wave.blocking_reason), transitions: (wave.transitions ?? []).slice(-32),
+    opened_at: wave.opened_at ?? null,
+    candidate: wave.candidate ? { n: wave.candidate.n, phase: wave.candidate.phase, run_id: wave.candidate.run_id,
+      blocking_reason: hint(wave.candidate.blocking_reason), transitions: transitions(wave.candidate.transitions) } : null,
     workspace: fact.workspace, package_ref: fact.ref, package: fact.packagePath,
     member_count: members.length, active_count: active.length, sealed_count: sealed.length,
     blocked_count: blocked.length, queued_count: queued.length, cancelled_count: cancelled.length,
     omitted_count: Math.max(0, members.length - display.length),
     members: display.map(member => ({ step: member.step, phase: member.phase, run_id: member.run_id,
-      sealed_head: member.sealed_head ?? null, blocking_reason: member.blocking_reason ?? null })),
+      sealed_head: member.sealed_head ?? null, blocking_reason: hint(member.blocking_reason),
+      queue_reason: hint(member.queue_reason), transitions: transitions(member.transitions) })),
   };
 }
 
 export function unknownWaveRow(fact, invalid) {
   return {
-    wave_id: basename(invalid.record_path).replace(/\.json$/, ''), state: 'unknown', reason: invalid.reason,
+    wave_id: basename(invalid.record_path).replace(/\.json$/, ''), ordinal: null, state: 'unknown', reason: invalid.reason, observed: true,
+    candidate: null, transitions: [], blocking_reason: null, requested_width: null, admitted_width: null,
     workspace: fact.workspace, package_ref: fact.ref, package: fact.packagePath, record_path: invalid.record_path,
     member_count: 0, active_count: 0, sealed_count: 0, blocked_count: 0, queued_count: 0, cancelled_count: 0,
     omitted_count: 0, members: [],
   };
 }
+
+const hint = value => typeof value === 'string' ? publicHint(value) : null;
+const transitions = values => (values ?? []).slice(-32).map(item => ({ phase: item.phase, at: item.at, reason: hint(item.reason) }));
 
 export function waveRows(fact, limits) {
   const rows = [];

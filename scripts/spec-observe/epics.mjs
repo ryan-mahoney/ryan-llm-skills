@@ -119,12 +119,12 @@ export const attentionOf = run => !!run
 // Lifecycle, not acceptance: a merged package has landed, not necessarily passed every gate.
 // `incomplete` means the package's receipts or checkpoints could not be fully read
 // (budget, stale or invalid records); without a completion that is `unknown`, never a guess.
-export function deriveMemberStatus({ observed = true, exists, prepared, hasReceipts, completion, run, incomplete = false }) {
+export function deriveMemberStatus({ observed = true, exists, prepared, hasReceipts, completion, run, execution_summary = null, incomplete = false }) {
   const basis = completion?.completion_basis;
   const status = !observed ? 'unobserved' : !exists ? 'missing'
     : basis === 'merged-pr' ? 'merged' : basis === 'manual' ? 'complete' : completion ? 'published'
-    : incomplete ? 'unknown' : hasReceipts ? 'in-progress' : prepared ? 'prepared' : 'proposed';
-  return { status, attention: status === 'in-progress' && attentionOf(run) };
+    : execution_summary?.mode === 'waves' ? 'in-progress' : incomplete ? 'unknown' : hasReceipts ? 'in-progress' : prepared ? 'prepared' : 'proposed';
+  return { status, attention: status === 'in-progress' && (execution_summary?.attention === true || attentionOf(run)) };
 }
 
 // The planning subset an epic member publishes. Values are the same truth as a
@@ -154,7 +154,7 @@ export function buildEpics(entries) {
         completed_at: fact.completion?.completed_at ?? null,
         pr_url: fact.completion?.merge?.url ?? fact.run?.merge?.url ?? null,
         assignment_id: fact.run?.assignment_id ?? null,
-        planning: projectPlanning(fact.planning) };
+        planning: projectPlanning(fact.planning), execution_summary: fact.execution_summary ?? null };
     });
     const byName = new Map(members.map(member => [member.name, member]));
     // A landed member owes nothing; otherwise list the requirements that have not landed.
@@ -244,7 +244,7 @@ export async function collectEpics({ entries, facts, runs, recentlyCompleted, ru
       if (fact) {
         entry.members.push({ ...base, exists: true, prepared: await kindOf(join(path, 'spec-steps.json')) === 'file',
           hasReceipts: (fact.candidates?.length ?? 0) > 0, completion: fact.completion ?? null, run: currentRun(path),
-          incomplete: !!(fact.staleReceipts || fact.receiptsIncomplete), planning });
+          incomplete: !!(fact.staleReceipts || fact.receiptsIncomplete), execution_summary: fact.execution_summary ?? null, planning });
       } else {
         const kind = await kindOf(path);
         entry.members.push({ ...base, observed: kind !== 'error', exists: kind === 'dir',

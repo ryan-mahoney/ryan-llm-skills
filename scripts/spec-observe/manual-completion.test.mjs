@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { collectWorkspace } from './sentinel.mjs';
 import { createDashboardServer, readDashboardState } from './dashboard.mjs';
-import { COMPLETION_FILE } from './manual-completion.mjs';
+import { COMPLETION_FILE, applyManualCompletions } from './manual-completion.mjs';
 import { makeFixture } from '../spec-location/fixture.mjs';
 import { newPackage } from '../spec-location/index.mjs';
 
@@ -76,6 +76,46 @@ test('completion writes require same-origin action token and reject unpublished 
   symlinkSync(outside, join(f.pkg, COMPLETION_FILE));
   assert.equal((await f.post()).status, 503);
   assert.equal(readFileSync(outside, 'utf8'), 'unchanged');
+});
+
+// Run alone: node --test --test-name-pattern='wave-only manual completion' scripts/spec-observe/manual-completion.test.mjs
+test('wave-only manual completion keeps worker evidence and a new wave dispatch reopens the package', async t => {
+  const f = await fixture(t);
+  rmSync(f.runs, { recursive: true });
+  const waves = join(f.pkg, 'runtime', 'waves'); mkdirSync(waves, { recursive: true });
+  const wave = { version: 1, wave_id: 'only', ordinal: 1, state: 'running', generation: 1,
+    started_at: '2026-01-01T10:00:00Z', transitions: [{ state: 'running', at: '2026-01-01T10:00:00Z' }],
+    members: { 1: { step: 1, phase: 'implementing', run_id: null } } };
+  writeFileSync(join(waves, 'only.json'), JSON.stringify(wave));
+  const active = await f.collect(); f.publish(active);
+  assert.equal(active.runs.length, 0); assert.equal(active.package_executions[0].execution_summary.phase, 'running');
+  assert.equal((await f.post()).status, 200, 'published package metadata authorizes wave-only completion');
+  const immediate = await readDashboardState(f.agentDir);
+  assert.equal(immediate.observers[0].snapshot.package_executions[0].execution_summary.phase, 'complete');
+  assert.equal(immediate.observers[0].snapshot.recently_completed[0].completion_basis, 'manual');
+  const fresh = await f.collect(); assert.equal(fresh.package_executions[0].execution_summary.phase, 'complete');
+  assert.equal(fresh.recently_completed[0].completion_basis, 'manual');
+  assert.deepEqual(JSON.parse(readFileSync(join(waves, 'only.json'))), wave, 'operator completion preserves the wave journal');
+  const marker = JSON.parse(readFileSync(join(f.pkg, COMPLETION_FILE)));
+  marker.completed_at = new Date(Date.now() - 2000).toISOString();
+  writeFileSync(join(f.pkg, COMPLETION_FILE), JSON.stringify(marker));
+  wave.started_at = new Date(Date.now() - 1000).toISOString();
+  writeFileSync(join(waves, 'only.json'), JSON.stringify(wave));
+  const reopened = await f.collect(); f.publish(reopened);
+  assert.equal(reopened.package_executions[0].execution_summary.phase, 'running');
+  assert.equal((await readDashboardState(f.agentDir)).observers[0].snapshot.recently_completed.length, 0);
+});
+
+test('manual completion uses package dispatches when a published execution row lacks timing', async t => {
+  const f = await fixture(t);
+  const completed_at = new Date(Date.now() - 2000).toISOString();
+  writeFileSync(join(f.pkg, COMPLETION_FILE), JSON.stringify({ schema_version: 2, kind: 'manual_completion',
+    package_ref: 'demo/feature', completed_at }));
+  const snapshot = { runs: [{ package: f.pkg, package_ref: 'demo/feature', is_current_assignment: true,
+    timing: { attempts: [{ started_at: new Date(Date.now() - 1000).toISOString() }] } }],
+    package_executions: [{ package: f.pkg, package_ref: 'demo/feature', execution_summary: { phase: 'running' } }] };
+  await applyManualCompletions({ observers: [{ snapshot }] });
+  assert.equal(snapshot.runs.length, 1); assert.deepEqual(snapshot.recently_completed, []);
 });
 
 test('existing worker checkpoint updates preserve an operator completion decision', async t => {

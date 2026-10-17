@@ -138,7 +138,43 @@ redaction and length limits still apply before display.
 The **Specs** destination pairs the spec list with a detail split into **Overview**,
 **Activity** and **Files** tabs. The Overview action bar owns **Mark complete** and
 its confirmation dialog, the Open spec, agent, epic and package Files actions, and
-dev-server controls for configured workspaces. **Mark complete** saves
+dev-server controls for configured workspaces.
+
+Spec status combines the package's current execution records. The list and the
+**Needs attention** filter include a blocked member while its siblings continue.
+Package selection remains stable when workers change; earlier run links still
+resolve to the package, and Activity retains the individual run history.
+
+Wave execution appears as an ordered outline of waves and their member steps.
+Current waves and waves needing attention open by default; completed waves can
+be expanded, and polling preserves the operator's expansion choices. Future
+waves describe the dependency plan rather than observed execution. Member rows
+show implementation, review, repair, confirmation, queue and blocking states;
+integration has its own row for the combined result. Sealed members await
+integration. Integrated waves do not establish workflow completion, publication
+or merge. Counts describe observed execution, not accepted-step evidence.
+
+The collector publishes additive `package_executions` facts alongside `runs`
+and `waves`, including waves without worker receipts. Missing or unreadable
+wave records and a changed frozen step index produce explicit coverage gaps.
+Serial execution uses the same step rows without wave grouping. Legacy snapshots
+retain their recorded step position when no execution summary is available.
+Activity groups phase attempts under their step or integration candidate and
+labels worker durations separately from package wall elapsed time.
+
+The focused browser check runs against temporary storage and substitutes only
+the final state response:
+
+```sh
+uv run --script scripts/spec-observe/frontend/waves-browser-check.py
+```
+
+Build the dashboard first and start the uishot warm browser as described above.
+`SENTINEL_EVIDENCE_DIR` optionally selects the output directory; otherwise the
+check writes its report and desktop/mobile captures under the system temporary
+directory. It does not contact live Sentinel state or submit worker controls.
+
+**Mark complete** saves
 `sentinel-completion.json` in the package folder, bound to its `ws/slug` reference. The package moves to Recently
 completed with an explicit **Marked complete** label. This records an operator's
 lifecycle decision; workers continue and step evidence, checkpoints, and PR status

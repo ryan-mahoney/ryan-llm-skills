@@ -13,6 +13,9 @@ import { createWorkspace, setupStorage } from '../workspaces/store.mjs';
 import { newPackage } from '../spec-location/index.mjs';
 import { makeFixture } from '../spec-location/fixture.mjs';
 import { resolveAssignment } from '../workspaces/assignments.mjs';
+import { createHash } from 'node:crypto';
+import { authorizePackage } from './package-files.mjs';
+import { packageExecution } from './sentinel-execution.mjs';
 
 const FIXED = Date.parse('2026-10-06T12:00:00.000Z');
 const now = () => FIXED;
@@ -79,6 +82,147 @@ function activity(packagePath, id, role, state) {
 }
 
 const condition = (run, kind) => run.conditions.find(item => item.kind === kind);
+
+// Run alone: node --test --test-name-pattern='^package execution:' scripts/spec-observe/sentinel.test.mjs
+test('package execution: wave-only work retains ordered progress, capacity and dependency layers', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'execution'), pkg = pack(repo);
+  const steps = [
+    { step: 1, name: 'First', requires: [], writes: ['one'], resources: ['database'] },
+    { step: 2, name: 'Sibling', requires: [], writes: ['two'] },
+    { step: 3, name: 'Shared resource', requires: [], writes: ['three'], resources: ['database'] },
+    { step: 4, name: 'Dependent', requires: [3], writes: ['four'] },
+  ];
+  const raw = JSON.stringify({ steps }); writeFileSync(join(pkg, 'spec-steps.json'), raw);
+  const index_sha256 = createHash('sha256').update(raw).digest('hex');
+  wave(pkg, 'z-first', { state: 'running', members: {
+    1: waveMember(1, 'implementing'), 2: waveMember(2, 'blocked', { blocking_reason: 'needs-input' }),
+  }, extra: { ordinal: 1, inputs: { index_sha256 }, requested_width: 2, admitted_width: 1 } });
+  const snapshot = await collect({ packages: [pkg], indexDir: f.indexDir, now });
+  assert.deepEqual(snapshot.runs, []);
+  const row = snapshot.package_executions[0], summary = row.execution_summary;
+  assert.equal(row.package_ref, 'execution/feature'); assert.equal(row.visibility, 'active');
+  assert.equal(summary.mode, 'waves'); assert.equal(summary.phase, 'running'); assert.equal(summary.attention, true);
+  assert.deepEqual([summary.active_count, summary.blocked_count, summary.integrated_count], [1, 1, 0]);
+  assert.deepEqual(summary.waves.map(item => [item.ordinal, item.state]), [[1, 'running'], [2, 'waiting_dependencies'], [3, 'waiting_dependencies']]);
+  assert.deepEqual(summary.waves[1].members.map(item => item.step), [3], 'shared resources use the existing effective dependency semantics');
+  assert.deepEqual([summary.waves[0].requested_width, summary.waves[0].admitted_width], [2, 1]);
+  assert.equal(summary.waves[0].members[1].blocking_reason, 'needs-input');
+  assert.deepEqual(await authorizePackage({ observers: [{ snapshot: { package_executions: [row] } }] }, pkg,
+    async () => join(STORAGE, 'projects', 'execution')), { root: pkg, ref: 'execution/feature' });
+  await assert.rejects(authorizePackage({ observers: [{ snapshot: { package_executions: [row] } }] }, repo, async () => repo), /not published/);
+});
+
+test('package execution: journal identity mismatch and corrupt records remain unknown without guessed future waves', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'changed-plan'), pkg = pack(repo);
+  writeFileSync(join(pkg, 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1, name: 'Changed', requires: [], writes: ['one'] }, { step: 2, name: 'Next', requires: [1], writes: ['two'] }] }));
+  wave(pkg, 'a-later', { state: 'integrated', members: { 2: waveMember(2, 'sealed') }, extra: { ordinal: 2, inputs: { index_sha256: 'old' } } });
+  wave(pkg, 'z-earlier', { state: 'blocked', members: { 1: waveMember(1, 'blocked') }, extra: { ordinal: 1, inputs: { index_sha256: 'old' } } });
+  writeFileSync(join(pkg, 'runtime', 'waves', 'broken.json'), '{');
+  const snapshot = await collect({ packages: [pkg], indexDir: f.indexDir, now });
+  const summary = snapshot.package_executions[0].execution_summary;
+  assert.deepEqual(summary.waves.map(item => item.wave_id), ['z-earlier', 'a-later', 'broken']);
+  assert.equal(summary.waves[0].members[0].name, null);
+  assert.equal(summary.coverage.state, 'partial');
+  assert.ok(summary.coverage.reasons.includes('wave-index-mismatch: z-earlier'));
+  assert.equal(summary.waves.some(item => item.observed === false), false);
+  assert.equal(summary.waves[2].state, 'unknown');
+  assert.deepEqual(snapshot.planned_packages, []);
+});
+
+test('package execution: unavailable wave directory stays visible with unknown lifecycle coverage', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'unavailable-waves'), pkg = pack(repo);
+  mkdirSync(join(pkg, 'runtime'), { recursive: true });
+  writeFileSync(join(pkg, 'runtime', 'waves'), 'not a directory');
+  const snapshot = await collect({ packages: [pkg], indexDir: f.indexDir, now });
+  const row = snapshot.package_executions[0];
+  assert.equal(row.visibility, 'active'); assert.equal(row.execution_summary.mode, 'waves');
+  assert.equal(row.execution_summary.phase, 'unknown'); assert.equal(row.execution_summary.coverage.state, 'unknown');
+  assert.equal(row.execution_summary.coverage.omitted, null);
+  assert.ok(row.execution_summary.coverage.reasons.some(reason => reason.startsWith('waves-unavailable:')));
+  assert.deepEqual(snapshot.planned_packages, []); assert.deepEqual(snapshot.recently_completed, []);
+});
+
+test('package execution: incomplete journal discovery never invents queued waves or an integration total', () => {
+  const base = { packagePath: '/storage/specs/package', ref: 'workspace/package', workspace: 'workspace', targets: [],
+    hasWaveFiles: true, invalidWaves: [], stepIndexNotes: [], candidates: [],
+    stepIndex: { source: '/storage/specs/package/spec-steps.json', digest: 'current',
+      steps: [{ step: 1, name: 'First\u001b[31m token=private' }, { step: 2, name: 'Next password=private' }],
+      execution_plan: { legacy: false, waves: [[1], [2]] } },
+    waves: [{ wave_id: 'first', ordinal: 1, index_sha256: 'current', state: 'integrated',
+      record_path: '/storage/specs/package/runtime/waves/first.json', transitions: [],
+      members: [{ step: 1, phase: 'sealed', transitions: [] }] }] };
+  for (const reason of ['waves-cap: directory', 'wave-read-budget: directory', 'waves-unavailable: directory']) {
+    const summary = packageExecution({ ...base, waveNotes: [reason] }, SENTINEL_LIMITS, ago(0)).execution_summary;
+    assert.deepEqual(summary.waves.map(wave => [wave.wave_id, wave.observed]), [['first', true]], reason);
+    assert.equal(summary.integrated_count, null, reason);
+    assert.equal(summary.steps[1].phase, 'unknown', reason);
+    assert.equal(summary.coverage.state, 'partial', reason);
+    assert.equal(summary.coverage.omitted, null, reason);
+    assert.equal(summary.waves[0].members[0].name, 'First [redacted]');
+    assert.equal(summary.steps[1].name, 'Next [redacted]');
+  }
+  const serial = packageExecution({ ...base, waves: [], hasWaveFiles: false, waveNotes: [],
+    stepIndex: { ...base.stepIndex, execution_plan: { legacy: true, waves: [[1], [2]] } } }, SENTINEL_LIMITS, ago(0));
+  assert.equal(serial.execution_summary.steps[0].name, 'First [redacted]');
+});
+
+test('package execution: serial completion receipts do not invent acceptance and newer serial work supersedes old waves', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'serial-execution'), pkg = pack(repo);
+  writeFileSync(join(pkg, 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1, name: 'First' }, { step: 2, name: 'Second' }] }));
+  wave(pkg, 'old-wave', { state: 'cancelled', members: { 1: waveMember(1, 'cancelled') }, extra: { ordinal: 1 } });
+  receipt(pkg, { id: 'serial', state: 'running', step: join(pkg, 'step-002-subspec.md'), started_at: ago(1000) });
+  let snapshot = await collect({ packages: [pkg], indexDir: f.indexDir, now });
+  let summary = snapshot.package_executions[0].execution_summary;
+  assert.equal(summary.mode, 'serial'); assert.equal(summary.phase, 'running');
+  assert.deepEqual(summary.steps.map(item => item.phase), ['unknown', 'running']); assert.deepEqual(summary.waves, []);
+  receipt(pkg, { id: 'serial', state: 'completed', step: join(pkg, 'step-002-subspec.md'), started_at: ago(1000), finished_at: ago(500) });
+  snapshot = await collect({ packages: [pkg], indexDir: f.indexDir, now }); summary = snapshot.package_executions[0].execution_summary;
+  assert.equal(summary.integrated_count, null); assert.equal(summary.phase, 'unknown');
+  assert.deepEqual(summary.steps.map(item => item.phase), ['unknown', 'worker_completed']);
+});
+
+test('package execution: newer serial receipts never hide active or incompletely observed waves', () => {
+  const base = { packagePath: '/storage/specs/package', ref: 'workspace/package', workspace: 'workspace', targets: [],
+    hasWaveFiles: true, invalidWaves: [], waveNotes: [], stepIndexNotes: [], currentAssignment: 'newer',
+    candidates: [{ id: 'newer', receipt: { state: 'running', step: '2', started_at: '2026-10-06T11:00:00Z' } }],
+    stepIndex: { source: '/storage/specs/package/spec-steps.json', digest: 'current',
+      steps: [{ step: 1, name: 'First' }, { step: 2, name: 'Second' }],
+      execution_plan: { legacy: false, waves: [[1], [2]] } },
+    waves: [{ wave_id: 'first', ordinal: 1, index_sha256: 'current', state: 'running',
+      record_path: '/storage/specs/package/runtime/waves/first.json',
+      transitions: [{ state: 'running', at: '2026-10-06T10:00:00Z' }],
+      members: [{ step: 1, phase: 'implementing', transitions: [] }] }] };
+  const cases = [base,
+    { ...base, waves: base.waves.map(wave => ({ ...wave, state: 'blocked', members: [{ step: 1, phase: 'blocked', transitions: [] }] })) },
+    { ...base, waves: base.waves.map(wave => ({ ...wave, state: 'cancelled' })), waveNotes: ['waves-cap: directory'] },
+    { ...base, waves: [], invalidWaves: [{ record_path: '/storage/specs/package/runtime/waves/broken.json', reason: 'invalid-json' }] },
+  ];
+  for (const fact of cases) {
+    const summary = packageExecution(fact, SENTINEL_LIMITS, ago(0)).execution_summary;
+    assert.equal(summary.mode, 'waves'); assert.ok(summary.waves.length > 0);
+    assert.ok(summary.coverage.reasons.includes('serial-wave-lifecycle-conflict'));
+  }
+  const active = packageExecution(base, SENTINEL_LIMITS, ago(0)).execution_summary;
+  assert.equal(active.active_count, 1); assert.equal(active.waves[0].members[0].phase, 'implementing');
+});
+
+test('package execution: integrated journal waits for package lifecycle completion and candidate timing keeps its subject', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'integrated-execution'), pkg = pack(repo);
+  const raw = JSON.stringify({ steps: [{ step: 1, name: 'First', requires: [], writes: ['one'] }] });
+  writeFileSync(join(pkg, 'spec-steps.json'), raw);
+  wave(pkg, 'done', { state: 'integrated', members: { 1: waveMember(1, 'sealed') }, extra: { ordinal: 1,
+    inputs: { index_sha256: createHash('sha256').update(raw).digest('hex') } } });
+  receipt(pkg, { id: 'candidate', state: 'completed', started_at: ago(90000), finished_at: ago(60000),
+    command_phase: { wave_id: 'done', subject: { kind: 'candidate' } } });
+  const snapshot = await collect({ packages: [pkg], indexDir: f.indexDir, now });
+  assert.equal(snapshot.package_executions[0].execution_summary.phase, 'integrated');
+  assert.equal(snapshot.package_executions[0].execution_summary.integrated_count, 1);
+  assert.deepEqual(snapshot.recently_completed, []);
+  const attempt = snapshot.runs[0].timing.attempts[0];
+  assert.equal('execution_summary' in snapshot.runs[0], false, 'worker rows reference the canonical package projection without duplicating its journals');
+  assert.deepEqual([attempt.run_id, attempt.wave_id, attempt.subject_kind, attempt.phase, attempt.step, attempt.name],
+    ['candidate', 'done', 'candidate', 'command', null, 'Integration candidate']);
+});
 
 test('package observation needs no Git process and reads targets from locations.json', async t => {
   const f = sandbox(t);

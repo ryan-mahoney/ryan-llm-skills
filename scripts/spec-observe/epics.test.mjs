@@ -9,6 +9,21 @@ import { EPIC_LIMITS, buildEpics, changedMembers, collectEpics, deriveMemberStat
 const record = (extra = {}) => ({ schema_version: 1, epic: 'demo', title: 'Demo', state: 'active',
   packages: [{ package: 'a' }, { package: 'b', requires: ['a'] }], ...extra });
 
+// Run alone: node --test --test-name-pattern='wave-only epic' scripts/spec-observe/epics.test.mjs
+test('wave-only epic aggregates preserve running attention and integrated work still owes package completion', () => {
+  const { epic } = parseEpic(record(), { slug: 'demo' });
+  const execution_summary = { mode: 'waves', phase: 'running', attention: true, active_count: 1, blocked_count: 1 };
+  const built = buildEpics([{ epic, workspace: 'demo', file: '/storage/epics/demo/epic.json', members: [
+    { path: '/storage/specs/a', exists: true, prepared: true, hasReceipts: false, execution_summary },
+    { path: '/storage/specs/b', exists: true, prepared: true, hasReceipts: false,
+      execution_summary: { mode: 'waves', phase: 'integrated', attention: false } },
+  ] }]).epics[0];
+  assert.deepEqual(built.members.map(member => [member.status, member.attention]), [['in-progress', true], ['in-progress', false]]);
+  assert.equal(built.members[0].execution_summary, execution_summary);
+  assert.deepEqual(built.members[1].waiting_on, ['a']);
+  assert.equal(built.summary.in_progress, 2); assert.equal(built.summary.attention, 1); assert.equal(built.summary.complete, 0);
+});
+
 test('parseEpic accepts a valid record and keeps allowlisted fields', () => {
   const { epic, error } = parseEpic(record({ plan: 'demo.md', note: 'n', extra: 1,
     packages: [{ package: 'a', note: 'folded' }, { package: 'b', requires: ['a'] }] }), { slug: 'demo' });

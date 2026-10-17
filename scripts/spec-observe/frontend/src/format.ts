@@ -17,9 +17,9 @@ export const terminal=new Set(['completed','complete','failed','cancelled','stal
 export {compareReadiness} from './readiness';
 export const key=(r:any)=>JSON.stringify([r.workspace,r.package,r.assignment_id]);
 export const pendingWorkflow=(r:any)=>r.is_current_assignment===true&&['ready','waiting-worker','waiting-external','decision-required','blocked','user-held'].includes(r.workflow_state);
-export const activeRun=(r:any)=>!r.recent_completion&&!r.planned&&(r.is_current_assignment!==false&&(!terminal.has(r.execution)||pendingWorkflow(r)||r.is_current_assignment===true&&r.execution==='failed'&&r.workflow_state!=='complete'));
+export const activeRun=(r:any)=>r.package_aggregate?r.aggregate_active===true:!r.recent_completion&&!r.planned&&(r.is_current_assignment!==false&&(!terminal.has(r.execution)||pendingWorkflow(r)||r.is_current_assignment===true&&r.execution==='failed'&&r.workflow_state!=='complete'));
 export const runningUnconfirmed=(r:any)=>r.execution==='running'&&(r.coverage?.reasons||[]).some((reason:string)=>/^coordinator-gone$|^checkout-unavailable:/.test(reason));
-export const attention=(r:any)=>activeRun(r)&&(['blocked','decision-required'].includes(r.workflow_state)||(r.conditions||[]).some((x:any)=>x.severity==='attention'&&x.state!=='resolved'&&(x.kind!=='action-outcome-unknown'||x.current===true))||(r.incidents||[]).some((x:any)=>x.state==='open'));
+export const attention=(r:any)=>r.package_aggregate?r.aggregate_attention===true:activeRun(r)&&(['blocked','decision-required'].includes(r.workflow_state)||(r.conditions||[]).some((x:any)=>x.severity==='attention'&&x.state!=='resolved'&&(x.kind!=='action-outcome-unknown'||x.current===true))||(r.incidents||[]).some((x:any)=>x.state==='open'));
 export type PackageFilter='all'|'active'|'attention'|'completed'|'planned'|'ready';
 // `planned` is the history alias for the Ready partition: prepared inventory
 // that is not already starting. Starting projections and planned rows never

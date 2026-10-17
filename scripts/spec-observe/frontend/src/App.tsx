@@ -1,3 +1,4 @@
+import { resolvePackageRecord, packageMatchesKey } from './execution-state';
 import { For, Show, Switch, Match, createSignal, createMemo, createEffect, on, onMount, onCleanup } from 'solid-js';
 import { getJson } from './api';
 import { scan, scanError, startNextStepsPolling, stopNextStepsPolling } from './next-steps-store';
@@ -96,7 +97,7 @@ export default function App() {
   const visibleRecords = createMemo(() => visibleSpecs(scopedRecords(), filter(), query()));
   const visibleAssignments = createMemo(() => scopedAssignments().filter(assignment => !q() || [assignment.assignment_id, assignment.spec_package, assignment.workflow_id, assignment.display, assignment.nextAction, assignment.safeAction].some(value => str(value).toLowerCase().includes(q()))));
   const visibleEpics = createMemo(() => sharedVisibleEpics(scopedEpics(), route().q ?? ''));
-  const record = createMemo(() => scopedRecords().find(item => item.key === route().id) ?? null);
+  const record = createMemo(() => resolvePackageRecord(packageSummaries(scopedRecords(), filter()), route().id));
   const agent = createMemo(() => scopedAssignments().find(item => item.key === route().id) ?? null);
   const epic = createMemo(() => scopedEpics().find(item => item.key === route().id) ?? null);
   const agentsFilter = createMemo(() => effectiveAgentFilter(route(), scopedAssignments()));
@@ -459,7 +460,7 @@ export default function App() {
     const currentId = currentRoute.id ?? null;
     if (currentRoute.dest !== 'specs' && expectedCompletionKey() !== null) { setExpectedCompletionKey(null); setExpectedCompletionRoute(null); expectedSeen = false; }
     if (currentRoute.dest === 'specs') {
-      const current = scopedRecords().find(item => item.key === currentId);
+      const current = resolvePackageRecord(packageSummaries(scopedRecords(), filter()), currentId ?? undefined);
       if (current) selectedIdentity = { workspace: str(current.workspace), package: str(current.package) };
       const rows = visibleRecords();
       const expected = expectedCompletionKey();
@@ -495,7 +496,7 @@ export default function App() {
         // Armed without a recorded route; preserve no-steal.
         return;
       }
-      if (!rows.some(item => item.key === currentId)) {
+      if (!rows.some(item => packageMatchesKey(item, currentId ?? undefined))) {
         const followed = currentId && selectedIdentity ? rows.find(item => !item.recent_completion && item.is_current_assignment === true && item.workspace === selectedIdentity!.workspace && item.package === selectedIdentity!.package) : undefined;
         replaceId(followed?.key ?? rows[0]?.key ?? null);
       }
