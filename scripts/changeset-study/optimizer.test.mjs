@@ -1,7 +1,7 @@
 // node --test scripts/changeset-study/optimizer.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { optimizePlan } from './optimizer.mjs';
+import { optimizePlan, pruneDeclaredDependencies } from './optimizer.mjs';
 import { compile } from '../changeset/engine.mjs';
 import { routeContext } from './context-router.mjs';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -98,4 +98,20 @@ test('every round recomputes candidates so pairs on several files all merge and 
   assert.deepEqual(r.plan.operations.map(op => op.members ?? [op.id]), [['a1', 'a2'], ['b1', 'b2'], ['d']]);
   assert.equal(r.plan.operations.find(op => op.id === 'd').context.length, 1);
   assert.equal(r.metrics.after.assignments, 3);
+});
+
+// node --test --test-name-pattern='pruning drops' scripts/changeset-study/optimizer.test.mjs
+test('pruning drops declared edges without file overlap and keeps every data dependency', () => {
+  const op = (id, writes, reads, depends_on) => ({ id, executor: 'simple', writes, reads, depends_on, objective: id, instruction: id,
+    requirements: ['keep'], context: [] });
+  const plan = { schema_version: 1, operations: [op('a', ['x.mjs'], [], []), op('b', ['y.mjs'], [], ['a']), op('c', ['z.mjs'], ['x.mjs'], ['a']),
+    op('d', ['y.mjs'], [], ['b']), op('e', ['w.mjs'], [], ['c'])] };
+  const original = structuredClone(plan);
+  const { plan: pruned, removed } = pruneDeclaredDependencies(plan);
+  assert.deepEqual(removed, [{ from: 'b', to: 'a' }, { from: 'e', to: 'c' }]);
+  assert.deepEqual(Object.fromEntries(pruned.operations.map(o => [o.id, o.depends_on])), { a: [], b: [], c: ['a'], d: ['b'], e: [] });
+  assert.deepEqual(plan, original);
+  // compile still orders every read/write overlap, so dropping sequencing edges never reorders file state.
+  assert.deepEqual(compile(pruned).find(o => o.id === 'd').depends_on, ['b']);
+  assert.deepEqual(compile(pruned).find(o => o.id === 'c').depends_on, ['a']);
 });

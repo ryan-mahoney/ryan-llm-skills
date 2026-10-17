@@ -23,7 +23,7 @@ export const PROVENANCE = Object.freeze({
   matching_passes: ['exact', 'trim_end', 'trim', 'unicode'],
   uniqueness: 'All matches at first successful tier within cursor/anchor/EOF scope; refuse more than one.',
   endings: 'Preserve context bytes and individual terminators; first source ending for inserts; preserve update EOF newline presence; adds LF.',
-  wrappers: ['outer blank lines', 'one whole ```diff/```patch/unlabelled fence', "one whole optional apply_patch <<'PATCH' or <<'EOF' heredoc"],
+  wrappers: ['outer blank lines', 'one whole ```diff/```patch/unlabelled fence', "one whole optional apply_patch <<'PATCH' or <<'EOF' heredoc", 'repeated consecutive trailing *** End Patch markers'],
 });
 class PatchError extends Error {
   constructor(code,message,details={}) { super(message); this.code=code; Object.assign(this,details); }
@@ -54,6 +54,9 @@ function envelopeLines(patch,envelope) {
       if(heredoc && lines.at(-1)===heredoc[1]) lines=lines.slice(1,-1);
     }
     blanks();
+    // A repeated terminal end marker is a transport stutter, not a nested patch: collapse
+    // only consecutive trailing copies, so an inner Begin/End pair still fails.
+    while(lines.length>1 && lines.at(-1)==='*** End Patch' && lines.at(-2)==='*** End Patch') lines.pop();
   }
   if(lines[0]!=='*** Begin Patch' || lines.at(-1)!=='*** End Patch') fail('malformed','Exact Begin Patch/End Patch envelope required');
   return lines.slice(1,-1);

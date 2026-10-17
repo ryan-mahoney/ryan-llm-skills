@@ -21,7 +21,7 @@ import { optimizePlan } from './optimizer.mjs';
 import { routeContext } from './context-router.mjs';
 import { resolveDispatchProfile } from './dispatch-profile.mjs';
 import { preprocessChangeset } from './preprocess-changeset.mjs';
-import { v4aEditor } from './v4a-editor.mjs';
+import { v4aEditor, routeWriterFormat, seedMove } from './v4a-editor.mjs';
 import { recoverAccounting } from './accounting.mjs';
 
 const reviewerPrompt = 'Review the resulting implementation against the task contract. Inspect behavioral impact, boundary conditions, compatibility and visible test feedback. Return only JSON {"accepted":boolean,"findings":["concrete defect and required behavior"]}. Accept when no concrete task defect is found; do not require cosmetic edits. Hidden acceptance tests are unavailable. Do not invent additional requirements.';
@@ -48,8 +48,8 @@ function diffs(before, after, limit = 200000) {
 const tail = (visible, chars) => visible?.output?.length > chars ? { ...visible, output: '[earlier output omitted]\n' + visible.output.slice(-chars) } : visible;
 function materialize(files, root) { rmSync(root, { recursive: true, force: true }); mkdirSync(root, { recursive: true }); new Workspace(files).materialize(root); }
 
-export async function runCell({ task, arm, selector, ledger, directory, plannerPrompt, timeoutMs, mounts = [], simpleSelector = null, editorSelector = null, writerRecoverySelector = null, strategy = null, optimization = null, preparedPlan = null, preparedBrief = null, planningSource = null, queryMode = null, briefSource = null, queryGranularity = null, dispatchProfile = null }) {
-  const dispatch = resolveDispatchProfile({ dispatchProfile, strategy, selector, editorSelector, writerRecoverySelector, optimization, queryMode, queryGranularity });
+export async function runCell({ task, arm, selector, ledger, directory, plannerPrompt, timeoutMs, mounts = [], simpleSelector = null, editorSelector = null, writerRecoverySelector = null, strategy = null, optimization = null, preparedPlan = null, preparedBrief = null, planningSource = null, queryMode = null, briefSource = null, queryGranularity = null, dispatchProfile = null, dispatchOptions = null }) {
+  const dispatch = resolveDispatchProfile({ dispatchProfile, dispatchOptions, strategy, selector, editorSelector, writerRecoverySelector, optimization, queryMode, queryGranularity });
   ({ optimization, queryMode, queryGranularity } = dispatch);
   if (!['discovery', 'catalog', 'catalog-lookup'].includes(queryMode)) throw new Error('Unknown query mode');
   if (queryMode.startsWith('catalog') && strategy !== 'owner-query-writer') throw new Error('Catalog query requires owner-query-writer');
@@ -80,7 +80,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
     writer_recovery_selector: writerRecoverySelector,
     ...(strategy ? { strategy, exploratory: true } : {}),
     optimization, planning_source: planningSource, query_mode: queryMode, query_granularity: queryGranularity, brief_source: briefSource,
-    ...(dispatchProfile ? { dispatch_profile: dispatchProfile, writer_format: dispatch.writerFormat, writer_attempts: [] } : {}),
+    ...(dispatchProfile ? { dispatch_profile: dispatchProfile, dispatch_options: dispatch.options, writer_format: dispatch.writerFormat, writer_attempts: [] } : {}),
     ...(dispatchOnly(strategy) ? { review_mode: 'executable-checks-only', checks: [] } : {}),
   };
   let client, agent, simpleClient, recoveryClient, contextParse;
@@ -334,7 +334,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
       if (strategy === 'owner-query-writer') {
         writeFileSync(join(directory, 'raw-plan.json'), JSON.stringify(plan, null, 2));
         if (dispatchProfile) {
-          const optimized = await preprocessChangeset(plan, current.snapshot(), { ledger, signal: controller.signal,
+          const optimized = await preprocessChangeset(plan, current.snapshot(), { ledger, signal: controller.signal, options: dispatch.options,
             parse: contextParse, protectedPaths: task.protected ?? ['visible.mjs'], stage, artifactDirectory: join(directory, 'routing'),
             beforeRouting: () => { if (client.shared.calls >= limits.model_calls) throw new Error('Cell model-call limit exceeded'); },
             onRouting: routing => {
@@ -358,14 +358,21 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
       writeFileSync(join(directory, `plan-${executions.length}.json`), JSON.stringify(plan, null, 2));
       validateStrategyPlan(strategy, plan);
       const editor = (model, stageName, recoveryModel = null) => async ({ operation, files }) => {
-        if (dispatch.writerFormat === 'v4a-fallback') {
+        if (dispatch.options) {
+          const seed = dispatch.options.seed_moves ? seedMove(operation, files) : null, promptOrder = dispatch.options.prompt_order;
+          const format = seed ? 'v4a' : routeWriterFormat(operation, files, dispatch.options.writer_routing);
           const retain = value => {
-            const record = { operation_id: operation.id, writer_fallback: value.writer_fallback ?? false,
+            const record = { operation_id: operation.id, format, writer_fallback: value.writer_fallback ?? false, ...(seed ? { seeded: true, seeded_characters: seed.seeded_characters } : {}),
               attempts: value.writer_attempts ?? [] };
             result.writer_attempts.push(record);
             writeFileSync(join(directory, 'writer-attempts.json'), JSON.stringify(result.writer_attempts, null, 2));
           };
-          try { const value = await v4aEditor(model, stageName, { operation, files }, { contextParse }); retain(value); return value; }
+          if (format === 'v4a') {
+            try { const value = await v4aEditor(model, stageName, seed ?? { operation, files }, { contextParse, promptOrder, seed }); retain(value); return value; }
+            catch (error) { retain(error); throw error; }
+          }
+          // Executable JSON edits with the focused writer's existing one local retry.
+          try { const value = await patchEditor(model, stageName, task.spec, { operation, files }, { ranges: true, focused: true, contextParse, promptOrder }); retain(value); return value; }
           catch (error) { retain(error); throw error; }
         }
         return strategy
@@ -376,7 +383,7 @@ export async function runCell({ task, arm, selector, ledger, directory, plannerP
         : simpleClient ? { simple: editor(simpleClient, 'simple-editor'), involved: editor(client, 'editor') }
         : { simple: editor(client, 'editor'), involved: editor(client, 'editor') };
       let draft;
-      const report = await stage('execution', () => execute(plan, current, { concurrency: 4, adapters, signal: controller.signal, onDraft: d => { draft = d; } }));
+      const report = await stage('execution', () => execute(plan, current, { concurrency: dispatch.options?.concurrency ?? 4, antiDependencies: dispatch.options?.anti_dependencies ?? 'serialize', adapters, signal: controller.signal, onDraft: d => { draft = d; } }));
       executions.push(report);
       // Retain all successful staged operations even if another operation failed.
       materialize(draft?.files ?? current.snapshot(), root);

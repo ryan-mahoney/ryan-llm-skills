@@ -109,3 +109,14 @@ test('implicit first chunk and trailing empty-context sentinel apply without alt
   const move=run({'a.txt':'same\r\nno-newline'},'*** Update File: a.txt\n*** Move to: b.txt',{allowedPaths:['a.txt','b.txt']});
   assert.equal(move.files['b.txt'],'same\r\nno-newline');
 });
+
+// node --test --test-name-pattern='trailing end marker' scripts/changeset-study/divergent/v4a-suite/applier.test.mjs
+test('lenient wrapper collapses a repeated trailing end marker but still refuses a nested patch', () => {
+  const files = { 'a.txt': 'one\n' };
+  const stutter = '*** Begin Patch\n*** Update File: a.txt\n@@\n-one\n+two\n*** End Patch\n*** End Patch';
+  assert.equal(applyV4A({ patch: stutter, files, allowedPaths: ['a.txt'], envelope: 'strict' }).ok, false);
+  const ok = applyV4A({ patch: stutter, files, allowedPaths: ['a.txt'], envelope: 'lenient-wrapper' });
+  assert.equal(ok.ok, true); assert.equal(ok.files['a.txt'], 'two\n');
+  const nested = '*** Begin Patch\n*** Update File: a.txt\n@@\n-one\n+two\n*** End Patch\n*** Begin Patch\n*** End Patch';
+  assert.equal(applyV4A({ patch: nested, files, allowedPaths: ['a.txt'], envelope: 'lenient-wrapper' }).ok, false);
+});

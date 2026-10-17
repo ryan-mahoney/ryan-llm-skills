@@ -30,6 +30,22 @@ A local format, path, application or syntax failure leaves the staged files unch
 
 Behavioral test failures are reported by the outer workflow after file modification. They never feed this fallback. Application success remains distinct from delivered correctness.
 
+## Dispatch options and the lean profile
+
+Both optimized profiles accept `dispatchOptions` (validated in [`dispatch-profile.mjs`](dispatch-profile.mjs)). `optimized-v4a` keeps the historical defaults; `optimized-lean` is the route the replay rounds under [`divergent/stacked-optimization/`](divergent/stacked-optimization/) recommend, and explicit options still override its fields.
+
+| Option | Values | Effect |
+| --- | --- | --- |
+| `advice` | `jev` (v4a default), `none` (lean) | Skip the Jev routing request; deterministic grouping only |
+| `writer_routing` | `v4a` (v4a default), `json`, `hybrid` (lean), `hybrid-wide` | Per-packet representation: an absent destination is written as literal V4A; an existing destination whose recipe names a source range goes to the executable JSON writer with its local retry; `hybrid-wide` also sends merged packets and packets with three or more excerpts to JSON |
+| `prune_dependencies` | `false` (v4a default), `true` (lean) | Drop declared `depends_on` edges with no file overlap before optimization; `compile` still orders every read/write overlap |
+| `prompt_order` | `target-first` (v4a default), `static-first` (lean) | Put the shared writer contract before the per-packet ownership sentence so DeepSeek's prefix cache applies across packets |
+| `concurrency` | 1..32 (4 v4a default, 8 lean) | Executor width |
+| `anti_dependencies` | `serialize` (both defaults), `snapshot` | Let a writer start once the reader of its file has started; readers snapshot their inputs at start |
+| `seed_moves` | `false` (v4a default), `true` (lean) | Pre-fill an absent destination with its declared source excerpts when the recipe says compose/copy/move/extract, and hand the writer an `Update` on that seed; a rejected seam patch gets one more seam attempt carrying the applier diagnostic instead of the JSON fallback |
+
+The V4A applier runs in its declared `lenient-wrapper` envelope: outer blank lines, one whole fence or heredoc, and repeated consecutive trailing `*** End Patch` markers are tolerated; nested envelopes, prose and partial lines are still rejected. Each attempt records whether the strict envelope would also have parsed.
+
 ## Use and retained evidence
 
 Add `--dispatch-profile optimized-v4a` to the existing `iterate.mjs` owner/query/writer invocation. Keep the selectors explicit:

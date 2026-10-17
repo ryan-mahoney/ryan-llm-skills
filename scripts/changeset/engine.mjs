@@ -133,8 +133,16 @@ export function validateFileSyntax(files) {
   }
 }
 
-export async function execute(plan, workspace, { concurrency = 4, adapters = {}, verify, signal, onDraft } = {}) {
+export async function execute(plan, workspace, { concurrency = 4, adapters = {}, verify, signal, onDraft, antiDependencies = 'serialize' } = {}) {
   const operations = compile(plan);
+  if (!['serialize', 'snapshot'].includes(antiDependencies)) throw new Error('antiDependencies must be serialize or snapshot');
+  // Every operation reads its inputs from the staged snapshot taken when it starts.
+  // A write-after-read edge therefore only needs the reader to have started before
+  // the writer starts; `snapshot` lets both run concurrently instead of waiting for
+  // the reader to finish. Edges carrying written bytes always wait for completion.
+  const byId = new Map(operations.map(op => [op.id, op]));
+  const softEdge = (op, id) => { const dep = byId.get(id); return antiDependencies === 'snapshot' &&
+    !intersects(dep.writes, [...op.reads, ...op.writes]) && intersects(dep.reads, op.writes); };
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 32) throw new Error('Concurrency must be 1..32');
   const started = performance.now(), initial = workspace.snapshot();
   // Work in a private transaction: callers see no partial batch on any failure.
@@ -174,7 +182,7 @@ export async function execute(plan, workspace, { concurrency = 4, adapters = {},
       if (op.depends_on.some(id => ['failed', 'blocked'].includes(states.get(id)))) {
         states.set(op.id, 'blocked'); records.push({ id: op.id, status: 'blocked', dependencies: op.depends_on }); continue;
       }
-      if (active.size >= concurrency || !op.depends_on.every(id => states.get(id) === 'passed')) continue;
+      if (active.size >= concurrency || !op.depends_on.every(id => states.get(id) === 'passed' || (softEdge(op, id) && active.has(id)))) continue;
       const promise = Promise.resolve().then(() => run(op)).finally(() => active.delete(op.id));
       active.set(op.id, promise); peak = Math.max(peak, active.size);
     }
@@ -200,6 +208,6 @@ export async function execute(plan, workspace, { concurrency = 4, adapters = {},
   return {
     schema_version: 1, ok, plan_sha256: hash(JSON.stringify(plan)), operations: records.sort((a, b) => operations.findIndex(o => o.id === a.id) - operations.findIndex(o => o.id === b.id)),
     verification, changes: changes.map(c => ({ path: c.path, before_sha256: hash(c.before), after_sha256: hash(c.after) })),
-    metrics: { execution_ms, total_ms: performance.now() - started, peak_concurrency: peak, model_calls: modelCalls, deterministic_operations: records.filter(r => r.executor === 'deterministic').length, failed: records.filter(r => r.status === 'failed').length, blocked: records.filter(r => r.status === 'blocked').length },
+    metrics: { execution_ms, total_ms: performance.now() - started, peak_concurrency: peak, anti_dependencies: antiDependencies, model_calls: modelCalls, deterministic_operations: records.filter(r => r.executor === 'deterministic').length, failed: records.filter(r => r.status === 'failed').length, blocked: records.filter(r => r.status === 'blocked').length },
   };
 }

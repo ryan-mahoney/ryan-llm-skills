@@ -101,3 +101,24 @@ export function optimizePlan(plan, files, { mode = 'deterministic', mergeChoices
   validateFocusedPlan(optimized); compile(optimized);
   return { plan: optimized, metrics: { before, after: planMetrics(optimized), changes } };
 }
+
+const overlapPath = (a, b) => a === b || a.startsWith(b + '/') || b.startsWith(a + '/');
+const intersects = (a, b) => a.some(x => b.some(y => overlapPath(x, y)));
+// A declared edge with no file overlap only encodes planner sequencing, such as
+// "the imported module must exist before its caller is edited". Writers never see
+// the other file, so the edge cannot change any written byte, and compile() keeps
+// every read/write overlap as a dependency. Dropping these edges lets independent
+// chains run concurrently.
+export function pruneDeclaredDependencies(plan) {
+  const byId = new Map(plan.operations.map(op => [op.id, op])), removed = [];
+  const operations = plan.operations.map(op => {
+    const depends_on = (op.depends_on ?? []).filter(id => {
+      const other = byId.get(id);
+      const keep = !other || intersects(other.writes ?? [], [...(op.reads ?? []), ...(op.writes ?? [])]) || intersects(other.reads ?? [], op.writes ?? []);
+      if (!keep) removed.push({ from: op.id, to: id });
+      return keep;
+    });
+    return { ...op, depends_on };
+  });
+  return { plan: { ...plan, operations }, removed };
+}

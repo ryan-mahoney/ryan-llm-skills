@@ -167,3 +167,27 @@ test('new files named like object properties use default modes', t => {
   assert.equal(statSync(join(root,'constructor')).mode & 0o777,0o644);
   assert.equal(readFileSync(join(root,'toString'),'utf8'),'other');
 });
+
+// node --test --test-name-pattern='snapshot anti-dependencies' scripts/changeset/engine.test.mjs
+test('snapshot anti-dependencies let a writer start once its reader has started, and the reader keeps the original text', async () => {
+  const files = { 'x.mjs': 'export const x = 1;\n', 'y.mjs': 'export const y = 0;\n' };
+  const run = async antiDependencies => {
+    const workspace = new Workspace(files); let readerSaw, order = [];
+    const adapters = { simple: async ({ operation, files: context }) => {
+      order.push(operation.id + ':start');
+      if (operation.id === 'reader') { await new Promise(r => setTimeout(r, 150)); readerSaw = context['x.mjs']; return { files: { 'y.mjs': 'export const y = 1;\n' } }; }
+      return { files: { 'x.mjs': 'export const x = 2;\n' } };
+    } };
+    const report = await execute(plan([model('reader', 'y.mjs', { reads: ['x.mjs'] }), model('writer', 'x.mjs', { depends_on: ['reader'] })]), workspace, { adapters, antiDependencies });
+    return { ok: report.ok, peak: report.metrics.peak_concurrency, readerSaw, order, x: workspace.read('x.mjs'), y: workspace.read('y.mjs') };
+  };
+  const serial = await run('serialize'), snapshot = await run('snapshot');
+  assert.equal(serial.peak, 1); assert.deepEqual(serial.order, ['reader:start', 'writer:start']);
+  assert.equal(snapshot.peak, 2); assert.deepEqual(snapshot.order, ['reader:start', 'writer:start']);
+  for (const result of [serial, snapshot]) { assert.equal(result.ok, true); assert.equal(result.readerSaw, 'export const x = 1;\n'); assert.equal(result.x, 'export const x = 2;\n'); assert.equal(result.y, 'export const y = 1;\n'); }
+  // A read-after-write edge still waits for completion even under snapshot scheduling.
+  const workspace = new Workspace(files), starts = [];
+  const adapters = { simple: async ({ operation }) => { starts.push(operation.id); await new Promise(r => setTimeout(r, 50)); return { files: { [operation.writes[0]]: `// ${operation.id}\n` } }; } };
+  const report = await execute(plan([model('first', 'x.mjs'), model('second', 'y.mjs', { reads: ['x.mjs'], depends_on: ['first'] })]), workspace, { adapters, antiDependencies: 'snapshot' });
+  assert.equal(report.metrics.peak_concurrency, 1); assert.deepEqual(starts, ['first', 'second']);
+});
