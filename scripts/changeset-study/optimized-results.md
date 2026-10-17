@@ -14,6 +14,8 @@ Actual incurred model usage excludes reused planning. plans_from adds original o
 | 10-bounded-query-recovery | deterministic/catalog-lookup | 2/3 | 0 | 150.34 | 449.88 | 19.14 | 19.15 |
 | 11-fresh-owner-briefs | deterministic/catalog-lookup | 1/3 | 0 | 468.26 | 468.26 | 3.43 | 3.43 |
 | 12-root-aware-catalog | deterministic/catalog-lookup | 2/3 | 0 | 246.40 | 657.78 | 50.88 | 50.89 |
+| 13-syntax-context | deterministic/catalog-lookup | 1/3 | 0 | 70.32 | 581.44 | 40.49 | 40.49 |
+| 14-unoptimized-syntax-context | none/catalog-lookup | 1/3 | 0 | 139.10 | 650.23 | 43.29 | 43.29 |
 
 | Run | Calls actual / allocated | Tokens actual / allocated | Equivalent USD actual / allocated | Jev calls | Jev tokens | Jev est. USD |
 |---|---:|---:|---:|---:|---:|---:|
@@ -27,6 +29,8 @@ Actual incurred model usage excludes reused planning. plans_from adds original o
 | 10-bounded-query-recovery | 13 / 73 | 114743 / 2787070 | 0.040695 / 0.144041 | 0 | 0 | 0.000000 |
 | 11-fresh-owner-briefs | 70 / 70 | 3327081 / 3327081 | 0.161421 / 0.161421 | 0 | 0 | 0.000000 |
 | 12-root-aware-catalog | 22 / 88 | 182657 / 3483586 | 0.076396 / 0.227903 | 0 | 0 | 0.000000 |
+| 13-syntax-context | 15 / 85 | 93665 / 3480967 | 0.039506 / 0.224273 | 0 | 0 | 0.000000 |
+| 14-unoptimized-syntax-context | 21 / 91 | 106093 / 3493395 | 0.037777 / 0.222544 | 0 | 0 | 0.000000 |
 
 | Cell | Valid | Applied | Visible base | Candidate failures | External | Owner s* | Query s* | Routing s | Optimization s | Writing s | Checks s |
 |---|---|---|---|---:|---|---:|---:|---:|---:|---:|---:|
@@ -60,6 +64,12 @@ Actual incurred model usage excludes reused planning. plans_from adds original o
 | 12-root-aware-catalog/000-hard-context-calibration | true | true | true | 0/1 | true | 54.36 | 13.50 | 0.00 | 0.00 | 3.27 | 0.26 |
 | 12-root-aware-catalog/001-hard-dependency-handoff | true | true | false | 1/1 | false | 205.22 | 63.08 | 0.00 | 0.00 | 40.99 | 66.05 |
 | 12-root-aware-catalog/002-hard-lifecycle-extract | true | false | true | 0/0 | false | 151.80 | 23.15 | 0.00 | 0.00 | 6.62 | 28.74 |
+| 13-syntax-context/000-hard-context-calibration | true | true | true | 0/1 | true | 54.36 | 13.50 | 0.00 | 0.00 | 3.52 | 0.25 |
+| 13-syntax-context/001-hard-dependency-handoff | true | false | false | 1/1 | false | 205.22 | 63.08 | 0.00 | 0.00 | 32.00 | 0.36 |
+| 13-syntax-context/002-hard-lifecycle-extract | true | false | true | 0/0 | false | 151.80 | 23.15 | 0.00 | 0.00 | 4.97 | 28.50 |
+| 14-unoptimized-syntax-context/000-hard-context-calibration | true | true | true | 0/1 | true | 54.36 | 13.50 | 0.00 | 0.00 | 3.65 | 0.26 |
+| 14-unoptimized-syntax-context/001-hard-dependency-handoff | true | false | true | 1/1 | false | 205.22 | 63.08 | 0.00 | 0.00 | 33.34 | 66.14 |
+| 14-unoptimized-syntax-context/002-hard-lifecycle-extract | true | false | true | 0/0 | false | 151.80 | 23.15 | 0.00 | 0.00 | 6.30 | 28.70 |
 
 *Owner and query seconds include allocated original planning for replays. JSON retains actual phase time and all stage calls/tokens separately. Application completion means execute returned ok, independently of downstream checks.
 

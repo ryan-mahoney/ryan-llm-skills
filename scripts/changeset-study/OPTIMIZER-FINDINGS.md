@@ -1,4 +1,4 @@
-# Optimizer findings: runs 03–12
+# Optimizer findings: runs 03–14
 
 Deterministic grouping produced the best fully passing DeepSeek calibration observation. No three-role configuration completed all three cases, and none established a quality-preserving win over the retained Sol controls. These exposed development cases and historical controls do not establish reliability or a global optimum.
 
@@ -20,6 +20,8 @@ Runs 04–06 share one corrected backend freeze: exact retry classification, a 4
 | 10 bounded recovery | 2/3 | 2/3 | 1/1 selected cells | 1/3 | 1/3 |
 | 11 fresh owners | 1/3 | 3/3 | 1/1 selected cells | 1/3 | 1/3 |
 | 12 root-aware catalog | 2/3 | 2/3 | 1/2 selected cells | 1/3 | 1/3 |
+| 13 syntax context | 1/3 | 2/3 | 1/2 selected cells | 1/3 | 1/3 |
+| 14 unoptimized | 1/3 | 3/3 | 1/2 selected cells | 1/3 | 1/3 |
 
 Zero selected candidate checks means no candidate check ran; it is not a pass. Base visible checks can pass on an unchanged or partial candidate. Application completion is the primary outcome.
 
@@ -35,7 +37,7 @@ On matched calibration, deterministic grouping reduced assignments from six to t
 
 Jev made two successful routing calls in 06: 4,294 tokens and $0.000169 estimated spend. It selected no vetoes or context changes. Every dispatched plan was byte-identical to 05, so these measurements show no benefit from Jev. Contextual calibration failed visible/candidate checks despite passing external grading. Its shorter handoff checks included no selected candidate tests, which prevents a quality-preserving speed claim.
 
-Actual model usage counts newly incurred requests. Allocated usage adds the original owner/query work for 04–06 and only original owner work for 07–10 and 12; 11 incurs fresh owners. It excludes donor writing and checks. Reused planning is an allocation, not a new charge. Cache-write tokens are zero in all rows. Jev usage is separate from the Sol/DeepSeek columns.
+Actual model usage counts newly incurred requests. Allocated usage adds the original owner/query work for 04–06 and only original owner work for 07–10 and 12; 11 incurs fresh owners; 13–14 allocate inherited 11 owners and 12 query/context work. It excludes donor writing and checks. Reused planning is an allocation, not a new charge. Cache-write tokens are zero in all rows. Jev usage is separate from the Sol/DeepSeek columns.
 
 | Actual run | Calls | Input | Output | Cache read | Total tokens | Normalized USD |
 |---|---:|---:|---:|---:|---:|---:|
@@ -49,6 +51,8 @@ Actual model usage counts newly incurred requests. Allocated usage adds the orig
 | 10 bounded recovery | 13 | 98,095 | 9,352 | 7,296 | 114,743 | 0.040694676 |
 | 11 fresh owners | 70 | 162,892 | 78,365 | 3,085,824 | 3,327,081 | 0.161420544 |
 | 12 root-aware catalog | 22 | 130,130 | 31,023 | 21,504 | 182,657 | 0.076395624 |
+| 13 syntax context | 15 | 56,029 | 18,820 | 18,816 | 93,665 | 0.039505596 |
+| 14 unoptimized | 21 | 50,916 | 18,569 | 36,608 | 106,093 | 0.037777248 |
 
 | Allocated run | Calls | Input | Output | Cache read | Total tokens | Normalized USD |
 |---|---:|---:|---:|---:|---:|---:|
@@ -62,6 +66,8 @@ Actual model usage counts newly incurred requests. Allocated usage adds the orig
 | 10 bounded recovery | 73 | 217,518 | 53,072 | 2,516,480 | 2,787,070 | 0.144040680 |
 | 11 fresh owners | 70 | 162,892 | 78,365 | 3,085,824 | 3,327,081 | 0.161420544 |
 | 12 root-aware catalog | 88 | 270,016 | 106,882 | 3,106,688 | 3,483,586 | 0.227903328 |
+| 13 syntax context | 85 | 274,124 | 102,843 | 3,104,000 | 3,480,967 | 0.224272800 |
+| 14 unoptimized | 91 | 269,011 | 102,592 | 3,121,792 | 3,493,395 | 0.222544452 |
 
 Phase totals below are actual seconds. Query includes deterministic catalog generation. Phase sums exclude initialization and process overhead; elapsed totals use process wall time.
 
@@ -77,6 +83,8 @@ Phase totals below are actual seconds. Query includes deterministic catalog gene
 | 10 bounded recovery | 0.000 | 75.381 | 0.000 | 0.003 | 19.142 | 53.936 | 150.336 | 449.884 |
 | 11 fresh owners | 411.387 | 21.653 | 0.000 | 0.001 | 3.425 | 30.886 | 468.258 | 468.258 |
 | 12 root-aware catalog | 0.000 | 99.741 | 0.000 | 0.006 | 50.885 | 95.044 | 246.396 | 657.783 |
+| 13 syntax context | 0.000 | 0.000 | 0.000 | 0.003 | 40.485 | 29.112 | 70.315 | 581.443 |
+| 14 unoptimized | 0.000 | 0.000 | 0.000 | 0.001 | 43.286 | 95.100 | 139.101 | 650.229 |
 
 04–06 each allocate 612.420656s of original owner/query planning. Run 07 allocates 299.548442s of original owner work and incurs 79.310576s of fresh query/context work, including 0.128773s of catalog generation. Its allocated planning is 378.859018s; allocated elapsed is 419.725242s. No later Sol review or repair occurred after writers started.
 
@@ -161,6 +169,27 @@ All 22 run 12 request/receipt identities, provider roles, retained raw/dispatche
 | hard-dependency-handoff | `ba9ca32f452b763781d63207510982fc19d9e30996c6e6f3634746bfc1dd881c` | `751b886783a794fc7797172dc78a17f55fd1fe829ad31c6476100d9dcfacdbd8` |
 | hard-lifecycle-extract | `9fc4c77f53498bf5c285826ecb10a4de52ba39441a7789472b6023003b6e4096` | `9fc4c77f53498bf5c285826ecb10a4de52ba39441a7789472b6023003b6e4096` |
 
-11 model receipt charges were $0.200204044; 12 charges were $0.281194124. Budget snapshot at 2026-10-17T00:33:43.287645+00:00: 270 settled entries, zero holds, $2.203784052 settled exposure against $50. Trial model receipts total $2.203525052; trial Jev adds $0.000169000 and another settled Jev entry $0.000090000. The archived prior ledger is excluded. Normalized model cost for 03–12 is $0.694648836, or $0.694817836 including trial Jev. Normalized tariffs and settled exposure remain distinct; allocated donor charges must not be summed as new campaign spend.
+11 model receipt charges were $0.200204044; 12 charges were $0.281194124. Their original time, failed checks and owner allocation remain retained.
 
-The next work is offline diagnosis of the extraction compose/syntax failure, preserving source, briefs, plans, candidates and observed failures. No repeat has been run. A later same-freeze/same-plan repeat could measure mechanical application variability, but cannot establish delivery reliability by itself. The study remains incomplete: no configuration completed application across all three cases, no configuration delivered all three, and no quality-preserving win over the historical Sol controls is established.
+Runs 13 and 14 reused the exact raw plans and owner briefs from 12. Run 13 froze `56aa535`, adding deterministic local syntax-error excerpts/compose-part mappings and literal-composition guidance to the existing single writer retry. Run 14 reused that exact frozen-file inventory, with optimization `none` instead of `deterministic`. Both incurred only DeepSeek writer calls: no owner, Sol query or Jev call. All request/receipt identities, donor task/result/plan hashes and provider routing passed audit. They are one matched backend/input comparison pair, not repeated estimates of success probability.
+
+13 calibration applied 2/2 grouped operations and passed all checks. Handoff passed nine of 11 assignments; `wire-dependencies` failed `Replacement count mismatch: pi/extensions/spec-runtime/runtime.mjs`, blocking `completion-guard`. The failed assignment merged the separate raw `wire-dependencies` and `editor-outcomes` operations. Base, generated-candidate and external checks failed at the missing `buildDependencyHandoff` export. Extraction failed its first operation after two writer attempts: `Unexpected token 'export'` at `export async function resolveInput`, line 138 of the composed module; runtime rewire was blocked, with no changes applied. Unchanged-source visible checks passed; external acceptance failed.
+
+14 calibration applied all three unoptimized operations and passed all checks. Handoff passed 13 of 15 operations. The separate `wire-dependencies`, `editor-outcomes` and `completion-guard` all applied, but `test-wave-authority` failed `Replacement count mismatch: pi/extensions/spec-runtime/runtime.test.mjs`; `test-profile-guidance` was blocked. Base visible checks passed, while generated-candidate and external checks failed. The first candidate failure was `wave handoff: fresh editor packets carry incomplete-packet state and length stop blocks completion`, with `Writer lease is absent, replaced, or revoked; stop this assignment.` Extraction failed after two attempts on `Identifier 'nativeCommand' has already been declared`, line 193; dependent rewire was blocked, with no changes applied. Its base visible checks passed on unchanged source and external acceptance failed.
+
+| Run/case | Passed / failed / blocked operations | Writer calls | Writing s | Checks s | Full delivery |
+|---|---:|---:|---:|---:|---|
+| 13 context-calibration | 2 / 0 / 0 | 2 | 3.518 | 0.253 | pass |
+| 13 dependency-handoff | 9 / 1 / 1 | 11 | 32.001 | 0.356 | fail |
+| 13 lifecycle-extract | 0 / 1 / 1 | 2 | 4.967 | 28.503 | fail |
+| 14 context-calibration | 3 / 0 / 0 | 3 | 3.648 | 0.264 | pass |
+| 14 dependency-handoff | 13 / 1 / 1 | 16 | 33.340 | 66.138 | fail |
+| 14 lifecycle-extract | 0 / 1 / 1 | 2 | 6.298 | 28.698 | fail |
+
+Application completion and full delivery were each 1/3 in both runs. Handoff's different failure location does not establish that grouping caused the earlier failure or that ungrouped writing is reliable. On the application-complete matched calibration only, writer+optimizer time was 3.518605 seconds in 13 versus 3.648650 seconds in 14, with two versus three calls; both passed downstream checks. This is one observed pair, with model variability and no global optimum claim. Failed handoff/extraction timings cannot be treated as quality-preserving wins.
+
+Actual model cost equals receipt charges for these native DeepSeek-only replays: $0.039505596 in 13 and $0.037777248 in 14. Run 13 used input/output/cache-read tokens 56,029/18,820/18,816, totaling 93,665 across 15 calls. Run 14 used 50,916/18,569/36,608, totaling 106,093 across 21 calls. Cache-write tokens are zero. Allocated totals add original 11 owner plus 12 query/context planning once, excluding donor writing/checks: 581.443141 seconds, 85 calls, 3,480,967 tokens and $0.224272800 normalized for 13; 650.229192 seconds, 91 calls, 3,493,395 tokens and $0.222544452 for 14. The roughly 64-second external handoff failures in 12 and 14 remain fully included; neither timed out.
+
+Budget snapshot at 2026-10-17T00:45:22.715999+00:00: 306 settled entries, zero holds, $2.281066896 settled exposure against $50. Trial model receipts total $2.280807896; trial Jev routing adds $0.000169000 and another settled Jev entry $0.000090000. The archived prior ledger is excluded. Normalized model cost for 03–14 is $0.771931680, or $0.772100680 including trial Jev. Normalized tariffs and settled exposure remain distinct; allocated donor charges must not be summed as new campaign spend.
+
+The next work is offline mechanical replacement/compose diagnosis, preserving frozen plans, source, briefs, candidates and all observed failures. No additional trial or repeat has been run. A later exact-freeze/input repeat would measure variability, not establish downstream correctness by itself. The study remains incomplete: no measured configuration completed application across all three cases or delivered all three, and no quality-preserving win over the historical Sol controls is established.
