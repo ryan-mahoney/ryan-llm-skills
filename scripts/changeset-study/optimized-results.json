@@ -13520,6 +13520,3372 @@
           }
         }
       ]
+    },
+    {
+      "run": "11-fresh-owner-briefs",
+      "optimization": "deterministic",
+      "query_mode": "catalog-lookup",
+      "plans_from": null,
+      "briefs_from": null,
+      "manifest_hash": "e4ebdc2ea008564122de290af59278cfe3f61ea9e7b26948fab5078932c05fd7",
+      "expected": 3,
+      "pending": [],
+      "application_complete": 1,
+      "integrity_valid": false,
+      "incurred_seconds": 468.2578171299999,
+      "allocated_seconds": 468.2578171299999,
+      "writing_seconds": 3.425398045000009,
+      "writing_pipeline_seconds": 3.426160616000008,
+      "model_usage": {
+        "calls": 70,
+        "receipts": 70,
+        "accounting_complete": true,
+        "tokens": {
+          "input": 162892,
+          "output": 78365,
+          "cacheRead": 3085824,
+          "cacheWrite": 0,
+          "totalTokens": 3327081
+        },
+        "known_tokens": {
+          "input": 162892,
+          "output": 78365,
+          "cacheRead": 3085824,
+          "cacheWrite": 0,
+          "totalTokens": 3327081
+        },
+        "equivalent_usd": 0.161420544,
+        "reported_usd": 0.200204044,
+        "request_seconds": 437.23699999999997
+      },
+      "allocated_model_usage": {
+        "calls": 70,
+        "receipts": 70,
+        "accounting_complete": true,
+        "tokens": {
+          "input": 162892,
+          "output": 78365,
+          "cacheRead": 3085824,
+          "cacheWrite": 0,
+          "totalTokens": 3327081
+        },
+        "known_tokens": {
+          "input": 162892,
+          "output": 78365,
+          "cacheRead": 3085824,
+          "cacheWrite": 0,
+          "totalTokens": 3327081
+        },
+        "equivalent_usd": 0.161420544,
+        "reported_usd": 0.200204044,
+        "request_seconds": 437.23699999999997
+      },
+      "incurred_equivalent_plus_jev_estimated_usd": 0.161420544,
+      "allocated_equivalent_plus_jev_estimated_usd": 0.161420544,
+      "jev": {
+        "calls": 0,
+        "tokens": 0,
+        "estimated_usd": 0
+      },
+      "cells": [
+        {
+          "catalog_hash": "e82979515fc2a02b1d429eea15b4cd7efe8726b1b82488d21f73aa1282c7a8d1",
+          "catalog_evidence": {
+            "recorded_hash": "e82979515fc2a02b1d429eea15b4cd7efe8726b1b82488d21f73aa1282c7a8d1",
+            "provenance_valid": true
+          },
+          "source_requests_hash": "63b5ab8c148cfc2e776af921406b7d4ec5cd2d97551a482137fc941d8deec88e",
+          "source_lookup_hash": "5fb0d0c507814dc5a32ce3e6c7d12c9b77ed5465c3c946f302d612113e2be960",
+          "source_lookup_characters": 18626,
+          "source_lookup_evidence": {
+            "status": "resolved",
+            "provenance_valid": true,
+            "successful_lookup": true,
+            "request_count": 2,
+            "source_characters": 18626,
+            "error": null,
+            "request_origin_reservation": "655f34b5-ecf7-49c0-922a-1fbf346664fc",
+            "requests_hash": "63b5ab8c148cfc2e776af921406b7d4ec5cd2d97551a482137fc941d8deec88e",
+            "result_hash": "5fb0d0c507814dc5a32ce3e6c7d12c9b77ed5465c3c946f302d612113e2be960",
+            "snippets": [
+              {
+                "request_index": 0,
+                "path": "pi/extensions/context-budget/policy.mjs",
+                "source_hash": "0edd6ba7b612b80bbfdb6fdea258f0e871a3ca09eac2bada1efe04ba90a3e48d",
+                "source_start": 4058,
+                "source_end": 14720,
+                "start": "export function installContextBudget(pi, { compact, serialize, retrySettings } = {}) {\n  if (installed.has(pi)) return;\n  installed.add(pi);\n  // Pi gives each ",
+                "end": null,
+                "text_hash": "19c05728d5b4b1a286a03ff9bff36c3c75cbdfb44a0d874d14749fd231022ded"
+              },
+              {
+                "request_index": 1,
+                "path": "pi/extensions/context-budget/policy.test.mjs",
+                "source_hash": "c166730e6b8dc6956bed37d5fcbf2d53fde28590abac743e4f95bc2e9dd14342",
+                "source_start": 71,
+                "source_end": 8035,
+                "start": "import { mkdtempSync, readFileSync, rmSync } from 'node:fs';\nimport { tmpdir } from 'node:os';\nimport { join } from 'node:path';\nimport { POLICY, budgetModel, e",
+                "end": null,
+                "text_hash": "d9979dfca83683aa23fa704eb7b32480137df79ba47d7f7ecf3ce6d97839af6c"
+              }
+            ]
+          },
+          "query_format_recoveries": [],
+          "query_format_recovery_count": 0,
+          "query_call_count": 2,
+          "query_call_cap": 3,
+          "task": "hard-context-calibration",
+          "cell": "11-fresh-owner-briefs/000-hard-context-calibration",
+          "optimization": "deterministic",
+          "query_mode": "catalog-lookup",
+          "editor_selector": "deepseek/deepseek-flash:off",
+          "task_hash": "53a7b4559f4db02a586dda721ec592e6bf4a3e90f8f671b69a50f92621536b49",
+          "application_complete": true,
+          "visible_accepted": true,
+          "candidate_tests": {
+            "count": 1,
+            "failed": 0
+          },
+          "base_visible_accepted": true,
+          "external_accepted": true,
+          "hidden_pass": true,
+          "error": null,
+          "downstream_failures": {
+            "visible": false,
+            "candidate": false,
+            "external": false
+          },
+          "integrity_valid": true,
+          "validation": [
+            {
+              "check": "candidate hash",
+              "ok": true
+            },
+            {
+              "check": "result roles match manifest",
+              "ok": true
+            },
+            {
+              "check": "result optimization matches manifest",
+              "ok": true
+            },
+            {
+              "check": "result query mode matches manifest",
+              "ok": true
+            },
+            {
+              "check": "implementation brief hash",
+              "ok": true
+            },
+            {
+              "check": "raw and dispatched plans retained",
+              "ok": true
+            },
+            {
+              "check": "dispatched plan hash",
+              "ok": true
+            },
+            {
+              "check": "request and receipt identities",
+              "ok": true
+            },
+            {
+              "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "DeepSeek owner, Sol query, DeepSeek writers; no planning after writers",
+              "ok": true
+            },
+            {
+              "check": "catalog artifact hash",
+              "ok": true
+            },
+            {
+              "check": "catalog artifact shape",
+              "ok": true
+            },
+            {
+              "check": "query packets retain the catalog artifact",
+              "ok": true
+            },
+            {
+              "check": "source lookup request artifact hash",
+              "ok": true
+            },
+            {
+              "check": "source lookup result artifact hash",
+              "ok": true
+            },
+            {
+              "check": "source requests match an original query response",
+              "ok": true
+            },
+            {
+              "check": "lookup source task hash",
+              "ok": true
+            },
+            {
+              "check": "source lookup followup packets retain exact requests and result",
+              "ok": true
+            },
+            {
+              "check": "successful lookup batch shape",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 0 request identity",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 0 whole-file source hash",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 0 exact source slice and offsets",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 0 unique source anchors",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 1 request identity",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 1 whole-file source hash",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 1 exact source slice and offsets",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 1 unique source anchors",
+              "ok": true
+            },
+            {
+              "check": "lookup character counts and batch cap",
+              "ok": true
+            },
+            {
+              "check": "catalog-lookup planning call cap and stages",
+              "ok": true
+            },
+            {
+              "check": "catalog-lookup bounded format recovery metadata",
+              "ok": true
+            },
+            {
+              "check": "manifest planning source matches cell",
+              "ok": true
+            },
+            {
+              "check": "recorded model calls match requests",
+              "ok": true
+            },
+            {
+              "check": "brief-only manifest retains brief source",
+              "ok": true
+            },
+            {
+              "check": "original query and owner provenance retained",
+              "ok": true
+            }
+          ],
+          "provider_routing_valid": true,
+          "result_hash": "39b92a2e06bc103229e77221109099f7173627db78590c0698d13a4ef49fd0e9",
+          "raw_plan_hash": "270b82221ea98f923b8c767bb1ed5e9387d08a47ec55bb0e06cd3d987aa9e2da",
+          "plan_hash": "96199679db2525ae60bf34d355ae236bb5ec1a7c2120dfa72f5ea01841869c06",
+          "candidate_hash": "2b6d8d1df6ad286a3a4d98ff9efb09f2fb7026780b6a1fbf907be2350ac3d61f",
+          "implementation_brief_hash": "09f086830115c40d14505e8885062af9a7ad875c40a29f7868229627ee3b5c7b",
+          "implementation_brief_valid": true,
+          "planning_artifacts": [
+            {
+              "name": "planning-attempt-0.json",
+              "hash": "270b82221ea98f923b8c767bb1ed5e9387d08a47ec55bb0e06cd3d987aa9e2da",
+              "kind": "planning-attempt"
+            },
+            {
+              "name": "raw-plan.json",
+              "hash": "270b82221ea98f923b8c767bb1ed5e9387d08a47ec55bb0e06cd3d987aa9e2da",
+              "kind": "raw-plan"
+            }
+          ],
+          "planning_origin": {
+            "kind": "original-raw-plan",
+            "run": "11-fresh-owner-briefs",
+            "cell": "000-hard-context-calibration",
+            "artifact": "raw-plan.json",
+            "hash": "270b82221ea98f923b8c767bb1ed5e9387d08a47ec55bb0e06cd3d987aa9e2da"
+          },
+          "planning_source": null,
+          "planning_source_valid": null,
+          "brief_source": null,
+          "brief_source_valid": null,
+          "brief_origin": null,
+          "reused_planning": false,
+          "borrowed_planning_scope": "none",
+          "borrowed_planning": {
+            "seconds": 0,
+            "owner_seconds": 0,
+            "query_seconds": 0,
+            "query_context_seconds": 0,
+            "usage": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            }
+          },
+          "allocated_planning": {
+            "seconds": 75.880377634,
+            "owner_seconds": 54.364332517,
+            "query_seconds": 21.516045117,
+            "query_context_seconds": 0.02874737599999935,
+            "usage": {
+              "calls": 10,
+              "receipts": 10,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 31969,
+                "output": 11239,
+                "cacheRead": 104320,
+                "cacheWrite": 0,
+                "totalTokens": 147528
+              },
+              "known_tokens": {
+                "input": 31969,
+                "output": 11239,
+                "cacheRead": 104320,
+                "cacheWrite": 0,
+                "totalTokens": 147528
+              },
+              "equivalent_usd": 0.023703419999999996,
+              "reported_usd": 0.06248692,
+              "request_seconds": 75.474
+            }
+          },
+          "allocated_owner": {
+            "seconds": 54.364332517,
+            "usage": {
+              "calls": 8,
+              "receipts": 8,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 15486,
+                "output": 10016,
+                "cacheRead": 104320,
+                "cacheWrite": 0,
+                "totalTokens": 129822
+              },
+              "known_tokens": {
+                "input": 15486,
+                "output": 10016,
+                "cacheRead": 104320,
+                "cacheWrite": 0,
+                "totalTokens": 129822
+              },
+              "equivalent_usd": 0.017290919999999998,
+              "reported_usd": 0.017290919999999998,
+              "request_seconds": 53.991
+            }
+          },
+          "owner_role_valid": true,
+          "incurred": {
+            "seconds": 79.821678546,
+            "model_usage": {
+              "calls": 12,
+              "receipts": 12,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 38492,
+                "output": 12522,
+                "cacheRead": 104960,
+                "cacheWrite": 0,
+                "totalTokens": 155974
+              },
+              "known_tokens": {
+                "input": 38492,
+                "output": 12522,
+                "cacheRead": 104960,
+                "cacheWrite": 0,
+                "totalTokens": 155974
+              },
+              "equivalent_usd": 0.02720376,
+              "reported_usd": 0.06598726,
+              "request_seconds": 80.954
+            },
+            "jev": {
+              "calls": 0,
+              "usage": null,
+              "input_tokens": null,
+              "output_tokens": null,
+              "tokens": 0,
+              "estimated_usd": 0,
+              "fallback": null,
+              "answer_ok": null
+            },
+            "equivalent_plus_jev_estimated_usd": 0.02720376
+          },
+          "allocated": {
+            "seconds": 79.821678546,
+            "model_usage": {
+              "calls": 12,
+              "receipts": 12,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 38492,
+                "output": 12522,
+                "cacheRead": 104960,
+                "cacheWrite": 0,
+                "totalTokens": 155974
+              },
+              "known_tokens": {
+                "input": 38492,
+                "output": 12522,
+                "cacheRead": 104960,
+                "cacheWrite": 0,
+                "totalTokens": 155974
+              },
+              "equivalent_usd": 0.02720376,
+              "reported_usd": 0.06598726,
+              "request_seconds": 80.954
+            },
+            "equivalent_plus_jev_estimated_usd": 0.02720376
+          },
+          "phase_seconds": {
+            "owner": 54.364332517,
+            "query": 21.516045117,
+            "routing": 0,
+            "optimization": 0.0007625709999992977,
+            "writing": 3.425398045000009,
+            "checks": 0.2437153989999788,
+            "other": 0.14773727600000003
+          },
+          "query_context_seconds": 0.02874737599999935,
+          "writing_pipeline_seconds": 3.426160616000008,
+          "model_usage_by_stage": {
+            "owner": {
+              "calls": 8,
+              "receipts": 8,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 15486,
+                "output": 10016,
+                "cacheRead": 104320,
+                "cacheWrite": 0,
+                "totalTokens": 129822
+              },
+              "known_tokens": {
+                "input": 15486,
+                "output": 10016,
+                "cacheRead": 104320,
+                "cacheWrite": 0,
+                "totalTokens": 129822
+              },
+              "equivalent_usd": 0.017290919999999998,
+              "reported_usd": 0.017290919999999998,
+              "request_seconds": 53.991
+            },
+            "query": {
+              "calls": 2,
+              "receipts": 2,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 16483,
+                "output": 1223,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 17706
+              },
+              "known_tokens": {
+                "input": 16483,
+                "output": 1223,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 17706
+              },
+              "equivalent_usd": 0.0064125,
+              "reported_usd": 0.04519600000000001,
+              "request_seconds": 21.483
+            },
+            "routing": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "optimization": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "writing": {
+              "calls": 2,
+              "receipts": 2,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 6523,
+                "output": 1283,
+                "cacheRead": 640,
+                "cacheWrite": 0,
+                "totalTokens": 8446
+              },
+              "known_tokens": {
+                "input": 6523,
+                "output": 1283,
+                "cacheRead": 640,
+                "cacheWrite": 0,
+                "totalTokens": 8446
+              },
+              "equivalent_usd": 0.0035003400000000002,
+              "reported_usd": 0.0035003400000000002,
+              "request_seconds": 5.48
+            },
+            "checks": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "other": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            }
+          },
+          "allocated_phase_seconds": {
+            "owner": 54.364332517,
+            "query": 21.516045117,
+            "routing": 0,
+            "optimization": 0.0007625709999992977,
+            "writing": 3.425398045000009,
+            "checks": 0.2437153989999788,
+            "other": 0.14773727600000003
+          },
+          "optimization_metrics": {
+            "before": {
+              "assignments": 3,
+              "dependency_depth": 2,
+              "context_selections": 4
+            },
+            "after": {
+              "assignments": 2,
+              "dependency_depth": 1,
+              "context_selections": 3
+            },
+            "changes": [
+              {
+                "kind": "merge",
+                "members": [
+                  "factor-calibration",
+                  "seed-resume-calibration"
+                ],
+                "into": "factor-calibration"
+              }
+            ]
+          }
+        },
+        {
+          "catalog_hash": null,
+          "catalog_evidence": null,
+          "source_requests_hash": null,
+          "source_lookup_hash": null,
+          "source_lookup_characters": null,
+          "source_lookup_evidence": null,
+          "query_format_recoveries": [],
+          "query_format_recovery_count": 0,
+          "query_call_count": 0,
+          "query_call_cap": 3,
+          "task": "hard-dependency-handoff",
+          "cell": "11-fresh-owner-briefs/001-hard-dependency-handoff",
+          "optimization": "deterministic",
+          "query_mode": "catalog-lookup",
+          "editor_selector": "deepseek/deepseek-flash:off",
+          "task_hash": "d979407d0e1fdf935a7c2b994c98c634b5f11a8e044d12a307ca468880b0fb30",
+          "application_complete": false,
+          "visible_accepted": true,
+          "candidate_tests": {
+            "count": 0,
+            "failed": 0
+          },
+          "base_visible_accepted": true,
+          "external_accepted": false,
+          "hidden_pass": false,
+          "error": null,
+          "downstream_failures": {
+            "visible": false,
+            "candidate": false,
+            "external": true
+          },
+          "integrity_valid": false,
+          "validation": [
+            {
+              "check": "candidate hash",
+              "ok": true
+            },
+            {
+              "check": "result roles match manifest",
+              "ok": true
+            },
+            {
+              "check": "result optimization matches manifest",
+              "ok": true
+            },
+            {
+              "check": "result query mode matches manifest",
+              "ok": true
+            },
+            {
+              "check": "implementation brief hash",
+              "ok": true
+            },
+            {
+              "check": "raw and dispatched plans retained",
+              "ok": false
+            },
+            {
+              "check": "dispatched plan hash",
+              "ok": true
+            },
+            {
+              "check": "request and receipt identities",
+              "ok": true
+            },
+            {
+              "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "DeepSeek owner, Sol query, DeepSeek writers; no planning after writers",
+              "ok": true
+            },
+            {
+              "check": "catalog-lookup planning call cap and stages",
+              "ok": true
+            },
+            {
+              "check": "catalog-lookup bounded format recovery metadata",
+              "ok": true
+            },
+            {
+              "check": "manifest planning source matches cell",
+              "ok": true
+            },
+            {
+              "check": "recorded model calls match requests",
+              "ok": true
+            },
+            {
+              "check": "brief-only manifest retains brief source",
+              "ok": true
+            },
+            {
+              "check": "original query and owner provenance retained",
+              "ok": false
+            }
+          ],
+          "provider_routing_valid": true,
+          "result_hash": "8ce7003088a4161cd9c83911c906aa90b4448ab4c1c4be0b5776644625f38287",
+          "raw_plan_hash": null,
+          "plan_hash": null,
+          "candidate_hash": "bb6fa004e7e8393778e7c173048de7a48e2811b15faa64395d09cf191eab887e",
+          "implementation_brief_hash": "b61eb7a895f70a0d7dea6c10a6a7a0add410edde6af40b250846d92c450c0e78",
+          "implementation_brief_valid": true,
+          "planning_artifacts": [],
+          "planning_origin": null,
+          "planning_source": null,
+          "planning_source_valid": null,
+          "brief_source": null,
+          "brief_source_valid": null,
+          "brief_origin": null,
+          "reused_planning": false,
+          "borrowed_planning_scope": "none",
+          "borrowed_planning": {
+            "seconds": 0,
+            "owner_seconds": 0,
+            "query_seconds": 0,
+            "query_context_seconds": 0,
+            "usage": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            }
+          },
+          "allocated_planning": {
+            "seconds": 205.22094105699998,
+            "owner_seconds": 205.218983733,
+            "query_seconds": 0.001957323999988148,
+            "query_context_seconds": 0.001957323999988148,
+            "usage": {
+              "calls": 29,
+              "receipts": 29,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 67010,
+                "output": 39154,
+                "cacheRead": 1493632,
+                "cacheWrite": 0,
+                "totalTokens": 1599796
+              },
+              "known_tokens": {
+                "input": 67010,
+                "output": 39154,
+                "cacheRead": 1493632,
+                "cacheWrite": 0,
+                "totalTokens": 1599796
+              },
+              "equivalent_usd": 0.076049592,
+              "reported_usd": 0.076049592,
+              "request_seconds": 204.855
+            }
+          },
+          "allocated_owner": {
+            "seconds": 205.218983733,
+            "usage": {
+              "calls": 29,
+              "receipts": 29,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 67010,
+                "output": 39154,
+                "cacheRead": 1493632,
+                "cacheWrite": 0,
+                "totalTokens": 1599796
+              },
+              "known_tokens": {
+                "input": 67010,
+                "output": 39154,
+                "cacheRead": 1493632,
+                "cacheWrite": 0,
+                "totalTokens": 1599796
+              },
+              "equivalent_usd": 0.076049592,
+              "reported_usd": 0.076049592,
+              "request_seconds": 204.855
+            }
+          },
+          "owner_role_valid": true,
+          "incurred": {
+            "seconds": 207.39214006199995,
+            "model_usage": {
+              "calls": 29,
+              "receipts": 29,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 67010,
+                "output": 39154,
+                "cacheRead": 1493632,
+                "cacheWrite": 0,
+                "totalTokens": 1599796
+              },
+              "known_tokens": {
+                "input": 67010,
+                "output": 39154,
+                "cacheRead": 1493632,
+                "cacheWrite": 0,
+                "totalTokens": 1599796
+              },
+              "equivalent_usd": 0.076049592,
+              "reported_usd": 0.076049592,
+              "request_seconds": 204.855
+            },
+            "jev": {
+              "calls": 0,
+              "usage": null,
+              "input_tokens": null,
+              "output_tokens": null,
+              "tokens": 0,
+              "estimated_usd": 0,
+              "fallback": null,
+              "answer_ok": null
+            },
+            "equivalent_plus_jev_estimated_usd": 0.076049592
+          },
+          "allocated": {
+            "seconds": 207.39214006199995,
+            "model_usage": {
+              "calls": 29,
+              "receipts": 29,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 67010,
+                "output": 39154,
+                "cacheRead": 1493632,
+                "cacheWrite": 0,
+                "totalTokens": 1599796
+              },
+              "known_tokens": {
+                "input": 67010,
+                "output": 39154,
+                "cacheRead": 1493632,
+                "cacheWrite": 0,
+                "totalTokens": 1599796
+              },
+              "equivalent_usd": 0.076049592,
+              "reported_usd": 0.076049592,
+              "request_seconds": 204.855
+            },
+            "equivalent_plus_jev_estimated_usd": 0.076049592
+          },
+          "phase_seconds": {
+            "owner": 205.218983733,
+            "query": 0.001957323999988148,
+            "routing": 0,
+            "optimization": 0,
+            "writing": 0,
+            "checks": 1.8579481340000057,
+            "other": 0.142859317
+          },
+          "query_context_seconds": 0.001957323999988148,
+          "writing_pipeline_seconds": 0,
+          "model_usage_by_stage": {
+            "owner": {
+              "calls": 29,
+              "receipts": 29,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 67010,
+                "output": 39154,
+                "cacheRead": 1493632,
+                "cacheWrite": 0,
+                "totalTokens": 1599796
+              },
+              "known_tokens": {
+                "input": 67010,
+                "output": 39154,
+                "cacheRead": 1493632,
+                "cacheWrite": 0,
+                "totalTokens": 1599796
+              },
+              "equivalent_usd": 0.076049592,
+              "reported_usd": 0.076049592,
+              "request_seconds": 204.855
+            },
+            "query": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "routing": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "optimization": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "writing": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "checks": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "other": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            }
+          },
+          "allocated_phase_seconds": {
+            "owner": 205.218983733,
+            "query": 0.001957323999988148,
+            "routing": 0,
+            "optimization": 0,
+            "writing": 0,
+            "checks": 1.8579481340000057,
+            "other": 0.142859317
+          },
+          "optimization_metrics": null
+        },
+        {
+          "catalog_hash": null,
+          "catalog_evidence": null,
+          "source_requests_hash": null,
+          "source_lookup_hash": null,
+          "source_lookup_characters": null,
+          "source_lookup_evidence": null,
+          "query_format_recoveries": [],
+          "query_format_recovery_count": 0,
+          "query_call_count": 0,
+          "query_call_cap": 3,
+          "task": "hard-lifecycle-extract",
+          "cell": "11-fresh-owner-briefs/002-hard-lifecycle-extract",
+          "optimization": "deterministic",
+          "query_mode": "catalog-lookup",
+          "editor_selector": "deepseek/deepseek-flash:off",
+          "task_hash": "c6365120c768dec61e14fed5c2adc988444879b14063cb06ca72aafab59a71cb",
+          "application_complete": false,
+          "visible_accepted": true,
+          "candidate_tests": {
+            "count": 0,
+            "failed": 0
+          },
+          "base_visible_accepted": true,
+          "external_accepted": false,
+          "hidden_pass": false,
+          "error": null,
+          "downstream_failures": {
+            "visible": false,
+            "candidate": false,
+            "external": true
+          },
+          "integrity_valid": false,
+          "validation": [
+            {
+              "check": "candidate hash",
+              "ok": true
+            },
+            {
+              "check": "result roles match manifest",
+              "ok": true
+            },
+            {
+              "check": "result optimization matches manifest",
+              "ok": true
+            },
+            {
+              "check": "result query mode matches manifest",
+              "ok": true
+            },
+            {
+              "check": "implementation brief hash",
+              "ok": true
+            },
+            {
+              "check": "raw and dispatched plans retained",
+              "ok": false
+            },
+            {
+              "check": "dispatched plan hash",
+              "ok": true
+            },
+            {
+              "check": "request and receipt identities",
+              "ok": true
+            },
+            {
+              "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "DeepSeek owner, Sol query, DeepSeek writers; no planning after writers",
+              "ok": true
+            },
+            {
+              "check": "catalog-lookup planning call cap and stages",
+              "ok": true
+            },
+            {
+              "check": "catalog-lookup bounded format recovery metadata",
+              "ok": true
+            },
+            {
+              "check": "manifest planning source matches cell",
+              "ok": true
+            },
+            {
+              "check": "recorded model calls match requests",
+              "ok": true
+            },
+            {
+              "check": "brief-only manifest retains brief source",
+              "ok": true
+            },
+            {
+              "check": "original query and owner provenance retained",
+              "ok": false
+            }
+          ],
+          "provider_routing_valid": true,
+          "result_hash": "e6efb11770b8becff8e4803d502ad40301ac55c570e387b87e07a5154b40514f",
+          "raw_plan_hash": null,
+          "plan_hash": null,
+          "candidate_hash": "048c3f6d4bb0f0c8a53a49ecd478714155a44a11e7414a1c06ad87dff821026c",
+          "implementation_brief_hash": "bb9ae3225735e2c8ed57ff0f272e57870aece98d1bf60953339b806784d7bd01",
+          "implementation_brief_valid": true,
+          "planning_artifacts": [],
+          "planning_origin": null,
+          "planning_source": null,
+          "planning_source_valid": null,
+          "brief_source": null,
+          "brief_source_valid": null,
+          "brief_origin": null,
+          "reused_planning": false,
+          "borrowed_planning_scope": "none",
+          "borrowed_planning": {
+            "seconds": 0,
+            "owner_seconds": 0,
+            "query_seconds": 0,
+            "query_context_seconds": 0,
+            "usage": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            }
+          },
+          "allocated_planning": {
+            "seconds": 151.938517498,
+            "owner_seconds": 151.803633409,
+            "query_seconds": 0.1348840889999992,
+            "query_context_seconds": 0.1348840889999992,
+            "usage": {
+              "calls": 29,
+              "receipts": 29,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 57390,
+                "output": 26689,
+                "cacheRead": 1487232,
+                "cacheWrite": 0,
+                "totalTokens": 1571311
+              },
+              "known_tokens": {
+                "input": 57390,
+                "output": 26689,
+                "cacheRead": 1487232,
+                "cacheWrite": 0,
+                "totalTokens": 1571311
+              },
+              "equivalent_usd": 0.058167192000000006,
+              "reported_usd": 0.058167192000000006,
+              "request_seconds": 151.428
+            }
+          },
+          "allocated_owner": {
+            "seconds": 151.803633409,
+            "usage": {
+              "calls": 29,
+              "receipts": 29,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 57390,
+                "output": 26689,
+                "cacheRead": 1487232,
+                "cacheWrite": 0,
+                "totalTokens": 1571311
+              },
+              "known_tokens": {
+                "input": 57390,
+                "output": 26689,
+                "cacheRead": 1487232,
+                "cacheWrite": 0,
+                "totalTokens": 1571311
+              },
+              "equivalent_usd": 0.058167192000000006,
+              "reported_usd": 0.058167192000000006,
+              "request_seconds": 151.428
+            }
+          },
+          "owner_role_valid": true,
+          "incurred": {
+            "seconds": 181.04399852199998,
+            "model_usage": {
+              "calls": 29,
+              "receipts": 29,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 57390,
+                "output": 26689,
+                "cacheRead": 1487232,
+                "cacheWrite": 0,
+                "totalTokens": 1571311
+              },
+              "known_tokens": {
+                "input": 57390,
+                "output": 26689,
+                "cacheRead": 1487232,
+                "cacheWrite": 0,
+                "totalTokens": 1571311
+              },
+              "equivalent_usd": 0.058167192000000006,
+              "reported_usd": 0.058167192000000006,
+              "request_seconds": 151.428
+            },
+            "jev": {
+              "calls": 0,
+              "usage": null,
+              "input_tokens": null,
+              "output_tokens": null,
+              "tokens": 0,
+              "estimated_usd": 0,
+              "fallback": null,
+              "answer_ok": null
+            },
+            "equivalent_plus_jev_estimated_usd": 0.058167192000000006
+          },
+          "allocated": {
+            "seconds": 181.04399852199998,
+            "model_usage": {
+              "calls": 29,
+              "receipts": 29,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 57390,
+                "output": 26689,
+                "cacheRead": 1487232,
+                "cacheWrite": 0,
+                "totalTokens": 1571311
+              },
+              "known_tokens": {
+                "input": 57390,
+                "output": 26689,
+                "cacheRead": 1487232,
+                "cacheWrite": 0,
+                "totalTokens": 1571311
+              },
+              "equivalent_usd": 0.058167192000000006,
+              "reported_usd": 0.058167192000000006,
+              "request_seconds": 151.428
+            },
+            "equivalent_plus_jev_estimated_usd": 0.058167192000000006
+          },
+          "phase_seconds": {
+            "owner": 151.803633409,
+            "query": 0.1348840889999992,
+            "routing": 0,
+            "optimization": 0,
+            "writing": 0,
+            "checks": 28.784291568999993,
+            "other": 0.142313717
+          },
+          "query_context_seconds": 0.1348840889999992,
+          "writing_pipeline_seconds": 0,
+          "model_usage_by_stage": {
+            "owner": {
+              "calls": 29,
+              "receipts": 29,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 57390,
+                "output": 26689,
+                "cacheRead": 1487232,
+                "cacheWrite": 0,
+                "totalTokens": 1571311
+              },
+              "known_tokens": {
+                "input": 57390,
+                "output": 26689,
+                "cacheRead": 1487232,
+                "cacheWrite": 0,
+                "totalTokens": 1571311
+              },
+              "equivalent_usd": 0.058167192000000006,
+              "reported_usd": 0.058167192000000006,
+              "request_seconds": 151.428
+            },
+            "query": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "routing": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "optimization": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "writing": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "checks": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "other": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            }
+          },
+          "allocated_phase_seconds": {
+            "owner": 151.803633409,
+            "query": 0.1348840889999992,
+            "routing": 0,
+            "optimization": 0,
+            "writing": 0,
+            "checks": 28.784291568999993,
+            "other": 0.142313717
+          },
+          "optimization_metrics": null
+        }
+      ]
+    },
+    {
+      "run": "12-root-aware-catalog",
+      "optimization": "deterministic",
+      "query_mode": "catalog-lookup",
+      "plans_from": null,
+      "briefs_from": "11-fresh-owner-briefs",
+      "manifest_hash": "b480bdf182bb06c4f857b63adc26f5f64c664989d40849926aaa19fab4911ef6",
+      "expected": 3,
+      "pending": [],
+      "application_complete": 2,
+      "integrity_valid": true,
+      "incurred_seconds": 246.396421335,
+      "allocated_seconds": 657.783370994,
+      "writing_seconds": 50.884895123999996,
+      "writing_pipeline_seconds": 50.89076563399999,
+      "model_usage": {
+        "calls": 22,
+        "receipts": 22,
+        "accounting_complete": true,
+        "tokens": {
+          "input": 130130,
+          "output": 31023,
+          "cacheRead": 21504,
+          "cacheWrite": 0,
+          "totalTokens": 182657
+        },
+        "known_tokens": {
+          "input": 130130,
+          "output": 31023,
+          "cacheRead": 21504,
+          "cacheWrite": 0,
+          "totalTokens": 182657
+        },
+        "equivalent_usd": 0.076395624,
+        "reported_usd": 0.281194124,
+        "request_seconds": 188.064
+      },
+      "allocated_model_usage": {
+        "calls": 88,
+        "receipts": 88,
+        "accounting_complete": true,
+        "tokens": {
+          "input": 270016,
+          "output": 106882,
+          "cacheRead": 3106688,
+          "cacheWrite": 0,
+          "totalTokens": 3483586
+        },
+        "known_tokens": {
+          "input": 270016,
+          "output": 106882,
+          "cacheRead": 3106688,
+          "cacheWrite": 0,
+          "totalTokens": 3483586
+        },
+        "equivalent_usd": 0.227903328,
+        "reported_usd": 0.432701828,
+        "request_seconds": 598.338
+      },
+      "incurred_equivalent_plus_jev_estimated_usd": 0.076395624,
+      "allocated_equivalent_plus_jev_estimated_usd": 0.227903328,
+      "jev": {
+        "calls": 0,
+        "tokens": 0,
+        "estimated_usd": 0
+      },
+      "cells": [
+        {
+          "catalog_hash": "e82979515fc2a02b1d429eea15b4cd7efe8726b1b82488d21f73aa1282c7a8d1",
+          "catalog_evidence": {
+            "recorded_hash": "e82979515fc2a02b1d429eea15b4cd7efe8726b1b82488d21f73aa1282c7a8d1",
+            "provenance_valid": true
+          },
+          "source_requests_hash": null,
+          "source_lookup_hash": null,
+          "source_lookup_characters": null,
+          "source_lookup_evidence": null,
+          "query_format_recoveries": [],
+          "query_format_recovery_count": 0,
+          "query_call_count": 1,
+          "query_call_cap": 3,
+          "task": "hard-context-calibration",
+          "cell": "12-root-aware-catalog/000-hard-context-calibration",
+          "optimization": "deterministic",
+          "query_mode": "catalog-lookup",
+          "editor_selector": "deepseek/deepseek-flash:off",
+          "task_hash": "53a7b4559f4db02a586dda721ec592e6bf4a3e90f8f671b69a50f92621536b49",
+          "application_complete": true,
+          "visible_accepted": true,
+          "candidate_tests": {
+            "count": 1,
+            "failed": 0
+          },
+          "base_visible_accepted": true,
+          "external_accepted": true,
+          "hidden_pass": true,
+          "error": null,
+          "downstream_failures": {
+            "visible": false,
+            "candidate": false,
+            "external": false
+          },
+          "integrity_valid": true,
+          "validation": [
+            {
+              "check": "candidate hash",
+              "ok": true
+            },
+            {
+              "check": "result roles match manifest",
+              "ok": true
+            },
+            {
+              "check": "result optimization matches manifest",
+              "ok": true
+            },
+            {
+              "check": "result query mode matches manifest",
+              "ok": true
+            },
+            {
+              "check": "implementation brief hash",
+              "ok": true
+            },
+            {
+              "check": "raw and dispatched plans retained",
+              "ok": true
+            },
+            {
+              "check": "dispatched plan hash",
+              "ok": true
+            },
+            {
+              "check": "request and receipt identities",
+              "ok": true
+            },
+            {
+              "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "DeepSeek owner, Sol query, DeepSeek writers; no planning after writers",
+              "ok": true
+            },
+            {
+              "check": "catalog artifact hash",
+              "ok": true
+            },
+            {
+              "check": "catalog artifact shape",
+              "ok": true
+            },
+            {
+              "check": "query packets retain the catalog artifact",
+              "ok": true
+            },
+            {
+              "check": "catalog-lookup planning call cap and stages",
+              "ok": true
+            },
+            {
+              "check": "catalog-lookup bounded format recovery metadata",
+              "ok": true
+            },
+            {
+              "check": "manifest planning source matches cell",
+              "ok": true
+            },
+            {
+              "check": "recorded model calls match requests",
+              "ok": true
+            },
+            {
+              "check": "manifest brief source matches cell",
+              "ok": true
+            },
+            {
+              "check": "job and result brief source match",
+              "ok": true
+            },
+            {
+              "check": "brief source completed",
+              "ok": true
+            },
+            {
+              "check": "brief source result hash",
+              "ok": true
+            },
+            {
+              "check": "shared brief bytes and recorded hashes",
+              "ok": true
+            },
+            {
+              "check": "brief source task hash",
+              "ok": true
+            },
+            {
+              "check": "brief source DeepSeek owner role",
+              "ok": true
+            },
+            {
+              "check": "shared brief incurs no owner calls",
+              "ok": true
+            },
+            {
+              "check": "original query and owner provenance retained",
+              "ok": true
+            }
+          ],
+          "provider_routing_valid": true,
+          "result_hash": "514c105092aff541c74c5fae1e274c5ce6dd1960467108a415af3b7a5f2643e7",
+          "raw_plan_hash": "3967db25f7c90bfdb0ebf7118cf40f1df07a6af65a1af062b9100390adf96e34",
+          "plan_hash": "5255170149318024bedaba6617bc32d01a871ed5c0a9296d944c41a482d001f7",
+          "candidate_hash": "00d14b53da8572796f805f05ba37a0278f6c2736ba24e4636527569efc3b231b",
+          "implementation_brief_hash": "09f086830115c40d14505e8885062af9a7ad875c40a29f7868229627ee3b5c7b",
+          "implementation_brief_valid": true,
+          "planning_artifacts": [
+            {
+              "name": "planning-attempt-0.json",
+              "hash": "3967db25f7c90bfdb0ebf7118cf40f1df07a6af65a1af062b9100390adf96e34",
+              "kind": "planning-attempt"
+            },
+            {
+              "name": "raw-plan.json",
+              "hash": "3967db25f7c90bfdb0ebf7118cf40f1df07a6af65a1af062b9100390adf96e34",
+              "kind": "raw-plan"
+            }
+          ],
+          "planning_origin": {
+            "kind": "original-raw-plan",
+            "run": "12-root-aware-catalog",
+            "cell": "000-hard-context-calibration",
+            "artifact": "raw-plan.json",
+            "hash": "3967db25f7c90bfdb0ebf7118cf40f1df07a6af65a1af062b9100390adf96e34"
+          },
+          "planning_source": null,
+          "planning_source_valid": null,
+          "brief_source": {
+            "run": "11-fresh-owner-briefs",
+            "cell": "000-hard-context-calibration",
+            "brief_hash": "09f086830115c40d14505e8885062af9a7ad875c40a29f7868229627ee3b5c7b",
+            "result_hash": "39b92a2e06bc103229e77221109099f7173627db78590c0698d13a4ef49fd0e9"
+          },
+          "brief_source_valid": true,
+          "brief_origin": {
+            "kind": "reused-owner-brief",
+            "run": "11-fresh-owner-briefs",
+            "cell": "000-hard-context-calibration",
+            "hash": "09f086830115c40d14505e8885062af9a7ad875c40a29f7868229627ee3b5c7b",
+            "result_hash": "39b92a2e06bc103229e77221109099f7173627db78590c0698d13a4ef49fd0e9"
+          },
+          "reused_planning": true,
+          "borrowed_planning_scope": "owner-only",
+          "borrowed_planning": {
+            "seconds": 54.364332517,
+            "owner_seconds": 54.364332517,
+            "query_seconds": 0,
+            "query_context_seconds": 0,
+            "usage": {
+              "calls": 8,
+              "receipts": 8,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 15486,
+                "output": 10016,
+                "cacheRead": 104320,
+                "cacheWrite": 0,
+                "totalTokens": 129822
+              },
+              "known_tokens": {
+                "input": 15486,
+                "output": 10016,
+                "cacheRead": 104320,
+                "cacheWrite": 0,
+                "totalTokens": 129822
+              },
+              "equivalent_usd": 0.017290919999999998,
+              "reported_usd": 0.017290919999999998,
+              "request_seconds": 53.991
+            }
+          },
+          "allocated_planning": {
+            "seconds": 67.86733088300001,
+            "owner_seconds": 54.364332517,
+            "query_seconds": 13.502998366000002,
+            "query_context_seconds": 0.017961971000000007,
+            "usage": {
+              "calls": 9,
+              "receipts": 9,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 21079,
+                "output": 11038,
+                "cacheRead": 104320,
+                "cacheWrite": 0,
+                "totalTokens": 136437
+              },
+              "known_tokens": {
+                "input": 21079,
+                "output": 11038,
+                "cacheRead": 104320,
+                "cacheWrite": 0,
+                "totalTokens": 136437
+              },
+              "equivalent_usd": 0.020195219999999996,
+              "reported_usd": 0.038696919999999996,
+              "request_seconds": 67.474
+            }
+          },
+          "allocated_owner": {
+            "seconds": 54.364332517,
+            "usage": {
+              "calls": 8,
+              "receipts": 8,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 15486,
+                "output": 10016,
+                "cacheRead": 104320,
+                "cacheWrite": 0,
+                "totalTokens": 129822
+              },
+              "known_tokens": {
+                "input": 15486,
+                "output": 10016,
+                "cacheRead": 104320,
+                "cacheWrite": 0,
+                "totalTokens": 129822
+              },
+              "equivalent_usd": 0.017290919999999998,
+              "reported_usd": 0.017290919999999998,
+              "request_seconds": 53.991
+            }
+          },
+          "owner_role_valid": true,
+          "incurred": {
+            "seconds": 17.236563297999997,
+            "model_usage": {
+              "calls": 3,
+              "receipts": 3,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 12169,
+                "output": 2308,
+                "cacheRead": 768,
+                "cacheWrite": 0,
+                "totalTokens": 15245
+              },
+              "known_tokens": {
+                "input": 12169,
+                "output": 2308,
+                "cacheRead": 768,
+                "cacheWrite": 0,
+                "totalTokens": 15245
+              },
+              "equivalent_usd": 0.006424908,
+              "reported_usd": 0.024926608000000003,
+              "request_seconds": 19.104
+            },
+            "jev": {
+              "calls": 0,
+              "usage": null,
+              "input_tokens": null,
+              "output_tokens": null,
+              "tokens": 0,
+              "estimated_usd": 0,
+              "fallback": null,
+              "answer_ok": null
+            },
+            "equivalent_plus_jev_estimated_usd": 0.006424908
+          },
+          "allocated": {
+            "seconds": 71.600895815,
+            "model_usage": {
+              "calls": 11,
+              "receipts": 11,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 27655,
+                "output": 12324,
+                "cacheRead": 105088,
+                "cacheWrite": 0,
+                "totalTokens": 145067
+              },
+              "known_tokens": {
+                "input": 27655,
+                "output": 12324,
+                "cacheRead": 105088,
+                "cacheWrite": 0,
+                "totalTokens": 145067
+              },
+              "equivalent_usd": 0.023715827999999998,
+              "reported_usd": 0.042217528000000004,
+              "request_seconds": 73.095
+            },
+            "equivalent_plus_jev_estimated_usd": 0.023715827999999998
+          },
+          "phase_seconds": {
+            "owner": 0,
+            "query": 13.502998366000002,
+            "routing": 0,
+            "optimization": 0.0005506860000004962,
+            "writing": 3.2727655689999993,
+            "checks": 0.2585260419999977,
+            "other": 0.153108616
+          },
+          "query_context_seconds": 0.017961971000000007,
+          "writing_pipeline_seconds": 3.2733162549999997,
+          "model_usage_by_stage": {
+            "owner": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "query": {
+              "calls": 1,
+              "receipts": 1,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 5593,
+                "output": 1022,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 6615
+              },
+              "known_tokens": {
+                "input": 5593,
+                "output": 1022,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 6615
+              },
+              "equivalent_usd": 0.0029043,
+              "reported_usd": 0.021406,
+              "request_seconds": 13.483
+            },
+            "routing": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "optimization": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "writing": {
+              "calls": 2,
+              "receipts": 2,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 6576,
+                "output": 1286,
+                "cacheRead": 768,
+                "cacheWrite": 0,
+                "totalTokens": 8630
+              },
+              "known_tokens": {
+                "input": 6576,
+                "output": 1286,
+                "cacheRead": 768,
+                "cacheWrite": 0,
+                "totalTokens": 8630
+              },
+              "equivalent_usd": 0.0035206079999999997,
+              "reported_usd": 0.0035206079999999997,
+              "request_seconds": 5.621
+            },
+            "checks": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "other": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            }
+          },
+          "allocated_phase_seconds": {
+            "owner": 54.364332517,
+            "query": 13.502998366000002,
+            "routing": 0,
+            "optimization": 0.0005506860000004962,
+            "writing": 3.2727655689999993,
+            "checks": 0.2585260419999977,
+            "other": 0.153108616
+          },
+          "optimization_metrics": {
+            "before": {
+              "assignments": 3,
+              "dependency_depth": 2,
+              "context_selections": 3
+            },
+            "after": {
+              "assignments": 2,
+              "dependency_depth": 1,
+              "context_selections": 2
+            },
+            "changes": [
+              {
+                "kind": "merge",
+                "members": [
+                  "factor-calibration",
+                  "seed-session-calibration"
+                ],
+                "into": "factor-calibration"
+              }
+            ]
+          }
+        },
+        {
+          "catalog_hash": "56a96d36ca55b9e21a30f5da89a33f3a0cfe75a6ee9a57837766c6d5a55f93a4",
+          "catalog_evidence": {
+            "recorded_hash": "56a96d36ca55b9e21a30f5da89a33f3a0cfe75a6ee9a57837766c6d5a55f93a4",
+            "provenance_valid": true
+          },
+          "source_requests_hash": "f626d51c167ff6714cad887bdbcf488b5061fffa9f27460d5fb44f85878f0fd4",
+          "source_lookup_hash": "809ca94e30b923e1ee565b023c987bcaaa14de7d7aeffa9d6a0b66478a16d381",
+          "source_lookup_characters": 18264,
+          "source_lookup_evidence": {
+            "status": "resolved",
+            "provenance_valid": true,
+            "successful_lookup": true,
+            "request_count": 5,
+            "source_characters": 18264,
+            "error": null,
+            "request_origin_reservation": "fbd1d989-fa88-4cd7-8832-5dfaeaef5240",
+            "requests_hash": "f626d51c167ff6714cad887bdbcf488b5061fffa9f27460d5fb44f85878f0fd4",
+            "result_hash": "809ca94e30b923e1ee565b023c987bcaaa14de7d7aeffa9d6a0b66478a16d381",
+            "snippets": [
+              {
+                "request_index": 0,
+                "path": "pi/extensions/spec-runtime/runtime.mjs",
+                "source_hash": "6dd64d9b67f11d0af5756145da795111aa3bb318239afe9a28b1deac8ac1e2ae",
+                "source_start": 3143,
+                "source_end": 8557,
+                "start": "// The card determines relevance; the latest attempt supplies observations. Do not\n// infer prerequisite acceptance or carry every historical blocker into a new",
+                "end": "function atomic(file, value) {\n  mkdirSync(dirname(file), { recursive: true });\n  const tmp = `${file}.${randomUUID()}.tmp`;\n  writeFileSync(tmp, `${JSON.string",
+                "text_hash": "29e59bcc79dadf7e87fa1266b4de6684a3ddb1cff3308842e330377d31cbfcef"
+              },
+              {
+                "request_index": 1,
+                "path": "pi/extensions/spec-runtime/runtime.mjs",
+                "source_hash": "6dd64d9b67f11d0af5756145da795111aa3bb318239afe9a28b1deac8ac1e2ae",
+                "source_start": 83438,
+                "source_end": 88249,
+                "start": "export async function runEditor(record, assignment, signal, launchProcess = launch, { stopGroup = terminateGroup, context = [], reasoning } = {}) {\n  assertLeas",
+                "end": "// Share the editor slot so checks cannot race writes, even during a question pause.\nexport async function runCompletion(record, input) {\n  return withIdleWrite",
+                "text_hash": "ed40aab62a64536192fd6034a414c8dfa3ffbb65696aa7f06e2be1f79dc0fa5f"
+              },
+              {
+                "request_index": 2,
+                "path": "pi/extensions/spec-runtime/runtime.test.mjs",
+                "source_hash": "a1229087ac5385d9bfe1508f51c061fa9d57d1747250b5cfee1ca30a81aabf37",
+                "source_start": 109482,
+                "source_end": 117348,
+                "start": "  assert.doesNotThrow(() => assertManagedModel(record, 'editor', fallback, [recovery('primalabs/editor-model')]), 'the recorded editor fallback passes');\n  asse",
+                "end": null,
+                "text_hash": "fc8b786dfa56503714b7b0a59edd0c034eaf7c3a64dac9b937a2165bfeada327"
+              },
+              {
+                "request_index": 3,
+                "path": "pi/agents/spec-step-owner.md",
+                "source_hash": "8b142a2256882c3d1c08b52d43963136fe5dd153647de34aa1816930f0df1a38",
+                "source_start": 6944,
+                "source_end": 7033,
+                "start": "Read missing source facts directly before deciding. Reserve read-only editor assignments\nfor a specific blocking fact you cannot obtain with your tools, such as",
+                "end": "for a specific blocking fact you cannot obtain with your tools, such as command output;\nrequest a bounded answer. Normally combine the editor's needed reads wit",
+                "text_hash": "dc0d075f21ef898bcbabb6b54191ceb25632b381e35ba174908a3f1643c577d5"
+              },
+              {
+                "request_index": 4,
+                "path": "pi/agents/spec-step-editor.md",
+                "source_hash": "9b7722391dedf41f54358907e6e12647793f650f904ee2e1845e74d770c229e6",
+                "source_start": 4216,
+                "source_end": 4300,
+                "start": "Lead each return with outcome, changed symbols and unresolved decisions. State that\nverification was not run; do not imply the implementation is verified.\nAim f",
+                "end": "verification was not run; do not imply the implementation is verified.\nAim for at most 4,000 characters; include only decision-relevant hunks or diagnostics.\nKe",
+                "text_hash": "032842b2cccfb559c47b0492b458e95d736152a6d57caaab5601eff65a034ad5"
+              }
+            ]
+          },
+          "query_format_recoveries": [],
+          "query_format_recovery_count": 0,
+          "query_call_count": 2,
+          "query_call_cap": 3,
+          "task": "hard-dependency-handoff",
+          "cell": "12-root-aware-catalog/001-hard-dependency-handoff",
+          "optimization": "deterministic",
+          "query_mode": "catalog-lookup",
+          "editor_selector": "deepseek/deepseek-flash:off",
+          "task_hash": "d979407d0e1fdf935a7c2b994c98c634b5f11a8e044d12a307ca468880b0fb30",
+          "application_complete": true,
+          "visible_accepted": false,
+          "candidate_tests": {
+            "count": 1,
+            "failed": 1
+          },
+          "base_visible_accepted": false,
+          "external_accepted": false,
+          "hidden_pass": false,
+          "error": null,
+          "downstream_failures": {
+            "visible": true,
+            "candidate": true,
+            "external": true
+          },
+          "integrity_valid": true,
+          "validation": [
+            {
+              "check": "candidate hash",
+              "ok": true
+            },
+            {
+              "check": "result roles match manifest",
+              "ok": true
+            },
+            {
+              "check": "result optimization matches manifest",
+              "ok": true
+            },
+            {
+              "check": "result query mode matches manifest",
+              "ok": true
+            },
+            {
+              "check": "implementation brief hash",
+              "ok": true
+            },
+            {
+              "check": "raw and dispatched plans retained",
+              "ok": true
+            },
+            {
+              "check": "dispatched plan hash",
+              "ok": true
+            },
+            {
+              "check": "request and receipt identities",
+              "ok": true
+            },
+            {
+              "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "DeepSeek owner, Sol query, DeepSeek writers; no planning after writers",
+              "ok": true
+            },
+            {
+              "check": "catalog artifact hash",
+              "ok": true
+            },
+            {
+              "check": "catalog artifact shape",
+              "ok": true
+            },
+            {
+              "check": "query packets retain the catalog artifact",
+              "ok": true
+            },
+            {
+              "check": "source lookup request artifact hash",
+              "ok": true
+            },
+            {
+              "check": "source lookup result artifact hash",
+              "ok": true
+            },
+            {
+              "check": "source requests match an original query response",
+              "ok": true
+            },
+            {
+              "check": "lookup source task hash",
+              "ok": true
+            },
+            {
+              "check": "source lookup followup packets retain exact requests and result",
+              "ok": true
+            },
+            {
+              "check": "successful lookup batch shape",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 0 request identity",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 0 whole-file source hash",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 0 exact source slice and offsets",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 0 unique source anchors",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 1 request identity",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 1 whole-file source hash",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 1 exact source slice and offsets",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 1 unique source anchors",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 2 request identity",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 2 whole-file source hash",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 2 exact source slice and offsets",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 2 unique source anchors",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 3 request identity",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 3 whole-file source hash",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 3 exact source slice and offsets",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 3 unique source anchors",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 4 request identity",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 4 whole-file source hash",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 4 exact source slice and offsets",
+              "ok": true
+            },
+            {
+              "check": "lookup snippet 4 unique source anchors",
+              "ok": true
+            },
+            {
+              "check": "lookup character counts and batch cap",
+              "ok": true
+            },
+            {
+              "check": "catalog-lookup planning call cap and stages",
+              "ok": true
+            },
+            {
+              "check": "catalog-lookup bounded format recovery metadata",
+              "ok": true
+            },
+            {
+              "check": "manifest planning source matches cell",
+              "ok": true
+            },
+            {
+              "check": "recorded model calls match requests",
+              "ok": true
+            },
+            {
+              "check": "manifest brief source matches cell",
+              "ok": true
+            },
+            {
+              "check": "job and result brief source match",
+              "ok": true
+            },
+            {
+              "check": "brief source completed",
+              "ok": true
+            },
+            {
+              "check": "brief source result hash",
+              "ok": true
+            },
+            {
+              "check": "shared brief bytes and recorded hashes",
+              "ok": true
+            },
+            {
+              "check": "brief source task hash",
+              "ok": true
+            },
+            {
+              "check": "brief source DeepSeek owner role",
+              "ok": true
+            },
+            {
+              "check": "shared brief incurs no owner calls",
+              "ok": true
+            },
+            {
+              "check": "original query and owner provenance retained",
+              "ok": true
+            }
+          ],
+          "provider_routing_valid": true,
+          "result_hash": "d7fdcdb040a7f5020f089e132a25736b5683093de3a4cb52df8c947589203951",
+          "raw_plan_hash": "ba9ca32f452b763781d63207510982fc19d9e30996c6e6f3634746bfc1dd881c",
+          "plan_hash": "751b886783a794fc7797172dc78a17f55fd1fe829ad31c6476100d9dcfacdbd8",
+          "candidate_hash": "9bcae92be725b515f3d1cbdaa8d374a75aae52277d38498a6ead5af5c1090032",
+          "implementation_brief_hash": "b61eb7a895f70a0d7dea6c10a6a7a0add410edde6af40b250846d92c450c0e78",
+          "implementation_brief_valid": true,
+          "planning_artifacts": [
+            {
+              "name": "planning-attempt-0.json",
+              "hash": "ba9ca32f452b763781d63207510982fc19d9e30996c6e6f3634746bfc1dd881c",
+              "kind": "planning-attempt"
+            },
+            {
+              "name": "raw-plan.json",
+              "hash": "ba9ca32f452b763781d63207510982fc19d9e30996c6e6f3634746bfc1dd881c",
+              "kind": "raw-plan"
+            }
+          ],
+          "planning_origin": {
+            "kind": "original-raw-plan",
+            "run": "12-root-aware-catalog",
+            "cell": "001-hard-dependency-handoff",
+            "artifact": "raw-plan.json",
+            "hash": "ba9ca32f452b763781d63207510982fc19d9e30996c6e6f3634746bfc1dd881c"
+          },
+          "planning_source": null,
+          "planning_source_valid": null,
+          "brief_source": {
+            "run": "11-fresh-owner-briefs",
+            "cell": "001-hard-dependency-handoff",
+            "brief_hash": "b61eb7a895f70a0d7dea6c10a6a7a0add410edde6af40b250846d92c450c0e78",
+            "result_hash": "8ce7003088a4161cd9c83911c906aa90b4448ab4c1c4be0b5776644625f38287"
+          },
+          "brief_source_valid": true,
+          "brief_origin": {
+            "kind": "reused-owner-brief",
+            "run": "11-fresh-owner-briefs",
+            "cell": "001-hard-dependency-handoff",
+            "hash": "b61eb7a895f70a0d7dea6c10a6a7a0add410edde6af40b250846d92c450c0e78",
+            "result_hash": "8ce7003088a4161cd9c83911c906aa90b4448ab4c1c4be0b5776644625f38287"
+          },
+          "reused_planning": true,
+          "borrowed_planning_scope": "owner-only",
+          "borrowed_planning": {
+            "seconds": 205.218983733,
+            "owner_seconds": 205.218983733,
+            "query_seconds": 0,
+            "query_context_seconds": 0,
+            "usage": {
+              "calls": 29,
+              "receipts": 29,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 67010,
+                "output": 39154,
+                "cacheRead": 1493632,
+                "cacheWrite": 0,
+                "totalTokens": 1599796
+              },
+              "known_tokens": {
+                "input": 67010,
+                "output": 39154,
+                "cacheRead": 1493632,
+                "cacheWrite": 0,
+                "totalTokens": 1599796
+              },
+              "equivalent_usd": 0.076049592,
+              "reported_usd": 0.076049592,
+              "request_seconds": 204.855
+            }
+          },
+          "allocated_planning": {
+            "seconds": 268.302099158,
+            "owner_seconds": 205.218983733,
+            "query_seconds": 63.083115425,
+            "query_context_seconds": 0.10101538199999968,
+            "usage": {
+              "calls": 31,
+              "receipts": 31,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 121682,
+                "output": 44824,
+                "cacheRead": 1493632,
+                "cacheWrite": 0,
+                "totalTokens": 1660138
+              },
+              "known_tokens": {
+                "input": 121682,
+                "output": 44824,
+                "cacheRead": 1493632,
+                "cacheWrite": 0,
+                "totalTokens": 1660138
+              },
+              "equivalent_usd": 0.09925519199999999,
+              "reported_usd": 0.242093592,
+              "request_seconds": 267.832
+            }
+          },
+          "allocated_owner": {
+            "seconds": 205.218983733,
+            "usage": {
+              "calls": 29,
+              "receipts": 29,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 67010,
+                "output": 39154,
+                "cacheRead": 1493632,
+                "cacheWrite": 0,
+                "totalTokens": 1599796
+              },
+              "known_tokens": {
+                "input": 67010,
+                "output": 39154,
+                "cacheRead": 1493632,
+                "cacheWrite": 0,
+                "totalTokens": 1599796
+              },
+              "equivalent_usd": 0.076049592,
+              "reported_usd": 0.076049592,
+              "request_seconds": 204.855
+            }
+          },
+          "owner_role_valid": true,
+          "incurred": {
+            "seconds": 170.363415362,
+            "model_usage": {
+              "calls": 16,
+              "receipts": 16,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 93957,
+                "output": 26034,
+                "cacheRead": 14848,
+                "cacheWrite": 0,
+                "totalTokens": 134839
+              },
+              "known_tokens": {
+                "input": 93957,
+                "output": 26034,
+                "cacheRead": 14848,
+                "cacheWrite": 0,
+                "totalTokens": 134839
+              },
+              "equivalent_usd": 0.05951698799999999,
+              "reported_usd": 0.202355388,
+              "request_seconds": 139.353
+            },
+            "jev": {
+              "calls": 0,
+              "usage": null,
+              "input_tokens": null,
+              "output_tokens": null,
+              "tokens": 0,
+              "estimated_usd": 0,
+              "fallback": null,
+              "answer_ok": null
+            },
+            "equivalent_plus_jev_estimated_usd": 0.05951698799999999
+          },
+          "allocated": {
+            "seconds": 375.582399095,
+            "model_usage": {
+              "calls": 45,
+              "receipts": 45,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 160967,
+                "output": 65188,
+                "cacheRead": 1508480,
+                "cacheWrite": 0,
+                "totalTokens": 1734635
+              },
+              "known_tokens": {
+                "input": 160967,
+                "output": 65188,
+                "cacheRead": 1508480,
+                "cacheWrite": 0,
+                "totalTokens": 1734635
+              },
+              "equivalent_usd": 0.13556658,
+              "reported_usd": 0.27840498,
+              "request_seconds": 344.20799999999997
+            },
+            "equivalent_plus_jev_estimated_usd": 0.13556658
+          },
+          "phase_seconds": {
+            "owner": 0,
+            "query": 63.083115425,
+            "routing": 0,
+            "optimization": 0.004846271999995224,
+            "writing": 40.989099902,
+            "checks": 66.046472341,
+            "other": 0.137844066
+          },
+          "query_context_seconds": 0.10101538199999968,
+          "writing_pipeline_seconds": 40.993946173999994,
+          "model_usage_by_stage": {
+            "owner": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "query": {
+              "calls": 2,
+              "receipts": 2,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 54672,
+                "output": 5670,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 60342
+              },
+              "known_tokens": {
+                "input": 54672,
+                "output": 5670,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 60342
+              },
+              "equivalent_usd": 0.0232056,
+              "reported_usd": 0.166044,
+              "request_seconds": 62.977
+            },
+            "routing": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "optimization": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "writing": {
+              "calls": 14,
+              "receipts": 14,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 39285,
+                "output": 20364,
+                "cacheRead": 14848,
+                "cacheWrite": 0,
+                "totalTokens": 74497
+              },
+              "known_tokens": {
+                "input": 39285,
+                "output": 20364,
+                "cacheRead": 14848,
+                "cacheWrite": 0,
+                "totalTokens": 74497
+              },
+              "equivalent_usd": 0.036311388,
+              "reported_usd": 0.036311388,
+              "request_seconds": 76.376
+            },
+            "checks": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "other": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            }
+          },
+          "allocated_phase_seconds": {
+            "owner": 205.218983733,
+            "query": 63.083115425,
+            "routing": 0,
+            "optimization": 0.004846271999995224,
+            "writing": 40.989099902,
+            "checks": 66.046472341,
+            "other": 0.137844066
+          },
+          "optimization_metrics": {
+            "before": {
+              "assignments": 15,
+              "dependency_depth": 6,
+              "context_selections": 26
+            },
+            "after": {
+              "assignments": 11,
+              "dependency_depth": 5,
+              "context_selections": 20
+            },
+            "changes": [
+              {
+                "kind": "merge",
+                "members": [
+                  "wire-dependencies",
+                  "editor-outcomes"
+                ],
+                "into": "wire-dependencies"
+              },
+              {
+                "kind": "merge",
+                "members": [
+                  "test-helpers",
+                  "test-owner-handoff"
+                ],
+                "into": "test-helpers"
+              },
+              {
+                "kind": "merge",
+                "members": [
+                  "test-detail-budget",
+                  "test-incomplete-editor"
+                ],
+                "into": "test-detail-budget"
+              },
+              {
+                "kind": "merge",
+                "members": [
+                  "test-wave-authority",
+                  "test-profile-guidance"
+                ],
+                "into": "test-wave-authority"
+              }
+            ]
+          }
+        },
+        {
+          "catalog_hash": "9bd134532ad5f86b967be84586fd25dc82980a6d42be8379b0ba9113e18cf50c",
+          "catalog_evidence": {
+            "recorded_hash": "9bd134532ad5f86b967be84586fd25dc82980a6d42be8379b0ba9113e18cf50c",
+            "provenance_valid": true
+          },
+          "source_requests_hash": null,
+          "source_lookup_hash": null,
+          "source_lookup_characters": null,
+          "source_lookup_evidence": null,
+          "query_format_recoveries": [],
+          "query_format_recovery_count": 0,
+          "query_call_count": 1,
+          "query_call_cap": 3,
+          "task": "hard-lifecycle-extract",
+          "cell": "12-root-aware-catalog/002-hard-lifecycle-extract",
+          "optimization": "deterministic",
+          "query_mode": "catalog-lookup",
+          "editor_selector": "deepseek/deepseek-flash:off",
+          "task_hash": "c6365120c768dec61e14fed5c2adc988444879b14063cb06ca72aafab59a71cb",
+          "application_complete": false,
+          "visible_accepted": true,
+          "candidate_tests": {
+            "count": 0,
+            "failed": 0
+          },
+          "base_visible_accepted": true,
+          "external_accepted": false,
+          "hidden_pass": false,
+          "error": null,
+          "downstream_failures": {
+            "visible": false,
+            "candidate": false,
+            "external": true
+          },
+          "integrity_valid": true,
+          "validation": [
+            {
+              "check": "candidate hash",
+              "ok": true
+            },
+            {
+              "check": "result roles match manifest",
+              "ok": true
+            },
+            {
+              "check": "result optimization matches manifest",
+              "ok": true
+            },
+            {
+              "check": "result query mode matches manifest",
+              "ok": true
+            },
+            {
+              "check": "implementation brief hash",
+              "ok": true
+            },
+            {
+              "check": "raw and dispatched plans retained",
+              "ok": true
+            },
+            {
+              "check": "dispatched plan hash",
+              "ok": true
+            },
+            {
+              "check": "request and receipt identities",
+              "ok": true
+            },
+            {
+              "check": "receipt routing matches requests",
+              "ok": true
+            },
+            {
+              "check": "DeepSeek owner, Sol query, DeepSeek writers; no planning after writers",
+              "ok": true
+            },
+            {
+              "check": "catalog artifact hash",
+              "ok": true
+            },
+            {
+              "check": "catalog artifact shape",
+              "ok": true
+            },
+            {
+              "check": "query packets retain the catalog artifact",
+              "ok": true
+            },
+            {
+              "check": "catalog-lookup planning call cap and stages",
+              "ok": true
+            },
+            {
+              "check": "catalog-lookup bounded format recovery metadata",
+              "ok": true
+            },
+            {
+              "check": "manifest planning source matches cell",
+              "ok": true
+            },
+            {
+              "check": "recorded model calls match requests",
+              "ok": true
+            },
+            {
+              "check": "manifest brief source matches cell",
+              "ok": true
+            },
+            {
+              "check": "job and result brief source match",
+              "ok": true
+            },
+            {
+              "check": "brief source completed",
+              "ok": true
+            },
+            {
+              "check": "brief source result hash",
+              "ok": true
+            },
+            {
+              "check": "shared brief bytes and recorded hashes",
+              "ok": true
+            },
+            {
+              "check": "brief source task hash",
+              "ok": true
+            },
+            {
+              "check": "brief source DeepSeek owner role",
+              "ok": true
+            },
+            {
+              "check": "shared brief incurs no owner calls",
+              "ok": true
+            },
+            {
+              "check": "original query and owner provenance retained",
+              "ok": true
+            }
+          ],
+          "provider_routing_valid": true,
+          "result_hash": "fdc6cb9c67da9a293de017ca2383b2d646d2dca2f9e7658010d711483de5c2af",
+          "raw_plan_hash": "9fc4c77f53498bf5c285826ecb10a4de52ba39441a7789472b6023003b6e4096",
+          "plan_hash": "9fc4c77f53498bf5c285826ecb10a4de52ba39441a7789472b6023003b6e4096",
+          "candidate_hash": "048c3f6d4bb0f0c8a53a49ecd478714155a44a11e7414a1c06ad87dff821026c",
+          "implementation_brief_hash": "bb9ae3225735e2c8ed57ff0f272e57870aece98d1bf60953339b806784d7bd01",
+          "implementation_brief_valid": true,
+          "planning_artifacts": [
+            {
+              "name": "planning-attempt-0.json",
+              "hash": "9fc4c77f53498bf5c285826ecb10a4de52ba39441a7789472b6023003b6e4096",
+              "kind": "planning-attempt"
+            },
+            {
+              "name": "raw-plan.json",
+              "hash": "9fc4c77f53498bf5c285826ecb10a4de52ba39441a7789472b6023003b6e4096",
+              "kind": "raw-plan"
+            }
+          ],
+          "planning_origin": {
+            "kind": "original-raw-plan",
+            "run": "12-root-aware-catalog",
+            "cell": "002-hard-lifecycle-extract",
+            "artifact": "raw-plan.json",
+            "hash": "9fc4c77f53498bf5c285826ecb10a4de52ba39441a7789472b6023003b6e4096"
+          },
+          "planning_source": null,
+          "planning_source_valid": null,
+          "brief_source": {
+            "run": "11-fresh-owner-briefs",
+            "cell": "002-hard-lifecycle-extract",
+            "brief_hash": "bb9ae3225735e2c8ed57ff0f272e57870aece98d1bf60953339b806784d7bd01",
+            "result_hash": "e6efb11770b8becff8e4803d502ad40301ac55c570e387b87e07a5154b40514f"
+          },
+          "brief_source_valid": true,
+          "brief_origin": {
+            "kind": "reused-owner-brief",
+            "run": "11-fresh-owner-briefs",
+            "cell": "002-hard-lifecycle-extract",
+            "hash": "bb9ae3225735e2c8ed57ff0f272e57870aece98d1bf60953339b806784d7bd01",
+            "result_hash": "e6efb11770b8becff8e4803d502ad40301ac55c570e387b87e07a5154b40514f"
+          },
+          "reused_planning": true,
+          "borrowed_planning_scope": "owner-only",
+          "borrowed_planning": {
+            "seconds": 151.803633409,
+            "owner_seconds": 151.803633409,
+            "query_seconds": 0,
+            "query_context_seconds": 0,
+            "usage": {
+              "calls": 29,
+              "receipts": 29,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 57390,
+                "output": 26689,
+                "cacheRead": 1487232,
+                "cacheWrite": 0,
+                "totalTokens": 1571311
+              },
+              "known_tokens": {
+                "input": 57390,
+                "output": 26689,
+                "cacheRead": 1487232,
+                "cacheWrite": 0,
+                "totalTokens": 1571311
+              },
+              "equivalent_usd": 0.058167192000000006,
+              "reported_usd": 0.058167192000000006,
+              "request_seconds": 151.428
+            }
+          },
+          "allocated_planning": {
+            "seconds": 174.958301578,
+            "owner_seconds": 151.803633409,
+            "query_seconds": 23.154668169,
+            "query_context_seconds": 0.10955753800000002,
+            "usage": {
+              "calls": 30,
+              "receipts": 30,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 75334,
+                "output": 28161,
+                "cacheRead": 1487232,
+                "cacheWrite": 0,
+                "totalTokens": 1590727
+              },
+              "known_tokens": {
+                "input": 75334,
+                "output": 28161,
+                "cacheRead": 1487232,
+                "cacheWrite": 0,
+                "totalTokens": 1590727
+              },
+              "equivalent_usd": 0.06531679200000001,
+              "reported_usd": 0.108775192,
+              "request_seconds": 174.471
+            }
+          },
+          "allocated_owner": {
+            "seconds": 151.803633409,
+            "usage": {
+              "calls": 29,
+              "receipts": 29,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 57390,
+                "output": 26689,
+                "cacheRead": 1487232,
+                "cacheWrite": 0,
+                "totalTokens": 1571311
+              },
+              "known_tokens": {
+                "input": 57390,
+                "output": 26689,
+                "cacheRead": 1487232,
+                "cacheWrite": 0,
+                "totalTokens": 1571311
+              },
+              "equivalent_usd": 0.058167192000000006,
+              "reported_usd": 0.058167192000000006,
+              "request_seconds": 151.428
+            }
+          },
+          "owner_role_valid": true,
+          "incurred": {
+            "seconds": 58.796442675,
+            "model_usage": {
+              "calls": 3,
+              "receipts": 3,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 24004,
+                "output": 2681,
+                "cacheRead": 5888,
+                "cacheWrite": 0,
+                "totalTokens": 32573
+              },
+              "known_tokens": {
+                "input": 24004,
+                "output": 2681,
+                "cacheRead": 5888,
+                "cacheWrite": 0,
+                "totalTokens": 32573
+              },
+              "equivalent_usd": 0.010453727999999999,
+              "reported_usd": 0.053912128000000004,
+              "request_seconds": 29.607
+            },
+            "jev": {
+              "calls": 0,
+              "usage": null,
+              "input_tokens": null,
+              "output_tokens": null,
+              "tokens": 0,
+              "estimated_usd": 0,
+              "fallback": null,
+              "answer_ok": null
+            },
+            "equivalent_plus_jev_estimated_usd": 0.010453727999999999
+          },
+          "allocated": {
+            "seconds": 210.60007608400002,
+            "model_usage": {
+              "calls": 32,
+              "receipts": 32,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 81394,
+                "output": 29370,
+                "cacheRead": 1493120,
+                "cacheWrite": 0,
+                "totalTokens": 1603884
+              },
+              "known_tokens": {
+                "input": 81394,
+                "output": 29370,
+                "cacheRead": 1493120,
+                "cacheWrite": 0,
+                "totalTokens": 1603884
+              },
+              "equivalent_usd": 0.06862092,
+              "reported_usd": 0.11207932000000001,
+              "request_seconds": 181.035
+            },
+            "equivalent_plus_jev_estimated_usd": 0.06862092
+          },
+          "phase_seconds": {
+            "owner": 0,
+            "query": 23.154668169,
+            "routing": 0,
+            "optimization": 0.0004735519999994722,
+            "writing": 6.623029652999998,
+            "checks": 28.739097332000004,
+            "other": 0.140495549
+          },
+          "query_context_seconds": 0.10955753800000002,
+          "writing_pipeline_seconds": 6.623503204999998,
+          "model_usage_by_stage": {
+            "owner": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "query": {
+              "calls": 1,
+              "receipts": 1,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 17944,
+                "output": 1472,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 19416
+              },
+              "known_tokens": {
+                "input": 17944,
+                "output": 1472,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 19416
+              },
+              "equivalent_usd": 0.007149599999999999,
+              "reported_usd": 0.050608,
+              "request_seconds": 23.043
+            },
+            "routing": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "optimization": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "writing": {
+              "calls": 2,
+              "receipts": 2,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 6060,
+                "output": 1209,
+                "cacheRead": 5888,
+                "cacheWrite": 0,
+                "totalTokens": 13157
+              },
+              "known_tokens": {
+                "input": 6060,
+                "output": 1209,
+                "cacheRead": 5888,
+                "cacheWrite": 0,
+                "totalTokens": 13157
+              },
+              "equivalent_usd": 0.003304128,
+              "reported_usd": 0.003304128,
+              "request_seconds": 6.564
+            },
+            "checks": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            },
+            "other": {
+              "calls": 0,
+              "receipts": 0,
+              "accounting_complete": true,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "known_tokens": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0
+              },
+              "equivalent_usd": 0,
+              "reported_usd": 0,
+              "request_seconds": 0
+            }
+          },
+          "allocated_phase_seconds": {
+            "owner": 151.803633409,
+            "query": 23.154668169,
+            "routing": 0,
+            "optimization": 0.0004735519999994722,
+            "writing": 6.623029652999998,
+            "checks": 28.739097332000004,
+            "other": 0.140495549
+          },
+          "optimization_metrics": {
+            "before": {
+              "assignments": 2,
+              "dependency_depth": 2,
+              "context_selections": 7
+            },
+            "after": {
+              "assignments": 2,
+              "dependency_depth": 2,
+              "context_selections": 7
+            },
+            "changes": []
+          }
+        }
+      ]
     }
   ],
   "ablations": [
@@ -13809,6 +17175,90 @@
           }
         }
       ]
+    },
+    {
+      "task": "hard-context-calibration",
+      "raw_plan_hash": "270b82221ea98f923b8c767bb1ed5e9387d08a47ec55bb0e06cd3d987aa9e2da",
+      "eligible": false,
+      "cells": [
+        {
+          "cell": "11-fresh-owner-briefs/000-hard-context-calibration",
+          "optimization": "deterministic",
+          "application_complete": true,
+          "writing_seconds": 3.425398045000009,
+          "writing_pipeline_seconds": 3.426160616000008,
+          "writer_calls": 2,
+          "writer_tokens": 8446,
+          "downstream_failures": {
+            "visible": false,
+            "candidate": false,
+            "external": false
+          }
+        }
+      ]
+    },
+    {
+      "task": "hard-context-calibration",
+      "raw_plan_hash": "3967db25f7c90bfdb0ebf7118cf40f1df07a6af65a1af062b9100390adf96e34",
+      "eligible": false,
+      "cells": [
+        {
+          "cell": "12-root-aware-catalog/000-hard-context-calibration",
+          "optimization": "deterministic",
+          "application_complete": true,
+          "writing_seconds": 3.2727655689999993,
+          "writing_pipeline_seconds": 3.2733162549999997,
+          "writer_calls": 2,
+          "writer_tokens": 8630,
+          "downstream_failures": {
+            "visible": false,
+            "candidate": false,
+            "external": false
+          }
+        }
+      ]
+    },
+    {
+      "task": "hard-dependency-handoff",
+      "raw_plan_hash": "ba9ca32f452b763781d63207510982fc19d9e30996c6e6f3634746bfc1dd881c",
+      "eligible": false,
+      "cells": [
+        {
+          "cell": "12-root-aware-catalog/001-hard-dependency-handoff",
+          "optimization": "deterministic",
+          "application_complete": true,
+          "writing_seconds": 40.989099902,
+          "writing_pipeline_seconds": 40.993946173999994,
+          "writer_calls": 14,
+          "writer_tokens": 74497,
+          "downstream_failures": {
+            "visible": true,
+            "candidate": true,
+            "external": true
+          }
+        }
+      ]
+    },
+    {
+      "task": "hard-lifecycle-extract",
+      "raw_plan_hash": "9fc4c77f53498bf5c285826ecb10a4de52ba39441a7789472b6023003b6e4096",
+      "eligible": false,
+      "cells": [
+        {
+          "cell": "12-root-aware-catalog/002-hard-lifecycle-extract",
+          "optimization": "deterministic",
+          "application_complete": false,
+          "writing_seconds": 6.623029652999998,
+          "writing_pipeline_seconds": 6.623503204999998,
+          "writer_calls": 2,
+          "writer_tokens": 13157,
+          "downstream_failures": {
+            "visible": false,
+            "candidate": false,
+            "external": true
+          }
+        }
+      ]
     }
   ],
   "recommendation": {
@@ -13817,7 +17267,7 @@
     "status": "pending matched application-complete configurations"
   },
   "publication_evidence": {
-    "observed_at": "2026-10-17T00:09:30.795588+00:00",
+    "observed_at": "2026-10-17T00:33:43.287645+00:00",
     "run_root_label": "dispatch-deepseek",
     "matched_runs": [
       "04-corrected-unoptimized",
@@ -13830,15 +17280,15 @@
     "deterministic_and_contextual_dispatched_plans_identical": true,
     "budget_snapshot": {
       "limit_usd": 50,
-      "settled_entries": 178,
+      "settled_entries": 270,
       "unsettled_entries": 0,
-      "settled_usd": 1.722385884,
-      "retained_exposure_usd": 1.722385884,
-      "reported_trial_model_usd": 1.722126884,
+      "settled_usd": 2.203784052,
+      "retained_exposure_usd": 2.203784052,
+      "reported_trial_model_usd": 2.203525052,
       "trial_jev_estimated_usd": 0.000169,
       "other_settled_usd": 9e-05,
-      "normalized_trial_model_usd": 0.456832668,
-      "normalized_plus_trial_jev_usd": 0.45700166799999997,
+      "normalized_trial_model_usd": 0.694648836,
+      "normalized_plus_trial_jev_usd": 0.694817836,
       "note": "Current reset ledger only. Settled exposure uses retained reservation charges; normalized Sol/DeepSeek costs use the report comparison tariff. Allocated planning is reused work and is not charged again."
     },
     "catalog_08_correction": {
@@ -13853,15 +17303,14 @@
       "correction_request_transported": false
     },
     "unmeasured_followup": {
-      "run": "11",
-      "state": "fresh owner planned; not measured",
-      "owner_prompt_revision": "d08577e",
-      "owner_briefs_reused": false
+      "state": "offline mechanical syntax diagnosis; no repeat measured or authorized"
     },
     "measured_lookup_bounds": {
       "runs": [
         "09-catalog-lookup-deterministic",
-        "10-bounded-query-recovery"
+        "10-bounded-query-recovery",
+        "11-fresh-owner-briefs",
+        "12-root-aware-catalog"
       ],
       "source_lookup_batches": 1,
       "source_lookup_limit_characters": 64000,
@@ -13869,7 +17318,42 @@
       "complete_request_limit_bytes": 163840,
       "query_call_cap": 3,
       "all_emitted_lookup_provenance_valid": true,
-      "no_sol_after_writers": true
+      "no_sol_after_writers": true,
+      "catalog_limit_bytes_by_run": {
+        "09": 49152,
+        "10": 49152,
+        "11": 49152,
+        "12": 65536
+      },
+      "client_context_limit_bytes": 163840
+    },
+    "fresh_owner_11": {
+      "freeze": "25d046312c0cbe2327a2a3546a32fb4b53f0aab4",
+      "owner_prompt_revision": "d08577e",
+      "briefs_from": null,
+      "application_complete": 1,
+      "delivered": 1,
+      "catalog_failures": [
+        "ambiguous basename steps.mjs from source-root alias handling",
+        "catalog51727bytes exceeds49152"
+      ]
+    },
+    "root_aware_12": {
+      "freeze": "5bfe1346db94bf07052e1ad151e73e5426445dfb",
+      "briefs_from": "11-fresh-owner-briefs",
+      "exact_owner_brief_bytes": true,
+      "application_complete": 2,
+      "delivered": 1,
+      "client_context_shape": "systemPrompt/messages/tools; provider options excluded",
+      "catalog_limit_bytes": 65536,
+      "source_lookup_limit_characters": 64000,
+      "source_lookup_offset_units": "UTF-16 code units",
+      "complete_request_limit_bytes": 163840,
+      "raw_plan_hashes": {
+        "hard-context-calibration": "3967db25f7c90bfdb0ebf7118cf40f1df07a6af65a1af062b9100390adf96e34",
+        "hard-dependency-handoff": "ba9ca32f452b763781d63207510982fc19d9e30996c6e6f3634746bfc1dd881c",
+        "hard-lifecycle-extract": "9fc4c77f53498bf5c285826ecb10a4de52ba39441a7789472b6023003b6e4096"
+      }
     }
   }
 }
