@@ -47,6 +47,10 @@ Both optimized profiles accept `dispatchOptions` (validated in [`dispatch-profil
 
 The V4A applier runs in its declared `lenient-wrapper` envelope: outer blank lines, one whole fence or heredoc, and repeated consecutive trailing `*** End Patch` markers are tolerated; nested envelopes, prose and partial lines are still rejected. Each attempt records whether the strict envelope would also have parsed.
 
+## Roles in spec-end-to-end terms
+
+The entry point accepts the names `spec_dispatch` uses: `--strong-owner-model` is the query planner (and the owner of a hard step), `--owner-model` an explicit brief owner for other steps, `--editor-model` the writer. `--model` remains the alias of `--strong-owner-model`. Each manifest and result records them as `spec_roles` (`owner_model`, `strong_owner_model`, `editor_model`). With `--strategy focused-dispatch` one strong-owner discovery agent plans the writer packets directly, with no separate brief or catalog query, and the same preprocessing, gates and writers apply; with `owner-query-writer` an owner brief precedes the planning call, and a planner that reports a missing owner decision gets the owner's revision up to three times.
+
 ## Use and retained evidence
 
 Add `--dispatch-profile optimized-v4a` to the existing `iterate.mjs` owner/query/writer invocation. Keep the selectors explicit:
