@@ -53,7 +53,7 @@ function ledgerPath(path) {
 const validPath = path => typeof path === 'string' && path.length > 0 && !path.includes('\\') && !path.includes('\0') &&
   !path.split('/').some(part => !part || part === '.' || part === '..') && !/^[A-Za-z]:/.test(path);
 
-export function buildInput({ path, source, sourceHash, instruction, update, allowedPaths, protectedPaths = [] }, model, maxTokens) {
+export function buildInput({ path, source, sourceHash, instruction, update, allowedPaths, protectedPaths = [] }, model, maxTokens, contextEstimate = 'utf8-bytes') {
   if (!validPath(path) || !Array.isArray(allowedPaths) || !allowedPaths.every(validPath) || !allowedPaths.includes(path) ||
       !Array.isArray(protectedPaths) || protectedPaths.some(protectedPath => path === protectedPath || path.startsWith(protectedPath + '/')))
     fail('path', 'File must be an explicitly allowed relative path outside protected paths');
@@ -69,9 +69,11 @@ export function buildInput({ path, source, sourceHash, instruction, update, allo
   const bytes = Buffer.byteLength(JSON.stringify(context));
   // No vendor tokenizer is available. UTF-8 bytes plus framing reserve are a conservative
   // eligibility guard, not a measured token count or a guarantee of provider acceptance.
-  if (bytes + maxTokens + 1024 > model.contextWindow)
+  if (!['utf8-bytes', 'utf8-bytes-div4'].includes(contextEstimate)) fail('context-policy', 'Unknown context estimate policy');
+  const estimatedTokens = contextEstimate === 'utf8-bytes' ? bytes : Math.ceil(bytes / 4);
+  if (estimatedTokens + maxTokens + 1024 > model.contextWindow)
     fail('context-cap', 'Full file and update exceed the conservative input/output context budget; no chunking or truncation is performed');
-  return { context, inputBytes: bytes };
+  return { context, inputBytes: bytes, estimatedInputTokens: estimatedTokens, contextEstimate };
 }
 
 function syntax(path, text) {
@@ -84,7 +86,7 @@ function syntax(path, text) {
 
 /** No candidate filesystem writes or changeset operations: one owner-prepared file update. */
 export async function createWriter({ selector, ledger, receiptPath, maxOutputTokens, maxOutputBytes = 2_000_000,
-  maxCalls = 32, callMs = 120000, signal, shared, runtime = null }) {
+  maxCalls = 32, callMs = 120000, signal, shared, runtime = null, contextEstimate = 'utf8-bytes' }) {
   const model = selectedModel(selector);
   if (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens < 1 || maxOutputTokens > model.maxTokens)
     fail('output-cap', `Explicit maxOutputTokens must be between 1 and ${model.maxTokens}`);
@@ -97,7 +99,7 @@ export async function createWriter({ selector, ledger, receiptPath, maxOutputTok
   return { selector, model, metadataHash, client,
     async write(input) {
       const { path, source, sourceHash } = input;
-      const { context, inputBytes } = buildInput(input, model, maxOutputTokens);
+      const { context, inputBytes, estimatedInputTokens } = buildInput(input, model, maxOutputTokens, contextEstimate);
       // Source/output eligibility is explicit, never inherited from historical writer caps.
       if (Buffer.byteLength(source) > maxOutputBytes) fail('output-cap', 'Current source already exceeds the requested full-file output byte cap');
       if (ledgerPath(canonicalLedger) !== canonicalLedger) fail('ledger', 'Canonical shared ledger identity changed');
@@ -112,7 +114,7 @@ export async function createWriter({ selector, ledger, receiptPath, maxOutputTok
       if (text.startsWith('```')) fail('response', 'Return raw full-file text without Markdown fences');
       const syntaxChecked = syntax(path, text);
       return { path, source_hash: sourceHash, output_hash: digest(text), text,
-        selector, metadata_hash: metadataHash, input_bytes: inputBytes, max_output_tokens: maxOutputTokens,
+        selector, metadata_hash: metadataHash, input_bytes: inputBytes, context_estimate: contextEstimate, estimated_input_tokens: estimatedInputTokens, max_output_tokens: maxOutputTokens,
         max_output_bytes: maxOutputBytes, syntax_checked: syntaxChecked, usage: response.usage ?? null };
     } };
 }

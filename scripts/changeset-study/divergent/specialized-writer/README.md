@@ -10,7 +10,7 @@ The owner must prepare the instruction and snippet. Their model calls, elapsed t
 and charges belong in a complete route comparison; this adapter does not create
 those inputs or claim that they are free. Whole-workflow comparison still requires
 the same candidate tests, terminal checks and separately declared outer review.
-This integration has no task runner. A separate two-call synthetic live integration
+The separate [three-case experiment protocol](PROTOCOL.md) defines a direct DeepSeek preparation and two full-file writer arms. A separate two-call synthetic live integration
 probe passed for both models; see [probe results](integration-probe-results.md).
 That probe does not establish task delivery or whole-workflow performance.
 
@@ -75,7 +75,7 @@ and a 1,024-unit framing reserve exceed the context window. This intentionally
 conservative byte proxy is not a vendor tokenizer or proof of provider acceptance.
 This local guard may reject files that the actual model tokenizer would fit,
 especially for Morph; refusal does not establish insufficient vendor capacity.
-Large full-file outputs may be locally ineligible even when a partial-edit route fits.
+An explicit opt-in `contextEstimate: 'utf8-bytes-div4'` uses bytes/4 instead; it is a heuristic, not a vendor tokenizer or guarantee. The three-case experiment declares this estimate and preserves provider context rejection. Large full-file outputs may be locally ineligible even when a partial-edit route fits.
 No historical 32k writer cap is silently inherited, and no chunking occurs.
 
 Reserved prompt delimiters inside input are rejected rather than escaped or
