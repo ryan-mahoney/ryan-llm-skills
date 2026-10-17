@@ -422,3 +422,33 @@ This isolates grouping as the configured difference, but one observation per arm
 still includes model-generation variability. Do not attribute a difference solely
 to grouping or declare reliability from a single successful replay. Stop after this
 one run and retain all failed attempts and costs before selecting the next treatment.
+
+## Protocol 15: enable low reasoning for the same writer assignments
+
+Runs 13 and 14 completed only calibration. Handoff failed exact replacements and
+extraction failed composition syntax despite one local retry with error-local source.
+The pinned SDK provider-boundary audit confirms previous `deepseek/deepseek-flash:off`
+requests explicitly sent `thinking:{type:'disabled'}`; the selector did not silently
+inherit DeepSeek's default. A synthetic key and intercepted transport verified that
+`:low` sends `thinking:{type:'enabled'}` plus `reasoning_effort:'low'`, retaining the
+same native provider, model ID and 16,000-token output setting. No inference occurred
+in this audit. These controls agree with the
+[official thinking-mode documentation](https://api-docs.deepseek.com/guides/thinking_mode/).
+
+Run all three original cases once, reusing the exact run 12 raw plans and owner
+briefs, with deterministic grouping and `deepseek/deepseek-flash:low` writers. Sol's
+selector remains `openai-codex/gpt-6.1-sol:low`, but plan reuse incurs no new Sol or
+owner requests. Retain the run 13 writer prompt, application retry, source compactor,
+engine, output bounds and outer checks unchanged. A new code freeze records corrected
+role accounting: inherited ownership remains `deepseek/deepseek-flash:off`, while the
+new writer selector is `:low`. Do not weaken strict identical-replay selector checks.
+Verify matching execution-module hashes before inference and record any differences.
+
+Count provider-reported output and cache usage without treating reasoning as free.
+Measure new writer calls, tokens, time, application completion and downstream outcomes;
+allocate inherited owner/query work separately. Do not infer a causal effect from one
+pair or claim success when a faster run applied fewer operations. If low reasoning
+completes all assignments, repeat the unchanged treatment before selecting it. Only
+after a reliable treatment exists should a cheaper contextual policy selectively use
+thinking; do not add a model to reason about each routing choice. The divergent
+prototypes remain offline and separate from this writing-only comparison.

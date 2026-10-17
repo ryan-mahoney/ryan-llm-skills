@@ -141,6 +141,7 @@ export function buildReport(runRoot) {
     assert(basename(run) === run && basename(cellName) === cellName, 'Planning source must use local run/cell names');
     const directory = join(root, run, cellName), rp = join(directory, 'result.json');
     const m = read(join(root, run, 'manifest.json'));
+    const ownerSelector = m.roles?.implementation_owner ?? m.editor_selector;
     if (!existsSync(rp) || !Number.isFinite(read(rp).process_elapsed_ms)) { active.delete(key); return null; }
     const r = read(rp), requests = rows(join(directory, 'requests.jsonl')), receipts = rows(join(directory, 'receipts.jsonl'));
     const checks = [], verify = (ok, message) => checks.push({ check: message, ok: Boolean(ok) });
@@ -163,9 +164,9 @@ export function buildReport(runRoot) {
     const sol = /^(openai|openai-codex)\/gpt-6\.1-sol(?::|$)/;
     const firstWriter = requests.findIndex(x => x.stage === 'editor');
     const firstQuery = requests.findIndex(x => phase(x.stage) === 'query');
-    const providerValid = sol.test(m.selector) && /^deepseek\//.test(m.editor_selector) &&
+    const providerValid = sol.test(m.selector) && /^deepseek\//.test(m.editor_selector) && /^deepseek\//.test(ownerSelector) &&
       requests.every((x, i) => ['owner', 'query', 'writing'].includes(phase(x.stage)) &&
-        x.selector === (phase(x.stage) === 'query' ? m.selector : m.editor_selector) &&
+        x.selector === (phase(x.stage) === 'query' ? m.selector : phase(x.stage) === 'owner' ? ownerSelector : m.editor_selector) &&
         (phase(x.stage) === 'writing' || firstWriter < 0 || i < firstWriter) &&
         (phase(x.stage) !== 'owner' || firstQuery < 0 || i < firstQuery)) &&
       (r.reviews ?? []).length === 0 && (r.repairs ?? 0) === 0 &&
@@ -194,7 +195,7 @@ export function buildReport(runRoot) {
         selectedSourceArtifact = safePlanArtifact(selectedName) ? donor.planning_artifacts.find(a => a.name === selectedName) ?? null : null;
         verifySource(selectedSourceArtifact?.hash === source.plan_hash && rawHash === source.plan_hash, 'shared selected planning artifact hash');
         verifySource(donor.result_hash === source.result_hash, 'planning source result hash');
-        verifySource(donor.provider_routing_valid && donor.owner_role_valid, 'planning source provider routing');
+        verifySource(donor.provider_routing_valid && donor.owner_role_valid && donor.owner_selector === ownerSelector, 'planning source provider routing');
         verifySource(Boolean(donor.allocated_planning), 'planning source allocated planning available');
         verifySource(donor.implementation_brief_valid && donor.implementation_brief_hash === briefHash && donor.task_hash === r.task_hash, 'shared task and frozen brief');
         verifySource(requests.every(x => !['owner', 'query'].includes(phase(x.stage))), 'replay incurs no owner/query calls');
@@ -212,7 +213,7 @@ export function buildReport(runRoot) {
         verifyBrief(briefDonor.result_hash === briefSource.result_hash, 'brief source result hash');
         verifyBrief(briefDonor.implementation_brief_valid && briefDonor.implementation_brief_hash === briefSource.brief_hash && briefHash === briefSource.brief_hash && briefHash === r.implementation_brief_hash, 'shared brief bytes and recorded hashes');
         verifyBrief(briefDonor.task_hash === r.task_hash, 'brief source task hash');
-        verifyBrief(briefDonor.owner_role_valid && briefDonor.editor_selector === m.editor_selector && Boolean(briefDonor.allocated_owner), 'brief source DeepSeek owner role');
+        verifyBrief(briefDonor.owner_role_valid && briefDonor.owner_selector === ownerSelector && Boolean(briefDonor.allocated_owner), 'brief source DeepSeek owner role');
         verifyBrief(byStage.owner.calls === 0, 'shared brief incurs no owner calls');
       }
       if (source) verifyBrief(source.run === briefSource.run && source.cell === briefSource.cell && source.result_hash === briefSource.result_hash, 'plan and brief source agree');
@@ -231,17 +232,17 @@ export function buildReport(runRoot) {
     const borrowedOwner = source ? donor?.allocated_owner : briefSource ? briefDonor?.allocated_owner : { seconds: 0, usage: emptyUsage() };
     const allocatedOwner = inherited && borrowedOwner ? { seconds: seconds.owner + borrowedOwner.seconds, usage: plus(byStage.owner, borrowedOwner.usage) } : null;
     const ownerRequests = requests.filter(x => phase(x.stage) === 'owner'), ownerReceipts = receipts.filter(x => phase(x.stage) === 'owner');
-    const ownerRoleValid = m.strategy === 'owner-query-writer' && /^deepseek\//.test(m.editor_selector) && r.editor_selector === m.editor_selector &&
-      ownerRequests.every(q => q.selector === m.editor_selector) && ownerReceipts.length === ownerRequests.length &&
+    const ownerRoleValid = m.strategy === 'owner-query-writer' && /^deepseek\//.test(ownerSelector) && r.editor_selector === m.editor_selector &&
+      ownerRequests.every(q => q.selector === ownerSelector) && ownerReceipts.length === ownerRequests.length &&
       new Set(ownerRequests.map(q => q.reservation)).size === ownerRequests.length && new Set(ownerReceipts.map(q => q.reservation)).size === ownerReceipts.length &&
-      ownerReceipts.every(x => x.selector === m.editor_selector && ownerRequests.some(q => q.reservation === x.reservation)) &&
+      ownerReceipts.every(x => x.selector === ownerSelector && ownerRequests.some(q => q.reservation === x.reservation)) &&
       Boolean(allocatedOwner) && (ownerRequests.length > 0 || (source ? sourceValid && donor?.owner_role_valid : briefSource ? briefValid : false));
     const incurred = usage(requests, receipts), jev = routingUsage(r);
     const allocated = borrowed ? plus(incurred, borrowed.usage) : null;
     const visible = (r.checks ?? []).at(-1)?.visible;
     const candidateTests = visible?.candidate_tests ?? [];
     const applicationComplete = r.executions?.at(-1)?.ok === true;
-    const output = { ...evidence, task: r.task ?? cellName.replace(/^\d+-/, ''), cell: key, optimization: m.optimization ?? 'none', query_mode: m.query_mode ?? 'discovery', editor_selector: m.editor_selector, task_hash: r.task_hash,
+    const output = { ...evidence, task: r.task ?? cellName.replace(/^\d+-/, ''), cell: key, optimization: m.optimization ?? 'none', query_mode: m.query_mode ?? 'discovery', editor_selector: m.editor_selector, owner_selector: ownerSelector, task_hash: r.task_hash,
       application_complete: applicationComplete, visible_accepted: r.visible_accepted ?? visible?.ok ?? null,
       candidate_tests: { count: candidateTests.length, failed: candidateTests.filter(t => t.ok !== true).length },
       base_visible_accepted: visible?.base_ok ?? visible?.visible_check_ok ?? null,

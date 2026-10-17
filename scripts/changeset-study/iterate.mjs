@@ -10,6 +10,7 @@ import { sdkRoot } from './client.mjs';
 import { recoverAccounting } from './accounting.mjs';
 import { strategyNames, usesCandidateChecks, usesEditor, deliveredResult } from './strategies.mjs';
 import { modelRuntime, parseSelector } from '../changeset/models.mjs';
+import { buildRunRoles } from './run-roles.mjs';
 
 const args = process.argv.slice(2);
 const option = name => { const i = args.indexOf(name); if (i < 0 || !args[i + 1]) throw new Error(`${name} required`); return args[i + 1]; };
@@ -50,6 +51,8 @@ const original = read(join(source, 'manifest.json'));
 if (hash(readFileSync(join(source, 'tasks.json'))) !== original.tasks_file_hash) throw new Error('Reference task bytes changed');
 const replayManifest = replay ? read(join(replay, 'manifest.json')) : null;
 if (replayManifest && (replayManifest.strategy !== strategy || replayManifest.selector !== selector || (replayManifest.editor_selector ?? null) !== editorSelector || (replayManifest.query_mode ?? 'discovery') !== queryMode || !equal(files(codeRoot), replayManifest.frozen_files))) throw new Error('Replay strategy, selectors or frozen bytes differ');
+const donorManifest = plansFrom || briefsFrom ? read(join(plansFrom ?? briefsFrom, 'manifest.json')) : null;
+const runRoles = buildRunRoles({ strategy, selector, editorSelector, donorManifest });
 if (original.comparison !== 'sol-native-vs-sol-nemotron-workflow' || original.models[0] !== selector) throw new Error('Use previous workflow run and identical Sol selector');
 const selected = ['hard-context-calibration', 'hard-dependency-handoff', 'hard-lifecycle-extract'];
 const tasks = read(join(source, 'tasks.json'));
@@ -111,7 +114,7 @@ write(join(run, 'references.json'), references);
 const manifest = { schema_version: 1, comparison: strategy === 'owner-query-writer' ? 'deepseek-owner-sol-query-deepseek-writer' : editorSelector ? 'sol-owner-deepseek-editor' : 'adaptive-sol-only-development', exploratory: true, strategy, selector,
   editor_selector: editorSelector, models, optimization, query_mode: queryMode,
   plans_from: plansFrom ? basename(plansFrom) : null, briefs_from: briefsFrom ? basename(briefsFrom) : null,
-  ...(strategy === 'owner-query-writer' ? { roles: { implementation_owner: editorSelector, query_planner: selector, writer: editorSelector } } : {}),
+  ...(runRoles ? { roles: runRoles } : {}),
   replay_of: replay ? basename(replay) : null,
   created_at: new Date().toISOString(), source_run: basename(source), source_manifest_hash: hash(readFileSync(join(source, 'manifest.json'))),
   revision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim(), node: process.version,

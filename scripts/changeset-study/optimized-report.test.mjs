@@ -118,14 +118,16 @@ test('a frozen rejected planning attempt funds replay allocation without qualify
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('brief-only reuse allocates inherited owner work once while new query and catalog generation remain incurred', () => {
+// Run alone: node --test --test-name-pattern='brief-only reuse' scripts/changeset-study/optimized-report.test.mjs
+test('brief-only reuse preserves owner selector and allocates owner work while new query and catalog generation remain incurred', () => {
   const root = mkdtempSync(join(tmpdir(), 'optimized-report-brief-'));
-  const sol = 'openai-codex/gpt-6.1-sol:low', ds = 'deepseek/deepseek-flash';
+  const sol = 'openai-codex/gpt-6.1-sol:low', ds = 'deepseek/deepseek-flash:off', low = 'deepseek/deepseek-flash:low';
   const plan = { operations: [{ id: 'same-plan' }] }, brief = 'Shared owner brief.\n';
   const write = (p, value) => writeFileSync(p, typeof value === 'string' ? value : JSON.stringify(value));
-  function make(name, { briefSource = null, planningSource = null, actual = 3000, query = 100, context = 2 } = {}) {
+  function make(name, { briefSource = null, planningSource = null, actual = 3000, query = 100, context = 2, writer = ds, owner = null } = {}) {
     const run = join(root, name), dir = join(run, '000-case'); mkdirSync(dir, { recursive: true });
-    write(join(run, 'manifest.json'), { strategy: 'owner-query-writer', selector: sol, editor_selector: ds, optimization: 'none', query_mode: 'catalog',
+    write(join(run, 'manifest.json'), { strategy: 'owner-query-writer', selector: sol, editor_selector: writer, optimization: 'none', query_mode: 'catalog',
+      ...(owner ? { roles: { implementation_owner: owner, query_planner: sol, writer } } : {}),
       schedule: ['case'], plans_from: planningSource?.run ?? null, briefs_from: planningSource ? null : briefSource?.run ?? null });
     write(join(dir, 'candidate.json'), '{}'); write(join(dir, 'implementation-brief.md'), brief);
     write(join(dir, 'raw-plan.json'), plan); write(join(dir, 'plan-0.json'), plan);
@@ -133,10 +135,10 @@ test('brief-only reuse allocates inherited owner work once while new query and c
     const catalog = { schema_version: 1, files: [] };
     if (!planningSource) write(join(dir, 'catalog.json'), catalog);
     const stages = planningSource ? ['editor'] : briefSource ? ['planning', 'editor'] : ['implementation-planning', 'planning', 'editor'];
-    const requests = stages.map((stage, i) => ({ stage, selector: stage === 'planning' ? sol : ds, reservation: `${name}-${i}`, ...(stage === 'planning' ? { context: { messages: [{ role: 'user', content: JSON.stringify({ catalog }) }] } } : {}) }));
+    const requests = stages.map((stage, i) => ({ stage, selector: stage === 'planning' ? sol : stage === 'implementation-planning' ? ds : writer, reservation: `${name}-${i}`, ...(stage === 'planning' ? { context: { messages: [{ role: 'user', content: JSON.stringify({ catalog }) }] } } : {}) }));
     const receipts = requests.map(q => ({ ...q, elapsed_ms: 1000, usage: { input: 4, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 5, cost: { total: 0.01 } } }));
     write(join(dir, 'requests.jsonl'), requests.map(JSON.stringify).join('\n')); write(join(dir, 'receipts.jsonl'), receipts.map(JSON.stringify).join('\n'));
-    const r = { task: 'case', task_hash: 'task', selector: sol, editor_selector: ds, optimization: 'none', query_mode: 'catalog',
+    const r = { task: 'case', task_hash: 'task', selector: sol, editor_selector: writer, optimization: 'none', query_mode: 'catalog',
       ...(!planningSource ? { catalog_hash: hash(readFileSync(join(dir, 'catalog.json'))) } : {}),
       brief_source: briefSource, planning_source: planningSource, process_elapsed_ms: actual * 1000, implementation_brief_hash: hash(brief), candidate_hash: hash('{}'),
       executions: [{ ok: true, plan_sha256: hash(JSON.stringify(plan)), operations: [{ executor: 'simple', status: 'passed' }] }],
@@ -153,6 +155,9 @@ test('brief-only reuse allocates inherited owner work once while new query and c
     const planSource = { run: borrowed.run, cell: borrowed.cell, result_hash: borrowed.result_hash, plan_artifact: 'raw-plan.json',
       plan_hash: hash(readFileSync(join(root, borrowed.run, borrowed.cell, 'raw-plan.json'))) };
     make('full-replay', { briefSource: borrowed, planningSource: planSource, actual: 8 });
+    make('separate-original-roles', { writer: low, owner: ds });
+    make('low-writer-replay', { briefSource: borrowed, planningSource: planSource, actual: 8, writer: low, owner: ds });
+    make('wrong-owner-replay', { briefSource: borrowed, planningSource: planSource, actual: 8, writer: low, owner: low });
     let report = buildReport(root), c = report.runs.find(r => r.run === 'catalog').cells[0];
     assert.equal(c.integrity_valid, true); assert.equal(c.brief_source_valid, true); assert.equal(c.owner_role_valid, true);
     assert.equal(c.borrowed_planning_scope, 'owner-only'); assert.equal(c.phase_seconds.owner, 0);
@@ -169,6 +174,18 @@ test('brief-only reuse allocates inherited owner work once while new query and c
     const replay = report.runs.find(r => r.run === 'full-replay').cells[0];
     assert.equal(replay.integrity_valid, true); assert.equal(replay.allocated.seconds, 25, 'full plan replay inherits owner plus donor query/context once');
     assert.equal(replay.allocated.model_usage.calls, 3); assert.equal(replay.allocated_planning.query_context_seconds, 3);
+    const originalRoles = report.runs.find(r => r.run === 'separate-original-roles').cells[0];
+    assert.equal(originalRoles.integrity_valid, true); assert.equal(originalRoles.owner_selector, ds);
+    assert.equal(originalRoles.model_usage_by_stage.owner.calls, 1); assert.equal(originalRoles.owner_role_valid, true);
+    const lowReplay = report.runs.find(r => r.run === 'low-writer-replay').cells[0];
+    assert.equal(lowReplay.integrity_valid, true); assert.equal(lowReplay.provider_routing_valid, true);
+    assert.equal(lowReplay.owner_selector, ds); assert.equal(lowReplay.editor_selector, low);
+    assert.equal(lowReplay.owner_role_valid, true); assert.equal(lowReplay.brief_source_valid, true);
+    assert.equal(lowReplay.allocated.seconds, 25); assert.equal(lowReplay.allocated.model_usage.calls, 3);
+    const wrongOwner = report.runs.find(r => r.run === 'wrong-owner-replay').cells[0];
+    assert.equal(wrongOwner.integrity_valid, false); assert.equal(wrongOwner.brief_source_valid, false);
+    assert.equal(wrongOwner.owner_role_valid, false); assert.equal(wrongOwner.allocated.model_usage, null);
+    assert.equal(wrongOwner.owner_selector, low);
     const donorDir = join(root, 'donor', '000-case');
     write(join(donorDir, 'implementation-brief.md'), 'tampered');
     report = buildReport(root); c = report.runs.find(r => r.run === 'catalog').cells[0];
