@@ -130,11 +130,14 @@ test('brief-only reuse allocates inherited owner work once while new query and c
     write(join(dir, 'candidate.json'), '{}'); write(join(dir, 'implementation-brief.md'), brief);
     write(join(dir, 'raw-plan.json'), plan); write(join(dir, 'plan-0.json'), plan);
     write(join(dir, 'job.json'), { briefSource, planningSource });
+    const catalog = { schema_version: 1, files: [] };
+    if (!planningSource) write(join(dir, 'catalog.json'), catalog);
     const stages = planningSource ? ['editor'] : briefSource ? ['planning', 'editor'] : ['implementation-planning', 'planning', 'editor'];
-    const requests = stages.map((stage, i) => ({ stage, selector: stage === 'planning' ? sol : ds, reservation: `${name}-${i}` }));
+    const requests = stages.map((stage, i) => ({ stage, selector: stage === 'planning' ? sol : ds, reservation: `${name}-${i}`, ...(stage === 'planning' ? { context: { messages: [{ role: 'user', content: JSON.stringify({ catalog }) }] } } : {}) }));
     const receipts = requests.map(q => ({ ...q, elapsed_ms: 1000, usage: { input: 4, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 5, cost: { total: 0.01 } } }));
     write(join(dir, 'requests.jsonl'), requests.map(JSON.stringify).join('\n')); write(join(dir, 'receipts.jsonl'), receipts.map(JSON.stringify).join('\n'));
     const r = { task: 'case', task_hash: 'task', selector: sol, editor_selector: ds, optimization: 'none', query_mode: 'catalog',
+      ...(!planningSource ? { catalog_hash: hash(readFileSync(join(dir, 'catalog.json'))) } : {}),
       brief_source: briefSource, planning_source: planningSource, process_elapsed_ms: actual * 1000, implementation_brief_hash: hash(brief), candidate_hash: hash('{}'),
       executions: [{ ok: true, plan_sha256: hash(JSON.stringify(plan)), operations: [{ executor: 'simple', status: 'passed' }] }],
       stages: [{ name: 'implementation-planning', elapsed_ms: briefSource || planningSource ? 0 : 10000 },
@@ -187,5 +190,140 @@ test('brief-only reuse allocates inherited owner work once while new query and c
     }
     c = buildReport(root).runs.find(r => r.run === 'catalog').cells[0];
     assert.equal(c.brief_source_valid, false); assert.equal(c.allocated.seconds, null, 'a Sol request cannot be inherited as DeepSeek owner work');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// Run alone: node --test --test-name-pattern='lookup provenance' scripts/changeset-study/optimized-report.test.mjs
+test('lookup provenance verifies frozen source, rejected lookups and planner call caps without promoting failed plans', () => {
+  const root = mkdtempSync(join(tmpdir(), 'optimized-report-lookup-'));
+  const sol = 'openai-codex/gpt-6.1-sol:low', ds = 'deepseek/deepseek-flash:off';
+  const write = (path, value) => writeFileSync(path, typeof value === 'string' ? value : JSON.stringify(value));
+  const task = { id: 'case', spec: 'Owner contract', files: { 'support.mjs': '// Fixture header\nexport function prepare() { return 1; }\n' } };
+  const brief = 'Unchanged settled owner brief.\n', plan = { schema_version: 1, operations: [{ id: 'one' }] };
+  const catalog = { schema_version: 1, files: [{ path: 'support.mjs', exists: true }] };
+  function make(name, mode) {
+    const directory = join(root, name, '000-case'); mkdirSync(directory, { recursive: true });
+    write(join(root, name, 'manifest.json'), { strategy: 'owner-query-writer', selector: sol, editor_selector: ds,
+      optimization: 'none', query_mode: 'catalog-lookup', schedule: ['case'] });
+    write(join(directory, 'job.json'), { task }); write(join(directory, 'candidate.json'), '{}');
+    write(join(directory, 'implementation-brief.md'), brief); write(join(directory, 'catalog.json'), catalog);
+    const input = { implementation_brief: brief, catalog, file_tree: Object.keys(task.files), protected_files: [] };
+    const requested = [{ path: mode === 'rejected' ? 'missing.mjs' : 'support.mjs', whole: true }];
+    const resolved = mode === 'rejected' ? { ok: false, error: 'needs discovery: unknown frozen source path', request_index: 0, matches: null, candidates: [] }
+      : { schema_version: 1, offset_units: 'utf16-code-units', source_characters: task.files['support.mjs'].length,
+        snippets: [{ request_index: 0, path: 'support.mjs', request: requested[0], source_hash: hash(task.files['support.mjs']),
+          source_start: 0, source_end: task.files['support.mjs'].length, start: null, end: null, text: task.files['support.mjs'] }] };
+    const requests = [], responses = [];
+    function call(stage, selector, packet, response) {
+      const reservation = `${name}-${requests.length}`;
+      requests.push({ reservation, stage, selector, context: { systemPrompt: 'Planner', messages: [{ role: 'user', content: JSON.stringify(packet) }] } });
+      if (response !== undefined) responses.push({ reservation, stage, response: { content: [{ type: 'text', text: typeof response === 'string' ? response : JSON.stringify(response) }] } });
+    }
+    call('implementation-planning', ds, { task: 'owner only' }, brief);
+    if (mode === 'resolved') call('planning', sol, input, '{"source_requests":[]} extra text');
+    call('planning', sol, input, mode === 'direct' ? plan : mode === 'malformed' ? 'invalid JSON' : { source_requests: requested });
+    if (mode === 'resolved') call('planning', sol, { ...input, source_requests: requested, source_lookup: resolved }, plan);
+    const completed = ['resolved', 'direct'].includes(mode);
+    if (completed) call('editor', ds, {}, {});
+    write(join(directory, 'requests.jsonl'), requests.map(JSON.stringify).join('\n'));
+    write(join(directory, 'responses.jsonl'), responses.map(JSON.stringify).join('\n'));
+    write(join(directory, 'receipts.jsonl'), requests.map(request => JSON.stringify({ reservation: request.reservation, stage: request.stage, selector: request.selector,
+      elapsed_ms: 1000, usage: { input: 4, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 5, cost: { total: 0.01 } } })).join('\n'));
+    if (completed) { write(join(directory, 'raw-plan.json'), plan); write(join(directory, 'plan-0.json'), plan); }
+    const result = { task: 'case', task_hash: hash(JSON.stringify(task)), selector: sol, editor_selector: ds, query_mode: 'catalog-lookup', optimization: 'none',
+      process_elapsed_ms: 5000, implementation_brief_hash: hash(brief), candidate_hash: hash('{}'), catalog_hash: hash(readFileSync(join(directory, 'catalog.json'))),
+      executions: completed ? [{ ok: true, plan_sha256: hash(JSON.stringify(plan)), operations: [{ executor: 'simple', status: 'passed' }] }] : [],
+      stages: [{ name: 'implementation-planning', elapsed_ms: 1000 }, { name: 'planning', elapsed_ms: 1000 }] };
+    if (['resolved', 'rejected'].includes(mode)) {
+      write(join(directory, 'source-requests.json'), requested); write(join(directory, 'source-lookup.json'), resolved);
+      result.source_requests_hash = hash(readFileSync(join(directory, 'source-requests.json')));
+      result.source_lookup_hash = hash(readFileSync(join(directory, 'source-lookup.json')));
+      if (mode === 'resolved') { result.source_lookup_characters = resolved.source_characters; result.query_format_recoveries = [{ after_call: 1, error: 'Unexpected extra text' }]; }
+    }
+    write(join(directory, 'result.json'), result);
+    return directory;
+  }
+  try {
+    const directory = make('resolved', 'resolved'); make('rejected', 'rejected'); make('direct', 'direct'); make('malformed', 'malformed');
+    const cell = name => buildReport(root).runs.find(run => run.run === name).cells[0];
+    let valid = cell('resolved');
+    assert.equal(valid.integrity_valid, true);
+    assert.equal(valid.catalog_evidence.provenance_valid, true);
+    assert.equal(valid.source_lookup_evidence.provenance_valid, true);
+    assert.equal(valid.source_lookup_evidence.successful_lookup, true);
+    assert.equal(valid.source_lookup_evidence.status, 'resolved');
+    assert.equal(valid.source_lookup_characters, task.files['support.mjs'].length);
+    assert.equal(valid.query_call_count, 3); assert.equal(valid.query_call_cap, 3);
+    assert.deepEqual(valid.query_format_recoveries, [{ after_call: 1, error: 'Unexpected extra text' }]);
+    const rejected = cell('rejected');
+    assert.equal(rejected.source_lookup_evidence.provenance_valid, true);
+    assert.equal(rejected.source_lookup_evidence.status, 'rejected');
+    assert.equal(rejected.source_lookup_evidence.successful_lookup, false);
+    assert.equal(rejected.application_complete, false); assert.equal(rejected.integrity_valid, false);
+    assert.equal(cell('direct').source_lookup_evidence, null);
+    assert.equal(cell('direct').integrity_valid, true);
+    assert.equal(cell('malformed').source_lookup_evidence, null);
+    assert.equal(cell('malformed').application_complete, false);
+
+    const lookupPath = join(directory, 'source-lookup.json'), resultPath = join(directory, 'result.json');
+    const originalLookup = readFileSync(lookupPath), originalResult = readFileSync(resultPath);
+    const requestArtifact = join(directory, 'source-requests.json'), originalRequestArtifact = readFileSync(requestArtifact);
+    const strippedLookup = JSON.parse(originalResult);
+    delete strippedLookup.source_requests_hash; delete strippedLookup.source_lookup_hash; delete strippedLookup.source_lookup_characters;
+    rmSync(requestArtifact); rmSync(lookupPath); write(resultPath, strippedLookup);
+    assert.equal(cell('resolved').source_lookup_evidence.provenance_valid, false, 'retained lookup packets require artifacts even when result fields were removed');
+    assert.equal(cell('resolved').integrity_valid, false);
+    writeFileSync(requestArtifact, originalRequestArtifact); writeFileSync(lookupPath, originalLookup); writeFileSync(resultPath, originalResult);
+    const catalogPath = join(directory, 'catalog.json'), originalCatalog = readFileSync(catalogPath);
+    const strippedCatalog = JSON.parse(originalResult); delete strippedCatalog.catalog_hash;
+    rmSync(catalogPath); write(resultPath, strippedCatalog);
+    assert.equal(cell('resolved').catalog_evidence.provenance_valid, false, 'catalog query packets require catalog artifact and result hash');
+    assert.equal(cell('resolved').integrity_valid, false);
+    writeFileSync(catalogPath, originalCatalog); writeFileSync(resultPath, originalResult);
+
+    const originalRequestBytes = readFileSync(join(directory, 'requests.jsonl'));
+    for (const change of [
+      lookup => { lookup.snippets[0].text = 'corrupted source'; },
+      lookup => { lookup.snippets[0].source_hash = 'wrong'; },
+      lookup => { lookup.snippets[0].source_start = 1; },
+      lookup => { lookup.snippets[0].start = 'invented anchor'; },
+      lookup => { lookup.snippets[0].request.path = 'other.mjs'; },
+      lookup => { lookup.source_characters++; },
+      lookup => { lookup.snippets[0] = null; },
+    ]) {
+      const bad = JSON.parse(originalLookup); change(bad); write(lookupPath, bad);
+      const result = JSON.parse(originalResult); result.source_lookup_hash = hash(readFileSync(lookupPath)); write(resultPath, result);
+      // Keep recorded followup input consistent with the corrupted artifact so the
+      // independent frozen-source checks, rather than packet identity alone, reject it.
+      const matchingPackets = originalRequestBytes.toString('utf8').split('\n').map(JSON.parse);
+      for (const packet of matchingPackets) {
+        const input = JSON.parse(packet.context.messages[0].content);
+        if (input.source_lookup) { input.source_lookup = bad; packet.context.messages[0].content = JSON.stringify(input); }
+      }
+      write(join(directory, 'requests.jsonl'), matchingPackets.map(JSON.stringify).join('\n'));
+
+      const changed = cell('resolved');
+      assert.equal(changed.source_lookup_evidence.provenance_valid, false);
+      assert.equal(changed.integrity_valid, false);
+    }
+    writeFileSync(lookupPath, originalLookup); writeFileSync(resultPath, originalResult); writeFileSync(join(directory, 'requests.jsonl'), originalRequestBytes);
+    for (const field of ['source_lookup_hash', 'source_requests_hash']) {
+      const badHash = JSON.parse(originalResult); badHash[field] = 'wrong'; write(resultPath, badHash);
+      assert.equal(cell('resolved').source_lookup_evidence.provenance_valid, false);
+    }
+    writeFileSync(resultPath, originalResult);
+    const responsePath = join(directory, 'responses.jsonl'), originalResponses = readFileSync(responsePath);
+    write(responsePath, '{partial response');
+    assert.equal(cell('resolved').source_lookup_evidence.provenance_valid, false);
+    writeFileSync(responsePath, originalResponses);
+    write(join(root, 'direct/000-case/responses.jsonl'), '{irrelevant historical partial response');
+    assert.equal(cell('direct').integrity_valid, true, 'no lookup does not add a new response-file requirement');
+    const requestsPath = join(directory, 'requests.jsonl'), receiptsPath = join(directory, 'receipts.jsonl');
+    const requests = readFileSync(requestsPath, 'utf8').split('\n').map(JSON.parse), receipts = readFileSync(receiptsPath, 'utf8').split('\n').map(JSON.parse);
+    const extra = { ...requests[1], reservation: 'extra-query' };
+    requests.splice(4, 0, extra); receipts.splice(4, 0, { ...receipts[1], reservation: 'extra-query' });
+    write(requestsPath, requests.map(JSON.stringify).join('\n')); write(receiptsPath, receipts.map(JSON.stringify).join('\n'));
+    valid = cell('resolved'); assert.equal(valid.query_call_count, 4); assert.equal(valid.integrity_valid, false);
+    assert.equal(valid.validation.find(check => check.check === 'catalog-lookup planning call cap and stages').ok, false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

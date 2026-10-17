@@ -29,8 +29,10 @@ Sol-only runs. See the [results](owner-editor-results.md) and
 The current [three-role optimizer study](OPTIMIZER-FINDINGS.md) separates a DeepSeek
 implementation owner, Sol query planner and DeepSeek writers. Deterministic grouping
 halved writer calls on calibration; no treatment completed all three cases. Jev
-selected the same plans as fixed policy, and the first catalog-only queries blocked
-the larger cases. See the [offline results visual](optimized-results.html),
+selected the same plans as fixed policy. Through run 10, bounded source lookup
+enabled completed writing for both larger cases in run 09, but downstream checks
+failed; no configuration delivered all three. Fresh-owner run 11 is planned and
+unmeasured. See the [offline results visual](optimized-results.html),
 [measurements](optimized-results.md), [JSON evidence](optimized-results.json) and
 [comparison protocol](OPTIMIZER-PROTOCOL.md). This research is still in progress.
 

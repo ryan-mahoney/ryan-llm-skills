@@ -3,7 +3,8 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { hash } from '../changeset/workspace.mjs';
+import { hash, safePath } from '../changeset/workspace.mjs';
+import { parseJson } from '../changeset/models.mjs';
 import { equivalentCost, costPolicy } from '../changeset-research/cost.mjs';
 
 const read = p => JSON.parse(readFileSync(p, 'utf8'));
@@ -41,6 +42,92 @@ function routingUsage(r) {
     tokens: u?.totalTokens ?? (Number.isFinite(input) && Number.isFinite(output) ? input + output : routing.attempted ? null : 0),
     estimated_usd: spend?.estimatedUsd ?? (routing.attempted ? null : 0),
     fallback: routing.fallback ?? null, answer_ok: routing.answer?.ok ?? null };
+}
+
+function sameData(a, b) {
+  const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
+    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+  return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
+}
+function requestInput(request) {
+  try {
+    const message = request.context?.messages?.filter(message => message.role === 'user').at(-1);
+    const content = typeof message?.content === 'string' ? message.content : message?.content?.map(part => part.text ?? '').join('');
+    return parseJson(content ?? '');
+  } catch { return null; }
+}
+function modelValue(response) {
+  try { return parseJson(response.response.content.filter(part => part.type === 'text').map(part => part.text).join('\n')); }
+  catch { return null; }
+}
+function queryEvidence({ directory, result, job, requests, responses, verify, artifactHash, queryMode }) {
+  const queries = requests.filter(request => phase(request.stage) === 'query');
+  const artifact = name => { try { return existsSync(join(directory, name)) ? read(join(directory, name)) : null; } catch { return null; } };
+  const catalogHash = artifactHash('catalog.json'), catalogChecks = [];
+  const checkCatalog = (ok, name) => { catalogChecks.push(Boolean(ok)); verify(ok, name); };
+  if (catalogHash !== null || result.catalog_hash != null || (queryMode?.startsWith('catalog') && queries.length > 0)) {
+    checkCatalog(catalogHash !== null && catalogHash === result.catalog_hash, 'catalog artifact hash');
+    const catalog = artifact('catalog.json');
+    checkCatalog(catalog?.schema_version === 1 && Array.isArray(catalog?.files), 'catalog artifact shape');
+    checkCatalog(queries.every(request => sameData(requestInput(request)?.catalog, catalog)), 'query packets retain the catalog artifact');
+  }
+  const requestHash = artifactHash('source-requests.json'), lookupHash = artifactHash('source-lookup.json');
+  const packetLookup = queries.some(query => {
+    const input = requestInput(query);
+    return Object.hasOwn(input ?? {}, 'source_lookup') || Object.hasOwn(input ?? {}, 'source_requests');
+  });
+  const lookupPresent = packetLookup || requestHash !== null || lookupHash !== null || result.source_requests_hash != null || result.source_lookup_hash != null || result.source_lookup_characters != null;
+  let lookup = null;
+  if (lookupPresent) {
+    const checks = [], check = (ok, name) => { checks.push(Boolean(ok)); verify(ok, name); };
+    check(requestHash !== null && requestHash === result.source_requests_hash, 'source lookup request artifact hash');
+    check(lookupHash !== null && lookupHash === result.source_lookup_hash, 'source lookup result artifact hash');
+    const requested = artifact('source-requests.json'), resolved = artifact('source-lookup.json');
+    let responseRows;
+    try { responseRows = responses(); } catch { responseRows = []; }
+    const origins = responseRows.filter(response => queries.some(query => query.reservation === response.reservation) && sameData(modelValue(response)?.source_requests, requested));
+    check(origins.length > 0 && requested !== null, 'source requests match an original query response');
+    check(job.task && hash(JSON.stringify(job.task)) === result.task_hash, 'lookup source task hash');
+    const followups = queries.filter(request => Object.hasOwn(requestInput(request) ?? {}, 'source_lookup'));
+    check(followups.every(request => sameData(requestInput(request).source_requests, requested) && sameData(requestInput(request).source_lookup, resolved)), 'source lookup followup packets retain exact requests and result');
+    const rejected = resolved?.ok === false;
+    const snippetEvidence = [];
+    if (rejected) {
+      check(typeof resolved.error === 'string' && resolved.error.length > 0 && !Object.hasOwn(resolved, 'snippets') && result.source_lookup_characters == null && followups.length === 0, 'rejected lookup is explicit and supplies no successful source');
+    } else {
+      check(resolved?.schema_version === 1 && resolved.offset_units === 'utf16-code-units' && Array.isArray(requested) && requested.length > 0 && requested.length <= 8 && Array.isArray(resolved?.snippets) && resolved.snippets.length === requested.length, 'successful lookup batch shape');
+      let characters = 0;
+      for (const [index, snippet] of (Array.isArray(resolved?.snippets) ? resolved.snippets : []).entries()) {
+        let pathSafe = true;
+        try { safePath(snippet?.path); } catch { pathSafe = false; }
+        const source = pathSafe && Object.hasOwn(job.task?.files ?? {}, snippet.path) ? job.task.files[snippet.path] : null;
+        check(snippet?.request_index === index && sameData(snippet?.request, requested?.[index]) && snippet?.path === requested?.[index]?.path, `lookup snippet ${index} request identity`);
+        check(typeof source === 'string' && snippet?.source_hash === hash(source), `lookup snippet ${index} whole-file source hash`);
+        const offsets = typeof source === 'string' && Number.isInteger(snippet?.source_start) && Number.isInteger(snippet?.source_end) && snippet.source_start >= 0 && snippet.source_end > snippet.source_start && snippet.source_end <= source.length;
+        check(offsets && snippet?.text === source.slice(snippet.source_start, snippet.source_end), `lookup snippet ${index} exact source slice and offsets`);
+        const endpoint = (anchor, offset, boundary) => typeof source === 'string' && (anchor === null ? offset === boundary :
+          typeof anchor === 'string' && anchor.length > 0 && anchor.length <= 160 && source.indexOf(anchor) === offset && source.lastIndexOf(anchor) === offset);
+        check(offsets && endpoint(snippet.start, snippet.source_start, 0) && endpoint(snippet.end, snippet.source_end, source.length), `lookup snippet ${index} unique source anchors`);
+        if (typeof snippet?.text === 'string') characters += snippet.text.length;
+        snippetEvidence.push({ request_index: snippet?.request_index ?? null, path: snippet?.path ?? null, source_hash: snippet?.source_hash ?? null,
+          source_start: snippet?.source_start ?? null, source_end: snippet?.source_end ?? null, start: snippet?.start ?? null, end: snippet?.end ?? null,
+          text_hash: typeof snippet?.text === 'string' ? hash(snippet.text) : null });
+      }
+      check(Number.isInteger(resolved?.source_characters) && resolved.source_characters === characters && characters <= 64000 && result.source_lookup_characters === characters, 'lookup character counts and batch cap');
+    }
+    lookup = { status: rejected ? 'rejected' : Array.isArray(resolved?.snippets) ? 'resolved' : 'invalid', provenance_valid: checks.every(Boolean), successful_lookup: !rejected && checks.every(Boolean), request_count: Array.isArray(requested) ? requested.length : null,
+      source_characters: rejected ? null : resolved?.source_characters ?? null, error: rejected ? resolved.error : null,
+      request_origin_reservation: origins[0]?.reservation ?? null, requests_hash: requestHash, result_hash: lookupHash, snippets: snippetEvidence };
+  }
+  const recoveries = result.query_format_recoveries ?? [];
+  const lookupMode = (queryMode ?? 'discovery') === 'catalog-lookup';
+  if (lookupMode) {
+    verify(queries.length <= 3 && queries.every(query => query.stage === 'planning'), 'catalog-lookup planning call cap and stages');
+    verify(Array.isArray(recoveries) && recoveries.length <= 1 && recoveries.every(recovery => Number.isInteger(recovery.after_call) && recovery.after_call >= 1 && recovery.after_call <= queries.length && recovery.after_call < 3 && typeof recovery.error === 'string'), 'catalog-lookup bounded format recovery metadata');
+  }
+  return { catalog_hash: catalogHash, catalog_evidence: catalogChecks.length ? { recorded_hash: result.catalog_hash ?? null, provenance_valid: catalogChecks.every(Boolean) } : null,
+    source_requests_hash: requestHash, source_lookup_hash: lookupHash, source_lookup_characters: result.source_lookup_characters ?? null,
+    source_lookup_evidence: lookup, query_format_recoveries: recoveries, query_format_recovery_count: Array.isArray(recoveries) ? recoveries.length : null, query_call_count: queries.length, query_call_cap: lookupMode ? 3 : null };
 }
 
 export function buildReport(runRoot) {
@@ -87,6 +174,7 @@ export function buildReport(runRoot) {
     const byStage = Object.fromEntries(phases.map(p => [p, usage(requests.filter(x => phase(x.stage) === p), receipts.filter(x => phase(x.stage) === p))]));
     const seconds = Object.fromEntries(phases.map(p => [p, sum((r.stages ?? []).filter(x => phase(x.name) === p).map(x => x.elapsed_ms)) / 1000]));
     const job = existsSync(join(directory, 'job.json')) ? read(join(directory, 'job.json')) : {};
+    const evidence = queryEvidence({ directory, result: r, job, requests, responses: () => rows(join(directory, 'responses.jsonl')), verify, artifactHash, queryMode: m.query_mode });
     const source = r.planning_source ?? job.planningSource ?? null;
     const briefSource = r.brief_source ?? job.briefSource ?? null;
     const queryContextSeconds = sum((r.stages ?? []).filter(s => s.name === 'query-context').map(s => s.elapsed_ms)) / 1000;
@@ -153,7 +241,7 @@ export function buildReport(runRoot) {
     const visible = (r.checks ?? []).at(-1)?.visible;
     const candidateTests = visible?.candidate_tests ?? [];
     const applicationComplete = r.executions?.at(-1)?.ok === true;
-    const output = { task: r.task ?? cellName.replace(/^\d+-/, ''), cell: key, optimization: m.optimization ?? 'none', query_mode: m.query_mode ?? 'discovery', editor_selector: m.editor_selector, task_hash: r.task_hash,
+    const output = { ...evidence, task: r.task ?? cellName.replace(/^\d+-/, ''), cell: key, optimization: m.optimization ?? 'none', query_mode: m.query_mode ?? 'discovery', editor_selector: m.editor_selector, task_hash: r.task_hash,
       application_complete: applicationComplete, visible_accepted: r.visible_accepted ?? visible?.ok ?? null,
       candidate_tests: { count: candidateTests.length, failed: candidateTests.filter(t => t.ok !== true).length },
       base_visible_accepted: visible?.base_ok ?? visible?.visible_check_ok ?? null,
