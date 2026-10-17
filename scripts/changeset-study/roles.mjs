@@ -12,6 +12,14 @@ its observable assertions and concrete fixture invocation/setup/cleanup. If test
 forbidden, say so. Cover the whole step without broadening it. For pure moves, name
 the source/destination, moved symbols, preserved receiver and injected dependencies.
 
+Before handing off, check that every concrete recipe agrees with the source facts
+and stated preservation requirements. Resolve relative file paths from the module
+that will contain the expression, including test modules; verify the resulting path
+against the supplied file tree and existing path construction. Settle these mechanical
+details yourself. Do not leave alternatives, questions or instructions for the query
+planner to choose an implementation. If a requirement is genuinely unresolved, report
+that input gap explicitly rather than presenting an unsettled brief as ready.
+
 The query planner translates your decisions into small executable assignments and a
 dependency graph; it must not design the implementation or fill in missing behavioral
 decisions. Writers receive only their local assignment. Supply enough settled detail

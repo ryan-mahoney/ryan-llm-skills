@@ -318,3 +318,26 @@ Focused offline verification covers malformed replies before lookup, repeated fo
 failure, exhaustion of the shared correction allowance and provider errors. Jev's
 offline verification checkpoint returned incomplete-context fallback; the focused
 lookup integration passed in 647 ms. Broader tests remain operator-managed.
+
+## Protocol 11: regenerate settled owner briefs
+
+Run 10 completed calibration and extraction writing. Handoff stopped before dispatch
+because the reused owner brief supplied a test URL resolving outside the profile
+directory named by both the step and current runtime. The same brief asked the query
+planner to decide whether to correct that recipe. The query planner reported an input
+gap, as its role requires. Source-only diagnosis confirmed the mismatch; terminal test
+failures were not needed to identify it.
+
+Run all three original cases with fresh DeepSeek owner reasoning and the protocol 10
+query/writer backend. Do not reuse or manually patch the original briefs. Add a generic
+owner instruction to reconcile concrete recipes with existing source, resolve relative
+paths from the module containing the expression, and settle mechanical choices before
+handoff. Give the owner the original step and source only, with no prior candidates,
+briefs, query responses or downstream failures. There is no new owner feedback loop.
+
+Retain deterministic grouping, the same explicit selectors, one source lookup batch,
+the shared query correction allowance, local writer retry and outer checks. Count all
+fresh owner time, calls, tokens and charges. This is a new end-to-end exploratory
+treatment with new briefs and plans, not a paired replay isolating prompt effects.
+Earlier brief-reuse attempts remain unchanged. The separate divergent prototypes have
+offline evidence only; their live comparisons remain queued after this goal.
