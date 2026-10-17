@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, statSync, symlinkSync, chmodSync, existsSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Workspace, hash } from './workspace.mjs';
-import { compile, execute } from './engine.mjs';
+import { Workspace, hash, ambiguousAnchorMessage } from './workspace.mjs';
+import { compile, execute, transform } from './engine.mjs';
 const plan = operations => ({ schema_version: 1, operations });
 const op = (id, path, edits, extra = {}) => ({ id, reads: [], writes: [path], depends_on: [], executor: 'deterministic', edits, ...extra });
 const replace = (path, search, text) => ({ kind: 'replace', path, search, text });
@@ -190,4 +190,12 @@ test('snapshot anti-dependencies let a writer start once its reader has started,
   const adapters = { simple: async ({ operation }) => { starts.push(operation.id); await new Promise(r => setTimeout(r, 50)); return { files: { [operation.writes[0]]: `// ${operation.id}\n` } }; } };
   const report = await execute(plan([model('first', 'x.mjs'), model('second', 'y.mjs', { reads: ['x.mjs'], depends_on: ['first'] })]), workspace, { adapters, antiDependencies: 'snapshot' });
   assert.equal(report.metrics.peak_concurrency, 1); assert.deepEqual(starts, ['first', 'second']);
+});
+
+// node --test --test-name-pattern='ambiguous anchor' scripts/changeset/engine.test.mjs
+test('an ambiguous anchor message names each match line and the text that follows it', () => {
+  const message = ambiguousAnchorMessage('a.mjs', 'const x', 'const x = 1;\nlet y;\nconst x2 = 2;\n');
+  assert.match(message, /matches 2 times/); assert.match(message, /line 1 followed by " = 1;/); assert.match(message, /line 3 followed by "2 = 2;/);
+  assert.match(ambiguousAnchorMessage('a.mjs', 'zzz', 'abc'), /not found/);
+  assert.throws(() => transform({ id: 'r', writes: ['a.mjs'], reads: [], edits: [{ kind: 'replace-range', path: 'a.mjs', start: 'const x', end: null, text: '' }] }, { 'a.mjs': 'const x = 1;\nconst x2 = 2;\n' }), /matches 2 times \(line 1 followed by/);
 });

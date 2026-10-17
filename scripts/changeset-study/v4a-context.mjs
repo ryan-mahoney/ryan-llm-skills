@@ -1,4 +1,5 @@
 import { validateFocusedPlan } from './focused-editors.mjs';
+import { ambiguousAnchorMessage } from '../changeset/workspace.mjs';
 
 export const V4A_SOURCE_LIMIT = 64000;
 
@@ -12,7 +13,7 @@ export function v4aInput(operation, files) {
     if (typeof text !== 'string') throw new Error(`Excerpt file missing: ${path}`);
     const anchor = (value, fallback) => {
       if (value === null) return fallback;
-      if (text.split(value).length !== 2) throw new Error(`Excerpt anchor must be unique: ${path}`);
+      if (text.split(value).length !== 2) throw new Error(`Excerpt anchor must be unique: ${ambiguousAnchorMessage(path, value, text)}`);
       return text.indexOf(value);
     };
     const a = anchor(start, 0), b = anchor(end, text.length);

@@ -128,3 +128,21 @@ export class Workspace {
     }
   }
 }
+
+// "Must be unique" alone sends a planner or writer back to guess. Name the match count,
+// the line of each match and the text that follows it, so the next attempt can extend
+// the anchor into something unique.
+export function anchorMatches(text, anchor, limit = 5) {
+  const rows = []; let at = text.indexOf(anchor);
+  while (at >= 0 && rows.length < limit) {
+    rows.push({ line: text.slice(0, at).split('\n').length, follows: JSON.stringify(text.slice(at + anchor.length, at + anchor.length + 40)) });
+    at = text.indexOf(anchor, at + 1);
+  }
+  return rows;
+}
+export function ambiguousAnchorMessage(path, anchor, text) {
+  const count = text.split(anchor).length - 1;
+  if (count === 0) return `Anchor not found in ${path}: ${JSON.stringify(anchor.slice(0, 80))}`;
+  const rows = anchorMatches(text, anchor);
+  return `Anchor must be unique in ${path}: ${JSON.stringify(anchor.slice(0, 80))} matches ${count} times (line ${rows.map(r => `${r.line} followed by ${r.follows}`).join('; line ')}); extend it with the text that follows the intended match.`;
+}

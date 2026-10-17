@@ -203,7 +203,7 @@ test('compose retry keeps the final syntax excerpt but omits stale part mapping 
 test('preflight rejects missing and oversized initial excerpts but leaves future source to staged execution', () => {
   const first = { ...operation(), context: [{ path: 'answer.mjs', start: 'missing', end: null }] };
   const later = { ...operation(), id: 'later', depends_on: ['answer'], context: [{ path: 'answer.mjs', start: 'future anchor', end: null }] };
-  assert.deepEqual(preflightFocusedPlan({ schema_version: 1, operations: [first, later] }, files), ['answer: Excerpt anchor must be unique: answer.mjs']);
+  assert.deepEqual(preflightFocusedPlan({ schema_version: 1, operations: [first, later] }, files), ['answer: Excerpt anchor must be unique: Anchor not found in answer.mjs: "missing"']);
   const oversized = { ...operation(), context: [{ path: 'answer.mjs', start: null, end: null }] };
   assert.deepEqual(preflightFocusedPlan({ schema_version: 1, operations: [oversized] }, { 'answer.mjs': 'x'.repeat(32001) }), ['answer: Focused source exceeds 32000 characters: answer']);
 });

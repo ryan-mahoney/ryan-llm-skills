@@ -1,5 +1,6 @@
 // Keep the complete specification with the planner; editors get bounded assignments.
 import { compile } from '../changeset/engine.mjs';
+import { ambiguousAnchorMessage } from '../changeset/workspace.mjs';
 import { compactContext } from './context-compact.mjs';
 
 export const focusedPacketRules = `Every operation must have exactly ONE writable file, plus:
@@ -70,7 +71,7 @@ export function focusedInput(operation, files, { parse } = {}) {
     if (typeof text !== 'string') throw new Error(`Excerpt file missing: ${path}`);
     const anchor = (value, fallback) => {
       if (value === null) return fallback;
-      if (text.split(value).length !== 2) throw new Error(`Excerpt anchor must be unique: ${path}`);
+      if (text.split(value).length !== 2) throw new Error(`Excerpt anchor must be unique: ${ambiguousAnchorMessage(path, value, text)}`);
       return text.indexOf(value);
     };
     const a = anchor(start, 0), b = anchor(end, text.length);

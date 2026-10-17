@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
-import { hash, safePath, Workspace } from './workspace.mjs';
+import { hash, safePath, Workspace, ambiguousAnchorMessage } from './workspace.mjs';
 
 const overlap = (a, b) => a === b || a.startsWith(b + '/') || b.startsWith(a + '/');
 const intersects = (a, b) => a.some(x => b.some(y => overlap(x, y)));
@@ -61,7 +61,8 @@ export function transform(op, context) {
   const range = part => {
     const text = read(safePath(part.path));
     const anchor = value => {
-      if (typeof value !== 'string' || !value || text.split(value).length !== 2) throw new Error(`Range anchor must be unique: ${part.path}`);
+      if (typeof value !== 'string' || !value) throw new Error(`Range anchor must be unique: ${part.path}`);
+      if (text.split(value).length !== 2) throw new Error(`Range anchor must be unique: ${ambiguousAnchorMessage(part.path, value, text)}`);
       return text.indexOf(value);
     };
     const start = anchor(part.start), end = part.end === null ? text.length : anchor(part.end);
