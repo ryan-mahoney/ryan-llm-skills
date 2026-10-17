@@ -9,6 +9,7 @@
 // package-fixture.mjs reexports this module, so makeWaveFixture is imported
 // from its own owner and only ever called inside bootLinuxWave (never at module
 // top level) to avoid a circular import at evaluation time.
+import { chmodSync, lstatSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { makeWaveFixture } from './package-fixture.mjs';
@@ -69,6 +70,16 @@ function coordinatorDiagnostics(coordinators) {
 function assignIfPresent(env, name, value) {
   if (value === undefined || value === null || value === '') return;
   env[name] = value;
+}
+
+// The kernel creates each overlay workdir's work/ subdirectory with mode 000. Node 22's
+// recursive rmSync tolerated that, but Node 24's does not and fails with EACCES, so give
+// the owner access to every directory before the fixture tree is removed.
+function grantOwnerAccess(path) {
+  const stat = lstatSync(path, { throwIfNoEntry: false });
+  if (!stat?.isDirectory()) return;
+  if ((stat.mode & 0o700) !== 0o700) chmodSync(path, stat.mode | 0o700);
+  for (const name of readdirSync(path)) grantOwnerAccess(join(path, name));
 }
 
 // Boot one real Linux wave case. Every owned identity is registered for
@@ -182,6 +193,7 @@ export async function bootLinuxWave(t, facts, options = {}) {
     }
     if (servicesClean && failures.length === 0 && fixture !== null) {
       try {
+        grantOwnerAccess(fixture.dir);
         await fixture.cleanup();
       } catch (error) {
         failures.push(`fixture cleanup: ${error && error.message ? error.message : String(error)}`);
