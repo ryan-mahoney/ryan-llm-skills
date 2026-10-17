@@ -19,6 +19,7 @@ import assert from 'node:assert/strict';
 import { bootLinuxWave, startupWindowStart } from './package-fixture.mjs';
 import { parseUsecProperty } from './wave-linux-duration.mjs';
 import { startCoordinator } from './wave-native-driver.mjs';
+import { isAdmittedWaveStartupReceipt } from './wave-native-oracles.mjs';
 import { collectLinuxRestartDiagnostics } from './wave-boundary-diagnostics.mjs';
 
 const GIB = 1024 ** 3;
@@ -767,17 +768,12 @@ function assertNoCallsAfterStartup(coordinator, provider, label) {
   const resultIds = new Set();
   for (const event of toolResultEnds(coordinator, 'spec_dispatch')) {
     if (event?.isError === true) continue;
-    const result = toolResultObject(event);
-    if (!result || typeof result !== 'object') continue;
-    // A successful startup is the actual admitted-running waves receipt
-    // (`waveReceipt`): execution 'waves' with the record's state, which admission
-    // marks 'running' on launch, plus durable identity/generation/width fields.
-    if (result.execution !== 'waves' || result.state !== 'running') continue;
-    if (typeof result.wave_id !== 'string' || result.wave_id.length === 0) continue;
-    if (typeof result.record_path !== 'string' || result.record_path.length === 0) continue;
-    if (!Number.isInteger(result.generation) || result.generation < 1) continue;
-    if (!Number.isInteger(result.admitted_width) || result.admitted_width <= 0) continue;
-    if (result.error || result.code) continue;
+    // A successful startup is the actual admitted waves receipt (`waveReceipt`):
+    // execution 'waves' plus durable identity/generation/width fields. Card
+    // step-013-subspec.md line49: a startup receipt may be running or already
+    // integrated, because the D startup returns an already-integrated recovered
+    // wave. The shared predicate keeps every identity/admission/error guard.
+    if (!isAdmittedWaveStartupReceipt(toolResultObject(event))) continue;
     const id = event?.toolCallId ?? event?.tool_call_id;
     if (typeof id === 'string') resultIds.add(id);
   }
@@ -941,6 +937,30 @@ async function runPromotionRestart(t, facts) {
   boot.coordinators.push(d);
   await d.ready;
   const integrated = await waitForWave(fixture, record => record.state === 'integrated', { label: 'recovered integrated' });
+  // The durable integrated record can be written before the coordinator's SDK
+  // tool completion is emitted, so the startup receipt must be observed rather
+  // than inferred: wait for D's actual spec_dispatch tool completion (no success
+  // or state is required here) before judging the post-startup window.
+  const dStartupEvent = await waitFor(() => toolResultEnds(d, 'spec_dispatch')[0],
+    { label: 'promotion-restart d spec_dispatch tool completion' });
+  const dStartupReceipt = toolResultObject(dStartupEvent) ?? {};
+  t.diagnostic(JSON.stringify({
+    ev: 'EV-14',
+    case: 'promotion-restart',
+    d_pid: d.pid ?? null,
+    d_tool_call_id: dStartupEvent?.toolCallId ?? dStartupEvent?.tool_call_id ?? null,
+    d_is_error: dStartupEvent?.isError ?? dStartupEvent?.error != null,
+    d_receipt: {
+      state: dStartupReceipt.state ?? null,
+      execution: dStartupReceipt.execution ?? null,
+      wave_id: dStartupReceipt.wave_id ?? null,
+      record_path: dStartupReceipt.record_path ?? null,
+      generation: dStartupReceipt.generation ?? null,
+      admitted_width: dStartupReceipt.admitted_width ?? null,
+      error: dStartupReceipt.error ?? null,
+      code: dStartupReceipt.code ?? null,
+    },
+  }));
   assert.equal(integrated.target?.promotion?.state, 'synced', 'the recovered promotion journal reaches synced');
   const hookLines = readFileSync(join(fixture.dir, 'hook.log'), 'utf8').split('\n').filter(Boolean);
   assert.equal(hookLines.length, 1, `the promotion hook records exactly one committed branch update: ${JSON.stringify(hookLines)}`);

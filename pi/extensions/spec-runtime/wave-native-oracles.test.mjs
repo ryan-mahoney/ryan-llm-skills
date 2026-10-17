@@ -7,7 +7,7 @@
 // `command_phase` records and records bound to other waves.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { integratedWaveAt, startupWindowStart, waveWorkerRuns } from './wave-native-oracles.mjs';
+import { integratedWaveAt, isAdmittedWaveStartupReceipt, startupWindowStart, waveWorkerRuns } from './wave-native-oracles.mjs';
 
 function waveRecord(transitions, extra = {}) {
   return { wave_id: 'wave-1', state: 'integrated', transitions, ...extra };
@@ -170,4 +170,105 @@ test('startupWindowStart returns -1 without a matching call or result', () => {
   ];
   assert.equal(startupWindowStart(requests, new Set(['call_start']), windowAccessors), -1);
   assert.equal(startupWindowStart([], new Set(['call_start']), windowAccessors), -1);
+});
+
+// Admitted startup receipt predicate (card step-013-subspec.md line 49). The
+// receipt may describe a fresh launch ('running') or a recovered wave that was
+// already integrated when the restart replayed it ('integrated'); every other
+// identity/admission/error guard stays mandatory for both states.
+function admittedReceipt(extra = {}) {
+  return {
+    execution: 'waves',
+    state: 'running',
+    wave_id: 'wave-1',
+    record_path: '/tmp/fixture/waves/wave-1.json',
+    generation: 1,
+    admitted_width: 2,
+    ...extra,
+  };
+}
+
+test('isAdmittedWaveStartupReceipt accepts running and integrated receipts', () => {
+  assert.equal(isAdmittedWaveStartupReceipt(admittedReceipt()), true);
+  assert.equal(isAdmittedWaveStartupReceipt(admittedReceipt({ state: 'integrated' })), true,
+    'a recovered already-integrated wave is an admitted startup');
+});
+
+test('isAdmittedWaveStartupReceipt rejects a non-object receipt', () => {
+  assert.equal(isAdmittedWaveStartupReceipt(null), false);
+  assert.equal(isAdmittedWaveStartupReceipt(undefined), false);
+  assert.equal(isAdmittedWaveStartupReceipt('{"state":"running"}'), false);
+  assert.equal(isAdmittedWaveStartupReceipt([]), false);
+});
+
+test('isAdmittedWaveStartupReceipt rejects a non-waves execution', () => {
+  assert.equal(isAdmittedWaveStartupReceipt(admittedReceipt({ execution: 'package' })), false);
+  assert.equal(isAdmittedWaveStartupReceipt(admittedReceipt({ execution: undefined })), false);
+});
+
+test('isAdmittedWaveStartupReceipt rejects every other state', () => {
+  for (const state of ['open', 'sealed', 'failed', 'killed', 'RUnning', '', undefined]) {
+    assert.equal(isAdmittedWaveStartupReceipt(admittedReceipt({ state })), false,
+      `state ${JSON.stringify(state)} is not an admitted startup`);
+  }
+});
+
+test('isAdmittedWaveStartupReceipt requires durable identity', () => {
+  assert.equal(isAdmittedWaveStartupReceipt(admittedReceipt({ wave_id: '' })), false);
+  assert.equal(isAdmittedWaveStartupReceipt(admittedReceipt({ wave_id: undefined })), false);
+  assert.equal(isAdmittedWaveStartupReceipt(admittedReceipt({ record_path: '' })), false);
+  assert.equal(isAdmittedWaveStartupReceipt(admittedReceipt({ record_path: undefined })), false);
+});
+
+test('isAdmittedWaveStartupReceipt requires an integer generation and admitted width', () => {
+  assert.equal(isAdmittedWaveStartupReceipt(admittedReceipt({ generation: 0 })), false);
+  assert.equal(isAdmittedWaveStartupReceipt(admittedReceipt({ generation: 1.5 })), false);
+  assert.equal(isAdmittedWaveStartupReceipt(admittedReceipt({ generation: undefined })), false);
+  assert.equal(isAdmittedWaveStartupReceipt(admittedReceipt({ admitted_width: 0 })), false);
+  assert.equal(isAdmittedWaveStartupReceipt(admittedReceipt({ admitted_width: 2.5 })), false);
+  assert.equal(isAdmittedWaveStartupReceipt(admittedReceipt({ admitted_width: undefined })), false);
+});
+
+test('isAdmittedWaveStartupReceipt rejects a receipt carrying an error or code', () => {
+  assert.equal(isAdmittedWaveStartupReceipt(admittedReceipt({ error: 'admission refused' })), false);
+  assert.equal(isAdmittedWaveStartupReceipt(admittedReceipt({ code: 'E_PACKAGE_OWNED' })), false);
+  assert.equal(isAdmittedWaveStartupReceipt(admittedReceipt({ state: 'integrated', code: 'E_RETRY' })), false);
+});
+
+// The predicate drives the real zero-call window: an integrated receipt opens
+// it through the same startupWindowStart proof, while failed and retried
+// receipts contribute no admitted id and therefore cannot open it.
+test('an integrated startup receipt opens the real call/result window', () => {
+  const events = [
+    { isError: true, toolCallId: 'call_failed', result: { execution: 'waves', state: 'running', code: 'E_RETRY' } },
+    { isError: false, toolCallId: 'call_retry', result: admittedReceipt({ state: 'integrated' }) },
+  ];
+  const admittedIds = new Set(events
+    .filter(event => event.isError !== true && isAdmittedWaveStartupReceipt(event.result))
+    .map(event => event.toolCallId));
+  assert.deepEqual([...admittedIds], ['call_retry'],
+    'only the integrated receipt is admitted; the failed receipt is excluded');
+  const requests = [
+    { messages: [{ role: 'user', content: 'startup' }], calls: [dispatchCall('call_failed')] },
+    { messages: [{ role: 'user', content: 'retry startup' }], calls: [dispatchCall('call_retry')] },
+    { messages: [startupResultMessage('call_retry')], calls: [] },
+  ];
+  assert.equal(startupWindowStart(requests, admittedIds, windowAccessors), 2,
+    'the integrated receipt opens the window at its replayed result');
+  assert.deepEqual(requests.slice(2).flatMap(requestCalls), [], 'the window itself is call-free');
+});
+
+test('failed and retried receipts cannot open the window', () => {
+  const requests = [
+    { messages: [{ role: 'user', content: 'startup' }], calls: [dispatchCall('call_failed')] },
+    { messages: [startupResultMessage('call_failed')], calls: [dispatchCall('call_retry')] },
+  ];
+  const results = [
+    { execution: 'waves', state: 'running', wave_id: 'wave-1', record_path: '/tmp/wave-1.json', generation: 1, admitted_width: 2, error: 'refused' },
+    { execution: 'waves', state: 'retrying', wave_id: 'wave-1', record_path: '/tmp/wave-1.json', generation: 1, admitted_width: 2 },
+  ];
+  const admittedIds = new Set(results.filter(isAdmittedWaveStartupReceipt).map(() => 'call_retry'));
+  assert.equal(admittedIds.size, 0, 'neither receipt passes the admitted predicate');
+  assert.equal(startupWindowStart(requests, admittedIds, windowAccessors), -1,
+    'no admitted id means no post-startup window');
 });

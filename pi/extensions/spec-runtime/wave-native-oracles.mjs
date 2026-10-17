@@ -91,6 +91,28 @@ export function startupWindowStart(requests, startupCallIds, { messagesFor, call
   return -1;
 }
 
+// Admitted startup receipt predicate (card step-013-subspec.md line 49).
+//
+// A startup dispatch is admitted when the coordinator's `waveReceipt` proves the
+// wave was actually launched or resumed: execution 'waves' plus durable identity
+// (wave_id, record_path), generation and admitted width, with no error or code.
+// The receipt's state may be 'running' (fresh admission) or 'integrated' (a
+// recovered wave that was already integrated when the restart replayed it: the
+// D startup returns an already-integrated recovered wave). Every other state is
+// not an admitted startup, and the identity/admission/error guards stay
+// mandatory for both states. Returns a boolean; it never infers success.
+export function isAdmittedWaveStartupReceipt(result) {
+  if (!result || typeof result !== 'object') return false;
+  if (result.execution !== 'waves') return false;
+  if (result.state !== 'running' && result.state !== 'integrated') return false;
+  if (typeof result.wave_id !== 'string' || result.wave_id.length === 0) return false;
+  if (typeof result.record_path !== 'string' || result.record_path.length === 0) return false;
+  if (!Number.isInteger(result.generation) || result.generation < 1) return false;
+  if (!Number.isInteger(result.admitted_width) || result.admitted_width <= 0) return false;
+  if (result.error || result.code) return false;
+  return true;
+}
+
 // Durable records bound to `waveId` that are stage worker runs. `command_phase`
 // is the explicit production discriminator (runtime.mjs writes it on bound
 // command records): such a record stays bound for drain authority but is not a
