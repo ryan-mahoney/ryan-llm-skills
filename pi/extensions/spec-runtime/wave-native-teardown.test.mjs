@@ -26,12 +26,13 @@
 // assertions read only the recorded owner observation.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startCoordinator } from './wave-native-driver.mjs';
 import { createProcessRegistry, isLiveProcessState, parseProcStat } from './waves-fixture-processes.mjs';
+import { makeWaveFixture, registerNativeTeardown } from './package-fixture.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const checkout = join(here, '..', '..', '..');
@@ -141,9 +142,11 @@ export async function createAgentSession() {
 `;
 
 // One sandbox with a synthetic SDK. `env` is a private copy so the fixture never
-// mutates the test process environment.
-function makeSandbox() {
-  const dir = mkdtempSync(join(tmpdir(), 'wave-teardown-'));
+// mutates the test process environment. An optional `into` directory lets a case
+// populate an already-created package fixture directory instead of a bare temp
+// dir; the default remains a fresh mkdtemp.
+function makeSandbox({ into } = {}) {
+  const dir = into ?? mkdtempSync(join(tmpdir(), 'wave-teardown-'));
   const sdkRoot = join(dir, 'sdk');
   mkdirSync(join(sdkRoot, 'dist'), { recursive: true });
   writeFileSync(join(sdkRoot, 'dist', 'index.js'), SYNTHETIC_SDK);
@@ -252,7 +255,8 @@ async function runTeardownCase(t, { teardownOf, boundMs, label }) {
       t.diagnostic(`emergency registry cleanup failed: ${cleanupError?.message ?? String(cleanupError)}`);
     }
     try {
-      await waitFor(() => (!driverPid || !observePid(driverPid).live) && (!descendantPid || !observePid(descendantPid).live),
+      await waitFor(() => (!driverPid || !observePid(driverPid).live)
+        && (!descendantPid || !observePid(descendantPid).live),
         5_000, 'emergency cleanup to take both recorded pids');
     } catch (verifyError) {
       t.diagnostic(`emergency cleanup verification: ${verifyError?.message ?? String(verifyError)}`);
@@ -357,7 +361,8 @@ test('wave native: coordinator crash preserves descendants until final teardown'
       t.diagnostic(`emergency registry cleanup failed: ${cleanupError?.message ?? String(cleanupError)}`);
     }
     try {
-      await waitFor(() => (!driverPid || !observePid(driverPid).live) && (!descendantPid || !observePid(descendantPid).live),
+      await waitFor(() => (!driverPid || !observePid(driverPid).live)
+        && (!descendantPid || !observePid(descendantPid).live),
         5_000, 'emergency cleanup to take both recorded pids');
     } catch (verifyError) {
       t.diagnostic(`emergency cleanup verification: ${verifyError?.message ?? String(verifyError)}`);
@@ -378,4 +383,139 @@ test('wave native: coordinator shutdown drains the owned group', { timeout: 1200
     boundMs: SHUTDOWN_BOUND_MS,
     label: 'shutdown',
   });
+});
+
+// Failure-path sandbox removal: the ordered teardown must still finish the
+// process work and remove the sandbox even when an earlier cleanup step throws.
+// This runs the *actual* makeWaveFixture and its real process registry, but the
+// installed SDK is still the synthetic module above, so kernel_proof is false:
+// the assertion is about cleanup ordering and sandbox removal, not Pi lifecycle.
+//
+// The baseline is expected RED: package-fixture's cleanup() rethrows the first
+// failure before reaching rmSync, so a throwing cleanup leaves the directory on
+// disk. The assertions read only the recorded observations taken BEFORE the
+// emergency reap, so neither the emergency registry cleanup nor the emergency
+// rm can satisfy them.
+test('wave native: teardown removes the sandbox after a cleanup failure', { timeout: 120000 }, async t => {
+  const fixture = await makeWaveFixture({ members: 1 });
+  // Populate the synthetic SDK inside the real fixture directory.
+  const { sandbox, env } = makeSandbox({ into: fixture.dir });
+  sandbox.processRegistry = fixture.processRegistry;
+
+  // The real fixture's cleanup() calls this registry method and rethrows its
+  // first failure before removing the directory, so wrapping it puts the
+  // deliberate error inside package-fixture.cleanup. The bound original is
+  // kept so the emergency reap can restore the method before invoking it.
+  const registry = fixture.processRegistry;
+  const realRegistryCleanup = registry.cleanup.bind(registry);
+  const DELIBERATE_CLEANUP_ERROR = 'deliberate cleanup failure';
+
+  let coordinator = null;
+  let driverPid = null;
+  let descendantPid = null;
+  let teardownOutcome = null;
+  let failure = null;
+
+  try {
+    coordinator = startCoordinator({
+      sandbox,
+      env,
+      script: { port: 1, mode: 'teardown', case: 'cleanup-failure' },
+      tag: 'teardown-cleanup-failure',
+    });
+    const ready = await coordinator.ready;
+    driverPid = ready.pid;
+    assert.ok(Number.isSafeInteger(driverPid) && driverPid > 0, 'driver reports a usable pid');
+
+    descendantPid = await waitFor(
+      () => readPidFile(sandbox.descendantPidFile),
+      10_000,
+      'the coordinator descendant pid file',
+    );
+    assert.notEqual(descendantPid, driverPid, 'the descendant is a distinct process');
+    assert.ok(observePid(driverPid).live, `driver ${driverPid} is running before teardown`);
+    assert.ok(observePid(descendantPid).live, `descendant ${descendantPid} is running before teardown`);
+
+    // Capture the registered teardown callback instead of running it through a
+    // test-level t.after, so the case controls when it is invoked and can
+    // observe the failure path with a bounded timeout.
+    let teardownCallback = null;
+    const registrationContext = { after: callback => { teardownCallback = callback; } };
+    const boot = { fixture, coordinators: [coordinator], providers: [] };
+    registerNativeTeardown(registrationContext, boot);
+    assert.equal(typeof teardownCallback, 'function', 'registerNativeTeardown registers a teardown callback');
+
+    // Run the real registry cleanup, then throw the deliberate error so the
+    // fixture's own cleanup observes a failure and rethrows before its rmSync.
+    registry.cleanup = async () => {
+      await realRegistryCleanup();
+      throw new Error(DELIBERATE_CLEANUP_ERROR);
+    };
+
+    // Intentional caught case error; the registered teardown runs in finally.
+    try {
+      throw new Error('intentional cleanup-failure case error');
+    } catch (caseError) {
+      assert.match(caseError.message, /intentional/);
+    } finally {
+      let timer;
+      try {
+        await Promise.race([
+          Promise.resolve().then(() => teardownCallback()),
+          new Promise((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error(`cleanup-failure teardown did not resolve within ${SHUTDOWN_BOUND_MS}ms`)),
+              SHUTDOWN_BOUND_MS,
+            );
+          }),
+        ]);
+        teardownOutcome = { resolved: true };
+      } catch (teardownError) {
+        teardownOutcome = { resolved: false, message: String(teardownError?.message ?? teardownError) };
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    // Record the post-teardown observation BEFORE any emergency cleanup.
+    const after = {
+      driver: observePid(driverPid),
+      descendant: observePid(descendantPid),
+      fixtureDirExists: existsSync(fixture.dir),
+    };
+    t.diagnostic(`after cleanup-failure teardown: ${JSON.stringify({ teardownOutcome, after })}`);
+
+    // The deliberate cleanup error must surface to the caller...
+    assert.equal(teardownOutcome.resolved, false, 'a throwing fixture cleanup surfaces to the teardown caller');
+    assert.match(teardownOutcome.message, /deliberate cleanup failure/,
+      `teardown surfaces the original cleanup error; got: ${teardownOutcome.message}`);
+    // ...but the process work must already be done, and the sandbox must be gone.
+    assert.equal(after.driver.live, false,
+      `driver ${driverPid} is not running after a failed cleanup (state=${after.driver.state})`);
+    assert.equal(after.descendant.live, false,
+      `descendant ${descendantPid} is not running after a failed cleanup (state=${after.descendant.state})`);
+    assert.equal(after.fixtureDirExists, false,
+      `fixture directory ${fixture.dir} is removed even though cleanup threw`);
+  } catch (error) {
+    failure = error;
+  } finally {
+    // Emergency reap only after the observations above: restore the real
+    // registry cleanup first so the emergency reap actually runs.
+    registry.cleanup = realRegistryCleanup;
+    try {
+      await registry.cleanup();
+    } catch (cleanupError) {
+      t.diagnostic(`emergency registry cleanup failed: ${cleanupError?.message ?? String(cleanupError)}`);
+    }
+    try {
+      await waitFor(() => (!driverPid || !observePid(driverPid).live)
+        && (!descendantPid || !observePid(descendantPid).live),
+        5_000, 'emergency cleanup to take both recorded pids');
+    } catch (verifyError) {
+      t.diagnostic(`emergency cleanup verification: ${verifyError?.message ?? String(verifyError)}`);
+    }
+    try { rmSync(fixture.dir, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+
+  if (failure) throw failure;
 });

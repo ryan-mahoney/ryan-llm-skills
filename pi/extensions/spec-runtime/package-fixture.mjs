@@ -328,8 +328,10 @@ export async function makeWaveFixture(options = {}) {
 
   // Teardown responsibility is registered before any future operation. Shim and
   // registry cleanup are attempted independently so one failure cannot skip the
-  // other; the sandbox is only removed when both succeed, and the first error
-  // surfaces to the caller.
+  // other, and the sandbox directory removal is always attempted even when those
+  // steps fail so a broken shim or registry never leaks the sandbox. The first
+  // failure still surfaces to the caller; successful removal is recorded so a
+  // repeated cleanup stays a no-op.
   const processRegistry = createProcessRegistry();
   let cleaned = false;
   const cleanup = async () => {
@@ -337,9 +339,11 @@ export async function makeWaveFixture(options = {}) {
     let failure = null;
     try { await cleanupPortableHostShims(join(base.dir, 'shim-state')); } catch (error) { failure = error; }
     try { await processRegistry.cleanup(); } catch (error) { if (!failure) failure = error; }
+    let removed = false;
+    try { rmSync(base.dir, { recursive: true, force: true }); removed = true; }
+    catch (error) { if (!failure) failure = error; }
+    if (removed) cleaned = true;
     if (failure) throw failure;
-    rmSync(base.dir, { recursive: true, force: true });
-    cleaned = true;
   };
 
   return {

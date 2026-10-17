@@ -495,7 +495,12 @@ export function createWaveReviewRuntime(deps) {
         work: phase.layers.work, merged: phase.layers.merged, chdir: record.checkout,
         command: ['/bin/bash', '-o', 'pipefail', '-c', command] }).argv;
       const transport = sanitizeTransport(process.env);
-      const outputPath = join(record.package, 'runtime', 'runs', `${record.id}-command-${randomUUID()}.log`);
+      // The protocol log and the stderr log share one unique command stem so a
+      // single command run is traceable across both streams, while each stream
+      // stays unfiltered in its own file.
+      const commandStem = `${record.id}-command-${randomUUID()}`;
+      const outputPath = join(record.package, 'runtime', 'runs', `${commandStem}.log`);
+      const stderrPath = join(record.package, 'runtime', 'runs', `${commandStem}.stderr.log`);
       const started = await adapter.start({ argv, cwd: record.checkout, env: transport, deadline, limits: policy,
         register: serviceRecord => { record.command_service = serviceRecord; save(record); return true; } });
       if (started?.record) record.command_service = started.record;
@@ -504,17 +509,20 @@ export function createWaveReviewRuntime(deps) {
         const drained = record.command_service
           ? await adapter.drain(record.command_service, { env: transport, ownershipVerified: true }) : null;
         return { exit_code: null, signal: null, error: started?.reason || started?.status || 'command-launch-failed',
-          full_output_path: outputPath, requires_cancellation: drained?.status !== 'confirmed' };
+          full_output_path: outputPath, stderr_output_path: stderrPath,
+          requires_cancellation: drained?.status !== 'confirmed' };
       }
       mkdirSync(dirname(outputPath), { recursive: true });
       let error = null, stopRequested = false, timedOut = false, stopResult = null;
+      // Each stream gets its own protocol log: `full_output_path` holds exactly
+      // the child's stdout so protocol consumers never see stderr noise, and
+      // `stderr_output_path` retains the complete stderr stream unfiltered.
       const output = createWriteStream(outputPath, { mode: 0o600 });
       output.on('error', cause => { error ||= cause?.message ?? 'run log write failed'; });
-      // Two pipes share one log; `end: false` keeps either stream's EOF from
-      // closing the file before the other has drained. The file is finished
-      // explicitly after the child closes so no output is dropped.
-      started.child.stdout?.pipe(output, { end: false });
-      started.child.stderr?.pipe(output, { end: false });
+      const stderrOutput = createWriteStream(stderrPath, { mode: 0o600 });
+      stderrOutput.on('error', cause => { error ||= cause?.message ?? 'stderr log write failed'; });
+      started.child.stdout?.pipe(output);
+      started.child.stderr?.pipe(stderrOutput);
       let reportUnconfirmed;
       const unconfirmed = new Promise(resolveFailure => { reportUnconfirmed = resolveFailure; });
       // The caller's timeout and abort are the only stop authority: the unit is
@@ -542,7 +550,12 @@ export function createWaveReviewRuntime(deps) {
       const result = await Promise.race([closed, unconfirmed]);
       clearTimeout(timer);
       signal?.removeEventListener('abort', onAbort);
-      await new Promise(resolveFinish => output.end(resolveFinish));
+      // Both logs are closed (and their write errors observed) before the
+      // result is returned, so a caller reading either path sees complete files.
+      await Promise.all([
+        new Promise(resolveFinish => output.end(resolveFinish)),
+        new Promise(resolveFinish => stderrOutput.end(resolveFinish)),
+      ]);
       const stopped = stopResult ? await stopResult : null;
       const drained = await adapter.drain(record.command_service, { env: transport, ownershipVerified: true });
       const requiresCancellation = stopRequested
@@ -550,7 +563,7 @@ export function createWaveReviewRuntime(deps) {
         : drained?.status !== 'confirmed';
       if (stopRequested && !stopped) error ||= 'Command stop was not confirmed';
       return { ...result, error: error ?? null, ...(timedOut ? { timed_out: true } : {}),
-        full_output_path: outputPath, requires_cancellation: requiresCancellation };
+        full_output_path: outputPath, stderr_output_path: stderrPath, requires_cancellation: requiresCancellation };
     },
 
     // A command phase completes only on a confirmed drain; any unknown or

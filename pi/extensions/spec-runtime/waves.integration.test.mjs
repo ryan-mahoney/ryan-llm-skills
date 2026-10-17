@@ -470,12 +470,16 @@ test('wave native: width five implements, reviews, repairs and promotes through 
   assert.equal(git(fixture.integrationCheckout, 'status', '--porcelain'), '', 'integration checkout is clean');
 
   // D-3: worktree fallback everywhere, never a userns launch. Shapes are read
-  // step-013-subspec.md:38 contract reconciliation: the card names the fallback
-  // reason `fallback_reason` with value `userns-denied`, while the as-built
-  // durable record carries it as `workspace.backendReason`. The value is
-  // identical, so the assertions below keep `userns-denied` verbatim and read
-  // the field name the record actually writes; no bwrap or production change is
-  // implied by this reconciliation.
+  // step-013-subspec.md:38 contract reconciliation: the record keeps two
+  // distinct durable fields, not one renamed field. Each member's provisioned
+  // workspace carries the capability provenance, so a member's fallback reason
+  // is `workspace.backendReason` (step-workspaces.mjs) and the assertions below
+  // read it verbatim. The candidate workspace is a concrete workspace built by
+  // a concrete backend selection, so its `backendReason` names the selected
+  // backend (`explicit-worktree`) while the retained capability provenance stays
+  // in `capability.reason` (`userns-denied`). Both fields are durable and
+  // independently observed, so the candidate assertions read each one at its own
+  // path; no bwrap or production change is implied by this reconciliation.
   // from the as-built durable record: each member carries its provisioned
   // workspace (step-workspaces.mjs) and the candidate workspace lives at
   // record.target.integration.workspace (runtime.mjs / wave-candidate-binding).
@@ -504,7 +508,8 @@ test('wave native: width five implements, reviews, repairs and promotes through 
   }
   const candidateWorkspace = record.target?.integration?.workspace ?? {};
   assert.equal(candidateWorkspace.backend, 'worktree', 'candidate workspace backend is worktree');
-  assert.equal(candidateWorkspace.backendReason, 'userns-denied', 'candidate workspace backendReason is userns-denied');
+  assert.equal(candidateWorkspace.capability?.reason, 'userns-denied',
+    'candidate workspace capability reason is userns-denied');
 
   // Role prompts and tool sets on each role's first request.
   const firstByRole = new Map();
@@ -819,7 +824,15 @@ test('wave native: blocked members preserve work and repeated entry launches not
     const index = args.indexOf('--model');
     return index >= 0 ? args[index + 1] : null;
   };
-  assert.equal(step4Runs[0].stage, step4Runs[1].stage, 'step 4 retry keeps the same stage label');
+  // step-013-subspec.md:38: identity of the stage object across deserialization
+  // is not the contract; equal stage labels are. Deep equality on both stage
+  // objects plus an explicit label check implements that reading.
+  assert.deepStrictEqual(step4Runs[0].stage, step4Runs[1].stage, 'step 4 retry keeps the same stage');
+  for (const run of step4Runs) {
+    assert.equal(typeof run.stage?.label, 'string', 'step 4 reviewing run stage has a string label');
+    assert.ok(run.stage.label.length > 0, 'step 4 reviewing run stage label is non-empty');
+  }
+  assert.equal(step4Runs[0].stage?.label, step4Runs[1].stage?.label, 'step 4 retry keeps the same stage label');
   assert.equal(reviewedModel(step4Runs[0]), reviewedModel(step4Runs[1]), 'step 4 retry keeps the same review model');
   assert.ok(typeof reviewedModel(step4Runs[0]) === 'string' && reviewedModel(step4Runs[0]).length > 0,
     'step 4 review runs carry a --model argument');
