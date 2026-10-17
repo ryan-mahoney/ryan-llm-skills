@@ -77,3 +77,14 @@ Focused offline checks:
 node --test scripts/changeset-study/divergent/specialized-writer/experiment.test.mjs
 node --test scripts/changeset-study/divergent/specialized-writer/writer.test.mjs
 ```
+
+The first paid freeze completed all three owner preparations, then stopped before any
+vendor call because the harness passed a fractional remaining duration to Node's
+integer-only timeout API. That infrastructure attempt is retained. The corrected
+freeze can use `prepare --reuse-preparation PRIOR_RUN` to copy and pin those exact
+three owner outcomes, their complete preparation files/receipts, original source
+manifest/revision and canonical reservation IDs. Tasks, owner selector, ledger,
+routing and accounting must match. Source reservation IDs must contain only those
+owner requests. No owner is rerun, including a failed preparation. Reused charges
+remain part of each estimated complete route and the combined actual experiment
+once; `new_entries` separately counts only newly incurred vendor calls.

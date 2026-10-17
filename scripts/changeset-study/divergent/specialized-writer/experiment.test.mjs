@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { validatePreparation, guardClient, withFrozenRuntime, preparationTurnPolicy } from './experiment.mjs';
+import { validatePreparation, guardClient, withFrozenRuntime, preparationTurnPolicy, remainingCellMs } from './experiment.mjs';
 import { buildInput, selectedModel, digest } from './writer.mjs';
 
 test('settled full-file preparation rejects duplicate, protected and escaping targets before writing',()=>{
@@ -59,4 +59,11 @@ test('owner reserves final emission plus an unused JSON correction within eight 
   assert.deepEqual(preparationTurnPolicy(6,false),{finalRequired:true,canCorrect:true});
   assert.deepEqual(preparationTurnPolicy(7,true),{finalRequired:true,canCorrect:false});
   assert.deepEqual(preparationTurnPolicy(6,true),{finalRequired:false,canCorrect:false});
+});
+
+
+test('fractional measured preparation time becomes a positive integer deadline accepted by Node',()=>{
+  assert.equal(remainingCellMs(1200000,5396.871201),1194603);
+  assert.equal(remainingCellMs(1200000,1200000.25),1);
+  assert.doesNotThrow(()=>AbortSignal.timeout(remainingCellMs(1200000,5396.871201)));
 });

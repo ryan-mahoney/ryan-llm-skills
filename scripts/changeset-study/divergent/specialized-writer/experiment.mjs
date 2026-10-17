@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync, existsSync, mkdirSync, realpathSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, realpathSync, cpSync } from 'node:fs';
 import { join, resolve, basename } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -17,6 +17,7 @@ const same = (a,b) => digest(JSON.stringify(a)) === digest(JSON.stringify(b));
 export const protocol = 'deepseek-specialized-full-file-v1';
 export const selectors = ['openrouter/morph/morph-v3-fast', 'openrouter/relace/relace-apply-3'];
 export const ownerSystem = `You own implementation of a coding task. You receive the exact task and a read-only virtual source tree. You cannot execute commands or modify a filesystem. No editor tools exist. Return ONLY one JSON object, without Markdown fences. To inspect source, return {"read":["repository/relative/path"]}; only listed existing files can be read. Requested source is provided verbatim on the next call and retained in subsequent prompts. When implementation is settled, return {"files":[{"path":"repository/relative/path","instruction":"complete settled instructions for this file","update":"precise code update snippet"}]}. Each target must occur once; new files are allowed; deletion is unsupported. The update is sent with the ORIGINAL complete target file to a specialized apply model which returns the full new file. Include sufficient unchanged code anchors and all changed/new code in the snippet. For a new file include its entire content. Never ask the apply model to design an implementation. Cross-file changes must be consistent. Preserve protected files. Include required regression tests unless the task forbids editing tests. Do not emit changeset IR, operations, offsets, shell commands, implementation commentary or tests results. You have at most 8 total requests, including read requests and one possible JSON-format correction. When final_preparation_required is true, emit files; further source requests are forbidden. Finish within that bound.`;
+export const remainingCellMs = (limit, elapsed) => Math.max(1, Math.floor(limit-elapsed));
 export const preparationTurnPolicy = (turn, corrected) => ({ finalRequired: turn >= (corrected ? 7 : 6), canCorrect: !corrected && turn < 7 });
 export function validatePreparation(value, task) {
   if (!value || !Array.isArray(value.files) || !value.files.length || value.files.length > 32 || Object.keys(value).some(k=>k!=='files')) throw new Error('Owner must return only a nonempty files array (at most 32)');
@@ -49,6 +50,28 @@ export function prepare(options) {
       context_estimate: 'utf8-bytes-div4', writer_output_tokens: Object.fromEntries(selectors.map(s=>[s,selectedModel(s).maxTokens])) },
     metadata_hash: metadataHash, boundary: 'Standalone full-file route. Direct JSON owner with read-only source requests. No changeset execution, Sol inference, model review or repair. The legacy cell overlay retained by the shared freezer is unused.',
     limitations: ['Three exposed development tasks; one preparation and one attempt per vendor/task.', 'Byte/4 is an estimate, not a tokenizer or context acceptance guarantee.', 'Different advertised output ceilings are explicitly enforced (Morph 38000, Relace 128000).', 'All provider requests share the canonical ledger; reuse is allocated once per estimated complete route, not charged twice.', 'Legacy freezer retains cell overlay and planner skill; neither is used by this route.'] });
+  if(options.reusePreparation) {
+    const source=realpathSync(options.reusePreparation), previous=verify(source);
+    if(previous.model!==manifest.model || previous.ledger!==manifest.ledger || !same(previous.source_task_hashes,manifest.source_task_hashes)) throw new Error('Reused preparation identity differs');
+    const preparations=read(join(source,'preparations.json')), tasks=read(join(output,'tasks.json')), ids=[];
+    if(!Array.isArray(preparations) || !same(preparations.map(p=>p.task),taskIds)) throw new Error('Reuse requires all three settled preparation outcomes');
+    for(const [index,row] of preparations.entries()) {
+      const directory=join(source,'preparations',row.task);
+      if(!['prepared','failed'].includes(row.status) || !same(row,read(join(directory,'result.json'))) || !same(row.accounting,recoverAccounting(directory,manifest.ledger))) throw new Error('Preparation result/accounting changed');
+      if(row.status==='prepared') validatePreparation({files:row.files},tasks[index]);
+      const requests=existsSync(join(directory,'requests.jsonl'))?readFileSync(join(directory,'requests.jsonl'),'utf8').trim().split('\n').filter(Boolean).map(JSON.parse):[];
+      if(requests.some(r=>r.selector!==manifest.model || r.stage!=='owner-preparation')) throw new Error('Reused owner routing differs');
+      ids.push(...requests.map(r=>r.reservation));
+    }
+    const recorded=read(join(source,'campaign-reservations.json')).reservation_ids;
+    if(!same([...ids].sort(),[...recorded].sort()) || new Set(ids).size!==ids.length) throw new Error('Reuse source contains non-owner calls or missing reservations');
+    const preparationFiles=inventory(join(source,'preparations'));
+    cpSync(join(source,'preparations'),join(output,'preparations'),{recursive:true});
+    if(!same(inventory(join(source,'preparations')),preparationFiles) || !same(inventory(join(output,'preparations')),preparationFiles)) throw new Error('Preparation changed while copying');
+    write(join(output,'preparations.json'),preparations);
+    manifest.reused_preparation={source_run:source.split('/').at(-1),source_manifest_hash:digest(readFileSync(join(source,'manifest.json'))),
+      source_revision:read(join(source,'committed-source.json')).revision,reservation_ids:ids,aggregate_hash:digest(readFileSync(join(output,'preparations.json'))),files:preparationFiles};
+  }
   write(join(output,'manifest.json'),manifest); return { output, manifest };
 }
 export function verify(output) {
@@ -56,6 +79,7 @@ export function verify(output) {
   if(m.protocol!==protocol || digest(readFileSync(process.execPath))!==m.node_hash || digest(readFileSync(join(output,'tasks.json')))!==m.tasks_hash ||
      !same(inventory(join(output,'frozen')),m.frozen_files) || !same(inventory(join(output,'sdk/node_modules')),m.sdk_files) ||
      m.mounts.some(([p],i)=>!same(inventory(p),m.dependency_files[i])) || metadataHash!==m.metadata_hash) throw new Error('Frozen experiment inputs changed');
+  if(m.reused_preparation && (digest(readFileSync(join(output,'preparations.json')))!==m.reused_preparation.aggregate_hash || !same(inventory(join(output,'preparations')),m.reused_preparation.files))) throw new Error('Reused preparation bytes changed');
   validateLedger(m.ledger); return m;
 }
 async function owner(task, directory, manifest, campaign) {
@@ -91,7 +115,7 @@ async function applyTask(task, preparation, selector, directory, manifest, campa
   const row={task:task.id,selector,status:'failed',application:false,delivered:false,files:[],preparation_status:preparation.status,
     preparation_elapsed_ms:preparation.elapsed_ms,preparation_accounting:preparation.accounting};
   if(preparation.status!=='prepared') { row.status='owner-failed'; write(join(directory,'result.json'),row); return row; }
-  const files=structuredClone(task.files), signal=AbortSignal.timeout(Math.max(1,task.limits.cell_ms-preparation.elapsed_ms));
+  const files=structuredClone(task.files), signal=AbortSignal.timeout(remainingCellMs(task.limits.cell_ms,preparation.elapsed_ms));
   let writer;
   try {
   writer=await createWriter({selector,ledger:manifest.ledger,receiptPath:join(directory,'receipts.jsonl'),
@@ -162,11 +186,12 @@ export async function run(output) {
   writeFileSync(join(output,'started.json'),JSON.stringify({at:new Date().toISOString()})+'\n',{flag:'wx'});
   const entries=validateLedger(manifest.ledger).state.entries;
   const baseline=entries.reduce((n,e)=>n+(e.charged_usd??e.reserved_usd),0);
-  const campaign={ids:new Set(),path:join(output,'campaign-reservations.json')};
+  const campaign={ids:new Set(manifest.reused_preparation?.reservation_ids??[]),path:join(output,'campaign-reservations.json')};
   write(join(output,'budget-baseline.json'),{exposure_usd:baseline,entries:entries.length,extra_guard_usd:5});
   const tasks=read(join(output,'tasks.json')); const {parse}=await import(pathToFileURL(join(output,'frozen/scripts/changeset-study/parser/acorn.mjs')).href);
-  const preparations=[]; const rows=[];
-  for(const task of tasks) {
+  const preparations=manifest.reused_preparation?read(join(output,'preparations.json')):[]; const rows=[];
+  write(campaign.path,{reservation_ids:[...campaign.ids]});
+  for(const task of manifest.reused_preparation?[]:tasks) {
     verify(output); const prep=await owner(task,join(output,'preparations',task.id),manifest,campaign); preparations.push(prep);
     write(join(output,'preparations.json'),preparations);
   }
@@ -177,15 +202,15 @@ export async function run(output) {
     write(join(output,'results.json'),{protocol,preparations,rows});
   }
   const finalEntries=validateLedger(manifest.ledger).state.entries;
-  const final={protocol,tasks:taskIds,preparations,rows,actual_campaign:{entries:campaign.ids.size,
+  const final={protocol,tasks:taskIds,preparations,rows,actual_campaign:{entries:campaign.ids.size,reused_owner_entries:manifest.reused_preparation?.reservation_ids.length??0,new_entries:campaign.ids.size-(manifest.reused_preparation?.reservation_ids.length??0),
     exposure_usd:finalEntries.filter(e=>campaign.ids.has(e.id)).reduce((n,e)=>n+(e.charged_usd??e.reserved_usd),0)},note:'Actual shared preparation charged once; each estimated complete route allocates it once. Do not sum route estimates as actual campaign spend.'};
   write(join(output,'results.json'),final); return {output,completed_cells:rows.length};
   });
 }
 export async function main(args) {
   const [command,...rest]=args, options={};
-  for(let i=0;i<rest.length;i+=2) { if(!['--source','--output','--ledger','--parser','--sdk-root'].includes(rest[i])||!rest[i+1]||Object.hasOwn(options,rest[i])) throw new Error('Unique named options required'); options[rest[i]]=rest[i+1]; }
-  if(command==='prepare') return prepare({source:options['--source'],output:options['--output'],ledger:options['--ledger'],parser:options['--parser'],...(options['--sdk-root']?{sdk:options['--sdk-root']}:{})});
+  for(let i=0;i<rest.length;i+=2) { if(!['--source','--output','--ledger','--parser','--sdk-root','--reuse-preparation'].includes(rest[i])||!rest[i+1]||Object.hasOwn(options,rest[i])) throw new Error('Unique named options required'); options[rest[i]]=rest[i+1]; }
+  if(command==='prepare') return prepare({source:options['--source'],output:options['--output'],ledger:options['--ledger'],parser:options['--parser'],...(options['--sdk-root']?{sdk:options['--sdk-root']}:{}),...(options['--reuse-preparation']?{reusePreparation:options['--reuse-preparation']}:{})});
   if(command==='run' && Object.keys(options).length===1 && options['--output']) return run(options['--output']);
   throw new Error('Use prepare --source RUN03 --output NEW --ledger FILE --parser ACORN [--sdk-root SDK], or run --output FROZEN');
 }
