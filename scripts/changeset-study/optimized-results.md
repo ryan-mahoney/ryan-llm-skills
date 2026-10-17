@@ -19,6 +19,7 @@ Actual incurred model usage excludes reused planning. plans_from adds original o
 | 15-writer-low | deterministic/catalog-lookup | 2/3 | 0 | 826.10 | 1337.23 | 724.70 | 724.70 |
 | 16-writer-recovery | deterministic/catalog-lookup | 2/3 | 0 | 170.64 | 681.76 | 143.40 | 143.40 |
 | 17-ungrouped-recovery-control | none/catalog-lookup | 1/3 | 0 | 351.04 | 862.16 | 321.04 | 321.04 |
+| 18-smaller-regions | none/catalog-lookup | 3/3 | 0 | 331.56 | 742.95 | 73.55 | 73.55 |
 
 | Run | Calls actual / allocated | Tokens actual / allocated | Equivalent USD actual / allocated | Jev calls | Jev tokens | Jev est. USD |
 |---|---:|---:|---:|---:|---:|---:|
@@ -37,6 +38,7 @@ Actual incurred model usage excludes reused planning. plans_from adds original o
 | 15-writer-low | 16 / 86 | 291204 / 3678506 | 0.282740 / 0.467507 | 0 | 0 | 0.000000 |
 | 16-writer-recovery | 16 / 86 | 134600 / 3521902 | 0.075300 / 0.260068 | 0 | 0 | 0.000000 |
 | 17-ungrouped-recovery-control | 23 / 93 | 210590 / 3597892 | 0.126303 / 0.311070 | 0 | 0 | 0.000000 |
+| 18-smaller-regions | 33 / 99 | 247760 / 3548689 | 0.109410 / 0.260918 | 0 | 0 | 0.000000 |
 
 | Cell | Valid | Applied | Visible base | Candidate failures | External | Owner s* | Query s* | Routing s | Optimization s | Writing s | Checks s |
 |---|---|---|---|---:|---|---:|---:|---:|---:|---:|---:|
@@ -85,6 +87,9 @@ Actual incurred model usage excludes reused planning. plans_from adds original o
 | 17-ungrouped-recovery-control/000-hard-context-calibration | true | true | true | 0/1 | true | 54.36 | 13.50 | 0.00 | 0.00 | 4.07 | 0.26 |
 | 17-ungrouped-recovery-control/001-hard-dependency-handoff | true | false | false | 1/1 | false | 205.22 | 63.08 | 0.00 | 0.00 | 195.49 | 0.35 |
 | 17-ungrouped-recovery-control/002-hard-lifecycle-extract | true | false | true | 0/0 | false | 151.80 | 23.15 | 0.00 | 0.00 | 121.47 | 28.62 |
+| 18-smaller-regions/000-hard-context-calibration | true | true | true | 0/1 | true | 54.36 | 17.21 | 0.00 | 0.00 | 6.92 | 0.26 |
+| 18-smaller-regions/001-hard-dependency-handoff | true | true | false | 1/1 | false | 205.22 | 90.18 | 0.00 | 0.00 | 22.02 | 64.16 |
+| 18-smaller-regions/002-hard-lifecycle-extract | true | true | true | 0/0 | true | 151.80 | 28.58 | 0.00 | 0.00 | 44.61 | 56.85 |
 
 *Owner and query seconds include allocated original planning for replays. JSON retains actual phase time and all stage calls/tokens separately. Application completion means execute returned ok, independently of downstream checks.
 

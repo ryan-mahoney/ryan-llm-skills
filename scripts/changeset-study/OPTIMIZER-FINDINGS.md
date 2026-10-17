@@ -1,6 +1,6 @@
-# Optimizer findings: runs 03–17
+# Optimizer findings: runs 03–18
 
-Deterministic grouping produced the best fully passing DeepSeek calibration observation. No three-role configuration completed all three cases, and none established a quality-preserving win over the retained Sol controls. These exposed development cases and historical controls do not establish reliability or a global optimum.
+Smaller-region planning in run 18 completed application across all three cases once; calibration and extraction passed full delivery, while handoff failed downstream checks. Earlier deterministic grouping improved matched calibration, but no measured configuration delivered all three cases or established a quality-preserving win over retained Sol controls. Exposed development cases and historical controls do not establish reliability or a global optimum.
 
 The [measurement tables](optimized-results.md), [JSON evidence](optimized-results.json) and [interactive report](optimized-results.html) retain actual and allocated accounting, phase times, provider checks and artifact hashes. [Sol-only measurements](sol-only-results.json) provide historical, unmatched controls.
 
@@ -25,6 +25,7 @@ Runs 04–06 share one corrected backend freeze: exact retry classification, a 4
 | 15 low writers | 2/3 | 3/3 | 1/2 selected cells | 1/3 | 1/3 |
 | 16 grouped recovery | 2/3 | 1/3 | 1/2 selected cells | 1/3 | 1/3 |
 | 17 ungrouped recovery | 1/3 | 2/3 | 1/2 selected cells | 1/3 | 1/3 |
+| 18 smaller regions | 3/3 | 2/3 | 1/2 selected cells | 2/3 | 2/3 |
 
 Zero selected candidate checks means no candidate check ran; it is not a pass. Base visible checks can pass on an unchanged or partial candidate. Application completion is the primary outcome.
 
@@ -59,6 +60,7 @@ Actual model usage counts newly incurred requests. Allocated usage adds the orig
 | 15 low writers | 16 | 63,588 | 219,680 | 7,936 | 291,204 | 0.282740016 |
 | 16 grouped recovery | 16 | 30,761 | 54,815 | 49,024 | 134,600 | 0.075300444 |
 | 17 ungrouped recovery | 23 | 60,298 | 89,876 | 60,416 | 210,590 | 0.126303096 |
+| 18 smaller regions | 33 | 201,138 | 40,862 | 5,760 | 247,760 | 0.109410360 |
 
 | Allocated run | Calls | Input | Output | Cache read | Total tokens | Normalized USD |
 |---|---:|---:|---:|---:|---:|---:|
@@ -77,6 +79,7 @@ Actual model usage counts newly incurred requests. Allocated usage adds the orig
 | 15 low writers | 86 | 281,683 | 303,703 | 3,093,120 | 3,678,506 | 0.467507220 |
 | 16 grouped recovery | 86 | 248,856 | 138,838 | 3,134,208 | 3,521,902 | 0.260067648 |
 | 17 ungrouped recovery | 93 | 278,393 | 173,899 | 3,145,600 | 3,597,892 | 0.311070300 |
+| 18 smaller regions | 99 | 341,024 | 116,721 | 3,090,944 | 3,548,689 | 0.260918064 |
 
 Phase totals below are actual seconds. Query includes deterministic catalog generation. Phase sums exclude initialization and process overhead; elapsed totals use process wall time.
 
@@ -97,6 +100,7 @@ Phase totals below are actual seconds. Query includes deterministic catalog gene
 | 15 low writers | 0.000 | 0.000 | 0.000 | 0.003 | 724.695 | 100.682 | 826.099 | 1337.227 |
 | 16 grouped recovery | 0.000 | 0.000 | 0.000 | 0.003 | 143.401 | 26.479 | 170.636 | 681.764 |
 | 17 ungrouped recovery | 0.000 | 0.000 | 0.000 | 0.001 | 321.036 | 29.229 | 351.035 | 862.163 |
+| 18 smaller regions | 0.000 | 135.961 | 0.000 | 0.002 | 73.549 | 121.270 | 331.559 | 742.946 |
 
 04–06 each allocate 612.420656s of original owner/query planning. Run 07 allocates 299.548442s of original owner work and incurs 79.310576s of fresh query/context work, including 0.128773s of catalog generation. Its allocated planning is 378.859018s; allocated elapsed is 419.725242s. No later Sol review or repair occurred after writers started.
 
@@ -124,7 +128,7 @@ The initial complete extraction request was 70,674 bytes. Its correction, includ
 
 08 incurred 108.783377s, six calls and 51,998 tokens at $0.021066612 normalized cost ($0.123617412 in receipt charges). Owner-only allocation gives 408.331819s, 66 calls, 2,724,325 tokens and $0.124412616 normalized. No owner was rerun and no Sol call followed writing.
 
-The retained historical Sol controls completed all three cases: native Sol took 474.961857s at $0.166108800 normalized, and the boundary-review runs took 319.735002s/$0.107606136 and 339.549391s/$0.106832772. Successful completion across the cases remains missing from every measured three-role configuration, so no win over these controls is established.
+The retained historical Sol controls completed all three cases: native Sol took 474.961857s at $0.166108800 normalized, and the boundary-review runs took 319.735002s/$0.107606136 and 339.549391s/$0.106832772. Full delivery across the cases remains missing from every measured three-role configuration, so no win over these controls is established.
 
 Runs 09 and 10 measured the separate catalog-lookup mode: at most one source batch, 64,000 UTF-16 code units/source characters, three total query calls, and a 160 KiB complete-request limit. Both reused original 03 owner briefs. Source requests, lookup artifacts, whole-source hashes, exact snippet text/offsets, unique anchors and followup packet identity passed independent provenance checks. No Sol call followed writer dispatch. Run 09 froze `a6a0be5`; run 10 froze `abb8623`, adding bounded query-format recovery and interchangeable supplied endpoints. These are sequential development treatments, not matched controls.
 
@@ -216,7 +220,7 @@ Extraction created `wave-lifecycle.mjs`, then the runtime rewire's first attempt
 
 15 application completion was 2/3 and full delivery 1/3. Actual elapsed was 826.098944 seconds, with 16 native low-reasoning writer calls, 291,204 tokens and $0.282740016 normalized/receipt cost. Input/output/cache-read tokens were 63,588/219,680/7,936; cache writes were zero. Reasoning metadata reports 201,822 tokens as a subset of output; it is never added again to tokens or cost. Allocation adds only inherited owner/query/context work: 1,337.226675 seconds, 86 calls, 3,678,506 tokens and $0.467507220 normalized. No new owner, Sol query or Jev call occurred. All request/receipt identities, roles, frozen plan/brief hashes and source provenance passed. Rebuilding 03–14 preserved all prior application/outcome/accounting/phase measurements.
 
-Low reasoning completed handoff application in this observation, while calibration became slower and extraction still failed. These outcomes do not establish a reliable suite-wide configuration, a grouping winner, or a quality-preserving win over historical Sol controls. No measured configuration completed application or delivery across all three cases.
+Low reasoning completed handoff application in this observation, while calibration became slower and extraction still failed. These outcomes do not establish a reliable suite-wide configuration, a grouping winner, or a quality-preserving win over historical Sol controls. Through 15, no measured configuration completed application or delivery across all three cases.
 
 Run 16 froze `1f7e427` and replayed exact 12 plans/briefs with `off` primary writers and `low` only on the existing single application retry. Its recovery audit binds each attempt to an operation, permits at most attempts zero and one, and preserves the same DeepSeek model. Calibration applied 2/2 and passed all checks. Handoff applied nine of 11 operations; low recovery fixed `test-wave-authority` but `wire-dependencies` still failed a runtime.mjs replacement count, blocking completion-guard. Base/candidate/external checks failed at the missing export. Independent source inspection found an actual newline in the rejected search where the unchanged target source contains literal `\n`; predecessors had not modified that target. This is a mechanical text mismatch, not behavioral feedback or proof that grouping caused it.
 
@@ -237,6 +241,20 @@ Run 17 reused run 16's exact frozen-file inventory and 12 raw plans/briefs, with
 
 16 incurred 170.636118 seconds, 16 calls, 134,600 tokens and $0.075300444 native DeepSeek normalized/receipt cost. Input/output/cache-read tokens were 30,761/54,815/49,024. Allocation gives 681.763849 seconds, 86 calls, 3,521,902 tokens and $0.260067648 normalized. 17 incurred 351.035088 seconds, 23 calls, 210,590 tokens and $0.126303096; input/output/cache-read were 60,298/89,876/60,416. Allocation gives 862.162819 seconds, 93 calls, 3,597,892 tokens and $0.311070300. Cache writes are zero. Both allocate inherited 11 owner plus 12 query/context work once, excluding donor writing/checks. Prior 03–15 measurements remain unchanged.
 
-Budget checkpoint after 17 and before 18: 361 settled entries, zero holds, $2.765410452 exposure against $50. Trial model receipts total $2.765151452; trial Jev adds $0.000169000 and another settled Jev entry $0.000090000. The prior archived ledger is excluded. Normalized model cost for 03–17 is $1.256275236, or $1.256444236 including trial Jev. This checkpoint excludes currently running 18; allocated charges are not new spend.
+Run 18 froze `80cf4f1`, reused the exact 11 owner briefs, and generated fresh Sol query plans under `smaller-regions` with optimization `none`. Query instructions split large same-file work into ordered, bounded regions rather than changing the owner behavior. Off primary writers and low application recovery were retained. The assignment cap was derived from the unchanged 96-call budget: three query calls reserved, at most two writer attempts per assignment, at most 46 assignments. Actual plans contained 3, 19 and 4 assignments. No owner or Jev call occurred, and every Sol query preceded writer dispatch.
 
-Run 18 is running under exact freeze `80cf4f1`: new smaller-region Sol query plans, original 11 owner briefs, ungrouped dispatch and off-to-low application recovery. It adds no owner/Jev call and permits Sol queries only before writers. Its results are pending and excluded here. No further trial or repeat has started. The study remains incomplete: no measured configuration completed application or delivery across all three cases, and no quality-preserving win over the historical Sol controls is established.
+18 completed application in all three cases. Calibration applied 3/3 operations and passed base, generated-candidate and external checks. Handoff applied 19/19 on primary off calls, without recovery, but failed visible/candidate/external checks. Its first visible error was `ERR_MODULE_NOT_FOUND` for `wave-receipts.mjs` imported by generated runtime.test.mjs. Extraction applied 4/4, including one low application recovery, and passed all 74 existing visible tests plus external acceptance; no generated candidate test was selected. Successful application across all cases is an observed milestone, not full delivery or an established success rate.
+
+| Run 18 case | Applied | Query / off / low calls | Query incl. context s | Writing s | Checks s | Full delivery |
+|---|---:|---:|---:|---:|---:|---|
+| hard-context-calibration | 3/3 | 2 / 3 / 1 | 17.210 | 6.924 | 0.262 | pass |
+| hard-dependency-handoff | 19/19 | 2 / 19 / 0 | 90.175 | 22.016 | 64.157 | fail |
+| hard-lifecycle-extract | 4/4 | 1 / 4 / 1 | 28.575 | 44.609 | 56.851 | pass |
+
+Actual elapsed was 331.558962 seconds: 33 calls (five Sol queries, 26 off writer primaries, two low retries), input/output/cache-read tokens 201,138/40,862/5,760, totaling 247,760. Cache writes and length stops were zero. Native receipt charges were $0.354722260; normalized comparison cost was $0.109410360. Writer reasoning metadata totals 11,562 tokens as a subset of output, counted once. Allocating only inherited owner work gives 742.945911 seconds, 99 calls, 3,548,689 tokens and $0.260918064 normalized. Fresh query/context overhead remains included; donor writing and checks do not enter allocation.
+
+All task/brief/result hashes, provider routes, writer attempt bounds and retained plan hashes passed. Query calls were 2/2/1; complete query contexts were 27,461 and 48,156 bytes; 106,648 and 150,963; and 86,603, all below 160 KiB. Lookup batches were two requests/18,626 UTF-16 source characters and seven requests/37,914; hashes, exact snippet offsets/text, request identity and unique anchors passed. Extraction requested no lookup. Prior 03–17 outcome/accounting/phase measurements remained unchanged. No plan or candidate was manually repaired and no downstream failure was supplied to a model.
+
+Budget checkpoint after 18 and before 19: 394 settled entries, zero holds, $3.120132712 exposure against $50. Trial model receipts total $3.119873712; trial Jev adds $0.000169000 and another settled Jev entry $0.000090000. The prior archived ledger is excluded. Normalized model cost for 03–18 is $1.365685596, or $1.365854596 including trial Jev. This checkpoint excludes currently running 19; allocated charges are not new campaign spend.
+
+Run 19 is running as an exact 18 freeze/plan/brief repeat, with no owner/query/Jev calls and all outer checks retained. Execution remains `80cf4f1`; orchestration records `88c90e1`. Its results are pending and excluded here. No further trial has started. The study remains incomplete: run 18 completed application across all cases once, but full delivery across all three and a quality-preserving win over historical Sol controls remain unestablished.
