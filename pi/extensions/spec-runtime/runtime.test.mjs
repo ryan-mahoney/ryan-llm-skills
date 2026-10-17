@@ -264,12 +264,17 @@ test('spec file and directory inputs share run identity; explicit start honors o
 });
 
 test('repeated starts return the same run before and after completion; a second coordinator cannot take its writer lease', async t => {
-  const f = await fixture(t);
+  // The worker answers only after the lease check: with a fixed 50 ms delay, a slow
+  // second start sometimes found the first run already finished and was admitted.
+  const f = await fixture(t, `const { existsSync } = require('node:fs'); const release = require('node:path').join(__dirname, 'release');
+const poll = setInterval(() => { if (!existsSync(release)) return; clearInterval(poll);
+  console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'Implemented; focused check passed.'}]}})); }, 20);`);
   const runtime = new Runtime(f.options);
   const first = await runtime.start(f.input, '/parent/session.jsonl');
   assert.equal((await runtime.start(f.input)).run_id, first.run_id);
   await assert.rejects(() => new Runtime(f.options).start({ ...f.input, assignment_id: 'another-step' }), /run-active/);
   assert.equal(f.pids.length, 1, 'a refused second coordinator launched no process');
+  writeFileSync(join(f.dir, 'release'), '');
   const completed = await f.finished;
   assert.equal(completed.state, 'completed');
   assert.equal(completed.result, 'Implemented; focused check passed.');
