@@ -24,6 +24,8 @@ test('quoted insert text and shorthand objects are expectations; anchors and rem
   const guard = op('Guard throws exactly `Latest editor packet stopped incomplete (${stop_reason ?? \'error\'}); assign a bounded continuation.`');
   assert.deepEqual(recipeFidelity(guard, "throw new Error(`Latest editor packet stopped incomplete (${outcome.stop_reason ?? 'error'}); assign a bounded continuation.`);"), [], 'a template placeholder admits any expression');
   assert.equal(recipeFidelity(guard, "throw new Error(`Latest editor packet stopped (${outcome.stop_reason ?? 'error'}); assign a bounded continuation.`);").length, 1, 'literal text around a placeholder must match');
+  const nearest = op("Do not append telemetry. Replace only `pi.on('session_start', apply);` with a seeding handler. Find the most recent entry with `entry?.customType === 'context-budget'` and skip others.");
+  assert.deepEqual(recipeLiterals(nearest), [], 'a removal target after an earlier insertion cue, and an uncued description, are not expectations');
   const anchors = op('Delete range `// The top-level setup declaration` through `export async function resolveInput(`. Copy `// A contained wave root reserves capacity` through `// Side-`.');
   assert.deepEqual(recipeLiterals(anchors), []);
 });

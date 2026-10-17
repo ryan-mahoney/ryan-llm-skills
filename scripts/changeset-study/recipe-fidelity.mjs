@@ -12,11 +12,15 @@ export function recipeLiterals(operation, files = {}) {
   const text = `${operation.instruction}\n${(operation.requirements ?? []).join('\n')}`;
   const source = Object.values(files).filter(value => typeof value === 'string').join('\n');
   const literals = [];
+  // The keyword nearest to the snippet decides: an insertion cue makes it an expectation,
+  // a removal or locating cue makes it a target or anchor, and no cue leaves it alone.
+  const cue = /\b(remove|delete|replace only|replace the|replace range|range|from|through|anchor|before|after|at|exactly|verbatim|insert|add|append|register|emit|returning|return)\b/g;
+  const expecting = new Set(['exactly', 'verbatim', 'insert', 'add', 'append', 'register', 'emit', 'returning', 'return']);
   for (const match of text.matchAll(/`([^`\n]{24,})`/g)) {
     const before = text.slice(Math.max(0, match.index - 60), match.index).toLowerCase(), snippet = match[1];
     if (!/[(){}=;]/.test(snippet)) continue;
-    if (/\b(remove|delete|replace only|replace the|replace range|range|from|through|anchor|before|after|at)\b[^`]*$/.test(before) && !/\b(with|exactly|verbatim|insert|add|append|register|emit)\b[^`]*$/.test(before)) continue;
-    if (/\b(with|exactly|verbatim|insert|add|append|register|emit|is|returning|return)\b[^`]*$/.test(before)) literals.push({ kind: 'snippet', text: collapse(snippet) });
+    const cues = [...before.matchAll(cue)];
+    if (cues.length && expecting.has(cues.at(-1)[1])) literals.push({ kind: 'snippet', text: collapse(snippet) });
   }
   // A brace list is a binding shorthand only when the recipe presents it as an object
   // to pass or inject and its names already exist in the declared source. A result
