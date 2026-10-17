@@ -34,6 +34,20 @@ the larger cases. See the [offline results visual](optimized-results.html),
 [measurements](optimized-results.md), [JSON evidence](optimized-results.json) and
 [comparison protocol](OPTIMIZER-PROTOCOL.md). This research is still in progress.
 
+Two divergent approaches are prepared separately for later experiments:
+
+- [DeepSeek-only executable changesets](divergent/deepseek-direct/PROTOCOL.md)
+  remove the Sol query and delegated-writer stages, retaining a separate DeepSeek
+  boundary review, candidate checks and one batch repair. The runner pins its inputs
+  and uses the existing shared ledger; it has passed offline preparation tests only.
+- [Apply-writer prototype](divergent/apply-writer/README.md) accepts complete-file
+  output from an injected transport and verifies unchanged source outside one
+  explicitly assigned range. It has passed offline contract tests; no apply provider
+  is configured or measured.
+
+These prototypes do not alter the active three-role treatment or establish a
+performance result. Their live comparisons remain queued behind the current goal.
+
 ## Read the explanation
 
 - [Offline HTML visual](visual.html): interactive dependency walkthrough, performance
